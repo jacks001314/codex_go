@@ -872,10 +872,17 @@ type RuntimeRouter struct {
 	// guardianBlocking is the thread-owned approval-wait tracker the Guardian
 	// reviewer enters and the turn lifecycle exports from (Rust's per-thread
 	// ReviewBlocking, #55591).
-	guardianBlockingOnce   sync.Once
-	guardianBlocking       *guardianReviewBlocking
-	rolloutBudgetOnce      sync.Once
+	guardianBlockingOnce sync.Once
+	guardianBlocking     *guardianReviewBlocking
+	rolloutBudgetOnce    sync.Once
+	rolloutBudgetConfig  *config.RolloutBudgetConfig
+	// rolloutBudget is an explicit override used by hosts and tests. Production
+	// routers resolve one budget per root thread so child agents draw from their
+	// tree's account without sharing an unrelated conversation's allowance.
 	rolloutBudget          *runtimeutil.Budget
+	rolloutBudgetsMu       sync.Mutex
+	rolloutBudgets         map[string]*runtimeutil.Budget
+	rolloutBudgetRoots     map[string]string
 	rolloutBudgetCharged   atomic.Bool
 	rolloutBudgetExhausted atomic.Bool
 	reasoningEffortMu      sync.Mutex
@@ -916,11 +923,19 @@ type runtimeSelectedSkillCatalog struct {
 const runtimeSeedRolloutExtraKey = "runtime_seed_rollout"
 const remoteControlExternalAuthRecoveryTimeout = 30 * time.Second
 
-// rolloutBudgetForSession lazily resolves and configures the shared rollout
-// budget from `features.rollout_budget` (mirrors Rust's per-root-thread-session
-// RolloutBudget configured from resolve_rollout_budget_config). Returns nil
-// when the feature is disabled, the config is absent, or resolution fails.
+// rolloutBudgetForSession resolves the process-wide budget when no thread is
+// known. It keeps the historical test hook: an explicitly assigned
+// r.rolloutBudget wins over config-derived budgets.
 func (r *RuntimeRouter) rolloutBudgetForSession() *runtimeutil.Budget {
+	return r.rolloutBudgetForThread("")
+}
+
+// rolloutBudgetForThread returns the budget owned by threadID's rollout tree.
+// Rust shares one native account across a root agent and its descendants
+// (RolloutBudget::ThreadBudgetAccount::Native, #61582), so nested threads walk
+// ParentThreadID up to their root and reuse that root's budget. Nil means the
+// feature is disabled, the config is absent, or resolution failed.
+func (r *RuntimeRouter) rolloutBudgetForThread(threadID string) *runtimeutil.Budget {
 	if r == nil {
 		return nil
 	}
@@ -936,18 +951,85 @@ func (r *RuntimeRouter) rolloutBudgetForSession() *runtimeutil.Budget {
 		if err != nil || resolved == nil {
 			return
 		}
-		budget := runtimeutil.NewBudget()
-		budget.Configure(runtimeutil.BudgetConfig{
-			LimitBudget:               resolved.LimitBudget,
-			Advisory:                  !resolved.EnforceLimit,
-			PrefillTokenWeight:        resolved.PrefillTokenWeight,
-			SamplingTokenWeight:       resolved.SamplingTokenWeight,
-			ReminderAtRemainingTokens: resolved.ReminderAtRemainingTokens,
-			ReminderAtContextStart:    &resolved.ReminderAtContextStart,
-		})
-		r.rolloutBudget = budget
+		r.rolloutBudgetConfig = resolved
 	})
-	return r.rolloutBudget
+	if r.rolloutBudget != nil {
+		return r.rolloutBudget
+	}
+	if r.rolloutBudgetConfig == nil {
+		return nil
+	}
+	rootID := r.rolloutBudgetRootThread(threadID)
+	r.rolloutBudgetsMu.Lock()
+	defer r.rolloutBudgetsMu.Unlock()
+	if budget := r.rolloutBudgets[rootID]; budget != nil {
+		return budget
+	}
+	if r.rolloutBudgets == nil {
+		r.rolloutBudgets = map[string]*runtimeutil.Budget{}
+	}
+	resolved := r.rolloutBudgetConfig
+	budget := runtimeutil.NewBudget()
+	budget.Configure(runtimeutil.BudgetConfig{
+		LimitBudget:               resolved.LimitBudget,
+		Advisory:                  !resolved.EnforceLimit,
+		PrefillTokenWeight:        resolved.PrefillTokenWeight,
+		SamplingTokenWeight:       resolved.SamplingTokenWeight,
+		ReminderAtRemainingTokens: resolved.ReminderAtRemainingTokens,
+		ReminderAtContextStart:    &resolved.ReminderAtContextStart,
+	})
+	r.rolloutBudgets[rootID] = budget
+	return budget
+}
+
+// rolloutBudgetRootThread walks the persisted parent lineage. A thread without
+// a record (an ephemeral worker) is its own root.
+func (r *RuntimeRouter) rolloutBudgetRootThread(threadID string) string {
+	current := strings.TrimSpace(threadID)
+	if current == "" {
+		return ""
+	}
+	r.rolloutBudgetsMu.Lock()
+	if root, ok := r.rolloutBudgetRoots[current]; ok {
+		r.rolloutBudgetsMu.Unlock()
+		return root
+	}
+	r.rolloutBudgetsMu.Unlock()
+	seen := map[string]bool{}
+	root := current
+	for current != "" && !seen[current] {
+		seen[current] = true
+		record, err := r.threadRecord(session.ThreadID(current), true, false)
+		if err != nil || record == nil {
+			root = current
+			break
+		}
+		parent := strings.TrimSpace(string(record.ParentThreadID))
+		if parent == "" {
+			root = current
+			break
+		}
+		current = parent
+	}
+	r.rolloutBudgetsMu.Lock()
+	if r.rolloutBudgetRoots == nil {
+		r.rolloutBudgetRoots = map[string]string{}
+	}
+	r.rolloutBudgetRoots[strings.TrimSpace(threadID)] = root
+	r.rolloutBudgetsMu.Unlock()
+	return root
+}
+
+// rolloutBudgetCheck is the work gate consulted before generation requests,
+// tool handlers, and MCP handoff (Rust RolloutBudget::check_start, #61582).
+func (r *RuntimeRouter) rolloutBudgetCheck(threadID string) func() error {
+	return func() error {
+		budget := r.rolloutBudgetForThread(threadID)
+		if budget != nil && budget.Exhausted() {
+			return ErrSessionBudgetExceeded
+		}
+		return nil
+	}
 }
 
 // rolloutBudgetReminderMessage builds the developer-context reminder injected
@@ -973,7 +1055,7 @@ func (r *RuntimeRouter) rolloutBudgetFollowUp(threadID string) turn.SamplingFoll
 		if ctx == nil {
 			return nil
 		}
-		budget := r.rolloutBudgetForSession()
+		budget := r.rolloutBudgetForThread(threadID)
 		if budget == nil {
 			return nil
 		}
@@ -18996,6 +19078,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	// plugin registration installed on this thread.
 	options.MCPAgentMetadataRecipient = r.threadAgentMCPMetadataRecipient(threadID)
 	options.MCPToolRequestMetaHook = r.threadMCPToolRequestMetaHook(threadID)
+	options.MCPWorkBudgetCheck = r.rolloutBudgetCheck(threadID)
 	if searchSelection.provider == modelSearchHosted || searchSelection.provider == modelSearchClientMCP {
 		options.MCPToolAdmissionHook = r.modelSearchMCPAdmission(threadID, strings.TrimSpace(turnID), searchSelection)
 	}

@@ -101,6 +101,20 @@ func (c *Config) AgentsConfig(configBaseDir string) (*AgentsConfig, error) {
 	return out, nil
 }
 
+// AgentInterruptMessageEnabled reports `agents.interrupt_message`, which
+// defaults to true. Rust gates the interrupted-turn history marker on it
+// (InterruptedTurnHistoryMarker::from_config_and_version).
+func (c *Config) AgentInterruptMessageEnabled() bool {
+	if c != nil {
+		if agents, ok := c.Values["agents"].(map[string]any); ok {
+			if value, ok := agents["interrupt_message"].(bool); ok {
+				return value
+			}
+		}
+	}
+	return true
+}
+
 // parseAgentRoleConfig mirrors Rust's read_declared_role: the declared name is a
 // hint that a referenced role file may override through its `name` field.
 func parseAgentRoleConfig(name string, value any, configBaseDir string) (string, agent.RoleConfig, error) {

@@ -24,6 +24,19 @@ type TokenUsage struct {
 // error for `codex_rollout_budget_units`.
 var ErrInvalidRolloutBudgetUnits = errors.New("response.completed usage.codex_rollout_budget_units must be finite and non-negative")
 
+// HookCharge is the synchronous post-hook contribution of one model response
+// (Rust codex_hooks::HookCharge, #61580). Overflowed reports that summing the
+// individual hook prices exceeded f64 range; Units is then the largest
+// individual price, a real lower bound rather than the whole bill.
+type HookCharge struct {
+	Units      float64
+	Overflowed bool
+}
+
+// ErrInvalidRolloutBudgetCharge is returned when a charge is non-finite or
+// negative. Mirrors Rust's fatal `invalid rollout budget charge`.
+var ErrInvalidRolloutBudgetCharge = errors.New("invalid rollout budget charge")
+
 func (u *TokenUsage) NonCachedInput() int64 {
 	if u == nil {
 		return 0
@@ -145,28 +158,74 @@ func (b *Budget) Configure(config BudgetConfig) {
 // provider units are rejected as a fatal error, mirroring Rust's
 // `RolloutBudget::record_usage`.
 func (b *Budget) RecordUsage(usage TokenUsage) (bool, error) {
+	return b.RecordUsageWithHookCharge(&usage, HookCharge{})
+}
+
+// RecordUsageWithHookCharge charges one response's provider usage together
+// with the synchronous post-hook contribution it settled (Rust #61580
+// `RolloutBudget::record_usage`). The two numbers stay separate: provider
+// units are read from `codex_rollout_budget_units` or weighted tokens, and the
+// hook charge is added on top.
+func (b *Budget) RecordUsageWithHookCharge(usage *TokenUsage, hook HookCharge) (bool, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !b.configured {
 		return false, nil
 	}
-	var units float64
-	if usage.CodexRolloutBudgetUnits != "" {
-		value, err := usage.CodexRolloutBudgetUnits.Float64()
-		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
-			return false, fmt.Errorf("%w: got %q", ErrInvalidRolloutBudgetUnits, usage.CodexRolloutBudgetUnits)
+	if math.IsNaN(hook.Units) || math.IsInf(hook.Units, 0) || hook.Units < 0 {
+		return false, ErrInvalidRolloutBudgetCharge
+	}
+	if hook.Overflowed {
+		// All allowances are finite. No future nonnegative receipt can make
+		// this total representable; the remaining allowance is known zero.
+		b.posted.Add(math.Inf(1))
+		if !b.config.Advisory {
+			b.stopNewToolsLocked()
 		}
-		units = value
-	} else {
-		units = float64(max64(usage.OutputTokens, 0))*b.config.SamplingTokenWeight + float64((&usage).NonCachedInput())*b.config.PrefillTokenWeight
+	}
+	if math.IsInf(b.posted.Total(), 1) {
+		return !b.config.Advisory, nil
+	}
+	var units float64
+	if usage != nil {
+		var err error
+		units, err = b.providerUnitsLocked(*usage)
+		if err != nil {
+			return false, err
+		}
 	}
 	b.posted.Add(units)
+	b.posted.Add(hook.Units)
+	if math.IsInf(b.posted.Total(), 1) {
+		if !b.config.Advisory {
+			b.stopNewToolsLocked()
+		}
+		return false, ErrInvalidRolloutBudgetCharge
+	}
 	// Equality is allowed, including one rounding step (0.1 + 0.2 versus 0.3).
-	exhausted := !b.config.Advisory && (math.IsInf(b.posted.Total(), 1) || b.posted.Total() > math.Nextafter(b.config.LimitBudget, math.Inf(1)))
+	exhausted := !b.config.Advisory && b.posted.Total() > math.Nextafter(b.config.LimitBudget, math.Inf(1))
 	if exhausted {
 		b.stopNewToolsLocked()
 	}
 	return exhausted, nil
+}
+
+// RecordHookCharge charges synchronous post-hook units on their own. A hook
+// price is independent of the provider's usage record, so a completed
+// response without token usage still pays it (Rust #61580).
+func (b *Budget) RecordHookCharge(hook HookCharge) (bool, error) {
+	return b.RecordUsageWithHookCharge(nil, hook)
+}
+
+func (b *Budget) providerUnitsLocked(usage TokenUsage) (float64, error) {
+	if usage.CodexRolloutBudgetUnits != "" {
+		value, err := usage.CodexRolloutBudgetUnits.Float64()
+		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+			return 0, fmt.Errorf("%w: got %q", ErrInvalidRolloutBudgetUnits, usage.CodexRolloutBudgetUnits)
+		}
+		return value, nil
+	}
+	return float64(max64(usage.OutputTokens, 0))*b.config.SamplingTokenWeight + float64(usage.NonCachedInput())*b.config.PrefillTokenWeight, nil
 }
 
 // stopNewToolsLocked marks the shared session budget as exhausted so new tool

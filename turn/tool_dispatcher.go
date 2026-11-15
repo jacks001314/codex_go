@@ -63,6 +63,10 @@ type ToolDispatcherOptions struct {
 	// InvocationRegistry opts this turn into live tool-call lookup and unique
 	// active call IDs (Rust #57586). A nil registry leaves dispatch unchanged.
 	InvocationRegistry *agent.InvocationRegistry
+	// CheckWorkBudget refuses a tool handler once the shared rollout budget is
+	// exhausted (Rust Session::tool_start_denial, #61578/#61582). Refused calls
+	// publish an aborted output and never reach the handler.
+	CheckWorkBudget func() error
 }
 
 // Rust #44661 trace-safe milestones. They carry identifiers and tool names
@@ -188,6 +192,7 @@ type ToolDispatcher struct {
 	stepBatch          *tooltiming.Batch
 	stepGate           *tooltiming.Gate
 	invocationRegistry *agent.InvocationRegistry
+	checkWorkBudget    func() error
 }
 
 type ToolExecutionResult struct {
@@ -445,6 +450,7 @@ func NewToolDispatcher(options *ToolDispatcherOptions) *ToolDispatcher {
 		criticalPathTiming:          options.CriticalPathTiming,
 		timingState:                 options.TimingState,
 		invocationRegistry:          options.InvocationRegistry,
+		checkWorkBudget:             options.CheckWorkBudget,
 	}
 }
 
@@ -1008,7 +1014,78 @@ func (d *ToolDispatcher) rejectedInvocationResult(invocation *tool.Invocation, e
 	return result
 }
 
+// abortedInvocationResult publishes a refused call as an aborted tool output
+// without starting its handler (Rust AbortedToolOutput, #61578).
+func (d *ToolDispatcher) abortedInvocationResult(invocation *tool.Invocation, message string) *ToolExecutionResult {
+	finishedAt := d.nowUTC()
+	output := &tool.Output{
+		CallID:      invocation.CallID,
+		ToolName:    invocation.ToolName,
+		Success:     false,
+		Body:        message,
+		CompletedAt: finishedAt,
+	}
+	result := &ToolExecutionResult{
+		Invocation:      invocation,
+		Output:          output,
+		Response:        ToolResponseFromOutput(invocation, output),
+		StartedAt:       finishedAt,
+		FinishedAt:      finishedAt,
+		HandlerExecuted: false,
+		Aborted:         true,
+	}
+	d.completeDirectCall(invocation, result.Response, nil)
+	if d.onToolCompleted != nil {
+		d.onToolCompleted(context.Background(), result)
+	}
+	return result
+}
+
+// AbortToolItems refuses every dispatchable call in a completed response before
+// its handler starts. It is used when the response's own usage exhausts the
+// shared rollout budget and the buffered calls must not run (Rust
+// responses.process_mode=after_complete_response, #61577).
+func (d *ToolDispatcher) AbortToolItems(items []model.AgentItem, message string) []ToolExecutionResult {
+	if d == nil || d.router == nil {
+		return nil
+	}
+	results := make([]ToolExecutionResult, 0, len(items))
+	for i := range items {
+		responseItem, ok := responseItemFromAgentItem(&items[i])
+		if !ok {
+			d.observeNonDispatchedItem(&items[i])
+			continue
+		}
+		invocation, ok, err := d.router.BuildToolCall(*responseItem)
+		if err != nil || !ok {
+			d.observeNonDispatchedItem(&items[i])
+			continue
+		}
+		d.addInvocationContext(invocation)
+		if d.executedToolCalls != nil {
+			d.executedToolCalls.RecordToolCall(invocation, d.toolMode)
+			if call, permit := d.executedToolCalls.PrepareDirectCall(invocation, d.toolMode); call != nil {
+				if d.preparedDirectCalls == nil {
+					d.preparedDirectCalls = map[*tool.Invocation]*model.ExecutedToolCall{}
+					d.permittedDirectCalls = map[*tool.Invocation]*ExecutedToolCallPermit{}
+				}
+				d.preparedDirectCalls[invocation] = call
+				d.permittedDirectCalls[invocation] = permit
+			}
+		}
+		results = append(results, *d.abortedInvocationResult(invocation, message))
+	}
+	return results
+}
+
 func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *tool.Invocation) (*ToolExecutionResult, error) {
+	// Rust #61578/#61582 rechecks the shared budget before a handler starts,
+	// after readiness and admission have waited.
+	if d.checkWorkBudget != nil {
+		if err := d.checkWorkBudget(); err != nil {
+			return d.abortedInvocationResult(invocation, "aborted before handler start: rollout budget exhausted"), nil
+		}
+	}
 	reservation, reservationErr := d.reserveInvocation(invocation)
 	if reservationErr != nil {
 		return d.rejectedInvocationResult(invocation, reservationErr), nil

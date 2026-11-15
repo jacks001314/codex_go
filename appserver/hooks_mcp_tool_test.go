@@ -10,18 +10,19 @@ import (
 )
 
 type recordingMcpToolHookExecutor struct {
-	server  string
-	tool    string
-	input   map[string]any
-	envID   string
-	meta    map[string]any
-	output  string
-	err     error
-	timeout time.Duration
-	called  bool
+	server     string
+	tool       string
+	input      map[string]any
+	envID      string
+	meta       map[string]any
+	output     string
+	structured any
+	err        error
+	timeout    time.Duration
+	called     bool
 }
 
-func (e *recordingMcpToolHookExecutor) Execute(ctx context.Context, call HookMcpCall) (string, error) {
+func (e *recordingMcpToolHookExecutor) Execute(ctx context.Context, call HookMcpCall) (HookMcpOutput, error) {
 	e.called = true
 	e.server = call.Server
 	e.tool = call.Tool
@@ -29,7 +30,7 @@ func (e *recordingMcpToolHookExecutor) Execute(ctx context.Context, call HookMcp
 	e.envID = call.EnvironmentID
 	e.meta = call.Metadata
 	e.timeout = call.Timeout
-	return e.output, e.err
+	return HookMcpOutput{Text: e.output, StructuredContent: e.structured}, e.err
 }
 
 func TestHookRunnerStopMcpCarriesRequestMetadataAndEnvironmentLikeRust(t *testing.T) {

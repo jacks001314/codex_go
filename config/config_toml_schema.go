@@ -374,6 +374,7 @@ var configTomlFields = map[string]configFieldKind{
 	"project_doc_fallback_filenames":             {kind: configKindSequence},
 	"project_doc_max_bytes":                      {kind: configKindInteger, expected: "usize"},
 	"realtime":                                   {kind: configKindStruct, expected: "RealtimeToml", fields: configRealtimeFields},
+	"responses":                                  {kind: configKindStruct, expected: "ResponsesToml", fields: configResponsesFields},
 	"responses_api_metadata":                     {kind: configKindMap},
 	"review_model":                               {kind: configKindString},
 	"sandbox_mode":                               {kind: configKindEnum, variants: []string{"read-only", "workspace-write", "danger-full-access"}},

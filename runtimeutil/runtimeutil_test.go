@@ -3,6 +3,7 @@ package runtimeutil
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -160,6 +161,72 @@ func TestBudgetRecordUsageRejectsInvalidProviderUnits(t *testing.T) {
 	exhausted, err := budget.RecordUsage(TokenUsage{CodexRolloutBudgetUnits: json.Number("10")})
 	if err != nil || exhausted {
 		t.Fatalf("valid units: exhausted=%v err=%v", exhausted, err)
+	}
+}
+
+func TestBudgetRecordHookChargeAddsToProviderUnitsLikeRust(t *testing.T) {
+	budget := NewBudget()
+	budget.Configure(BudgetConfig{LimitBudget: 100, PrefillTokenWeight: 1, SamplingTokenWeight: 1})
+	// 98 provider units + a successful 3-unit post hook cross the limit; the
+	// two numbers stay separate but share one account (Rust #61580).
+	exhausted, err := budget.RecordHookCharge(HookCharge{Units: 3})
+	if err != nil {
+		t.Fatalf("RecordHookCharge error = %v", err)
+	}
+	if exhausted {
+		t.Fatal("hook-only 3 units against 100 exhausted the budget")
+	}
+	exhausted, err = budget.RecordUsage(TokenUsage{CodexRolloutBudgetUnits: json.Number("98")})
+	if err != nil {
+		t.Fatalf("RecordUsage error = %v", err)
+	}
+	if !exhausted {
+		t.Fatal("98 + 3 units against 100 did not exhaust the budget")
+	}
+	if !budget.Exhausted() {
+		t.Fatal("budget work gate not closed after exhaustion")
+	}
+}
+
+func TestBudgetRecordHookChargeCombinesInOneRecordLikeRust(t *testing.T) {
+	budget := NewBudget()
+	budget.Configure(BudgetConfig{LimitBudget: 10, PrefillTokenWeight: 1, SamplingTokenWeight: 1})
+	exhausted, err := budget.RecordUsageWithHookCharge(
+		&TokenUsage{CodexRolloutBudgetUnits: json.Number("8")},
+		HookCharge{Units: 3},
+	)
+	if err != nil {
+		t.Fatalf("RecordUsageWithHookCharge error = %v", err)
+	}
+	if !exhausted {
+		t.Fatal("8 provider + 3 hook units against 10 did not exhaust the budget")
+	}
+}
+
+func TestBudgetRecordHookChargeOverflowKeepsLowerBoundLikeRust(t *testing.T) {
+	budget := NewBudget()
+	budget.Configure(BudgetConfig{LimitBudget: math.MaxFloat64, PrefillTokenWeight: 1, SamplingTokenWeight: 1})
+	exhausted, err := budget.RecordHookCharge(HookCharge{Units: 1e308, Overflowed: true})
+	if err != nil {
+		t.Fatalf("RecordHookCharge error = %v", err)
+	}
+	if !exhausted {
+		t.Fatal("overflowed hook total did not close even the largest allowance")
+	}
+	// A later provider bill cannot make the overflowing total representable.
+	exhausted, err = budget.RecordUsage(TokenUsage{CodexRolloutBudgetUnits: json.Number("1")})
+	if err != nil || !exhausted {
+		t.Fatalf("provider charge after overflow: exhausted=%v err=%v", exhausted, err)
+	}
+}
+
+func TestBudgetRecordHookChargeRejectsInvalidUnits(t *testing.T) {
+	budget := NewBudget()
+	budget.Configure(BudgetConfig{LimitBudget: 10, PrefillTokenWeight: 1, SamplingTokenWeight: 1})
+	for _, units := range []float64{-1, math.NaN(), math.Inf(1)} {
+		if _, err := budget.RecordHookCharge(HookCharge{Units: units}); !errors.Is(err, ErrInvalidRolloutBudgetCharge) {
+			t.Fatalf("units %v error = %v, want ErrInvalidRolloutBudgetCharge", units, err)
+		}
 	}
 }
 

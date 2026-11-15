@@ -281,6 +281,15 @@ type AgentLoopRequest struct {
 	// Rust's `run_turn` placement: the step's world state is recorded first and
 	// the check runs immediately before inference.
 	PreSamplingValidation AgentPreSamplingValidation
+	// CheckWorkBudget refuses new model work once the shared rollout budget is
+	// exhausted (Rust RolloutBudget::check_start, #61582). It runs before every
+	// generation request and again before a completed response's tools start.
+	CheckWorkBudget func() error
+	// SettleBeforeToolDispatch charges the completed response and collects its
+	// follow-up context before any of its tool calls run. It mirrors Rust's
+	// `responses.process_mode = "after_complete_response"` (#61577); streaming
+	// keeps the follow-up after dispatch.
+	SettleBeforeToolDispatch bool
 	// OnIncompleteResponseUsage receives the usage a terminal incomplete
 	// response reported, before the loop returns that response's error (Rust
 	// #53670 `Session::record_incomplete_response_usage`). The model layer
@@ -318,8 +327,9 @@ type ModelRequestHookEvent struct {
 	Usage         *model.AgentUsage
 }
 
-// ModelRequestHook is one observation-only model request callback.
-type ModelRequestHook func(ctx context.Context, event ModelRequestHookEvent)
+// ModelRequestHook is one model request callback. Pre events are
+// observation-only; a post event may fail with a terminal accounting error.
+type ModelRequestHook func(ctx context.Context, event ModelRequestHookEvent) error
 
 // bridgeModelRequestHook adapts the model attempt hook to the turn event by
 // adding the thread, turn and cwd the model layer does not carry (Rust
@@ -328,13 +338,13 @@ func bridgeModelRequestHook(hook ModelRequestHook, threadID, turnID, cwd string)
 	if hook == nil {
 		return nil
 	}
-	return func(ctx context.Context, event model.ModelRequestHookEvent) {
+	return func(ctx context.Context, event model.ModelRequestHookEvent) error {
 		var usage *model.AgentUsage
 		if event.Usage != nil {
 			value := *event.Usage
 			usage = &value
 		}
-		hook(ctx, ModelRequestHookEvent{
+		return hook(ctx, ModelRequestHookEvent{
 			Phase:         event.Phase,
 			Status:        event.Status,
 			Kind:          string(event.Kind),
@@ -496,9 +506,15 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 				}
 			}
 		}
-		steer, steerErr := drainSteerChecked(l.steerMailbox, request)
-		if steerErr != nil {
-			return nil, steerErr
+		// Rust #61583: an exhausted shared budget no longer admits turn input,
+		// so queued mail stays pending instead of reopening the turn.
+		var steer *SteerDrainResult
+		var steerErr error
+		if workBudgetAllowsNewWork(request) {
+			steer, steerErr = drainSteerChecked(l.steerMailbox, request)
+			if steerErr != nil {
+				return nil, steerErr
+			}
 		}
 		if steer != nil {
 			if len(steer.InputItems) > 0 {
@@ -542,6 +558,13 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		// the turn without a model request.
 		if request.PreSamplingValidation != nil {
 			if err := request.PreSamplingValidation(ctx, iteration); err != nil {
+				return nil, err
+			}
+		}
+		// Rust #61582: a rollout budget exhausted by another thread in the tree
+		// (or by a previous turn) refuses the generation before it is sent.
+		if request.CheckWorkBudget != nil {
+			if err := request.CheckWorkBudget(); err != nil {
 				return nil, err
 			}
 		}
@@ -873,6 +896,50 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		}
 
 		toolItems := toolAgentItems(response)
+		// Rust #61577: after_complete_response settles usage and synchronous
+		// post-hooks before releasing the response's tool calls. Go already
+		// holds the completed response here, so the follow-up (usage
+		// accounting and budget reminders) runs once before dispatch.
+		toolFollowUpSettled := false
+		if len(toolItems) > 0 && request.SettleBeforeToolDispatch && request.SamplingFollowUp != nil {
+			followUp := request.SamplingFollowUp(&SamplingFollowUpContext{Response: response, Usage: result.Usage, Iteration: iteration, HasToolCalls: true})
+			if len(followUp) > 0 {
+				result.InputItems = append(result.InputItems, followUp...)
+				result.SamplingFollowUps++
+			}
+			toolFollowUpSettled = true
+		}
+		// Rust #61582/#61577: the response that exhausts the shared budget must
+		// not start its buffered tools. Refused calls still publish aborted
+		// outputs so the tool-call history stays complete; the turn then fails
+		// with SessionBudgetExceeded after its accepted items are persisted.
+		if request.CheckWorkBudget != nil {
+			if err := request.CheckWorkBudget(); err != nil {
+				if len(toolItems) > 0 {
+					for i := range toolItems {
+						result.InputItems = append(result.InputItems, &toolItems[i])
+					}
+					if l.dispatcher != nil {
+						executions := l.dispatcher.AbortToolItems(toolItems, "aborted before handler start: rollout budget exhausted")
+						result.ToolExecutions = append(result.ToolExecutions, executions...)
+						for i := range executions {
+							if executions[i].Response != nil {
+								result.InputItems = append(result.InputItems, executions[i].Response)
+							}
+							if len(executions[i].InputItems) > 0 {
+								result.InputItems = append(result.InputItems, executions[i].InputItems...)
+							}
+						}
+					} else {
+						for i := range toolItems {
+							result.InputItems = append(result.InputItems, abortedToolCallOutputItem(&toolItems[i]))
+						}
+					}
+				}
+				endSamplingRequestSpan()
+				return result, nil
+			}
+		}
 		if request.OnAssistantMessage != nil && responseHasAssistantMessage(response) {
 			request.OnAssistantMessage(response, iteration, len(toolItems) > 0)
 		}
@@ -897,7 +964,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			endSamplingRequestSpan()
 			continue
 		}
-		if len(toolItems) > 0 && request.SamplingCompaction != nil {
+		if len(toolItems) > 0 && request.SamplingCompaction != nil && workBudgetAllowsNewWork(request) {
 			// Rust #49262/#59245: the automatic compaction runs in its own
 			// `codex.compaction` phase span and timing segment.
 			compactionSpan := startTurnPhaseSpan(ctx, request, samplingSpan, CompactionPhaseSpanName, TurnPhaseCompaction, request.ThreadID, request.TurnID)
@@ -953,7 +1020,8 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			// finalized answer with one more sampling request. A steered user
 			// message reopens the phase (SteerMailbox::Enqueue), so explicit
 			// same-turn work still continues the turn here.
-			if l.steerMailbox.AcceptsMailboxDeliveryForCurrentTurn(request.ThreadID, request.TurnID) {
+			if l.steerMailbox.AcceptsMailboxDeliveryForCurrentTurn(request.ThreadID, request.TurnID) &&
+				workBudgetAllowsNewWork(request) {
 				steer, steerErr := drainSteerChecked(l.steerMailbox, request)
 				if steerErr != nil {
 					endSamplingRequestSpan()
@@ -1012,7 +1080,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 				result.InputItems = append(result.InputItems, executions[i].InputItems...)
 			}
 		}
-		if request.SamplingFollowUp != nil {
+		if request.SamplingFollowUp != nil && !toolFollowUpSettled {
 			followUp := request.SamplingFollowUp(&SamplingFollowUpContext{Response: response, Usage: result.Usage, Iteration: iteration, HasToolCalls: true})
 			if len(followUp) > 0 {
 				result.InputItems = append(result.InputItems, followUp...)
@@ -1282,6 +1350,16 @@ func agentItemRecordsTTFT(item *model.AgentItem) bool {
 // drainSteerChecked drains the mailbox and lets the host reject the delivered
 // input before it joins the conversation (Rust #58430: uploaded audio is
 // rejected inside the turn runner). A rejection fails the turn.
+// workBudgetAllowsNewWork reports whether the shared rollout budget still
+// admits new work (Rust RolloutBudget::can_receive_turn_input and
+// Session::inline_compaction_allowed, #61583).
+func workBudgetAllowsNewWork(request *AgentLoopRequest) bool {
+	if request == nil || request.CheckWorkBudget == nil {
+		return true
+	}
+	return request.CheckWorkBudget() == nil
+}
+
 func drainSteerChecked(mailbox *SteerMailbox, request *AgentLoopRequest) (*SteerDrainResult, error) {
 	steer := drainSteer(mailbox, request)
 	if steer == nil || request == nil || request.ValidateSteerInput == nil || len(steer.InputItems) == 0 {

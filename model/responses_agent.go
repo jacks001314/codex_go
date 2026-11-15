@@ -2421,7 +2421,10 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 	if r.responsesWebSocketEnabled() {
 		attempt := request.beginModelRequestAttempt(ctx, request.Model)
 		response, err := r.runWebSocket(ctx, request, "", "", false, &authRecoveryState{})
-		attempt.finish(ctx, response, err)
+		if hookErr := attempt.finish(ctx, response, err); hookErr != nil && err == nil {
+			held.flush()
+			return nil, hookErr
+		}
 		held.flush()
 		return response, err
 	}
@@ -2589,7 +2592,12 @@ func (r *ResponsesAgentRunner) runHTTP(ctx context.Context, request *AgentReques
 	// A non-streaming Responses request opens exactly one response stream, so
 	// it pairs one Pre/PostModelRequest lifecycle (Rust #61562).
 	attempt := request.beginModelRequestAttempt(ctx, request.Model)
-	defer func() { attempt.finish(ctx, response, err) }()
+	defer func() {
+		if hookErr := attempt.finish(ctx, response, err); hookErr != nil && err == nil {
+			response = nil
+			err = hookErr
+		}
+	}()
 	httpResponse, preempted, err := r.runResponsesHTTPRequestPreemptible(ctx, request, apiRequest)
 	receivedAt := time.Now()
 	if preempted {

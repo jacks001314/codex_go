@@ -8,6 +8,11 @@ import (
 	"github.com/google/uuid"
 )
 
+// ErrUsageAccountingFailed mirrors Rust CodexErrorDetails::UsageAccountingFailed
+// (#61580): a provider attempt ended and retrying inference cannot settle its
+// bill, so the sampling step must fail as terminal.
+var ErrUsageAccountingFailed = errors.New("usage accounting failed")
+
 // SamplingKind mirrors Rust's SamplingKind: the request kinds whose
 // PreModelRequest/PostModelRequest hook pairs stay distinct (Rust #61562).
 type SamplingKind string
@@ -44,8 +49,10 @@ type ModelRequestHookEvent struct {
 
 // ModelRequestHook observes model request attempts. The Responses runner pairs
 // one Pre and one Post event per attempt, keeping RequestID stable across
-// retries and incrementing AttemptNumber per opened response stream.
-type ModelRequestHook func(ctx context.Context, event ModelRequestHookEvent)
+// retries and incrementing AttemptNumber per opened response stream. A post
+// event may report a usage-accounting failure that retrying inference cannot
+// settle (Rust #61580 UsageAccountingFailed).
+type ModelRequestHook func(ctx context.Context, event ModelRequestHookEvent) error
 
 // modelRequestHooks owns one generation's hook lifecycle across retries.
 type modelRequestHooks struct {
@@ -104,7 +111,9 @@ func (request *AgentRequest) beginModelRequestAttempt(ctx context.Context, model
 		ctx: ctx, hooks: hooks, number: hooks.attempts,
 		model: strings.TrimSpace(model), turnID: strings.TrimSpace(request.TurnID),
 	}
-	hooks.hook(ctx, ModelRequestHookEvent{
+	// Pre events are observation-only; a hook failure never vetoes the request
+	// (Rust ModelRequestHookEvent::PreModelRequest).
+	_ = hooks.hook(ctx, ModelRequestHookEvent{
 		Phase:         "pre",
 		Kind:          hooks.kind,
 		RequestID:     hooks.requestID,
@@ -127,10 +136,11 @@ type modelRequestAttempt struct {
 
 // finish reports the attempt's terminal outcome. The synchronous hook runs
 // before the caller can account usage or release the terminal response event
-// (Rust #61562). A nil attempt is a no-op so callers can stay branch-free.
-func (attempt *modelRequestAttempt) finish(ctx context.Context, response *AgentResponse, err error) {
+// (Rust #61562). A nil attempt is a no-op so callers can stay branch-free. The
+// returned error is a terminal post-hook accounting failure (Rust #61580).
+func (attempt *modelRequestAttempt) finish(ctx context.Context, response *AgentResponse, err error) error {
 	if attempt == nil || attempt.finished {
-		return
+		return nil
 	}
 	attempt.finished = true
 	attempt.hooks.active = false
@@ -148,6 +158,15 @@ func (attempt *modelRequestAttempt) finish(ctx context.Context, response *AgentR
 		usage := response.Usage
 		event.Usage = &usage
 	}
+	if event.Usage == nil {
+		// Rust #61580 bills hooks for a failed attempt that still reported
+		// token usage, which is how an incomplete response arrives here.
+		var incomplete ResponseIncompleteError
+		if errors.As(err, &incomplete) && incomplete.Usage != nil {
+			usage := *incomplete.Usage
+			event.Usage = &usage
+		}
+	}
 	if err != nil {
 		event.Error = err.Error()
 		event.Status = "failed"
@@ -163,8 +182,9 @@ func (attempt *modelRequestAttempt) finish(ctx context.Context, response *AgentR
 		hookCtx = attempt.ctx
 	}
 	if attempt.hooks.hook != nil {
-		attempt.hooks.hook(hookCtx, event)
+		return attempt.hooks.hook(hookCtx, event)
 	}
+	return nil
 }
 
 func isModelRequestCancellation(ctx context.Context, err error) bool {

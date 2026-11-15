@@ -1213,6 +1213,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"projects":                                   {},
 	"realtime":                                   {},
 	"profile":                                    {},
+	"responses":                                  {},
 	"responsesapi_client_metadata":               {},
 	"responses_api_metadata":                     {},
 	"review_model":                               {},

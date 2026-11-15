@@ -406,6 +406,15 @@ func (r *Runtime) PrepareToolMode(requestedToolMode string, disableCodeModeFallb
 	return effectiveToolMode, r.router.TakeCodeModeUnavailableWarning(effectiveToolMode)
 }
 
+// drainSteerIfBudgetAllows keeps queued input pending once the shared rollout
+// budget is exhausted (Rust #61583 can_receive_turn_input).
+func drainSteerIfBudgetAllows(mailbox *SteerMailbox, request *AgentLoopRequest) *SteerDrainResult {
+	if request != nil && request.CheckWorkBudget != nil && request.CheckWorkBudget() != nil {
+		return nil
+	}
+	return drainSteer(mailbox, request)
+}
+
 func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoopResult, error) {
 	if r == nil || r.agent == nil {
 		return nil, errors.New("turn runtime agent is nil")
@@ -420,7 +429,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 	if r.router == nil {
 		inputItems := append([]any(nil), request.InputItems...)
 		clientMetadata := cloneStringMap(request.ClientMetadata)
-		if steer := drainSteer(r.steerMailbox, request); steer != nil {
+		if steer := drainSteerIfBudgetAllows(r.steerMailbox, request); steer != nil {
 			if len(steer.InputItems) > 0 {
 				inputItems = append(inputItems, steer.InputItems...)
 			}
@@ -442,6 +451,11 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			StripDirectCallMetadata(inputItems)
 		}
 		tools := MergeHostedTools(MergeHostedTools(request.Tools, r.hostedTools), request.HostedTools)
+		if request.CheckWorkBudget != nil {
+			if err := request.CheckWorkBudget(); err != nil {
+				return nil, err
+			}
+		}
 		sampling := timing.BeginSampling(r.now())
 		// Rust #50964: the sampling request compares its full model-visible tool
 		// list against the retained one and counts a change on the turn profile.
@@ -612,6 +626,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		CriticalPathTiming:          loopRequest.CriticalPathTiming,
 		TimingState:                 loopRequest.Timing,
 		InvocationRegistry:          r.invocationRegistry,
+		CheckWorkBudget:             loopRequest.CheckWorkBudget,
 	})
 	return NewAgentLoop(&AgentLoopOptions{
 		Agent:                   r.agent,

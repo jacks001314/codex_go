@@ -77,6 +77,10 @@ type ToolRegistryOptions struct {
 	// Search uses it to keep one provider responsible for a thread's browsing
 	// references when a background call outlives its sampling step.
 	MCPToolAdmissionHook func(info *mcp.RuntimeToolInfo, callID string) error
+	// MCPWorkBudgetCheck rechecks the shared rollout budget immediately before
+	// the MCP request is handed to the server (Rust #61578). A denial is
+	// reported to the model as an aborted call; nil disables the check.
+	MCPWorkBudgetCheck func() error
 	// MCPCyberAccessProgram supplies the issuing turn's explicit Cyber program
 	// for a matching agent registration (Rust turn_context.cyber_access_program).
 	MCPCyberAccessProgram func() string
@@ -1156,10 +1160,18 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 			}
 		}
 		var admission func(serverName string, toolName string, callID string) error
-		if options.MCPToolAdmissionHook != nil {
+		if options.MCPToolAdmissionHook != nil || options.MCPWorkBudgetCheck != nil {
 			infoForHook := info
 			admission = func(serverName string, toolName string, callID string) error {
-				return options.MCPToolAdmissionHook(&infoForHook, callID)
+				if options.MCPWorkBudgetCheck != nil {
+					if err := options.MCPWorkBudgetCheck(); err != nil {
+						return tool.RespondToModel("aborted before MCP handoff: rollout budget exhausted")
+					}
+				}
+				if options.MCPToolAdmissionHook != nil {
+					return options.MCPToolAdmissionHook(&infoForHook, callID)
+				}
+				return nil
 			}
 		}
 		executor := mcp.NewToolExecutor(&mcp.ToolExecutorOptions{

@@ -68,11 +68,12 @@ func TestModelRequestHooksPairRetriedAttemptsLikeRust(t *testing.T) {
 				record("terminal")
 			}
 		},
-		OnModelRequest: func(_ context.Context, event ModelRequestHookEvent) {
+		OnModelRequest: func(_ context.Context, event ModelRequestHookEvent) error {
 			mu.Lock()
 			events = append(events, event)
 			mu.Unlock()
 			record(event.Phase + "-" + strconv.Itoa(event.AttemptNumber))
+			return nil
 		},
 	})
 	if err != nil {
@@ -155,12 +156,13 @@ func TestModelRequestHooksReportSamplingKindLikeRust(t *testing.T) {
 		t.Helper()
 		_, err := runner.Run(context.Background(), &AgentRequest{
 			Prompt: "hi", Model: "gpt-5.5", SamplingKind: kind,
-			OnModelRequest: func(_ context.Context, event ModelRequestHookEvent) {
+			OnModelRequest: func(_ context.Context, event ModelRequestHookEvent) error {
 				if event.Phase != "post" {
-					return
+					return nil
 				}
 				kinds = append(kinds, event.Kind)
 				requestIDs = append(requestIDs, event.RequestID)
+				return nil
 			},
 		})
 		if err != nil {
@@ -198,8 +200,9 @@ func TestModelRequestHooksPairNonStreamingRequestLikeRust(t *testing.T) {
 	var events []ModelRequestHookEvent
 	if _, err := runner.Run(context.Background(), &AgentRequest{
 		Prompt: "hi", Model: "gpt-5.5",
-		OnModelRequest: func(_ context.Context, event ModelRequestHookEvent) {
+		OnModelRequest: func(_ context.Context, event ModelRequestHookEvent) error {
 			events = append(events, event)
+			return nil
 		},
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)

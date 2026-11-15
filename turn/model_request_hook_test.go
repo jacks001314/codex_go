@@ -34,8 +34,9 @@ func TestAgentLoopObservesModelRequestLifecycleLikeRust(t *testing.T) {
 		ThreadID: "thread-1",
 		TurnID:   "turn-1",
 		CWD:      "/workspace",
-		OnModelRequest: func(_ context.Context, event ModelRequestHookEvent) {
+		OnModelRequest: func(_ context.Context, event ModelRequestHookEvent) error {
 			events = append(events, event)
+			return nil
 		},
 	})
 	if err != nil {

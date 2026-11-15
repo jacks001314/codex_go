@@ -13,14 +13,14 @@ import (
 // (Rust #39296/#39331/#55263). Dormant cached servers start on demand; the
 // hook timeout covers startup and the call, and no model-tool approval or
 // recursive hook dispatch is involved.
-func (r *RuntimeRouter) Execute(ctx context.Context, call HookMcpCall) (string, error) {
+func (r *RuntimeRouter) Execute(ctx context.Context, call HookMcpCall) (HookMcpOutput, error) {
 	if r == nil {
-		return "", fmt.Errorf("MCP hook executor is unavailable")
+		return HookMcpOutput{}, fmt.Errorf("MCP hook executor is unavailable")
 	}
 	server := strings.TrimSpace(call.Server)
 	toolName := strings.TrimSpace(call.Tool)
 	if server == "" || toolName == "" {
-		return "", fmt.Errorf("MCP hook requires server and tool")
+		return HookMcpOutput{}, fmt.Errorf("MCP hook requires server and tool")
 	}
 	if call.Timeout > 0 {
 		var cancel context.CancelFunc
@@ -30,28 +30,28 @@ func (r *RuntimeRouter) Execute(ctx context.Context, call HookMcpCall) (string, 
 	threadID := ""
 	service := r.mcpServiceForThread(threadID, nil)
 	if service == nil {
-		return "", fmt.Errorf("MCP runtime is unavailable for hook call %s.%s", server, toolName)
+		return HookMcpOutput{}, fmt.Errorf("MCP runtime is unavailable for hook call %s.%s", server, toolName)
 	}
 	// Rust #39296/#39331: hook calls are restricted to already-connected,
 	// cataloged, policy-allowed tools. Unavailable servers fail immediately
 	// without starting or reconnecting them.
 	config, ok := service.ServerConfigForServer(server)
 	if !ok {
-		return "", fmt.Errorf("MCP hook server %q is not cataloged or connected", server)
+		return HookMcpOutput{}, fmt.Errorf("MCP hook server %q is not cataloged or connected", server)
 	}
 	if strings.TrimSpace(config.URL) == "" && strings.TrimSpace(config.Command) == "" {
-		return "", fmt.Errorf("MCP hook server %q has no configured endpoint", server)
+		return HookMcpOutput{}, fmt.Errorf("MCP hook server %q has no configured endpoint", server)
 	}
 	if err := validateHookMcpEnvironment(server, config, call.EnvironmentID); err != nil {
-		return "", err
+		return HookMcpOutput{}, err
 	}
 	if filter := mcp.ToolFilterFromServerConfig(&config); filter != nil && !filter.Allows(toolName) {
-		return "", fmt.Errorf("MCP hook tool %q is disabled for server %q", toolName, server)
+		return HookMcpOutput{}, fmt.Errorf("MCP hook tool %q is disabled for server %q", toolName, server)
 	}
 	// Rust #55263: a dormant cached server starts on demand for the hook, and
 	// the hook timeout covers startup plus the call.
 	if err := service.WaitForServerStartup(ctx, server, ""); err != nil {
-		return "", err
+		return HookMcpOutput{}, err
 	}
 	var arguments map[string]any
 	if len(call.Input) > 0 {
@@ -65,9 +65,15 @@ func (r *RuntimeRouter) Execute(ctx context.Context, call HookMcpCall) (string, 
 		Context:   ctx,
 	})
 	if err != nil {
-		return "", err
+		return HookMcpOutput{}, err
 	}
-	return mcpHookResponseText(response), nil
+	text := mcpHookResponseText(response)
+	if response != nil && response.IsError != nil && *response.IsError {
+		// Rust CoreHookMcpExecutor: an MCP error result fails the handler, so
+		// its structured content is never billed.
+		return HookMcpOutput{}, fmt.Errorf("MCP tool returned an error: %s", text)
+	}
+	return HookMcpOutput{Text: text, StructuredContent: response.StructuredContent}, nil
 }
 
 func validateHookMcpEnvironment(server string, config mcp.ServerConfig, environmentID string) error {

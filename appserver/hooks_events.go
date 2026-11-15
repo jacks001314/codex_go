@@ -90,9 +90,12 @@ type HookModelRequestRequest struct {
 	ResponseID     *string
 	Error          *string
 	TokenUsage     *model.AgentUsage
-	AgentID        string
-	AgentType      string
-	Hooks          []HookMetadata
+	// BillableModelRequest reports whether this post event ended an attempt
+	// whose synchronous hook prices are charged (Rust #61580).
+	BillableModelRequest bool
+	AgentID              string
+	AgentType            string
+	Hooks                []HookMetadata
 }
 
 func (r *HookRunner) RunModelRequest(ctx context.Context, request *HookModelRequestRequest) (*HookRunResult, error) {
@@ -109,12 +112,13 @@ func (r *HookRunner) RunModelRequest(ctx context.Context, request *HookModelRequ
 	}
 	turnID := request.TurnID
 	return r.Run(ctx, &HookRunRequest{
-		ThreadID:  request.ThreadID,
-		TurnID:    &turnID,
-		CWD:       request.CWD,
-		EventName: eventName,
-		InputJSON: inputJSON,
-		Hooks:     request.Hooks,
+		ThreadID:             request.ThreadID,
+		TurnID:               &turnID,
+		CWD:                  request.CWD,
+		EventName:            eventName,
+		InputJSON:            inputJSON,
+		Hooks:                request.Hooks,
+		BillableModelRequest: eventName == HookEventPostModelRequest && request.BillableModelRequest,
 	})
 }
 

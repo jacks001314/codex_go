@@ -2,14 +2,17 @@ package appserver
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"codex_go/config"
 	"codex_go/model"
 	"codex_go/runtimeutil"
+	"codex_go/session"
 	"codex_go/turn"
 )
 
@@ -121,5 +124,71 @@ func TestRuntimeRouterRolloutBudgetDisabledResolvesNil(t *testing.T) {
 	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
 	if budget := router.rolloutBudgetForSession(); budget != nil {
 		t.Fatalf("rolloutBudgetForSession() = %#v, want nil when disabled", budget)
+	}
+}
+
+func TestRuntimeRouterRolloutBudgetIsSharedPerRootThreadLikeRust(t *testing.T) {
+	home := t.TempDir()
+	configTOML := "[features.rollout_budget]\nenabled = true\nlimit_tokens = 10\nreminder_at_remaining_tokens = [5]\n"
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(configTOML), 0o644); err != nil {
+		t.Fatalf("write config.toml: %v", err)
+	}
+	store := session.NewStore(t.TempDir())
+	now := time.Now().UTC()
+	for _, record := range []*session.Record{
+		{ID: "root", SessionID: "root", CreatedAt: now, UpdatedAt: now, RecencyAt: now},
+		{ID: "child", ParentThreadID: "root", CreatedAt: now, UpdatedAt: now, RecencyAt: now},
+		{ID: "grandchild", ParentThreadID: "child", CreatedAt: now, UpdatedAt: now, RecencyAt: now},
+		{ID: "other", CreatedAt: now, UpdatedAt: now, RecencyAt: now},
+	} {
+		if err := store.Create(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home), ThreadRouter: NewRouter(store)})
+
+	rootBudget := router.rolloutBudgetForThread("root")
+	if rootBudget == nil {
+		t.Fatal("root budget = nil, want configured")
+	}
+	if childBudget := router.rolloutBudgetForThread("child"); childBudget != rootBudget {
+		t.Fatal("child thread does not share its root's rollout budget")
+	}
+	if grandchildBudget := router.rolloutBudgetForThread("grandchild"); grandchildBudget != rootBudget {
+		t.Fatal("grandchild thread does not share its root's rollout budget")
+	}
+	otherBudget := router.rolloutBudgetForThread("other")
+	if otherBudget == rootBudget {
+		t.Fatal("unrelated root threads share one rollout budget")
+	}
+	if _, err := rootBudget.RecordUsage(runtimeutil.TokenUsage{OutputTokens: 20}); err != nil {
+		t.Fatalf("RecordUsage error = %v", err)
+	}
+	if !rootBudget.Exhausted() {
+		t.Fatal("root budget not exhausted after charging 20 against a 10 allowance")
+	}
+	if otherBudget.Exhausted() {
+		t.Fatal("unrelated root budget exhausted by another tree's usage")
+	}
+	if err := router.rolloutBudgetCheck("child")(); !errors.Is(err, ErrSessionBudgetExceeded) {
+		t.Fatalf("child work gate error = %v, want ErrSessionBudgetExceeded", err)
+	}
+	if err := router.rolloutBudgetCheck("other")(); err != nil {
+		t.Fatalf("other work gate error = %v, want nil", err)
+	}
+}
+
+func TestBudgetStopTurnMarkerUsesNeutralDeveloperGuidanceLikeRust(t *testing.T) {
+	item := budgetStopTurnMarkerSessionItem("turn-budget", time.Now().UTC())
+	if item.Role != "developer" {
+		t.Fatalf("marker role = %q, want developer", item.Role)
+	}
+	if !strings.Contains(item.Text, "<turn_aborted>") ||
+		!strings.Contains(item.Text, "The previous turn was interrupted on purpose.") ||
+		strings.Contains(item.Text, "The user interrupted") {
+		t.Fatalf("marker text = %q, want neutral guidance", item.Text)
+	}
+	if item.Metadata["kind"] != "turn_aborted" || item.Metadata["turnId"] != "turn-budget" {
+		t.Fatalf("marker metadata = %#v", item.Metadata)
 	}
 }

@@ -2,9 +2,11 @@ package appserver
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"codex_go/model"
+	"codex_go/runtimeutil"
 	"codex_go/turn"
 )
 
@@ -17,13 +19,13 @@ func (r *RuntimeRouter) modelRequestHookCallback(threadID string, sessionID stri
 	}
 	threadID = strings.TrimSpace(threadID)
 	cwd = strings.TrimSpace(cwd)
-	return func(ctx context.Context, event turn.ModelRequestHookEvent) {
+	return func(ctx context.Context, event turn.ModelRequestHookEvent) error {
 		var usage *model.AgentUsage
 		if event.Usage != nil {
 			value := *event.Usage
 			usage = &value
 		}
-		hook(ctx, model.ModelRequestHookEvent{
+		return hook(ctx, model.ModelRequestHookEvent{
 			Phase:         event.Phase,
 			Status:        event.Status,
 			Kind:          model.SamplingKind(event.Kind),
@@ -47,8 +49,8 @@ func (r *RuntimeRouter) modelRequestAttemptHook(threadID string, sessionID strin
 	threadID = strings.TrimSpace(threadID)
 	sessionID = strings.TrimSpace(sessionID)
 	cwd = strings.TrimSpace(cwd)
-	return func(ctx context.Context, event model.ModelRequestHookEvent) {
-		r.runModelRequestHook(ctx, threadID, sessionID, cwd, event)
+	return func(ctx context.Context, event model.ModelRequestHookEvent) error {
+		return r.runModelRequestHook(ctx, threadID, sessionID, cwd, event)
 	}
 }
 
@@ -56,13 +58,13 @@ func (r *RuntimeRouter) modelRequestAttemptHook(threadID string, sessionID strin
 // runner pairs one Pre and one Post per opened response stream and reports the
 // sampling kind, stable request id, attempt number and provider response id
 // (Rust #61562/#61587).
-func (r *RuntimeRouter) runModelRequestHook(ctx context.Context, threadID string, sessionID string, cwd string, event model.ModelRequestHookEvent) {
+func (r *RuntimeRouter) runModelRequestHook(ctx context.Context, threadID string, sessionID string, cwd string, event model.ModelRequestHookEvent) error {
 	if r == nil || ctx == nil {
-		return
+		return nil
 	}
 	hooks := r.hooksForThreadTurn(threadID, cwd)
 	if len(hooks) == 0 {
-		return
+		return nil
 	}
 	var errorText *string
 	if event.Error != "" {
@@ -72,20 +74,56 @@ func (r *RuntimeRouter) runModelRequestHook(ctx context.Context, threadID string
 	if value := strings.TrimSpace(event.ResponseID); value != "" {
 		responseID = &value
 	}
-	_, _ = r.requireHookRunner().RunModelRequest(ctx, &HookModelRequestRequest{
-		ThreadID:      threadID,
-		SessionID:     sessionID,
-		TurnID:        event.TurnID,
-		CWD:           cwd,
-		Model:         event.Model,
-		Phase:         event.Phase,
-		Status:        event.Status,
-		Kind:          string(event.Kind),
-		RequestID:     event.RequestID,
-		AttemptNumber: event.AttemptNumber,
-		ResponseID:    responseID,
-		Error:         errorText,
-		TokenUsage:    event.Usage,
-		Hooks:         hooks,
+	billable := event.Phase == "post" &&
+		(event.Status == "completed" || (event.Status == "failed" && event.Usage != nil))
+	hookResult, hookErr := r.requireHookRunner().RunModelRequest(ctx, &HookModelRequestRequest{
+		ThreadID:             threadID,
+		SessionID:            sessionID,
+		TurnID:               event.TurnID,
+		CWD:                  cwd,
+		Model:                event.Model,
+		Phase:                event.Phase,
+		Status:               event.Status,
+		Kind:                 string(event.Kind),
+		RequestID:            event.RequestID,
+		AttemptNumber:        event.AttemptNumber,
+		ResponseID:           responseID,
+		Error:                errorText,
+		TokenUsage:           event.Usage,
+		Hooks:                hooks,
+		BillableModelRequest: billable,
 	})
+	if hookErr != nil || hookResult == nil {
+		return nil
+	}
+	return r.applyModelRequestHookCharge(threadID, hookResult)
+}
+
+// applyModelRequestHookCharge posts a billable PostModelRequest run's hook
+// price to the thread's shared rollout budget. Rust #61580 charges the
+// synchronous hook contribution independently of the provider usage record,
+// then surfaces a bad price as a terminal failure only after its valid
+// siblings were posted.
+func (r *RuntimeRouter) applyModelRequestHookCharge(threadID string, hookResult *HookRunResult) error {
+	if hookResult == nil {
+		return nil
+	}
+	if charge := hookResult.ModelRequestHookCharge; charge.Units != 0 || charge.Overflowed {
+		if budget := r.rolloutBudgetForThread(threadID); budget != nil {
+			exhausted, chargeErr := budget.RecordHookCharge(runtimeutil.HookCharge{
+				Units:      charge.Units,
+				Overflowed: charge.Overflowed,
+			})
+			if chargeErr != nil {
+				return fmt.Errorf("%w: %v", model.ErrUsageAccountingFailed, chargeErr)
+			}
+			if exhausted {
+				r.rolloutBudgetExhausted.Store(true)
+			}
+		}
+	}
+	if message := strings.TrimSpace(hookResult.ModelRequestHookInvalidPrice); message != "" {
+		return fmt.Errorf("%w: Invalid post-hook budget units: %s", model.ErrUsageAccountingFailed, message)
+	}
+	return nil
 }

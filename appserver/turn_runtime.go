@@ -1981,6 +1981,10 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	onToolCompleted = r.liveToolCompletedRecorder(liveItems, turnID, onToolCompleted)
 	onCompletedResponseItem := r.agentResponseRecorder(ctx, threadID, turnID, runConfig)
 	onCompletedResponseItem = r.liveResponseItemRecorder(liveItems, turnID, onCompletedResponseItem)
+	responseProcessMode := config.ResponseProcessModeStreaming
+	if cfg, cfgErr := r.effectiveConfigForTurn(params); cfgErr == nil && cfg != nil {
+		responseProcessMode = cfg.ResponseProcessMode()
+	}
 	agentRequest := &turn.AgentLoopRequest{
 		Prompt:                       agentPrompt,
 		Timing:                       timingState,
@@ -2038,8 +2042,10 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		OnWarning: func(message string) {
 			r.notify(NotificationWarning, &WarningNotification{ThreadID: stringPtrIfNotEmpty(threadID), Message: message})
 		},
-		SamplingFollowUp:   samplingFollowUp,
-		SamplingCompaction: samplingCompaction,
+		SamplingFollowUp:         samplingFollowUp,
+		SamplingCompaction:       samplingCompaction,
+		SettleBeforeToolDispatch: responseProcessMode == config.ResponseProcessModeAfterCompleteResponse,
+		CheckWorkBudget:          r.rolloutBudgetCheck(threadID),
 		SamplingCheckpoint: func() (uint64, bool) {
 			return r.runtimeSamplingCheckpoint(session.ThreadID(threadID))
 		},
@@ -2308,15 +2314,13 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			}
 		}
 	}
-	if budget := r.rolloutBudgetForSession(); budget != nil {
+	if budget := r.rolloutBudgetForThread(threadID); budget != nil {
 		// Per-response charging happens in the sampling follow-up; turns that
 		// produced no model responses are charged here. Exhaustion (from either
 		// path) fails the turn with the sessionBudgetExceeded codexErrorInfo,
 		// mirroring Rust Session::record_rollout_budget_usage.
-		exhausted := r.rolloutBudgetExhausted.Load()
-		if !r.rolloutBudgetCharged.Load() {
-			var budgetErr error
-			exhausted, budgetErr = budget.RecordUsage(runtimeutil.TokenUsage{
+		if len(result.Responses) == 0 {
+			_, budgetErr := budget.RecordUsage(runtimeutil.TokenUsage{
 				InputTokens:             result.Usage.InputTokens,
 				CachedInputTokens:       result.Usage.CachedInputTokens,
 				OutputTokens:            result.Usage.OutputTokens,
@@ -2327,7 +2331,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 				return
 			}
 		}
-		if exhausted {
+		if budget.Exhausted() {
 			r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, ErrSessionBudgetExceeded, nil)
 			return
 		}
@@ -5007,6 +5011,12 @@ func (r *RuntimeRouter) finishTurnWithErrorAnalytics(threadID string, turnID str
 		r.retireVoiceHandoffsForMisalignment(threadID)
 	}
 	appErr := &TurnError{Message: err.Error(), CodexErrorInfo: errorFields.TurnError, Misalignment: misalignmentDetailsFromError(err)}
+	// Rust #61581: an exhausted rollout budget records a neutral interruption
+	// marker before the terminal event, so a later turn knows the stop was
+	// automatic rather than a user interrupt.
+	if errors.Is(err, ErrSessionBudgetExceeded) {
+		r.recordAutomaticRolloutStopMarker(threadID, turnID, now)
+	}
 	if analytics != nil {
 		analytics.TurnError = errorFields.TurnError
 		analytics.CodexErrorKind = errorFields.CodexErrorKind
@@ -5231,6 +5241,10 @@ func turnAnalyticsErrorFieldsFromError(err error) turnAnalyticsErrorFields {
 		return turnAnalyticsErrorFields{TurnError: "badRequest", CodexErrorKind: stringPtrIfNotEmpty("unsupported_operation")}
 	case errors.Is(err, ErrSessionBudgetExceeded):
 		return turnAnalyticsErrorFields{TurnError: "sessionBudgetExceeded", CodexErrorKind: stringPtrIfNotEmpty("rollout_budget")}
+	case errors.Is(err, model.ErrUsageAccountingFailed):
+		// Rust #61580: UsageAccountingFailed falls through to
+		// CodexErrorInfo::Other; retrying cannot settle the bill.
+		return turnAnalyticsErrorFields{TurnError: "other", CodexErrorKind: stringPtrIfNotEmpty("usage_accounting_failed")}
 	default:
 		return turnAnalyticsErrorFields{}
 	}
@@ -5442,6 +5456,54 @@ func (r *RuntimeRouter) persistInterruptedTurnMarker(threadID string, turnID str
 		return
 	}
 	_ = r.appendRuntimeRollout(threadID, []session.Item{item}, now)
+}
+
+// recordAutomaticRolloutStopMarker persists Rust's neutral developer marker for
+// a turn stopped by the shared rollout budget. `agents.interrupt_message =
+// false` disables it exactly like the user-interrupt path.
+func (r *RuntimeRouter) recordAutomaticRolloutStopMarker(threadID string, turnID string, now time.Time) {
+	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		return
+	}
+	if !r.agentInterruptMessageEnabled() {
+		return
+	}
+	item := budgetStopTurnMarkerSessionItem(turnID, now)
+	if _, err := r.runtimeAppendItem(session.ThreadID(threadID), item); err != nil {
+		return
+	}
+	_ = r.appendRuntimeRollout(threadID, []session.Item{item}, now)
+}
+
+func budgetStopTurnMarkerSessionItem(turnID string, now time.Time) session.Item {
+	const guidance = "The previous turn was interrupted on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed."
+	text := "<turn_aborted>\n" + guidance + "\n</turn_aborted>"
+	return session.Item{
+		ID:        "turn-aborted-budget-" + safeIdentifier(turnID),
+		Type:      "message",
+		Role:      "developer",
+		Text:      text,
+		Content:   []session.ContentPart{{Type: "input_text", Text: text}},
+		CreatedAt: now,
+		Metadata: map[string]any{
+			"kind":   "turn_aborted",
+			"turnId": turnID,
+			"reason": "sessionBudgetExceeded",
+		},
+	}
+}
+
+// agentInterruptMessageEnabled resolves the interrupt-message setting for the
+// current thread config. A missing or unreadable config keeps Rust's default.
+func (r *RuntimeRouter) agentInterruptMessageEnabled() bool {
+	if r == nil || r.services.Config == nil {
+		return true
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil {
+		return true
+	}
+	return config.NewConfigFromRead(read).AgentInterruptMessageEnabled()
 }
 
 func interruptedTurnMarkerSessionItem(turnID string, now time.Time) session.Item {
@@ -6673,7 +6735,7 @@ func (r *RuntimeRouter) recordIncompleteResponseUsage(threadID string, turnID st
 	if strings.TrimSpace(turnID) != "" {
 		r.recordGoalTokenUsageWithDescendants(threadID, turnID, *total)
 	}
-	if budget := r.rolloutBudgetForSession(); budget != nil {
+	if budget := r.rolloutBudgetForThread(threadID); budget != nil {
 		// Per-response charging, mirroring Rust's `record_rollout_budget_usage`
 		// reached from `record_token_usage_info`.
 		r.rolloutBudgetCharged.Store(true)
@@ -6714,11 +6776,11 @@ func (r *RuntimeRouter) recordIncompleteCompactionUsage(record *session.Record, 
 		return
 	}
 	usage := *incomplete.Usage
+	threadID := strings.TrimSpace(request.ThreadID)
 	if request.Trigger != compact.TriggerManual {
-		r.chargeRolloutBudgetUsage(usage)
+		r.chargeRolloutBudgetUsage(threadID, usage)
 		return
 	}
-	threadID := strings.TrimSpace(request.ThreadID)
 	modelID := ""
 	cwd := ""
 	if params != nil {
@@ -6743,11 +6805,11 @@ func (r *RuntimeRouter) recordIncompleteCompactionUsage(record *session.Record, 
 // reached from the background compaction arm. Budget exhaustion is recorded for
 // later reporting but never turned into an error: the caller already holds a
 // terminal failure.
-func (r *RuntimeRouter) chargeRolloutBudgetUsage(usage model.AgentUsage) {
+func (r *RuntimeRouter) chargeRolloutBudgetUsage(threadID string, usage model.AgentUsage) {
 	if r == nil {
 		return
 	}
-	budget := r.rolloutBudgetForSession()
+	budget := r.rolloutBudgetForThread(threadID)
 	if budget == nil {
 		return
 	}

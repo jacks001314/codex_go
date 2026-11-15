@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	osexec "os/exec"
 	"regexp"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"codex_go/envutil"
+	"codex_go/runtimeutil"
 	"codex_go/telemetry"
 )
 
@@ -50,10 +52,24 @@ type HookMcpCall struct {
 	Timeout       time.Duration
 }
 
-// McpToolHookExecutor mirrors Rust HookMcpExecutor: returns text interpreted
-// using ordinary command-hook output semantics.
+// HookMcpOutput mirrors Rust HookMcpOutput: the text interpreted using
+// ordinary command-hook output semantics plus the structured content a
+// successful PostModelRequest hook can price itself with (Rust #61580).
+type HookMcpOutput struct {
+	Text              string
+	StructuredContent any
+}
+
+// McpToolHookExecutor mirrors Rust HookMcpExecutor.
 type McpToolHookExecutor interface {
-	Execute(ctx context.Context, call HookMcpCall) (string, error)
+	Execute(ctx context.Context, call HookMcpCall) (HookMcpOutput, error)
+}
+
+// HookCharge is the synchronous post-hook contribution carried by one
+// PostModelRequest run (Rust codex_hooks::HookCharge, #61580).
+type HookCharge struct {
+	Units      float64
+	Overflowed bool
 }
 
 type HookRunRequest struct {
@@ -66,6 +82,10 @@ type HookRunRequest struct {
 	InputJSON     string
 	Metadata      map[string]any
 	Hooks         []HookMetadata
+	// BillableModelRequest marks a PostModelRequest that ended a provider
+	// attempt whose bill can be settled (Rust #61580). Successful synchronous
+	// MCP handlers may then add `extra_codex_rollout_budget_units`.
+	BillableModelRequest bool
 }
 
 type HookRunResult struct {
@@ -77,6 +97,12 @@ type HookRunResult struct {
 	UpdatedInput       any
 	AdditionalContexts []string
 	FeedbackMessage    string
+	// ModelRequestHookCharge is the synchronous post-hook contribution of a
+	// billable PostModelRequest run (Rust #61580).
+	ModelRequestHookCharge HookCharge
+	// ModelRequestHookInvalidPrice is set when a successful handler reported a
+	// price that cannot be billed. Valid sibling prices are still charged.
+	ModelRequestHookInvalidPrice string
 	// PermissionRequestDecision is the folded verdict of a PermissionRequest
 	// run: any deny wins, otherwise the last allow wins, otherwise nil - Rust
 	// resolve_permission_request_decision. Matched handlers that cannot apply
@@ -92,6 +118,9 @@ type hookCommandRunResult struct {
 	Stdout      string
 	Stderr      string
 	Error       *string
+	// StructuredContent is the MCP handler's structuredContent. Command hooks
+	// have none (Rust HandlerRunResult, #61580).
+	StructuredContent any
 }
 
 func NewHookRunner() *HookRunner {
@@ -127,6 +156,11 @@ func (r *HookRunner) Run(ctx context.Context, request *HookRunRequest) (*HookRun
 	selected := selectHookHandlers(request.Hooks, request.EventName, request.MatcherInputs)
 	runs := make([]HookRunSummary, 0, len(selected))
 	result := &HookRunResult{}
+	// Rust #61580: successful synchronous MCP post-hooks may price the
+	// response. Prices become visible together, after the whole group ran, and
+	// a failed sibling never erases another handler's contribution.
+	var hookUnits runtimeutil.BudgetUnitsSum
+	var largestHookPrice float64
 	for _, metadata := range selected {
 		if metadata.ExecutionMode == HookExecutionAsync && request.EventName != HookEventSessionEnd {
 			r.scheduleAsyncHook(ctx, request, metadata)
@@ -148,6 +182,14 @@ func (r *HookRunner) Run(ctx context.Context, request *HookRunRequest) (*HookRun
 		}
 		completed := completedHookSummary(metadata, runResult, hookRunStatus(request.EventName, runResult), hookOutputEntries(request.EventName, runResult))
 		completed = hookSummaryWithRunIDSuffix(completed, request.RunIDSuffix)
+		if request.BillableModelRequest && hookRunSucceeded(runResult) {
+			if price, priceErr := modelRequestHookPrice(runResult.StructuredContent); priceErr != "" {
+				result.ModelRequestHookInvalidPrice = priceErr
+			} else {
+				largestHookPrice = max(largestHookPrice, price)
+				hookUnits.Add(price)
+			}
+		}
 		effect := hookRunEffect(request.EventName, runResult)
 		if request.EventName == HookEventPermissionRequest {
 			switch {
@@ -173,6 +215,15 @@ func (r *HookRunner) Run(ctx context.Context, request *HookRunRequest) (*HookRun
 		runs = append(runs, completed)
 	}
 	result.Runs = runs
+	if request.BillableModelRequest {
+		result.ModelRequestHookCharge.Units = hookUnits.Total()
+		if !isFiniteNumber(result.ModelRequestHookCharge.Units) {
+			// An individual price is a real lower bound even when the sum
+			// rounded past f64 range.
+			result.ModelRequestHookCharge = HookCharge{Units: largestHookPrice, Overflowed: true}
+			result.ModelRequestHookInvalidPrice = "total hook cost exceeds f64 range"
+		}
+	}
 	return result, nil
 }
 
@@ -420,8 +471,69 @@ func (r *HookRunner) runMcpToolHook(ctx context.Context, metadata HookMetadata, 
 	}
 	code := int32(0)
 	result.ExitCode = &code
-	result.Stdout = output
+	result.Stdout = output.Text
+	result.StructuredContent = output.StructuredContent
 	return result
+}
+
+// hookRunSucceeded mirrors Rust's parse_completed status check: a handler is
+// billable only when it reported no error and exited zero.
+func hookRunSucceeded(result *hookCommandRunResult) bool {
+	return result != nil && result.Error == nil && result.ExitCode != nil && *result.ExitCode == 0
+}
+
+// modelRequestHookPrice parses Rust #61580's
+// `structuredContent.extra_codex_rollout_budget_units`. The price is omitted
+// for null/absent structured content and must be finite and nonnegative.
+func modelRequestHookPrice(structuredContent any) (float64, string) {
+	if structuredContent == nil {
+		return 0, ""
+	}
+	object, ok := structuredContent.(map[string]any)
+	if !ok {
+		return 0, "post-hook structuredContent must be an object or null"
+	}
+	raw, present := object["extra_codex_rollout_budget_units"]
+	if !present || raw == nil {
+		return 0, ""
+	}
+	units, ok := numericHookPrice(raw)
+	if !ok {
+		return 0, "invalid post-hook structuredContent.extra_codex_rollout_budget_units"
+	}
+	if math.IsNaN(units) || math.IsInf(units, 0) || units < 0 {
+		return 0, "hook extra_codex_rollout_budget_units must be finite and nonnegative"
+	}
+	return units, ""
+}
+
+// numericHookPrice accepts the JSON decoder's float64 plus the integer and
+// json.Number forms a typed hook output can carry.
+func numericHookPrice(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case float32:
+		return float64(typed), true
+	case int:
+		return float64(typed), true
+	case int32:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case json.Number:
+		parsed, err := typed.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return parsed, true
+	default:
+		return 0, false
+	}
+}
+
+func isFiniteNumber(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
 // expandMcpArgumentTemplate recursively substitutes ${field.nested}

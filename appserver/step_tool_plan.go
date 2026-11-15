@@ -284,6 +284,7 @@ func (r *RuntimeRouter) stepToolRegistryOptions(inputs rememberedTurnToolInputs,
 		options.MCPTurnMetadata = searchCallTurnMetadata(options.MCPTurnMetadata, searchSelection.context)
 	}
 	options.MCPToolAdmissionHook = nil
+	options.MCPWorkBudgetCheck = r.rolloutBudgetCheck(inputs.params.ThreadID)
 	if searchSelection.provider == modelSearchHosted || searchSelection.provider == modelSearchClientMCP {
 		options.MCPToolAdmissionHook = r.modelSearchMCPAdmission(inputs.params.ThreadID, inputs.turnID, searchSelection)
 	}

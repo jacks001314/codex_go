@@ -344,7 +344,12 @@ func (r *ResponsesAgentRunner) runStreaming(ctx context.Context, request *AgentR
 		// #61587 keeps the request id stable while the attempt number rises.
 		attemptHooks := request.beginModelRequestAttempt(ctx, request.Model)
 		response, err := r.runStreamingOncePreemptible(ctx, request, apiRequest)
-		attemptHooks.finish(ctx, response, err)
+		if hookErr := attemptHooks.finish(ctx, response, err); hookErr != nil && err == nil {
+			// Rust #61580: the provider attempt ended, so its unsuccessful
+			// accounting is terminal and is never retried.
+			response = nil
+			err = hookErr
+		}
 		if err != nil && errors.Is(err, errResponsesSamplingPreempted) {
 			// Rust #48141: a signaled step yields the request instead of
 			// consuming a retry, and the connection state is dropped so the
@@ -636,6 +641,10 @@ func (r *ResponsesAgentRunner) runStreamingOnce(ctx context.Context, request *Ag
 
 func isRetryableResponsesStreamError(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if errors.Is(err, ErrUsageAccountingFailed) {
+		// Rust #61580: retrying inference cannot settle an accounting failure.
 		return false
 	}
 	if IsResponseIncompleteError(err) {

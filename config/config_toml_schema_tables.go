@@ -361,6 +361,10 @@ var configRealtimeFields = map[string]configFieldKind{
 	},
 }
 
+var configResponsesFields = map[string]configFieldKind{
+	"process_mode": {kind: configKindEnum, variants: []string{"streaming", "after_complete_response"}},
+}
+
 var configSandboxWorkspaceWriteFields = map[string]configFieldKind{
 	"writable_roots":         {kind: configKindPathSequence},
 	"network_access":         {kind: configKindBool},
