@@ -272,9 +272,9 @@ const (
 const (
 	defaultPageSize       = 50
 	maxThreadListPageSize = 100
-	// maxThreadListExcludedIDs mirrors Rust's THREAD_LIST_MAX_EXCLUDED_IDS
-	// (#51595); duplicates count toward the bound.
-	maxThreadListExcludedIDs = 100
+	// maxThreadListFilterIDs mirrors Rust's THREAD_LIST_MAX_FILTER_IDS
+	// (#51595, #61446); duplicates count toward the bound.
+	maxThreadListFilterIDs = 100
 )
 
 const (
@@ -2774,6 +2774,12 @@ type ThreadListParams struct {
 	HistoryAccount     *session.HistoryAccount `json:"-"`
 	Cursor             *string                 `json:"cursor,omitempty"`
 	Limit              *int                    `json:"limit,omitempty"`
+	// IncludedThreadIDs restricts the listing to these threads before the
+	// result limit is applied (Rust ThreadListParams::included_thread_ids,
+	// #61446). Omitted or null is unrestricted, while an empty list matches
+	// nothing. Up to 100 entries; invalid IDs or a larger list are rejected.
+	// Callers must repeat the same IDs on each page.
+	IncludedThreadIDs *[]string `json:"includedThreadIds,omitempty"`
 	// ExcludedThreadIDs drops these threads before the result limit is applied
 	// (Rust ThreadListParams::excluded_thread_ids, #51595). Up to 100 entries;
 	// invalid IDs or a larger list are rejected, never truncated. Callers must
@@ -2960,12 +2966,24 @@ func (p *ThreadListParams) Validate() error {
 	if p.ExcludedThreadIDs != nil {
 		// Rust rejects rather than truncating, and duplicates count toward the
 		// bound (#51595).
-		if len(*p.ExcludedThreadIDs) > maxThreadListExcludedIDs {
-			return invalidParams(fmt.Sprintf("excludedThreadIds accepts at most %d entries", maxThreadListExcludedIDs))
+		if len(*p.ExcludedThreadIDs) > maxThreadListFilterIDs {
+			return invalidParams(fmt.Sprintf("excludedThreadIds accepts at most %d entries", maxThreadListFilterIDs))
 		}
 		for _, id := range *p.ExcludedThreadIDs {
 			if !validUUIDString(id) {
 				return invalidParams("invalid excluded thread id: invalid UUID")
+			}
+		}
+	}
+	if p.IncludedThreadIDs != nil {
+		// Rust #61446 rejects rather than truncating, and duplicates count
+		// toward the bound.
+		if len(*p.IncludedThreadIDs) > maxThreadListFilterIDs {
+			return invalidParams(fmt.Sprintf("includedThreadIds accepts at most %d entries", maxThreadListFilterIDs))
+		}
+		for _, id := range *p.IncludedThreadIDs {
+			if !validUUIDString(id) {
+				return invalidParams("invalid included thread id: invalid UUID")
 			}
 		}
 	}
@@ -4214,6 +4232,13 @@ func BuildListOptions(params *ThreadListParams) (session.ListOptions, error) {
 		for _, id := range *params.ExcludedThreadIDs {
 			options.ExcludedThreadIDs = append(options.ExcludedThreadIDs, session.ThreadID(id))
 		}
+	}
+	if params.IncludedThreadIDs != nil {
+		included := make([]session.ThreadID, 0, len(*params.IncludedThreadIDs))
+		for _, id := range *params.IncludedThreadIDs {
+			included = append(included, session.ThreadID(id))
+		}
+		options.IncludedThreadIDs = &included
 	}
 	switch params.SortKey {
 	case SortUpdatedAt:

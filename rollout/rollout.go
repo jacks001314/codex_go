@@ -2760,6 +2760,9 @@ type ListOptions struct {
 	// IncludeAttachedThreads keeps saved attached forks in the result. Ordinary
 	// resume and history listings leave this false (Rust #56351).
 	IncludeAttachedThreads bool
+	// IncludedThreadIDs restricts the listing to these threads (Rust #61446).
+	// Nil means unrestricted; an empty slice matches nothing.
+	IncludedThreadIDs []string
 }
 
 func ListThreads(codexHome string, options ListOptions) (*Page, error) {
@@ -3364,6 +3367,9 @@ func moveRollout(path string, targetDir string) (string, error) {
 }
 
 func matchesOptions(item *ThreadItem, options *ListOptions) bool {
+	if options.IncludedThreadIDs != nil && !contains(options.IncludedThreadIDs, item.ThreadID) {
+		return false
+	}
 	if item.AttachedThread && (options == nil || !options.IncludeAttachedThreads) {
 		return false
 	}

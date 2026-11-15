@@ -437,6 +437,10 @@ type ListOptions struct {
 	// Rust's ThreadListParams::excluded_thread_ids (#51595). Empty means no
 	// exclusions.
 	ExcludedThreadIDs []ThreadID
+	// IncludedThreadIDs restricts the listing to these threads before the page
+	// size is applied (Rust #61446). Nil means unrestricted, while a pointer to
+	// an empty slice matches nothing.
+	IncludedThreadIDs *[]ThreadID
 	// HistoryAccount limits local discovery to threads visible to the current
 	// ChatGPT login (Rust #58918). Nil leaves the listing unscoped.
 	HistoryAccount *HistoryAccount
@@ -2047,6 +2051,9 @@ func writeStoreFileAtomically(path string, data []byte) error {
 }
 
 func matchesListOptions(record *Record, options *ListOptions, all []Record) bool {
+	if options.IncludedThreadIDs != nil && !containsThreadID(*options.IncludedThreadIDs, record.ID) {
+		return false
+	}
 	if record.Archived != options.Archived {
 		return false
 	}

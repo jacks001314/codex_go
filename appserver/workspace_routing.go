@@ -37,6 +37,40 @@ type workspaceRoutingCacheKey struct {
 // so a backend that keeps rejecting never spins.
 const workspaceRoutingRecoveryAttempts = 3
 
+// governmentWorkspaceRequiredError mirrors Rust's account-read mapping for a
+// commercial workspace routed to the government backend (#61418). The stable
+// reason and action let clients prompt for a government sign-in.
+type governmentWorkspaceRequiredError struct{}
+
+func (governmentWorkspaceRequiredError) Error() string {
+	return model.ErrWorkspaceRoutingGovernmentRequired.Error()
+}
+
+func (governmentWorkspaceRequiredError) Unwrap() error {
+	return model.ErrWorkspaceRoutingGovernmentRequired
+}
+
+func (governmentWorkspaceRequiredError) Is(target error) bool {
+	return target == model.ErrWorkspaceRoutingGovernmentRequired || target == ErrJSONRPCInvalidRequest
+}
+
+func (governmentWorkspaceRequiredError) JSONRPCErrorData() map[string]any {
+	return map[string]any{
+		"reason": "governmentWorkspaceRequired",
+		"action": "relogin",
+	}
+}
+
+// mapWorkspaceRoutingAccountReadError mirrors Rust's read_account error
+// mapping. Only the government-workspace conflict is invalid_request with
+// structured data; every other routing failure remains an internal error.
+func mapWorkspaceRoutingAccountReadError(err error) error {
+	if errors.Is(err, model.ErrWorkspaceRoutingGovernmentRequired) {
+		return governmentWorkspaceRequiredError{}
+	}
+	return err
+}
+
 // workspaceRoutingFetch coordinates one discovery per key: waiters share the
 // first result, and a generation change starts a fresh key (Rust
 // WorkspaceRoutingFetch plus the weak-entry map).

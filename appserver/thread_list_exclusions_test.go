@@ -160,8 +160,8 @@ func TestRouterThreadListExcludedThreadIDsApplyOnStatePath(t *testing.T) {
 func TestRouterThreadListExcludedThreadIDsValidateBoundAndIDs(t *testing.T) {
 	router := NewRouter(session.NewStore(t.TempDir()))
 
-	atBound := make([]string, 0, maxThreadListExcludedIDs)
-	for i := 0; i < maxThreadListExcludedIDs; i++ {
+	atBound := make([]string, 0, maxThreadListFilterIDs)
+	for i := 0; i < maxThreadListFilterIDs; i++ {
 		atBound = append(atBound, uuid.NewString())
 	}
 	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadList, ThreadListParams{ExcludedThreadIDs: &atBound}))
@@ -174,14 +174,14 @@ func TestRouterThreadListExcludedThreadIDsValidateBoundAndIDs(t *testing.T) {
 	if response.Error == nil || response.Error.Code != JSONRPCInvalidParamsErrorCode {
 		t.Fatalf("thread/list oversized exclusions = %+v, want code %d", response, JSONRPCInvalidParamsErrorCode)
 	}
-	if want := fmt.Sprintf("excludedThreadIds accepts at most %d entries", maxThreadListExcludedIDs); !strings.HasPrefix(response.Error.Message, want) {
+	if want := fmt.Sprintf("excludedThreadIds accepts at most %d entries", maxThreadListFilterIDs); !strings.HasPrefix(response.Error.Message, want) {
 		t.Fatalf("thread/list oversized exclusions message = %q, want prefix %q", response.Error.Message, want)
 	}
 
 	// Duplicates count toward the bound: 100 copies plus one more is oversized.
-	duplicates := make([]string, 0, maxThreadListExcludedIDs+1)
+	duplicates := make([]string, 0, maxThreadListFilterIDs+1)
 	id := uuid.NewString()
-	for i := 0; i <= maxThreadListExcludedIDs; i++ {
+	for i := 0; i <= maxThreadListFilterIDs; i++ {
 		duplicates = append(duplicates, id)
 	}
 	response = router.Handle(requestWithParams(t, IntID(3), MethodThreadList, ThreadListParams{ExcludedThreadIDs: &duplicates}))

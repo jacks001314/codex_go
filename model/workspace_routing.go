@@ -29,6 +29,7 @@ var (
 	ErrWorkspaceRoutingInvalidOverride      = errors.New("workspace routing discovery has invalid account routing override")
 	ErrWorkspaceRoutingBackendNotOrigin     = errors.New("workspace routing discovery must return an origin")
 	ErrWorkspaceRoutingBackendConflict      = errors.New("required ChatGPT backend conflicts with workspace routing")
+	ErrWorkspaceRoutingGovernmentRequired   = errors.New("Sign in to a government workspace to use the configured government backend.")
 	ErrWorkspaceRoutingInvalidBackendURL    = errors.New("invalid workspace backend URL")
 	ErrWorkspaceRoutingInvalidBackendOrigin = errors.New("workspace backend must use an HTTPS origin without credentials")
 	ErrWorkspaceRoutingAccountChanged       = errors.New("account changed during workspace routing discovery")
@@ -109,27 +110,32 @@ func ResolveWorkspaceRouting(entry chatgptapi.AccountsCheckEntry, requiredBaseUR
 		}
 		discovered = parsed
 	}
-	var origin string
+	var selected *url.URL
 	switch {
 	case required != nil && discovered != nil:
 		if workspaceOrigin(required) != workspaceOrigin(discovered) {
 			return nil, ErrWorkspaceRoutingBackendConflict
 		}
-		origin = workspaceOrigin(required)
+		selected = required
 	case required != nil:
-		origin = workspaceOrigin(required)
+		selected = required
 	case discovered != nil:
-		origin = workspaceOrigin(discovered)
+		selected = discovered
 	default:
 		effective, err := parseWorkspaceBackendURL(effectiveBaseURL)
 		if err != nil {
 			return nil, err
 		}
-		origin = workspaceOrigin(effective)
+		selected = effective
+	}
+	// A commercial workspace cannot route to the government backend even via
+	// an explicitly required or configured base URL (Rust #61418).
+	if backend == "NO_CONSTRAINT" && strings.EqualFold(selected.Hostname(), "gov.chatgpt.com") {
+		return nil, ErrWorkspaceRoutingGovernmentRequired
 	}
 	return &auth.WorkspaceRouting{
 		ChatGPTAccountID:       entry.ID,
-		BackendOrigin:          origin,
+		BackendOrigin:          workspaceOrigin(selected),
 		AccountRoutingOverride: auth.AccountRoutingOverride(override),
 	}, nil
 }
@@ -155,7 +161,15 @@ func workspaceOrigin(value *url.URL) string {
 	if value == nil {
 		return ""
 	}
-	return value.Scheme + "://" + value.Host
+	host := strings.ToLower(value.Hostname())
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	port := value.Port()
+	if port != "" && !(value.Scheme == "https" && port == "443") && !(value.Scheme == "http" && port == "80") {
+		host += ":" + port
+	}
+	return value.Scheme + "://" + host
 }
 
 // ApplyWorkspaceRouting rewrites a provider to the discovered ChatGPT backend

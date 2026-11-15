@@ -15655,10 +15655,11 @@ func (r *RuntimeRouter) handleGetAccount(request *Request) (*auth.GetAccountResp
 	response := r.requireAccount().GetAccount(&params)
 	response.RequiresOpenAIAuth = true
 	// Rust get_account: routing discovery failures surface as internal errors,
-	// so a ChatGPT account read is never reported with unresolved routing.
+	// except that a commercial workspace routed to the government backend is
+	// an invalid request with a relogin hint.
 	routing, err := r.workspaceRoutingForAccountRead(context.Background(), snapshot)
 	if err != nil {
-		return nil, err
+		return nil, mapWorkspaceRoutingAccountReadError(err)
 	}
 	response.WorkspaceRouting = routing
 	return response, nil

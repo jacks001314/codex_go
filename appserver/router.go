@@ -4062,11 +4062,13 @@ func (r *Router) handleThreadList(request *Request) (*ThreadListResponse, error)
 	}
 	var page *session.Page
 	if r.state != nil {
-		if !params.UseStateDBOnly {
+		// Rust #61446: requests with includedThreadIds always use indexed
+		// metadata and never scan rollouts for repairs.
+		if !params.UseStateDBOnly && params.IncludedThreadIDs == nil {
 			r.repairStateThreadListing(options.Search != "")
 		}
 		page, err = r.listRecordsFromState(options)
-		if err != nil && params.UseStateDBOnly {
+		if err != nil && (params.UseStateDBOnly || params.IncludedThreadIDs != nil) {
 			// Rust #51602 (`RolloutRecorder::list_threads_with_db_fallback`): a
 			// database-only listing that cannot query the state database fails
 			// with -32603 and Rust's "failed to list threads from state
@@ -4274,6 +4276,7 @@ func (r *Router) listRecordsIncludingRollouts(records []session.Record, options 
 	for _, archived := range []bool{false, true} {
 		rolloutPage, err := rollout.ListThreads(codexHome, rollout.ListOptions{
 			Archived: archived, PageSize: 0, IncludeAttachedThreads: options.IncludeAttachedThreads,
+			IncludedThreadIDs: rolloutIncludedThreadIDs(options.IncludedThreadIDs),
 		})
 		if err != nil {
 			continue
@@ -4295,6 +4298,17 @@ func (r *Router) listRecordsIncludingRollouts(records []session.Record, options 
 		}
 	}
 	return session.ListRecords(records, options)
+}
+
+func rolloutIncludedThreadIDs(ids *[]session.ThreadID) []string {
+	if ids == nil {
+		return nil
+	}
+	out := make([]string, 0, len(*ids))
+	for _, id := range *ids {
+		out = append(out, string(id))
+	}
+	return out
 }
 
 func (r *Router) handleThreadItemsList(request *Request) (*ThreadItemsListResponse, error) {

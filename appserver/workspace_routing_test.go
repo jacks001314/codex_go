@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -256,6 +257,27 @@ func TestResolveWorkspaceRoutingMatchesRust(t *testing.T) {
 			wantErr:         model.ErrWorkspaceRoutingBackendConflict,
 		},
 		{
+			name:            "required government backend needs a government workspace",
+			entry:           chatgptapi.AccountsCheckEntry{ID: "workspace", WorkspaceBackendOrigin: origin("NO_CONSTRAINT"), AccountRoutingOverride: override("NO_CONSTRAINT")},
+			requiredBaseURL: "https://GOV.chatgpt.com:443/backend-api/",
+			effective:       "https://chatgpt.com/backend-api",
+			wantErr:         model.ErrWorkspaceRoutingGovernmentRequired,
+		},
+		{
+			name:      "effective government backend needs a government workspace",
+			entry:     chatgptapi.AccountsCheckEntry{ID: "workspace", WorkspaceBackendOrigin: origin("NO_CONSTRAINT"), AccountRoutingOverride: override("NO_CONSTRAINT")},
+			effective: "https://gov.chatgpt.com/backend-api/",
+			wantErr:   model.ErrWorkspaceRoutingGovernmentRequired,
+		},
+		{
+			name:            "explicit government backend stays valid and normalizes its origin",
+			entry:           chatgptapi.AccountsCheckEntry{ID: "workspace", WorkspaceBackendOrigin: origin("https://GOV.chatgpt.com:443/"), AccountRoutingOverride: override("us")},
+			requiredBaseURL: "https://GOV.chatgpt.com:443/backend-api/",
+			effective:       "https://chatgpt.com/backend-api",
+			wantOrigin:      "https://gov.chatgpt.com",
+			wantOverride:    auth.AccountRoutingOverrideUS,
+		},
+		{
 			name:    "missing backend origin",
 			entry:   chatgptapi.AccountsCheckEntry{ID: "workspace", AccountRoutingOverride: override("us")},
 			wantErr: model.ErrWorkspaceRoutingMissingBackendOrigin,
@@ -290,6 +312,25 @@ func TestResolveWorkspaceRoutingMatchesRust(t *testing.T) {
 				t.Fatalf("routing = %+v, want origin %q override %q", got, testCase.wantOrigin, wantOverride)
 			}
 		})
+	}
+}
+
+func TestAccountReadMapsGovernmentWorkspaceRequirementLikeRust(t *testing.T) {
+	mapped := mapWorkspaceRoutingAccountReadError(model.ErrWorkspaceRoutingGovernmentRequired)
+	if code := errorCode(mapped); code != JSONRPCInvalidRequestErrorCode {
+		t.Fatalf("error code = %d, want %d", code, JSONRPCInvalidRequestErrorCode)
+	}
+	data := jsonRPCErrorData(mapped)
+	if data["reason"] != "governmentWorkspaceRequired" || data["action"] != "relogin" {
+		t.Fatalf("error data = %#v", data)
+	}
+	if got := jsonRPCErrorMessage(mapped); got != "Sign in to a government workspace to use the configured government backend." {
+		t.Fatalf("error message = %q", got)
+	}
+
+	other := errors.New("other routing failure")
+	if got := mapWorkspaceRoutingAccountReadError(other); got != other {
+		t.Fatalf("unrelated routing error = %v, want unchanged", got)
 	}
 }
 
