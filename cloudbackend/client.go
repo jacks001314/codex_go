@@ -351,6 +351,20 @@ func (c *Client) run(ctx context.Context) {
 			if pending == nil {
 				return
 			}
+			// Rust #61481: a queued start whose caller already went away must not
+			// replace the active attachment, and it must leave any existing
+			// recovery alone. The caller has no way to observe the reply, so
+			// answer it non-blockingly and move on.
+			if pending.method == appserver.MethodThreadStart && pending.ctx != nil && pending.ctx.Err() != nil {
+				if pending.cancel != nil {
+					pending.cancel()
+				}
+				select {
+				case pending.reply <- requestReply{err: &RPCError{Code: internalErrorCode, Message: pending.ctx.Err().Error()}}:
+				default:
+				}
+				continue
+			}
 			// A deliberate selection owns the next attachment, even when its
 			// handshake fails (Rust cloud_backend run_worker).
 			var canceledRoot string
