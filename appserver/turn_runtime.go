@@ -7793,7 +7793,12 @@ func (r *RuntimeRouter) compactEnvironmentContext(ctx context.Context, record *s
 	if _, err := r.recordEnvironmentWorldState(record, currentDate, "", false, false); err != nil {
 		return nil, err
 	}
-	text := r.turnEnvironmentContextTextWithContext(ctx, r.environmentContextParams(request.ThreadID, params), current, localTimezoneName(), "", cfg.IncludeEnvironmentContextTime(), environmentWorldStateRemovals{})
+	perEnvironment := cfg != nil && features.Enabled(cfg.FeatureSettings(), "per_environment_context")
+	var managedNetwork *config.NetworkRequirements
+	if cfg != nil && cfg.Requirements != nil {
+		managedNetwork = cfg.Requirements.Network
+	}
+	text := r.turnEnvironmentContextTextWithOptions(ctx, r.environmentContextParams(request.ThreadID, params), current, localTimezoneName(), "", cfg.IncludeEnvironmentContextTime(), environmentWorldStateRemovals{}, perEnvironment, managedNetwork)
 	return append(items, compact.Item{
 		ID: "environment-context-" + safeIdentifier(request.TurnID), Type: "message", Role: "user", Kind: "environment_context", Text: text, Created: created,
 	}), nil
@@ -9040,13 +9045,11 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 	}
 	inputItems = append(inputItems, additionalInputItems...)
 	permissionsSessionItems := []session.Item{}
-	if item, err := r.permissionsWorldStateInputItem(threadID, params, modelInfo, cfg); err != nil {
+	if items, err := r.permissionsWorldStateInputItems(threadID, params, modelInfo, cfg); err != nil {
 		return nil, err
-	} else if item != nil {
-		inputItems = append(inputItems, item)
-		if persisted, ok := permissionsWorldStateSessionItemForTurn(turnID, item, time.UnixMilli(startedAtMS).UTC()); ok {
-			permissionsSessionItems = append(permissionsSessionItems, persisted)
-		}
+	} else if len(items) > 0 {
+		inputItems = append(inputItems, items...)
+		permissionsSessionItems = append(permissionsSessionItems, permissionsWorldStateSessionItemsForTurn(turnID, items, time.UnixMilli(startedAtMS).UTC())...)
 	}
 	collaborationModeSessionItems := []session.Item{}
 	if item, err := r.collaborationModeWorldStateInputItem(threadID, params, modelInfo, cfg); err != nil {
@@ -9472,7 +9475,12 @@ func (r *RuntimeRouter) turnEnvironmentContextInputItemForTurn(ctx context.Conte
 			return nil, nil, err
 		}
 	}
-	text := r.turnEnvironmentContextTextWithContext(ctx, params, current, localTimezoneName(), shellVersion, cfg.IncludeEnvironmentContextTime(), removals)
+	perEnvironment := cfg != nil && features.Enabled(cfg.FeatureSettings(), "per_environment_context")
+	var managedNetwork *config.NetworkRequirements
+	if cfg != nil && cfg.Requirements != nil {
+		managedNetwork = cfg.Requirements.Network
+	}
+	text := r.turnEnvironmentContextTextWithOptions(ctx, params, current, localTimezoneName(), shellVersion, cfg.IncludeEnvironmentContextTime(), removals, perEnvironment, managedNetwork)
 	items := []any{}
 	sessionItems := []session.Item{}
 	if emitNotice {
@@ -9586,11 +9594,57 @@ func (r *RuntimeRouter) turnEnvironmentContextText(params *turn.TurnStartParams,
 }
 
 func (r *RuntimeRouter) turnEnvironmentContextTextWithContext(ctx context.Context, params *turn.TurnStartParams, date *time.Time, timezone string, shellVersion string, includeTime bool, removals environmentWorldStateRemovals) string {
+	return r.turnEnvironmentContextTextWithOptions(ctx, params, date, timezone, shellVersion, includeTime, removals, false, nil)
+}
+
+// turnEnvironmentContextTextWithOptions renders Rust's EnvironmentsState. The
+// per_environment_context feature (#61494) groups every selected environment,
+// including a single one, and describes that environment's own filesystem and
+// network rules. Shared managed network requirements become
+// <thread_network_requirements> so they are not mistaken for an environment's
+// own domains.
+func (r *RuntimeRouter) turnEnvironmentContextTextWithOptions(ctx context.Context, params *turn.TurnStartParams, date *time.Time, timezone string, shellVersion string, includeTime bool, removals environmentWorldStateRemovals, perEnvironment bool, networkRequirements *config.NetworkRequirements) string {
 	environments := r.unifiedExecEnvironmentsForTurn(params)
 	defaultShellName := r.defaultEnvironmentShellName()
 	var b strings.Builder
 	b.WriteString("<environment_context>\n")
-	if len(environments) <= 1 {
+	if perEnvironment {
+		b.WriteString("  <environments>\n")
+		for i, environment := range environments {
+			b.WriteString("    <environment id=\"")
+			b.WriteString(escapeEnvironmentXML(environment.ID))
+			b.WriteString("\"")
+			if len(environments) > 1 {
+				fmt.Fprintf(&b, " primary=\"%t\"", i == 0)
+			}
+			b.WriteString(">\n")
+			cwd := strings.TrimSpace(firstNonEmpty(environment.CWD, turnCWD(params), r.services.DefaultCWD, "."))
+			fmt.Fprintf(&b, "      <cwd>%s</cwd>\n", escapeEnvironmentXML(cwd))
+			if shellName := unifiedEnvironmentShellName(environment, ""); shellName != "" {
+				fmt.Fprintf(&b, "      <shell>%s</shell>\n", escapeEnvironmentXML(shellName))
+			} else {
+				b.WriteString("      <status>starting</status>\n")
+			}
+			if environment.PermissionProfile != nil {
+				access := "restricted"
+				if environment.PermissionProfile.AllowsNetwork() {
+					access = "enabled"
+				}
+				fmt.Fprintf(&b, "      <network access=\"%s\" />\n", access)
+				roots := environment.WorkspaceRoots
+				if len(roots) == 0 {
+					roots = []string{cwd}
+				}
+				if filesystem, err := sandbox.RenderFileSystemContext(environment.PermissionProfile, cwd, roots); err == nil && strings.TrimSpace(filesystem) != "" {
+					b.WriteString("      ")
+					b.WriteString(filesystem)
+					b.WriteByte('\n')
+				}
+			}
+			b.WriteString("    </environment>\n")
+		}
+		b.WriteString("  </environments>\n")
+	} else if len(environments) <= 1 {
 		var environment tool.UnifiedExecEnvironment
 		if len(environments) == 1 {
 			environment = environments[0]
@@ -9627,6 +9681,9 @@ func (r *RuntimeRouter) turnEnvironmentContextTextWithContext(ctx context.Contex
 		}
 		fmt.Fprintf(&b, "  <timezone>%s</timezone>\n", escapeEnvironmentXML(timezone))
 	}
+	if perEnvironment && networkRequirements != nil {
+		b.WriteString(renderThreadNetworkRequirements(networkRequirements))
+	}
 	if lines := r.environmentContextSubagentLines(ctx, strings.TrimSpace(params.ThreadID)); len(lines) > 0 {
 		b.WriteString("  <subagents>\n")
 		for _, line := range lines {
@@ -9638,6 +9695,40 @@ func (r *RuntimeRouter) turnEnvironmentContextTextWithContext(ctx context.Contex
 	}
 	b.WriteString("</environment_context>")
 	return b.String()
+}
+
+// renderThreadNetworkRequirements ports Rust's NetworkContext::render behind
+// the per_environment_context label. Domain entries keep the requirements
+// map's sorted order; allow and deny entries are separate lists.
+func renderThreadNetworkRequirements(requirements *config.NetworkRequirements) string {
+	if requirements == nil {
+		return ""
+	}
+	keys := make([]string, 0, len(requirements.Domains))
+	for domain := range requirements.Domains {
+		keys = append(keys, domain)
+	}
+	sort.Strings(keys)
+	allowed := make([]string, 0, len(keys))
+	denied := make([]string, 0, len(keys))
+	for _, domain := range keys {
+		switch requirements.Domains[domain] {
+		case config.NetworkAllow:
+			allowed = append(allowed, domain)
+		case config.NetworkDeny:
+			denied = append(denied, domain)
+		}
+	}
+	var network strings.Builder
+	network.WriteString(`<network enabled="true">`)
+	if len(allowed) > 0 {
+		fmt.Fprintf(&network, "<allowed>%s</allowed>", strings.Join(allowed, ","))
+	}
+	if len(denied) > 0 {
+		fmt.Fprintf(&network, "<denied>%s</denied>", strings.Join(denied, ","))
+	}
+	network.WriteString(`</network>`)
+	return "  <thread_network_requirements>" + network.String() + "</thread_network_requirements>\n"
 }
 
 func (r *RuntimeRouter) defaultEnvironmentShellName() string {
@@ -10342,11 +10433,11 @@ func (r *RuntimeRouter) turnStepInputItemsProvider(threadID string, turnID strin
 		// model-owned approval prompts and collaboration instructions instead of
 		// keeping the turn's initial model context.
 		if params != nil {
-			if item, permissionsErr := r.permissionsWorldStateInputItem(threadID, params, info, runConfig.Config); permissionsErr != nil {
+			if permissionItems, permissionsErr := r.permissionsWorldStateInputItems(threadID, params, info, runConfig.Config); permissionsErr != nil {
 				return nil, permissionsErr
-			} else if item != nil {
-				items = append(items, item)
-				if persisted, ok := permissionsWorldStateSessionItemForTurn(turnID, item, time.Now().UTC()); ok {
+			} else if len(permissionItems) > 0 {
+				items = append(items, permissionItems...)
+				for _, persisted := range permissionsWorldStateSessionItemsForTurn(turnID, permissionItems, time.Now().UTC()) {
 					if appendErr := r.appendWorldStateStepItem(threadID, persisted); appendErr != nil {
 						return nil, appendErr
 					}

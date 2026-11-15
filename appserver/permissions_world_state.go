@@ -2,6 +2,8 @@ package appserver
 
 import (
 	"encoding/json"
+	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -30,6 +32,23 @@ type permissionsWorldStateSnapshot struct {
 	ApprovedCommandPrefixes [][]string `json:"approved_command_prefixes,omitempty"`
 }
 
+// permissionsScopedWorldStateSnapshot mirrors Rust
+// PermissionsSnapshot::Scoped (#61494): one fingerprint per environment plus an
+// optional labelled thread-default description.
+type permissionsScopedWorldStateSnapshot struct {
+	Environments            map[string]string `json:"environments"`
+	ThreadDefaults          string            `json:"thread_defaults,omitempty"`
+	ApprovedCommandPrefixes [][]string        `json:"approved_command_prefixes"`
+}
+
+// permissionDescription is one permission fragment and the comparison value
+// Rust keeps in PermissionDescription: the instructions hash excludes saved
+// command prefixes, which the section tracks separately.
+type permissionDescription struct {
+	instructions string
+	fingerprint  string
+}
+
 // permissionsInstructionsForTurn renders the permissions instructions fragment
 // for a turn, or an empty string when the section is disabled or nothing can be
 // resolved.
@@ -40,15 +59,136 @@ func (r *RuntimeRouter) permissionsInstructionsForTurn(
 ) (string, string) {
 	cwd := turnCWD(params)
 	profile := permissionProfileForTurn(cfg, params, cwd)
+	description := permissionDescriptionForProfile(profile, cwd, options)
+	return sandbox.RenderPermissionInstructions(description.instructions), description.fingerprint
+}
+
+// permissionDescriptionForProfile ports Rust PermissionDescription::new: the
+// rendered permissions body and the fingerprint of the same body built without
+// the approved command prefixes.
+func permissionDescriptionForProfile(
+	profile *sandbox.PermissionProfile,
+	cwd string,
+	options sandbox.PermissionPromptProfileOptions,
+) permissionDescription {
 	body := sandbox.BuildPermissionPromptForProfile(profile, cwd, options)
-	rendered := sandbox.RenderPermissionInstructions(body)
 	// The section hash excludes the approved command prefixes (Rust
 	// PermissionsState builds the hash from instructions with an empty policy).
 	hashOptions := options
 	hashOptions.ApprovedCommandPrefixes = nil
 	hashBody := sandbox.BuildPermissionPromptForProfile(profile, cwd, hashOptions)
 	hash := sandbox.WorldStateFragmentHash(roleDeveloper(), sandbox.RenderPermissionInstructions(hashBody))
-	return rendered, hash
+	return permissionDescription{instructions: body, fingerprint: hash}
+}
+
+// permissionDescriptionsForTurn builds the permission descriptions Rust's
+// PermissionsState holds (#61494). With per_environment_context disabled the
+// single thread-scoped description is keyed by the empty string, matching the
+// unscoped snapshot. With it enabled every selected environment gets its own
+// description keyed by environment id; when no environment is selected (or
+// ready), the labelled thread defaults use the empty key.
+func (r *RuntimeRouter) permissionDescriptionsForTurn(
+	threadID string,
+	params *turn.TurnStartParams,
+	modelInfo *model.ModelInfo,
+	cfg *config.Config,
+	options sandbox.PermissionPromptProfileOptions,
+) (map[string]permissionDescription, bool) {
+	perEnvironment := cfg != nil && features.Enabled(cfg.FeatureSettings(), "per_environment_context")
+	if !perEnvironment {
+		rendered, hash := r.permissionsInstructionsForTurn(params, cfg, options)
+		return map[string]permissionDescription{"": {instructions: rendered, fingerprint: hash}}, false
+	}
+	descriptions := map[string]permissionDescription{}
+	selections := r.permissionEnvironmentSelections(params)
+	for _, selection := range selections {
+		environmentID := strings.TrimSpace(selectionEnvironmentID(selection))
+		if environmentID == "" {
+			continue
+		}
+		cwd := r.permissionEnvironmentCWD(params, selection)
+		profile := r.permissionProfileForEnvironmentSelection(cfg, params, selection, cwd)
+		environmentOptions := options
+		environmentOptions.ExecutorContext = r.permissionPromptExecutorContextForSelection(params, selection)
+		descriptions[environmentID] = permissionDescriptionForProfile(profile, cwd, environmentOptions)
+	}
+	if len(descriptions) == 0 {
+		cwd := turnCWD(params)
+		profile := permissionProfileForTurn(cfg, params, cwd)
+		options.ExecutorContext = r.permissionPromptExecutorContextForTurn(params)
+		descriptions[""] = permissionDescriptionForProfile(profile, cwd, options)
+	}
+	return descriptions, true
+}
+
+// permissionEnvironmentSelections returns the turn's captured environment
+// selections, falling back to the provider default like Rust's turn snapshot.
+func (r *RuntimeRouter) permissionEnvironmentSelections(params *turn.TurnStartParams) []map[string]any {
+	if params != nil && len(params.Environments) > 0 {
+		return params.Environments
+	}
+	if r == nil || r.services.Environment == nil {
+		return nil
+	}
+	defaultID, ok := r.services.Environment.DefaultEnvironmentID()
+	if !ok || strings.TrimSpace(defaultID) == "" {
+		return nil
+	}
+	return []map[string]any{{"environmentId": defaultID}}
+}
+
+func (r *RuntimeRouter) permissionEnvironmentCWD(params *turn.TurnStartParams, selection map[string]any) string {
+	cwd := strings.TrimSpace(firstNonEmpty(
+		threadItemStringFromAnyMap(selection, "cwd"),
+		threadItemStringFromAnyMap(selection, "CWD"),
+	))
+	if cwd != "" {
+		return cwd
+	}
+	if params != nil && strings.TrimSpace(params.CWD) != "" {
+		return strings.TrimSpace(params.CWD)
+	}
+	if r != nil && strings.TrimSpace(r.services.DefaultCWD) != "" {
+		return strings.TrimSpace(r.services.DefaultCWD)
+	}
+	return "."
+}
+
+func permissionWorkspaceRootsForSelection(selection map[string]any, cwd string) []string {
+	roots := stringSliceFromAny(firstNonNil(selection["workspaceRoots"], selection["workspace_roots"]))
+	trimmed := make([]string, 0, len(roots)+1)
+	for _, root := range roots {
+		if root = strings.TrimSpace(root); root != "" {
+			trimmed = append(trimmed, root)
+		}
+	}
+	if len(trimmed) > 0 {
+		return trimmed
+	}
+	if cwd = strings.TrimSpace(cwd); cwd != "" {
+		return []string{cwd}
+	}
+	return nil
+}
+
+// permissionProfileForEnvironmentSelection mirrors Rust
+// TurnEnvironment::permission_profile_with_workspace_roots: a ready attachment's
+// own profile wins, otherwise the thread defaults are materialized with that
+// environment's workspace roots.
+func (r *RuntimeRouter) permissionProfileForEnvironmentSelection(
+	cfg *config.Config,
+	params *turn.TurnStartParams,
+	selection map[string]any,
+	cwd string,
+) *sandbox.PermissionProfile {
+	if profile, _ := environmentSelectionOwnPermissionProfile(selection); profile != nil {
+		return profile
+	}
+	roots := permissionWorkspaceRootsForSelection(selection, cwd)
+	if resolution, err := threadDefaultSandboxPermissionProfileWithRoots(cfg, cwd, params, roots); err == nil && resolution != nil && resolution.Profile != nil {
+		return resolution.Profile
+	}
+	return permissionProfileForTurn(cfg, params, cwd)
 }
 
 func roleDeveloper() string {
@@ -140,7 +280,16 @@ func (r *RuntimeRouter) permissionPromptExecutorContextForTurn(params *turn.Turn
 		}
 		selections = []map[string]any{{"environmentId": defaultID}}
 	}
-	selected := selections[0]
+	return r.permissionPromptExecutorContextForSelection(params, selections[0])
+}
+
+// permissionPromptExecutorContextForSelection resolves one environment's
+// executor facts for its permissions description (Rust #47867/#61494). A local
+// or starting attachment has no executor context, so host resolution applies.
+func (r *RuntimeRouter) permissionPromptExecutorContextForSelection(params *turn.TurnStartParams, selected map[string]any) *sandbox.PermissionPromptExecutorContext {
+	if r == nil || r.services.Environment == nil || params == nil {
+		return nil
+	}
 	environmentID := strings.TrimSpace(selectionEnvironmentID(selected))
 	if environmentID == "" || environmentID == execserverclient.LocalEnvironmentID {
 		return nil
@@ -216,6 +365,23 @@ func (r *RuntimeRouter) permissionsWorldStateInputItem(
 	modelInfo *model.ModelInfo,
 	cfg *config.Config,
 ) (any, error) {
+	items, err := r.permissionsWorldStateInputItems(threadID, params, modelInfo, cfg)
+	if err != nil || len(items) == 0 {
+		return nil, err
+	}
+	return items[0], nil
+}
+
+// permissionsWorldStateInputItems ports Rust PermissionsState: it returns the
+// developer fragments for every changed scope and updates the persisted
+// snapshot. The scoped format can emit several descriptions (and withdrawals)
+// in one turn.
+func (r *RuntimeRouter) permissionsWorldStateInputItems(
+	threadID string,
+	params *turn.TurnStartParams,
+	modelInfo *model.ModelInfo,
+	cfg *config.Config,
+) ([]any, error) {
 	if cfg == nil {
 		return nil, nil
 	}
@@ -231,16 +397,39 @@ func (r *RuntimeRouter) permissionsWorldStateInputItem(
 		// Rust sends CompactPermissionsState (section id
 		// `approved_command_prefixes`) in this mode: only newly approved
 		// prefixes are reported.
-		return r.compactPermissionsWorldStateUpdate(record, state, threadID, savedPrefixHeadingForModel(modelInfo))
+		item, compactErr := r.compactPermissionsWorldStateUpdate(record, state, threadID, savedPrefixHeadingForModel(modelInfo))
+		if compactErr != nil || item == nil {
+			return nil, compactErr
+		}
+		return []any{item}, nil
 	}
 	options := r.permissionPromptOptionsForTurn(threadID, params, modelInfo, cfg)
-	rendered, hash := r.permissionsInstructionsForTurn(params, cfg, options)
+	descriptions, perEnvironment := r.permissionDescriptionsForTurn(threadID, params, modelInfo, cfg, options)
+	if perEnvironment {
+		return r.scopedPermissionsWorldStateUpdates(record, state, descriptions, options.ApprovedCommandPrefixes, savedPrefixHeadingForModel(modelInfo))
+	}
+	description := descriptions[""]
+	rendered := sandbox.RenderPermissionInstructions(description.instructions)
 	current := permissionsWorldStateSnapshot{
-		Instructions:            hash,
+		Instructions:            description.fingerprint,
 		ApprovedCommandPrefixes: options.ApprovedCommandPrefixes,
 	}
 
-	previous, previousKind := decodePermissionsWorldStateSnapshot(state.PermissionInstructions)
+	decoded := decodePermissionsWorldState(state.PermissionInstructions)
+	if decoded.Kind == "scoped" {
+		// Switching back to the unscoped format withdraws every scoped
+		// description before restating the thread-scoped rules, matching Rust.
+		updates := scopedPermissionsWithdrawals(decoded.Scoped)
+		if strings.TrimSpace(rendered) != "" {
+			updates = append(updates, modelInputTextMessage(contextfrag.RoleDeveloper, rendered))
+		}
+		if err := r.persistPermissionsWorldState(record, state, current); err != nil {
+			return nil, err
+		}
+		return updates, nil
+	}
+	previous := decoded.Current
+	previousKind := decoded.Kind
 	emitFull := true
 	savedPrefixes := ""
 	switch previousKind {
@@ -267,27 +456,179 @@ func (r *RuntimeRouter) permissionsWorldStateInputItem(
 		emitFull = true
 	}
 
-	snapshot, err := json.Marshal(current)
-	if err != nil {
+	if err := r.persistPermissionsWorldState(record, state, current); err != nil {
 		return nil, err
 	}
-	if !sameJSONValue(state.PermissionInstructions, snapshot) {
-		state.PermissionInstructions = snapshot
-		record.Metadata.WorldState, err = session.EncodeWorldState(state)
-		if err != nil {
-			return nil, err
-		}
-		if err := r.runtimeSaveThreadRecord(record); err != nil {
-			return nil, err
-		}
-	}
 	if savedPrefixes != "" {
-		return modelInputTextMessage(contextfrag.RoleDeveloper, savedPrefixes), nil
+		return []any{modelInputTextMessage(contextfrag.RoleDeveloper, savedPrefixes)}, nil
 	}
 	if !emitFull || strings.TrimSpace(rendered) == "" {
 		return nil, nil
 	}
-	return modelInputTextMessage(contextfrag.RoleDeveloper, rendered), nil
+	return []any{modelInputTextMessage(contextfrag.RoleDeveloper, rendered)}, nil
+}
+
+// persistPermissionsWorldState stores the section snapshot when it changed.
+func (r *RuntimeRouter) persistPermissionsWorldState(record *session.Record, state *session.WorldState, snapshot any) error {
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		return err
+	}
+	if sameJSONValue(state.PermissionInstructions, encoded) {
+		return nil
+	}
+	state.PermissionInstructions = encoded
+	record.Metadata.WorldState, err = session.EncodeWorldState(state)
+	if err != nil {
+		return err
+	}
+	return r.runtimeSaveThreadRecord(record)
+}
+
+// scopedPermissionsWorldStateUpdates applies Rust's scoped permissions diff:
+// stale scopes are withdrawn, changed scopes restate their instructions, and
+// newly saved prefixes produce one shared notice.
+func (r *RuntimeRouter) scopedPermissionsWorldStateUpdates(
+	record *session.Record,
+	state *session.WorldState,
+	descriptions map[string]permissionDescription,
+	approvedPrefixes [][]string,
+	heading string,
+) ([]any, error) {
+	current := permissionsScopedWorldStateSnapshot{
+		Environments:            map[string]string{},
+		ApprovedCommandPrefixes: canonicalCommandPrefixesOrEmpty(approvedPrefixes),
+	}
+	for environmentID, description := range descriptions {
+		if environmentID == "" {
+			current.ThreadDefaults = description.fingerprint
+			continue
+		}
+		current.Environments[environmentID] = description.fingerprint
+	}
+	decoded := decodePermissionsWorldState(state.PermissionInstructions)
+	updates := make([]any, 0, len(descriptions)+1)
+	if decoded.Kind == "scoped" {
+		previous := decoded.Scoped
+		previousHashes := make(map[string]string, len(previous.Environments)+1)
+		for environmentID, hash := range previous.Environments {
+			previousHashes[environmentID] = hash
+		}
+		if strings.TrimSpace(previous.ThreadDefaults) != "" {
+			previousHashes[""] = previous.ThreadDefaults
+		}
+		for _, environmentID := range sortedPermissionScopeIDs(previousHashes) {
+			if _, ok := descriptions[environmentID]; !ok {
+				updates = append(updates, modelInputTextMessage(contextfrag.RoleDeveloper, scopedPermissionsUpdateText(environmentID, nil)))
+			}
+		}
+		// Switching models can make saved command approvals stop applying.
+		// Additions get a short notice; removals restate each scope's rules.
+		prefixesRemoved := !prefixSubset(previous.ApprovedCommandPrefixes, current.ApprovedCommandPrefixes)
+		for _, environmentID := range sortedPermissionScopeIDs(descriptions) {
+			description := descriptions[environmentID]
+			previousHash, known := previousHashes[environmentID]
+			if prefixesRemoved || !known || previousHash != description.fingerprint {
+				instructions := description.instructions
+				updates = append(updates, modelInputTextMessage(contextfrag.RoleDeveloper, scopedPermissionsUpdateText(environmentID, &instructions)))
+			}
+		}
+		if !prefixesRemoved && !equalCommandPrefixSets(previous.ApprovedCommandPrefixes, current.ApprovedCommandPrefixes) {
+			added := addedCommandPrefixes(current.ApprovedCommandPrefixes, previous.ApprovedCommandPrefixes)
+			if text := approvedCommandPrefixSavedText(added, heading); text != "" {
+				updates = append(updates, modelInputTextMessage(contextfrag.RoleDeveloper, text))
+			}
+		}
+	} else {
+		for _, environmentID := range sortedPermissionScopeIDs(descriptions) {
+			description := descriptions[environmentID]
+			instructions := description.instructions
+			updates = append(updates, modelInputTextMessage(contextfrag.RoleDeveloper, scopedPermissionsUpdateText(environmentID, &instructions)))
+		}
+	}
+	if err := r.persistPermissionsWorldState(record, state, current); err != nil {
+		return nil, err
+	}
+	return updates, nil
+}
+
+// scopedPermissionsWithdrawals restates every scope a previous scoped
+// snapshot described as no longer current. Rust orders environment ids first,
+// then the thread defaults.
+func scopedPermissionsWithdrawals(previous permissionsScopedWorldStateSnapshot) []any {
+	ids := make([]string, 0, len(previous.Environments)+1)
+	for environmentID := range previous.Environments {
+		ids = append(ids, environmentID)
+	}
+	sort.Strings(ids)
+	updates := make([]any, 0, len(ids)+1)
+	for _, environmentID := range ids {
+		updates = append(updates, modelInputTextMessage(contextfrag.RoleDeveloper, scopedPermissionsUpdateText(environmentID, nil)))
+	}
+	if strings.TrimSpace(previous.ThreadDefaults) != "" {
+		updates = append(updates, modelInputTextMessage(contextfrag.RoleDeveloper, scopedPermissionsUpdateText("", nil)))
+	}
+	return updates
+}
+
+// scopedPermissionsUpdateText labels one environment's permission rules, or
+// the thread defaults when environmentID is empty. A nil instructions value
+// withdraws the previous description for that scope.
+func scopedPermissionsUpdateText(environmentID string, instructions *string) string {
+	var text strings.Builder
+	text.WriteString(sandbox.PermissionInstructionsOpenTag)
+	if strings.TrimSpace(environmentID) == "" {
+		text.WriteString("<thread_defaults>\n")
+	} else {
+		text.WriteString(`<environment id="`)
+		text.WriteString(escapeEnvironmentXML(environmentID))
+		text.WriteString("\">\n")
+	}
+	if instructions != nil {
+		text.WriteString(*instructions)
+	} else {
+		text.WriteString("The previous permission description for this scope is no longer current.\n")
+	}
+	if strings.TrimSpace(environmentID) == "" {
+		text.WriteString("</thread_defaults>")
+	} else {
+		text.WriteString("</environment>")
+	}
+	text.WriteString(sandbox.PermissionInstructionsCloseTag)
+	return text.String()
+}
+
+func sortedPermissionScopeIDs[T any](values map[string]T) []string {
+	ids := make([]string, 0, len(values))
+	for environmentID := range values {
+		ids = append(ids, environmentID)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func canonicalCommandPrefixesOrEmpty(prefixes [][]string) [][]string {
+	canonical := execpolicy.CanonicalCommandPrefixes(prefixes)
+	if canonical == nil {
+		return [][]string{}
+	}
+	return canonical
+}
+
+func equalCommandPrefixSets(left [][]string, right [][]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	seen := make(map[string]bool, len(left))
+	for _, prefix := range left {
+		seen[commandPrefixKey(prefix)] = true
+	}
+	for _, prefix := range right {
+		if !seen[commandPrefixKey(prefix)] {
+			return false
+		}
+	}
+	return true
 }
 
 // compactPermissionsWorldStateUpdate ports Rust CompactPermissionsState: the
@@ -381,19 +722,46 @@ func commandPrefixKey(prefix []string) string {
 	return strings.Join(prefix, "\x00")
 }
 
-func decodePermissionsWorldStateSnapshot(raw json.RawMessage) (permissionsWorldStateSnapshot, string) {
+// decodedPermissionsWorldState distinguishes the three persisted formats
+// Rust's untagged PermissionsSnapshot accepts: Current, Scoped, and the legacy
+// bare hash older Go builds wrote.
+type decodedPermissionsWorldState struct {
+	Kind    string
+	Current permissionsWorldStateSnapshot
+	Scoped  permissionsScopedWorldStateSnapshot
+}
+
+func decodePermissionsWorldState(raw json.RawMessage) decodedPermissionsWorldState {
 	if len(raw) == 0 {
-		return permissionsWorldStateSnapshot{}, "absent"
+		return decodedPermissionsWorldState{Kind: "absent"}
 	}
-	var current permissionsWorldStateSnapshot
-	if err := json.Unmarshal(raw, &current); err == nil && strings.TrimSpace(current.Instructions) != "" {
-		return current, "current"
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &keys); err == nil {
+		if _, ok := keys["instructions"]; ok {
+			var current permissionsWorldStateSnapshot
+			if err := json.Unmarshal(raw, &current); err == nil && strings.TrimSpace(current.Instructions) != "" {
+				return decodedPermissionsWorldState{Kind: "current", Current: current}
+			}
+		}
+		if _, ok := keys["environments"]; ok {
+			var scoped permissionsScopedWorldStateSnapshot
+			if err := json.Unmarshal(raw, &scoped); err == nil {
+				if scoped.Environments == nil {
+					scoped.Environments = map[string]string{}
+				}
+				scoped.ApprovedCommandPrefixes = canonicalCommandPrefixesOrEmpty(scoped.ApprovedCommandPrefixes)
+				return decodedPermissionsWorldState{Kind: "scoped", Scoped: scoped}
+			}
+		}
 	}
 	var legacy string
 	if err := json.Unmarshal(raw, &legacy); err == nil && strings.TrimSpace(legacy) != "" {
-		return permissionsWorldStateSnapshot{Instructions: strings.TrimSpace(legacy)}, "legacy"
+		return decodedPermissionsWorldState{
+			Kind:    "legacy",
+			Current: permissionsWorldStateSnapshot{Instructions: strings.TrimSpace(legacy)},
+		}
 	}
-	return permissionsWorldStateSnapshot{}, "unknown"
+	return decodedPermissionsWorldState{Kind: "unknown"}
 }
 
 // permissionsWorldStateSessionItemForTurn turns an emitted fragment into the
@@ -432,4 +800,25 @@ func permissionsWorldStateSessionItemForTurn(turnID string, input any, createdAt
 		Metadata: metadata,
 		Raw:      encoded,
 	}, true
+}
+
+// permissionsWorldStateSessionItemsForTurn persists every fragment emitted for
+// one turn. Scoped descriptions can produce several messages with distinct
+// scope labels, so their stored ids carry the emission index.
+func permissionsWorldStateSessionItemsForTurn(turnID string, inputs []any, createdAt time.Time) []session.Item {
+	if len(inputs) == 0 {
+		return nil
+	}
+	items := make([]session.Item, 0, len(inputs))
+	for index, input := range inputs {
+		item, ok := permissionsWorldStateSessionItemForTurn(turnID, input, createdAt)
+		if !ok {
+			continue
+		}
+		if len(inputs) > 1 {
+			item.ID = fmt.Sprintf("%s-%d", item.ID, index)
+		}
+		items = append(items, item)
+	}
+	return items
 }

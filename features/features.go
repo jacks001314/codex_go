@@ -72,6 +72,10 @@ var Registry = []Spec{
 	{Key: "shell_snapshot", Stage: StageStable, DefaultEnabled: true},
 	{Key: "shell_snapshot_v2", Stage: StageUnderDevelopment},
 	{Key: "deferred_executor", Stage: StageUnderDevelopment},
+	// Rust (codex-rs/features/src/lib.rs #61494): describe each selected
+	// environment's filesystem and permissions separately. Under development
+	// and off by default.
+	{Key: "per_environment_context", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "js_repl", Stage: StageRemoved},
 	{Key: "executed_tool_call_metadata", Stage: StageUnderDevelopment},
 	// Rust (codex-rs/features/src/lib.rs) defines code_mode with

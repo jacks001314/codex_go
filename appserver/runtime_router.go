@@ -21050,6 +21050,14 @@ func turnSandboxPermissionProfile(cfg *config.Config, cwd string, params *turn.T
 // roots, so a starting or failed attachment still anchors project-root
 // restrictions at its workspace (Rust #46568).
 func threadDefaultSandboxPermissionProfile(cfg *config.Config, cwd string, params *turn.TurnStartParams) (*config.SandboxPermissionProfileResolution, error) {
+	return threadDefaultSandboxPermissionProfileWithRoots(cfg, cwd, params, turnEnvironmentWorkspaceRoots(params, cwd))
+}
+
+// threadDefaultSandboxPermissionProfileWithRoots materializes the thread
+// defaults with an explicit environment's captured workspace roots. Rust's
+// TurnEnvironment::permission_profile_with_workspace_roots uses the same
+// fallback for each selected environment (#61494).
+func threadDefaultSandboxPermissionProfileWithRoots(cfg *config.Config, cwd string, params *turn.TurnStartParams, workspaceRoots []string) (*config.SandboxPermissionProfileResolution, error) {
 	if params != nil && turnStartSandboxPolicyPresent(params.SandboxPolicy) {
 		profileID, profile, err := turnSandboxPolicyPermissionProfile(params.SandboxPolicy)
 		if err != nil {
@@ -21087,7 +21095,7 @@ func threadDefaultSandboxPermissionProfile(cfg *config.Config, cwd string, param
 	// Rust TurnContext::permission_profile_for_environments (#46568): the thread
 	// defaults are materialized with the captured primary selection's workspace
 	// roots, including while the attachment is starting or after it failed.
-	return cfg.ResolveSandboxPermissionProfileWithWorkspaceRoots(profileID, cwd, turnEnvironmentWorkspaceRoots(params, cwd))
+	return cfg.ResolveSandboxPermissionProfileWithWorkspaceRoots(profileID, cwd, workspaceRoots)
 }
 
 func turnSandboxPolicyPermissionProfile(raw any) (string, *sandbox.PermissionProfile, error) {
