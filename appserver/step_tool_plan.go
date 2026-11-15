@@ -190,7 +190,12 @@ func (r *RuntimeRouter) stepToolRegistryOptions(inputs rememberedTurnToolInputs,
 		options.ClockProvider = nil
 		if options.EnableCurrentTimeTool {
 			if reminder := inputs.cfg.CurrentTimeReminder(); reminder != nil && reminder.ClockSource == config.CurrentTimeSourceExternal {
-				options.ClockProvider = &appServerClockProvider{router: r}
+				// Rust #61382: external clocks come from the host provider.
+				if provider, providerErr := r.resolveTimeProviderForConfig(inputs.cfg); providerErr == nil {
+					options.ClockProvider = hostClockProvider{provider: provider}
+				} else {
+					options.ClockProvider = unavailableClockProvider{err: providerErr}
+				}
 			}
 		}
 	}

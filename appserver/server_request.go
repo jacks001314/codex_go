@@ -19,7 +19,6 @@ const (
 	ServerRequestDynamicToolCall          ServerRequestMethod = "item/tool/call"
 	ServerRequestChatGPTAuthTokensRefresh ServerRequestMethod = "account/chatgptAuthTokens/refresh"
 	ServerRequestAttestationGenerate      ServerRequestMethod = "attestation/generate"
-	ServerRequestCurrentTimeRead          ServerRequestMethod = "currentTime/read"
 	ServerRequestApplyPatchApproval       ServerRequestMethod = "applyPatchApproval"
 	ServerRequestExecCommandApproval      ServerRequestMethod = "execCommandApproval"
 )
@@ -421,14 +420,6 @@ type AttestationGenerateResponse struct {
 // Format redacts the opaque attestation token from diagnostic output.
 func (r AttestationGenerateResponse) Format(f fmt.State, verb rune) {
 	fmt.Fprint(f, "appserver.AttestationGenerateResponse{Token:<redacted>}")
-}
-
-type CurrentTimeReadParams struct {
-	ThreadID string `json:"threadId"`
-}
-
-type CurrentTimeReadResponse struct {
-	CurrentTimeAt int64 `json:"currentTimeAt"`
 }
 
 type ChatGPTAuthTokensRefreshResponse struct {

@@ -5,7 +5,9 @@ import (
 	"time"
 )
 
-var ErrExternalTimeProviderRequired = errors.New("external current-time provider is required")
+var ErrExternalTimeProviderRequired = errors.New(
+	"features.current_time_reminder.clock_source is external, but no external current-time provider is available",
+)
 
 type TimeSource string
 

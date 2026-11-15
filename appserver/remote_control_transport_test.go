@@ -95,14 +95,14 @@ func TestRemoteControlTransportTargetsServerRequests(t *testing.T) {
 		requestDone <- router.requireServerRequests().RequestToConnection(
 			context.Background(),
 			remoteControlConnectionIDString(7),
-			ServerRequestCurrentTimeRead,
+			ServerRequestDynamicToolCall,
 			map[string]any{},
 			nil,
 		)
 	}()
 	serverRequest := readRemoteControlTransportMessage(t, writer)
 	requestID := strings.Trim(string(serverRequest["id"]), `"`)
-	if requestID == "" || strings.Trim(string(serverRequest["method"]), `"`) != string(ServerRequestCurrentTimeRead) {
+	if requestID == "" || strings.Trim(string(serverRequest["method"]), `"`) != string(ServerRequestDynamicToolCall) {
 		t.Fatalf("server request = %s", marshalRawMapForTest(serverRequest))
 	}
 	events <- remotecontrol.RemoteClientTransportEvent{

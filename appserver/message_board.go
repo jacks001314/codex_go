@@ -336,8 +336,14 @@ func (h *messageBoardHost) CurrentTime(ctx context.Context, caller string) (time
 	if _, err := h.registeredPath(caller); err != nil {
 		return time.Time{}, err
 	}
-	provider := &appServerClockProvider{router: h.router}
-	return provider.CurrentTime(ctx, strings.TrimSpace(caller))
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return time.Time{}, err
+		}
+	}
+	// Rust #61382: the board reads the thread's configured clock directly
+	// instead of asking the client through a server request.
+	return h.router.currentTimeForConfig(h.router.effectiveConfigForSessionTelemetry(), strings.TrimSpace(caller))
 }
 
 // Notify pushes metadata and a bounded preview to a recipient that is running a

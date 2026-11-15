@@ -263,7 +263,7 @@ func TestBuildProtocolSchemaIndexesRPCSurface(t *testing.T) {
 	requireProtocolMethodAbsent(t, stable.ClientRequests, string(MethodAccountSessionsList))
 	requireProtocolMethodAbsent(t, stable.ClientRequests, string(MethodMCPServerOauthCancel))
 	requireProtocolMethodAbsent(t, stable.ClientRequests, string(MethodMCPServerRefresh))
-	requireProtocolMethodAbsent(t, stable.ServerRequests, string(ServerRequestCurrentTimeRead))
+	requireProtocolMethodAbsent(t, stable.ServerRequests, "currentTime/read")
 	requireProtocolMethod(t, stable.Notifications, string(NotificationProcessOutputDelta), false)
 	requireProtocolMethod(t, stable.Notifications, string(NotificationThreadRealtimeStarted), false)
 	requireProtocolMethod(t, stable.Notifications, string(NotificationTurnModerationMetadata), false)
@@ -273,11 +273,10 @@ func TestBuildProtocolSchemaIndexesRPCSurface(t *testing.T) {
 	requireProtocolMethod(t, experimental.ClientRequests, string(MethodThreadIncrementElicitation), true)
 	requireProtocolMethod(t, experimental.ClientRequests, string(MethodThreadRealtimeStart), true)
 	requireProtocolMethod(t, experimental.ClientRequests, string(MethodProcessSpawn), true)
-	requireProtocolMethod(t, experimental.ServerRequests, string(ServerRequestCurrentTimeRead), true)
+	requireProtocolMethodAbsent(t, experimental.ServerRequests, "currentTime/read")
 	requireProtocolMethod(t, experimental.Notifications, string(NotificationProcessOutputDelta), false)
 	requireProtocolMethod(t, experimental.Notifications, string(NotificationThreadRealtimeStarted), false)
 	requireProtocolSignature(t, experimental.ClientRequests, string(MethodMemoryReset), "", "MemoryResetResponse")
-	requireProtocolSignature(t, experimental.ServerRequests, string(ServerRequestCurrentTimeRead), "CurrentTimeReadParams", "CurrentTimeReadResponse")
 	requireProtocolSignature(t, experimental.Notifications, string(NotificationProcessOutputDelta), "ProcessOutputDeltaNotification", "")
 
 	internal := BuildProtocolSchema(false, true)
@@ -295,9 +294,18 @@ func TestBuildProtocolSchemaIndexesRPCSurface(t *testing.T) {
 // optional gatewayOAuth login/read params, so no entry is forward-ported.
 var forwardPortedOptionalTypeScriptParams = map[string]string{}
 
-// Re-anchored to e54a5713ca: modelProvider/list and modelProvider/config/write
-// are in the anchor Rust fixture, so no method is forward-ported in stable.
-var forwardPortedStableMethods = map[string]string{}
+// modelProvider/default/set (#61397) is Go ahead of the frozen anchor.
+var forwardPortedStableMethods = map[string]string{
+	"modelProvider/default/set": "c5ef97aa89 (#61397)",
+}
+
+// retiredAheadOfAnchorMethods lists Rust methods Go removed after porting a
+// newer upstream commit. The frozen fixture tree still contains them, so the
+// coverage guard skips them; the guard fails once the anchor drops a method so
+// the entry is removed at the next re-anchor.
+var retiredAheadOfAnchorMethods = map[string]string{
+	"currentTime/read": "4aac2eacc5 (#61382)",
+}
 
 func TestBuildProtocolSchemaMatchesRustStableFixtures(t *testing.T) {
 	root := rustAppServerProtocolSchemaRoot(t)
@@ -338,12 +346,20 @@ func TestRustProtocolMethodSurfaceIsCoveredByGoSchemas(t *testing.T) {
 
 	var missing []string
 	for _, method := range rustMethods {
+		if _, retired := retiredAheadOfAnchorMethods[method]; retired {
+			continue
+		}
 		if !covered[method] {
 			missing = append(missing, method)
 		}
 	}
 	if len(missing) > 0 {
 		t.Fatalf("Go protocol schemas do not cover Rust methods: %v", missing)
+	}
+	for method := range retiredAheadOfAnchorMethods {
+		if !containsString(rustMethods, method) {
+			t.Fatalf("retired method %q is no longer in the pinned Rust tree; drop it from retiredAheadOfAnchorMethods", method)
+		}
 	}
 }
 

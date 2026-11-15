@@ -9541,7 +9541,7 @@ func (r *RuntimeRouter) environmentClockForTurn(ctx context.Context, threadID st
 	}
 	if cfg != nil {
 		if reminder := cfg.CurrentTimeReminder(); reminder != nil && reminder.Enabled && reminder.ClockSource == config.CurrentTimeSourceExternal {
-			return r.readClockForContext(ctx, threadID, turnID, cfg)
+			return r.readClockForContext(threadID, turnID, cfg)
 		}
 	}
 	now := runtimeRouterClockTime(r)
@@ -11271,7 +11271,7 @@ func (r *RuntimeRouter) currentTimeReminderInputItems(ctx context.Context, threa
 	now := runtimeRouterClockTime(r).UTC()
 	location := "UTC"
 	if reminder.ClockSource == config.CurrentTimeSourceExternal {
-		current, emitNotice, err := r.readClockForContext(ctx, threadID, turnID, cfg)
+		current, emitNotice, err := r.readClockForContext(threadID, turnID, cfg)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -11315,8 +11315,8 @@ type clockFailureKey struct {
 // `emitNotice` reports whether the caller should record the
 // CurrentTimeUnavailable fragment. A nil time with no error means the caller
 // continues without a clock value.
-func (r *RuntimeRouter) readClockForContext(ctx context.Context, threadID string, turnID string, cfg *config.Config) (current *time.Time, emitNotice bool, err error) {
-	value, readErr := r.requestCurrentTime(ctx, threadID)
+func (r *RuntimeRouter) readClockForContext(threadID string, turnID string, cfg *config.Config) (current *time.Time, emitNotice bool, err error) {
+	value, readErr := r.currentTimeForConfig(cfg, threadID)
 	if readErr == nil {
 		r.clearClockFailure(threadID)
 		return &value, false, nil

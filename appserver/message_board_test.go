@@ -381,6 +381,9 @@ func TestMessageBoardRemoteConfigParsesAndOpensEphemeralGateLikeRust(t *testing.
 func TestRemoteMessageBoardPrecedesLocalBoardsLikeRust(t *testing.T) {
 	home := t.TempDir()
 	store := session.NewStore(filepath.Join(home, "sessions"))
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[features.current_time_reminder]\nenabled = true\nclock_source = \"external\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
 
 	const token = "remote-board-credential-for-runtime-test"
 	const clockAt int64 = 1781717655
@@ -427,18 +430,9 @@ func TestRemoteMessageBoardPrecedesLocalBoardsLikeRust(t *testing.T) {
 		HTTPClient:   board.Client(),
 	})
 	defer router.Close()
-	// The remote board carries the caller's configured time, which the runtime
-	// resolves through the thread's connected client (Rust's external time
-	// provider).
-	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
-		if request.Method != ServerRequestCurrentTimeRead {
-			t.Errorf("server request method = %s, want %s", request.Method, ServerRequestCurrentTimeRead)
-			return
-		}
-		go func() {
-			_, _ = router.requireServerRequests().Resolve(OK(request.ID, &CurrentTimeReadResponse{CurrentTimeAt: clockAt}))
-		}()
-	}))
+	// The remote board carries the caller's configured time from the host
+	// provider (Rust #61382).
+	router.SetTimeProvider(&scriptedTimeProvider{values: []int64{clockAt}})
 
 	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir(), Prompt: "hello"}))
 	if start.Error != nil {

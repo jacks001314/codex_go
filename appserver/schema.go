@@ -387,9 +387,6 @@ func serverRequestMethods(includeExperimental bool) []ProtocolMethod {
 		{Method: string(ServerRequestPermissionsApproval)},
 		{Method: string(ServerRequestToolUserInput)},
 	}
-	if includeExperimental {
-		methods = append(methods, ProtocolMethod{Method: string(ServerRequestCurrentTimeRead), Experimental: true})
-	}
 	return normalizeProtocolMethods(methods)
 }
 
@@ -723,7 +720,6 @@ func protocolMethodSignatures() map[string]protocolMethodSignature {
 		string(ServerRequestAttestationGenerate):      {Params: "AttestationGenerateParams", Result: "AttestationGenerateResponse"},
 		string(ServerRequestChatGPTAuthTokensRefresh): {Params: "ChatgptAuthTokensRefreshParams", Result: "ChatgptAuthTokensRefreshResponse"},
 		string(ServerRequestCommandExecutionApproval): {Params: "CommandExecutionRequestApprovalParams", Result: "CommandExecutionRequestApprovalResponse"},
-		string(ServerRequestCurrentTimeRead):          {Params: "CurrentTimeReadParams", Result: "CurrentTimeReadResponse"},
 		string(ServerRequestDynamicToolCall):          {Params: "DynamicToolCallParams", Result: "DynamicToolCallResponse"},
 		string(ServerRequestExecCommandApproval):      {Params: "ExecCommandApprovalParams", Result: "ExecCommandApprovalResponse"},
 		string(ServerRequestFileChangeApproval):       {Params: "FileChangeRequestApprovalParams", Result: "FileChangeRequestApprovalResponse"},

@@ -16,7 +16,6 @@ func TestServerRequestThreadIDMatchRustTargetedKinds(t *testing.T) {
 		ServerRequestMcpElicitation,
 		ServerRequestPermissionsApproval,
 		"dynamic_tool_call",
-		"current_time_read",
 	} {
 		got, ok := ServerRequestThreadID(&ServerRequest{Kind: kind, ThreadID: rustThreadID1})
 		if !ok || got != rustThreadID1 {

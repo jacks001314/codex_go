@@ -102,7 +102,6 @@ func TestPendingAppServerRequestsUnsupportedMatchRust(t *testing.T) {
 	}{
 		{ServerRequestDynamicToolCall, "Dynamic tool calls are not available in TUI yet."},
 		{ServerRequestAttestationGenerate, "Attestation generation is not available in TUI."},
-		{ServerRequestCurrentTimeRead, "External current time is not available in TUI."},
 		{ServerRequestApplyPatchApproval, "Legacy patch approval requests are not available in TUI yet."},
 		{ServerRequestExecCommandApproval, "Legacy command approval requests are not available in TUI yet."},
 	}

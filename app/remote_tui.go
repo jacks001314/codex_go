@@ -4397,12 +4397,6 @@ func (c *remoteAppServerTUIClient) remoteServerRequestResult(ctx context.Context
 			return nil, -32602, err
 		}
 		return nil, -32000, errors.New("Attestation generation is not available in TUI.")
-	case appserver.ServerRequestCurrentTimeRead:
-		var payload appserver.CurrentTimeReadParams
-		if err := remoteDecodeServerRequestParams(params, &payload); err != nil {
-			return nil, -32602, err
-		}
-		return nil, -32000, errors.New("External current time is not available in TUI.")
 	case appserver.ServerRequestApplyPatchApproval:
 		var payload appserver.ApplyPatchApprovalParams
 		if err := remoteDecodeServerRequestParams(params, &payload); err != nil {

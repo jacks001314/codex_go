@@ -129,11 +129,7 @@ clock_source = "external"
 		DefaultCWD:   t.TempDir(),
 	})
 	router.SetNotificationSink(sink)
-	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
-		go func() {
-			_, _ = router.requireServerRequests().Resolve(ErrorResponse(request.ID, -32603, "test clock unavailable", nil))
-		}()
-	}))
+	router.SetTimeProvider(failingTimeProvider{err: errors.New("test clock unavailable")})
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
 	if threadStart.Error != nil {
 		t.Fatalf("thread start error: %+v", threadStart.Error)
@@ -5760,112 +5756,94 @@ func TestRuntimeRouterRemoteControlAuthRecoveryUsesExternalRefreshBridge(t *test
 	}
 }
 
-func TestRuntimeRouterRequestCurrentTimeBridge(t *testing.T) {
-	router := NewRuntimeRouter(RuntimeServices{})
-	router.subscribeThreadConnection("thread-time", "conn-time")
-	sink := &currentTimeTargetSink{
-		router:   router,
-		requests: make(chan targetedCurrentTimeRequest, 1),
+func externalClockConfig() *config.Config {
+	return &config.Config{Values: map[string]any{
+		"features": map[string]any{
+			"current_time_reminder": map[string]any{
+				"enabled":      true,
+				"clock_source": "external",
+			},
+		},
+	}}
+}
+
+// scriptedTimeProvider is the host clock used by the external-clock tests.
+type scriptedTimeProvider struct {
+	mu        sync.Mutex
+	values    []int64
+	errs      []error
+	reads     int
+	threadIDs []string
+}
+
+func (p *scriptedTimeProvider) CurrentTime(threadID string) (time.Time, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.reads++
+	p.threadIDs = append(p.threadIDs, threadID)
+	if len(p.errs) > 0 {
+		err := p.errs[0]
+		p.errs = p.errs[1:]
+		return time.Time{}, err
 	}
-	router.SetServerRequestSink(sink)
-	current, err := router.requestCurrentTime(context.Background(), "thread-time")
+	value := int64(1781717655)
+	if len(p.values) > 0 {
+		value = p.values[0]
+		p.values = p.values[1:]
+	}
+	return time.Unix(value, 0).UTC(), nil
+}
+
+func (p *scriptedTimeProvider) Sleep(string, time.Duration) error {
+	return nil
+}
+
+// failingTimeProvider models a host clock whose reads always fail.
+type failingTimeProvider struct {
+	err error
+}
+
+func (p failingTimeProvider) CurrentTime(string) (time.Time, error) {
+	return time.Time{}, p.err
+}
+
+func (p failingTimeProvider) Sleep(string, time.Duration) error {
+	return p.err
+}
+
+func TestRuntimeRouterExternalClockUsesHostProviderLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	cfg := externalClockConfig()
+	if _, err := router.currentTimeForConfig(cfg, "thread-time"); err == nil ||
+		!strings.Contains(err.Error(), "no external current-time provider") {
+		t.Fatalf("external clock without provider error = %v", err)
+	}
+
+	provider := &scriptedTimeProvider{values: []int64{1781717655}}
+	router.SetTimeProvider(provider)
+	current, err := router.currentTimeForConfig(cfg, " thread-time ")
 	if err != nil {
-		t.Fatalf("requestCurrentTime() error = %v", err)
+		t.Fatalf("currentTimeForConfig() error = %v", err)
 	}
 	if current.Unix() != 1781717655 || current.Location() != time.UTC {
 		t.Fatalf("current time = %s", current)
 	}
-	sent := <-sink.requests
-	if sent.connectionID != "conn-time" {
-		t.Fatalf("target connection = %q", sent.connectionID)
+	if provider.reads != 1 || len(provider.threadIDs) != 1 || provider.threadIDs[0] != "thread-time" {
+		t.Fatalf("provider reads = %d %#v", provider.reads, provider.threadIDs)
 	}
-	if sent.request.Method != ServerRequestCurrentTimeRead {
-		t.Fatalf("server request method = %s", sent.request.Method)
-	}
-	params, ok := sent.request.Params.(*CurrentTimeReadParams)
-	if !ok || params.ThreadID != "thread-time" {
-		t.Fatalf("server request params = %#v", sent.request.Params)
-	}
-	if _, err := router.requestCurrentTime(context.Background(), ""); err == nil {
-		t.Fatal("empty threadID requestCurrentTime() error = nil")
+
+	provider.errs = []error{errors.New("test clock unavailable")}
+	if _, err := router.currentTimeForConfig(cfg, "thread-time"); err == nil || err.Error() != "test clock unavailable" {
+		t.Fatalf("provider failure = %v", err)
 	}
 }
 
-func TestRuntimeRouterRequestCurrentTimeRequiresSingleSubscriber(t *testing.T) {
+func TestRuntimeRouterSystemClockNeedsNoProviderLikeRust(t *testing.T) {
 	router := NewRuntimeRouter(RuntimeServices{})
-	router.subscribeThreadConnection("thread-time", "conn-a")
-	router.subscribeThreadConnection("thread-time", "conn-b")
-
-	_, err := router.requestCurrentTime(context.Background(), "thread-time")
-	if err == nil || err.Error() != "expected exactly one client subscribed to the thread, found 2" {
-		t.Fatalf("requestCurrentTime() error = %v", err)
+	current, err := router.currentTimeForConfig(nil, "thread-time")
+	if err != nil || current.IsZero() {
+		t.Fatalf("system clock = %s, %v", current, err)
 	}
-}
-
-func TestRuntimeRouterRequestCurrentTimeWaitsForSubscriber(t *testing.T) {
-	router := NewRuntimeRouter(RuntimeServices{})
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
-	defer cancel()
-
-	_, err := router.requestCurrentTime(ctx, "thread-time")
-	if err == nil || err.Error() != "timed out waiting for a client to subscribe to the thread after 10s" {
-		t.Fatalf("requestCurrentTime() error = %v", err)
-	}
-}
-
-type targetedCurrentTimeRequest struct {
-	connectionID string
-	request      *ServerRequest
-}
-
-type currentTimeTargetSink struct {
-	router   *RuntimeRouter
-	requests chan targetedCurrentTimeRequest
-}
-
-func (s *currentTimeTargetSink) SendServerRequest(request *ServerRequest) {
-	s.send("", request)
-}
-
-func (s *currentTimeTargetSink) SendServerRequestToConnection(connectionID string, request *ServerRequest) {
-	s.send(connectionID, request)
-}
-
-func (s *currentTimeTargetSink) send(connectionID string, request *ServerRequest) {
-	s.requests <- targetedCurrentTimeRequest{connectionID: connectionID, request: request}
-	go func() {
-		_, _ = s.router.requireServerRequests().Resolve(OK(request.ID, &CurrentTimeReadResponse{CurrentTimeAt: 1781717655}))
-	}()
-}
-
-type currentTimeSequenceSink struct {
-	mu     sync.Mutex
-	router *RuntimeRouter
-	values []int64
-}
-
-func (s *currentTimeSequenceSink) SendServerRequest(request *ServerRequest) {
-	s.send(request)
-}
-
-func (s *currentTimeSequenceSink) SendServerRequestToConnection(_ string, request *ServerRequest) {
-	s.send(request)
-}
-
-func (s *currentTimeSequenceSink) send(request *ServerRequest) {
-	if request.Method != ServerRequestCurrentTimeRead {
-		return
-	}
-	value := int64(1781717655)
-	s.mu.Lock()
-	if len(s.values) > 0 {
-		value = s.values[0]
-		s.values = s.values[1:]
-	}
-	s.mu.Unlock()
-	go func() {
-		_, _ = s.router.requireServerRequests().Resolve(OK(request.ID, &CurrentTimeReadResponse{CurrentTimeAt: value}))
-	}()
 }
 
 func TestRuntimeRouterConfigProfileService(t *testing.T) {
@@ -18317,14 +18295,7 @@ clock_source = "external"
 		ThreadStatus: NewThreadStatusManager(),
 	})
 	router.SetNotificationSink(sink)
-	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
-		if request.Method != ServerRequestCurrentTimeRead {
-			t.Errorf("server request method = %s", request.Method)
-		}
-		go func() {
-			_, _ = router.requireServerRequests().Resolve(OK(request.ID, &CurrentTimeReadResponse{CurrentTimeAt: 1781717655}))
-		}()
-	}))
+	router.SetTimeProvider(&scriptedTimeProvider{values: []int64{1781717655}})
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
 		CWD:    project,
@@ -18413,27 +18384,14 @@ stream_max_retries = 0
 		ThreadStatus: NewThreadStatusManager(),
 	})
 	router.SetNotificationSink(sink)
-	var threadID string
-	var currentTimeReads atomic.Int32
-	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
-		if request.Method != ServerRequestCurrentTimeRead {
-			t.Errorf("server request method = %s", request.Method)
-		}
-		params, ok := request.Params.(*CurrentTimeReadParams)
-		if !ok || params.ThreadID != threadID {
-			t.Errorf("currentTime/read params = %#v, want thread %q", request.Params, threadID)
-		}
-		currentTimeReads.Add(1)
-		go func() {
-			_, _ = router.requireServerRequests().Resolve(OK(request.ID, &CurrentTimeReadResponse{CurrentTimeAt: 1781717655}))
-		}()
-	}))
+	provider := &scriptedTimeProvider{values: []int64{1781717655, 1781717655}}
+	router.SetTimeProvider(provider)
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{}))
 	if threadStart.Error != nil {
 		t.Fatalf("thread start error: %+v", threadStart.Error)
 	}
-	threadID = threadStart.Result.(*ThreadStartResponse).Thread.ID
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
 	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
 		ThreadID: threadID,
 		Input:    []turn.TurnUserInput{{Text: "What time is it?"}},
@@ -18465,8 +18423,13 @@ stream_max_retries = 0
 	}) {
 		t.Fatalf("user input texts do not contain refreshed environment date %s: %#v", currentDate, userTexts)
 	}
-	if currentTimeReads.Load() < 2 {
-		t.Fatalf("currentTime/read count = %d, want environment and reminder reads", currentTimeReads.Load())
+	if provider.reads < 2 {
+		t.Fatalf("clock read count = %d, want environment and reminder reads", provider.reads)
+	}
+	for _, id := range provider.threadIDs {
+		if id != threadID {
+			t.Fatalf("clock read thread = %q, want %q", id, threadID)
+		}
 	}
 }
 
@@ -18490,11 +18453,7 @@ clock_source = "external"
 		DefaultCWD:   t.TempDir(),
 	})
 	router.SetNotificationSink(sink)
-	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
-		go func() {
-			_, _ = router.requireServerRequests().Resolve(ErrorResponse(request.ID, -32603, "test clock unavailable", nil))
-		}()
-	}))
+	router.SetTimeProvider(&scriptedTimeProvider{errs: []error{errors.New("test clock unavailable")}})
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
 	if threadStart.Error != nil {
 		t.Fatalf("thread start error: %+v", threadStart.Error)
@@ -18626,10 +18585,7 @@ stream_max_retries = 0
 		ThreadStatus: NewThreadStatusManager(),
 	})
 	router.SetNotificationSink(sink)
-	router.SetServerRequestSink(&currentTimeSequenceSink{
-		router: router,
-		values: []int64{1781717655, 1781717715, 1781717775},
-	})
+	router.SetTimeProvider(&scriptedTimeProvider{values: []int64{1781717655, 1781717715, 1781717775}})
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{}))
 	if threadStart.Error != nil {
@@ -18722,10 +18678,7 @@ stream_max_retries = 0
 		ThreadStatus: NewThreadStatusManager(),
 	})
 	router.SetNotificationSink(sink)
-	router.SetServerRequestSink(&currentTimeSequenceSink{
-		router: router,
-		values: []int64{1781717655, 1781717595},
-	})
+	router.SetTimeProvider(&scriptedTimeProvider{values: []int64{1781717655, 1781717595}})
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{}))
 	if threadStart.Error != nil {
@@ -18823,10 +18776,7 @@ stream_max_retries = 0
 		ThreadStatus: NewThreadStatusManager(),
 	})
 	router.SetNotificationSink(sink)
-	router.SetServerRequestSink(&currentTimeSequenceSink{
-		router: router,
-		values: []int64{1781717655, 1781717715},
-	})
+	router.SetTimeProvider(&scriptedTimeProvider{values: []int64{1781717655, 1781717715}})
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{}))
 	if threadStart.Error != nil {
@@ -18928,10 +18878,7 @@ stream_max_retries = 0
 		ThreadStatus: NewThreadStatusManager(),
 	})
 	router.SetNotificationSink(sink)
-	router.SetServerRequestSink(&currentTimeSequenceSink{
-		router: router,
-		values: []int64{1781717655, 1781717715},
-	})
+	router.SetTimeProvider(&scriptedTimeProvider{values: []int64{1781717655, 1781717715}})
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{}))
 	if threadStart.Error != nil {
@@ -18988,10 +18935,7 @@ sleep_tool = true
 		ThreadStatus: NewThreadStatusManager(),
 	})
 	router.SetNotificationSink(sink)
-	router.SetServerRequestSink(&currentTimeSequenceSink{
-		router: router,
-		values: []int64{1781717655, 1781717655, 1781717657, 1781717657},
-	})
+	router.SetTimeProvider(&scriptedTimeProvider{values: []int64{1781717655, 1781717655, 1781717657, 1781717657}})
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
 		CWD:    t.TempDir(),

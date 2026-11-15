@@ -326,6 +326,11 @@ type RuntimeRouterOptions struct {
 	// managed files instead of the startup snapshot (Rust #57175
 	// ConfigManager::current_managed_config_loader).
 	CloudConfigLoader *config.CloudConfigLoader
+	// TimeProvider is the host clock behind
+	// features.current_time_reminder.clock_source = "external" (Rust #61382).
+	// The app server no longer asks the client for the time, so an external
+	// clock without a provider fails thread startup.
+	TimeProvider runtimeutil.TimeProvider
 }
 
 type RuntimeRouter struct {
@@ -351,6 +356,9 @@ type RuntimeRouter struct {
 	// (Rust #55270). They are not persisted, so a cold resume uses the default.
 	threadUnloadDelayMu sync.Mutex
 	threadUnloadDelays  map[string]time.Duration
+	// timeProviderMu guards timeProvider, the host-supplied external clock.
+	timeProviderMu sync.RWMutex
+	timeProvider   runtimeutil.TimeProvider
 	// audioStateMu guards audioDurations, the runtime-only measured-duration
 	// cache for uploaded audio (Rust #59268 SessionState::file_audio_durations).
 	audioStateMu   sync.Mutex
@@ -2183,6 +2191,7 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 		router.stateDBRecoveryNotice = options.StateDBRecoveryNotice
 		router.agentMCPMetadataDefault = options.AgentMCPMetadataRecipient
 		router.mcpToolRequestMetaDefault = options.MCPToolRequestMetaHook
+		router.timeProvider = options.TimeProvider
 	}
 	router.codexHomeScanCancel = func() { atomic.StoreInt32(&codexHomeScanCanceled, 1) }
 	router.configureEnvironmentHTTPPolicy()
@@ -5994,6 +6003,13 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 		}
 		if err := r.validateThreadStartEnvironments(&params); err != nil {
 			return nil, err
+		}
+		// Rust #61382: an explicit external clock needs a host-provided
+		// provider; thread startup fails instead of asking the client.
+		if cfg, cfgErr := r.effectiveConfigForThreadStart(&params); cfgErr != nil {
+			return nil, cfgErr
+		} else if _, timeErr := r.resolveTimeProviderForConfig(cfg); timeErr != nil {
+			return nil, timeErr
 		}
 		if params.ProjectID != nil {
 			if strings.TrimSpace(*params.ProjectID) == "" {
@@ -18579,7 +18595,12 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		enableCurrentTimeTool, enableSleepTool = decideClockToolEnablement(cfg, params, modelHasClock)
 		if enableCurrentTimeTool {
 			if reminder := cfg.CurrentTimeReminder(); reminder != nil && reminder.ClockSource == config.CurrentTimeSourceExternal {
-				clockProvider = &appServerClockProvider{router: r}
+				// Rust #61382: external clocks come from the host provider.
+				if provider, providerErr := r.resolveTimeProviderForConfig(cfg); providerErr == nil {
+					clockProvider = hostClockProvider{provider: provider}
+				} else {
+					clockProvider = unavailableClockProvider{err: providerErr}
+				}
 			}
 		}
 	}
@@ -21921,66 +21942,6 @@ func (r *RuntimeRouter) externalAuthRefresh(ctx context.Context, request *model.
 		ChatGPTAccountID: response.ChatGPTAccountID,
 		ChatGPTPlanType:  response.ChatGPTPlanType,
 	}, nil
-}
-
-const currentTimeRequestTimeout = 10 * time.Second
-
-func (r *RuntimeRouter) requestCurrentTime(ctx context.Context, threadID string) (time.Time, error) {
-	threadID = strings.TrimSpace(threadID)
-	if threadID == "" {
-		return time.Time{}, fmt.Errorf("%w: threadId is required", ErrInvalidRequest)
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	requestCtx, cancel := context.WithTimeout(ctx, currentTimeRequestTimeout)
-	defer cancel()
-	connectionIDs, err := r.waitForCurrentTimeSubscriber(requestCtx, threadID)
-	if err != nil {
-		return time.Time{}, err
-	}
-	connectionID, err := requireSingleCurrentTimeConnection(connectionIDs)
-	if err != nil {
-		return time.Time{}, err
-	}
-	var response CurrentTimeReadResponse
-	if err := r.requireServerRequests().RequestToConnection(requestCtx, connectionID, ServerRequestCurrentTimeRead, &CurrentTimeReadParams{ThreadID: threadID}, &response); err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return time.Time{}, errors.New("current-time request timed out after 10s")
-		}
-		return time.Time{}, err
-	}
-	current := time.Unix(response.CurrentTimeAt, 0).UTC()
-	if current.IsZero() {
-		return time.Time{}, fmt.Errorf("%w: current-time response is outside the supported range", ErrInvalidRequest)
-	}
-	return current, nil
-}
-
-func (r *RuntimeRouter) waitForCurrentTimeSubscriber(ctx context.Context, threadID string) ([]string, error) {
-	ticker := time.NewTicker(25 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		connectionIDs := r.subscribedConnectionIDsForThread(threadID)
-		if len(connectionIDs) > 0 {
-			return connectionIDs, nil
-		}
-		select {
-		case <-ctx.Done():
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return nil, errors.New("timed out waiting for a client to subscribe to the thread after 10s")
-			}
-			return nil, ctx.Err()
-		case <-ticker.C:
-		}
-	}
-}
-
-func requireSingleCurrentTimeConnection(connectionIDs []string) (string, error) {
-	if len(connectionIDs) == 1 {
-		return connectionIDs[0], nil
-	}
-	return "", fmt.Errorf("expected exactly one client subscribed to the thread, found %d", len(connectionIDs))
 }
 
 // approvalsReviewerForTurn resolves the turn's approvals reviewer, which routes

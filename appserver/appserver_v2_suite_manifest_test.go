@@ -54,7 +54,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "connection_handling_websocket", Owner: "appserver", Focus: "websocket connection lifecycle"},
 		{Module: "connection_handling_websocket_compression", Owner: "appserver", Focus: "zstd negotiation gated by app_server_websocket_compression (#54930/#54949)"},
 		{Module: "connection_handling_websocket_unix", Owner: "appserver", Focus: "unix websocket transport lifecycle"},
-		{Module: "current_time", Owner: "appserver", Focus: "currentTime/read server request"},
+		{Module: "current_time", Owner: "appserver", Focus: "external clock provider startup"},
 		{Module: "daemon_update_recovery", Owner: "appserverdaemon, install", Focus: "managed daemon update recovery and reexec handoff"},
 		{Module: "critical_path_analytics", Owner: "telemetry", Focus: "critical-path core analytics capture on terminal turns"},
 		{Module: "curated_mcp_sync", Owner: "mcp", Focus: "curated MCP synchronization"},

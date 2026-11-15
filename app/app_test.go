@@ -4776,13 +4776,6 @@ func TestRemoteServerRequestLongTailResponses(t *testing.T) {
 			wantErr:  "invalid server request params",
 		},
 		{
-			name:     "current time",
-			method:   appserver.ServerRequestCurrentTimeRead,
-			params:   `{}`,
-			wantCode: -32000,
-			wantErr:  "External current time is not available in TUI.",
-		},
-		{
 			name:     "legacy patch approval",
 			method:   appserver.ServerRequestApplyPatchApproval,
 			params:   `{}`,

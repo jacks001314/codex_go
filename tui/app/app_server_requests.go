@@ -8,7 +8,6 @@ const (
 	ServerRequestDynamicToolCall          = "dynamic_tool_call"
 	ServerRequestChatGPTAuthTokensRefresh = "chatgpt_auth_tokens_refresh"
 	ServerRequestAttestationGenerate      = "attestation_generate"
-	ServerRequestCurrentTimeRead          = "current_time_read"
 )
 
 type ServerRequest struct {
@@ -116,8 +115,6 @@ func (p *PendingAppServerRequests) NoteServerRequest(request ServerRequest) *Uns
 		return &UnsupportedAppServerRequest{RequestID: request.ID, Message: "Dynamic tool calls are not available in TUI yet."}
 	case ServerRequestAttestationGenerate:
 		return &UnsupportedAppServerRequest{RequestID: request.ID, Message: "Attestation generation is not available in TUI."}
-	case ServerRequestCurrentTimeRead:
-		return &UnsupportedAppServerRequest{RequestID: request.ID, Message: "External current time is not available in TUI."}
 	case ServerRequestApplyPatchApproval:
 		return &UnsupportedAppServerRequest{RequestID: request.ID, Message: "Legacy patch approval requests are not available in TUI yet."}
 	case ServerRequestExecCommandApproval:
@@ -158,7 +155,6 @@ func (p *PendingAppServerRequests) ContainsServerRequest(request ServerRequest) 
 	case ServerRequestDynamicToolCall,
 		ServerRequestChatGPTAuthTokensRefresh,
 		ServerRequestAttestationGenerate,
-		ServerRequestCurrentTimeRead,
 		ServerRequestApplyPatchApproval,
 		ServerRequestExecCommandApproval:
 		return true

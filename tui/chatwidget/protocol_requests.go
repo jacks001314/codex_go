@@ -12,7 +12,6 @@ const (
 	RequestToolUserInput            ServerRequestKind = "tool_request_user_input"
 	RequestDynamicToolCall          ServerRequestKind = "dynamic_tool_call"
 	RequestAttestationGenerate      ServerRequestKind = "attestation_generate"
-	RequestCurrentTimeRead          ServerRequestKind = "current_time_read"
 	RequestChatGPTAuthRefresh       ServerRequestKind = "chatgpt_auth_tokens_refresh"
 	RequestApplyPatchApprovalLegacy ServerRequestKind = "apply_patch_approval"
 	RequestExecApprovalLegacy       ServerRequestKind = "exec_command_approval"

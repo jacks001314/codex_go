@@ -117,8 +117,7 @@ func ServerRequestThreadID(request *ServerRequest) (string, bool) {
 		ServerRequestUserInput,
 		ServerRequestMcpElicitation,
 		ServerRequestPermissionsApproval,
-		"dynamic_tool_call",
-		"current_time_read":
+		"dynamic_tool_call":
 		return threadID, true
 	default:
 		return "", false

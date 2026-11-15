@@ -471,7 +471,7 @@ func (b *ServerRequestBroker) ResolveFromConnection(connectionID string, respons
 	b.notifyResolvedResponse(entry.request, response)
 	if response.Error != nil {
 		// Client-supplied messages are useful for ordinary requests such as
-		// currentTime/read, but credential responses must not echo their payload.
+		// ordinary requests, but credential responses must not echo their payload.
 		entry.ch <- &serverRequestResult{err: fmt.Errorf(
 			"server request failed: code=%d%s",
 			response.Error.Code,

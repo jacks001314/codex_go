@@ -586,15 +586,6 @@ func TestServerRequestMarshalShape(t *testing.T) {
 		t.Fatalf("apply patch approval json = %s", data)
 	}
 
-	request = &ServerRequest{ID: IntID(9), Method: ServerRequestCurrentTimeRead, Params: &CurrentTimeReadParams{ThreadID: "thread-1"}}
-	data, err = json.Marshal(request)
-	if err != nil {
-		t.Fatalf("Marshal current time error = %v", err)
-	}
-	if string(data) != `{"id":9,"method":"currentTime/read","params":{"threadId":"thread-1"}}` {
-		t.Fatalf("current time json = %s", data)
-	}
-
 	timeout := uint64(60000)
 	request = &ServerRequest{ID: StringID("input-1"), Method: ServerRequestToolUserInput, Params: &ToolRequestUserInputParams{
 		ThreadID:         "thread-1",

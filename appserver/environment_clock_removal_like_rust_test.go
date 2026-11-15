@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,48 +22,53 @@ type scriptedClockRead struct {
 	err   string
 }
 
-// scriptedClockSink answers current-time/read server requests from a script so
-// a test can interleave successful and failing external clock reads.
-type scriptedClockSink struct {
-	mu     sync.Mutex
-	router *RuntimeRouter
-	reads  []scriptedClockRead
-	seen   int
+// scriptedClockProvider is the host clock for tests that interleave successful
+// and failing external clock reads.
+type scriptedClockProvider struct {
+	mu        sync.Mutex
+	reads     []scriptedClockRead
+	sleepErrs []string
+	seen      int
+	sleeps    int
 }
 
-func (s *scriptedClockSink) SendServerRequest(request *ServerRequest) {
-	s.send(request)
-}
-
-func (s *scriptedClockSink) SendServerRequestToConnection(_ string, request *ServerRequest) {
-	s.send(request)
-}
-
-func (s *scriptedClockSink) send(request *ServerRequest) {
-	if request.Method != ServerRequestCurrentTimeRead {
-		return
-	}
+func (s *scriptedClockProvider) CurrentTime(string) (time.Time, error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	next := scriptedClockRead{value: 1781717655}
 	if len(s.reads) > 0 {
 		next = s.reads[0]
 		s.reads = s.reads[1:]
 	}
 	s.seen++
-	s.mu.Unlock()
-	go func() {
-		if next.err != "" {
-			_, _ = s.router.requireServerRequests().Resolve(ErrorResponse(request.ID, -32603, next.err, nil))
-			return
-		}
-		_, _ = s.router.requireServerRequests().Resolve(OK(request.ID, &CurrentTimeReadResponse{CurrentTimeAt: next.value}))
-	}()
+	if next.err != "" {
+		return time.Time{}, errors.New(next.err)
+	}
+	return time.Unix(next.value, 0).UTC(), nil
 }
 
-func (s *scriptedClockSink) readCount() int {
+func (s *scriptedClockProvider) Sleep(string, time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sleeps++
+	if len(s.sleepErrs) > 0 {
+		err := s.sleepErrs[0]
+		s.sleepErrs = s.sleepErrs[1:]
+		return errors.New(err)
+	}
+	return nil
+}
+
+func (s *scriptedClockProvider) readCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.seen
+}
+
+func (s *scriptedClockProvider) sleepCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sleeps
 }
 
 func nonfatalExternalClockConfig() *config.Config {
@@ -77,14 +83,14 @@ func nonfatalExternalClockConfig() *config.Config {
 	}}
 }
 
-func newEnvironmentRemovalTestRouter(t *testing.T, threadID string) (*RuntimeRouter, *scriptedClockSink, *session.Store) {
+func newEnvironmentRemovalTestRouter(t *testing.T, threadID string) (*RuntimeRouter, *scriptedClockProvider, *session.Store) {
 	t.Helper()
 	return newEnvironmentRemovalTestRouterWithConfig(t, threadID, "")
 }
 
 // newEnvironmentRemovalTestRouterWithConfig seeds a thread record and a router
 // whose config service reads toml (when non-empty) from the temporary home.
-func newEnvironmentRemovalTestRouterWithConfig(t *testing.T, threadID string, toml string) (*RuntimeRouter, *scriptedClockSink, *session.Store) {
+func newEnvironmentRemovalTestRouterWithConfig(t *testing.T, threadID string, toml string) (*RuntimeRouter, *scriptedClockProvider, *session.Store) {
 	t.Helper()
 	store := session.NewStore(filepath.Join(t.TempDir(), "sessions"))
 	now := time.Now().UTC()
@@ -103,10 +109,9 @@ func newEnvironmentRemovalTestRouterWithConfig(t *testing.T, threadID string, to
 		Config:       config.NewConfigService(home),
 		DefaultCWD:   t.TempDir(),
 	})
-	sink := &scriptedClockSink{router: router}
-	router.SetServerRequestSink(sink)
-	router.subscribeThreadConnection(threadID, "conn-clock")
-	return router, sink, store
+	provider := &scriptedClockProvider{}
+	router.SetTimeProvider(provider)
+	return router, provider, store
 }
 
 // Rust #45825 (core/src/context/world_state/environment.rs): an environment
@@ -368,12 +373,11 @@ sleep_tool = true
 		DefaultCWD:   t.TempDir(),
 	})
 	router.SetNotificationSink(sink)
-	clock := &scriptedClockSink{router: router, reads: []scriptedClockRead{
+	clock := &scriptedClockProvider{reads: []scriptedClockRead{
 		{value: 1781717655},
 		{value: 1781717655},
-		{err: "PRIVATE_CLOCK_ERROR"},
-	}}
-	router.SetServerRequestSink(clock)
+	}, sleepErrs: []string{"PRIVATE_CLOCK_ERROR"}}
+	router.SetTimeProvider(clock)
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
 		CWD:    t.TempDir(),
@@ -418,7 +422,7 @@ sleep_tool = true
 	if !found {
 		t.Fatalf("second request has no output for sleep-1: %#v", outputs)
 	}
-	if clock.readCount() < 3 {
-		t.Fatalf("clock reads = %d, want the sleep tool to poll the external clock", clock.readCount())
+	if clock.sleepCount() < 1 {
+		t.Fatalf("clock sleeps = %d, want the sleep tool to wait on the external clock", clock.sleepCount())
 	}
 }
