@@ -1990,6 +1990,9 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 				captureEnv = source
 			}
 			for key, value := range originalEnv {
+				if generatedChildOnlyCAEnvOverride(key, value) {
+					continue
+				}
 				captureEnv[key] = value
 			}
 			credentialPairs = preparedProxy.PrepareSnapshotCredentialMask(captureEnv)
@@ -2681,6 +2684,22 @@ func stripManagedProxyEnv(env map[string]string) {
 	delete(env, network.ProxyAllowLocalBindingEnvKey)
 }
 
+// generatedChildOnlyCAEnvOverride reports whether a caller supplied a managed
+// proxy bundle path for a child-only CA variable. Rust #61349 keeps such
+// generated defaults out of shell snapshots so a login shell's explicit value
+// can take precedence.
+func generatedChildOnlyCAEnvOverride(key string, value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, childKey := range network.ProxyChildOnlyCAEnvKeys {
+		if key == childKey {
+			return network.IsManagedMITMCATrustBundlePath(value)
+		}
+	}
+	return false
+}
+
 func stringValue(value *string) string {
 	if value == nil {
 		return ""
@@ -2811,10 +2830,10 @@ func execServerRuntimeReadablePaths(params *ExecParams) []string {
 			}
 		}
 	}
-	if params != nil {
-		for _, key := range []string{"CODEX_CA_CERTIFICATE", "SSL_CERT_FILE"} {
+	if params != nil && params.ManagedNetwork != nil {
+		for _, key := range append(append([]string{}, network.ProxyCustomCAEnvKeys...), network.ProxyChildOnlyCAEnvKeys...) {
 			path := strings.TrimSpace(params.Env[key])
-			if path == "" || !filepath.IsAbs(path) {
+			if path == "" || !filepath.IsAbs(path) || !network.IsManagedMITMCATrustBundlePath(path) {
 				continue
 			}
 			paths = append(paths, filepath.Clean(path))

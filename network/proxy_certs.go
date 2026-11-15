@@ -31,6 +31,15 @@ var ProxyCustomCAEnvKeys = []string{
 	"BUNDLE_SSL_CA_CERT",
 	"npm_config_cafile",
 	"NPM_CONFIG_CAFILE",
+	"NIX_SSL_CERT_FILE",
+}
+
+// ProxyChildOnlyCAEnvKeys are client CA settings that receive the managed
+// bundle when unset but never contribute roots to the proxy trust bundle
+// (Rust #61349 CHILD_ONLY_CA_ENV_KEYS).
+var ProxyChildOnlyCAEnvKeys = []string{
+	"CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE",
+	"DENO_CERT",
 }
 
 type ProxyManagedMITMCATrustBundle struct {

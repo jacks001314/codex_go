@@ -226,6 +226,12 @@ func (m *proxyMITMRuntime) ApplyChildEnv(env map[string]string) {
 		}
 		env[key] = m.trustBundlePath
 	}
+	for _, key := range ProxyChildOnlyCAEnvKeys {
+		if _, explicit := env[key]; explicit {
+			continue
+		}
+		env[key] = m.trustBundlePath
+	}
 }
 
 func (m *proxyMITMRuntime) Close() {

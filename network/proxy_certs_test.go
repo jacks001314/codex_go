@@ -30,6 +30,56 @@ func TestCAEnvFromMapAndStartupValues(t *testing.T) {
 	}
 }
 
+// TestChildOnlyCADefaultsLikeRust mirrors Rust #61349: Deno and Google Cloud
+// SDK receive the managed bundle only when unset, while explicit values
+// (including an empty string) are preserved and never become trust roots.
+func TestChildOnlyCADefaultsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	directory := filepath.Join(home, ProxyManagedMITMCADir)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	bundle := filepath.Join(directory, ProxyManagedMITMCATrustBundlePrefix+"-0123.pem")
+	if err := os.WriteFile(bundle, []byte("bundle"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &proxyMITMRuntime{
+		trustBundlePath:  bundle,
+		startupEnvValues: map[string]string{},
+	}
+	env := map[string]string{
+		"CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE": "/explicit/cloud.pem",
+		"DENO_CERT":                          "",
+	}
+	runtime.ApplyChildEnv(env)
+	if env["CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE"] != "/explicit/cloud.pem" {
+		t.Fatalf("cloud SDK override = %q", env["CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE"])
+	}
+	if value, ok := env["DENO_CERT"]; !ok || value != "" {
+		t.Fatalf("empty DENO_CERT override = %q (present=%t)", value, ok)
+	}
+	if env["SSL_CERT_FILE"] != bundle {
+		t.Fatalf("custom CA default = %q, want %q", env["SSL_CERT_FILE"], bundle)
+	}
+	if _, ok := env["NIX_SSL_CERT_FILE"]; !ok {
+		t.Fatalf("custom CA keys must include NIX_SSL_CERT_FILE")
+	}
+
+	missing := map[string]string{}
+	runtime.ApplyChildEnv(missing)
+	for _, key := range ProxyChildOnlyCAEnvKeys {
+		if missing[key] != bundle {
+			t.Fatalf("%s = %q, want managed bundle", key, missing[key])
+		}
+	}
+	for _, key := range ProxyChildOnlyCAEnvKeys {
+		if ProxyStartupCAFileEnvValues(map[string]string{key: "/startup.pem"})[key] != "" {
+			t.Fatalf("%s must not contribute a trust root", key)
+		}
+	}
+}
+
 func TestPersistManagedCATrustBundleAndHashValidation(t *testing.T) {
 	dir := t.TempDir()
 	managedCAPath := filepath.Join(dir, "ca.pem")

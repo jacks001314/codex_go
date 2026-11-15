@@ -1039,3 +1039,9 @@ func isManagedMITMCATrustBundlePath(path string) bool {
 	}
 	return IsProxyGeneratedTrustBundlePath(path, directory)
 }
+
+// IsManagedMITMCATrustBundlePath reports whether path is a generated managed
+// proxy trust bundle (Rust is_managed_mitm_ca_trust_bundle_path).
+func IsManagedMITMCATrustBundlePath(path string) bool {
+	return isManagedMITMCATrustBundlePath(path)
+}
