@@ -39,6 +39,60 @@ func TestMCPRuntimeCoordinatorKeepsThreadConfigIndependent(t *testing.T) {
 	assertMCPConfiguredServerNames(t, serviceB, []string{"beta"})
 }
 
+// TestDeferredMCPReprojectionSurvivesPrewarmAndRunsAtTurnStartLikeRust mirrors
+// Rust #61356: repeated next-turn reprojection requests coalesce, background
+// prewarm cannot consume them, and claiming one rebuilds the projection before
+// the turn binds tools.
+func TestDeferredMCPReprojectionSurvivesPrewarmAndRunsAtTurnStartLikeRust(t *testing.T) {
+	coordinator := newMCPRuntimeCoordinator()
+	defer func() {
+		if err := coordinator.close(); err != nil {
+			t.Fatalf("close() error = %v", err)
+		}
+	}()
+	cfg := mcpRuntimeConfigForTest("alpha", "alpha-mcp")
+	var creates atomic.Int32
+	var updates atomic.Int32
+	create := func(*config.Config) *mcp.MCPService {
+		creates.Add(1)
+		return mcp.NewMCPService(nil)
+	}
+	update := func(*mcp.MCPService, *config.Config) { updates.Add(1) }
+
+	first := coordinator.serviceForThread("thread-a", cfg, 1, "", create, update)
+	if first == nil {
+		t.Fatal("initial serviceForThread() = nil")
+	}
+	coordinator.requestReprojectOnNextTurn("thread-a")
+	coordinator.requestReprojectOnNextTurn("thread-a")
+
+	prewarmed := coordinator.serviceForThread("thread-a", cfg, 1, "", create, update)
+	if prewarmed != first || creates.Load() != 1 || updates.Load() != 0 {
+		t.Fatalf("prewarm consumed deferred work: service=%p creates=%d updates=%d", prewarmed, creates.Load(), updates.Load())
+	}
+	if !coordinator.claimReprojectOnNextTurn("thread-a") {
+		t.Fatal("deferred reprojection was not claimed at turn start")
+	}
+	if coordinator.claimReprojectOnNextTurn("thread-a") {
+		t.Fatal("repeated requests were not coalesced into one claim")
+	}
+	// The turn-start claim invalidates the runtime; binding tools then applies
+	// the rebuilt projection to the same published service handle.
+	coordinator.invalidateThread("thread-a")
+	reprojected := coordinator.serviceForThread("thread-a", cfg, 1, "", create, update)
+	if reprojected != first || creates.Load() != 1 || updates.Load() != 1 {
+		t.Fatalf("turn-start reprojection service=%p creates=%d updates=%d", reprojected, creates.Load(), updates.Load())
+	}
+
+	coordinator.requestReprojectOnNextTurn("thread-b")
+	if err := coordinator.closeThread("thread-b"); err != nil {
+		t.Fatalf("closeThread() error = %v", err)
+	}
+	if coordinator.claimReprojectOnNextTurn("thread-b") {
+		t.Fatal("closed thread kept a deferred reprojection request")
+	}
+}
+
 func TestMCPToolCallsStayBoundToEachThread(t *testing.T) {
 	firstServer := newThreadBoundMCPTestServer(t, "first-runtime")
 	defer firstServer.Close()

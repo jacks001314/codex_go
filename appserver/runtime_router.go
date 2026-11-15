@@ -17162,6 +17162,28 @@ func (r *RuntimeRouter) prewarmMCPThread(threadID string) {
 	})
 }
 
+// requestMCPReprojectOnNextTurn is the app-server equivalent of Rust's
+// CodexThread::reproject_mcp_on_next_turn (#61356): the next regular turn
+// rebuilds the MCP projection after turn start and before tools are bound.
+func (r *RuntimeRouter) requestMCPReprojectOnNextTurn(threadID string) {
+	if r == nil || r.mcpRuntimes == nil {
+		return
+	}
+	r.mcpRuntimes.requestReprojectOnNextTurn(threadID)
+}
+
+// startDeferredMCPReprojection claims a deferred reprojection request and
+// invalidates the thread runtime so the tools bound to this turn see the
+// rebuilt projection (Rust #61356).
+func (r *RuntimeRouter) startDeferredMCPReprojection(threadID string) {
+	if r == nil || r.mcpRuntimes == nil {
+		return
+	}
+	if r.mcpRuntimes.claimReprojectOnNextTurn(threadID) {
+		r.mcpRuntimes.invalidateThread(threadID)
+	}
+}
+
 func (r *RuntimeRouter) prewarmLoadedMCPThreads() {
 	if r == nil {
 		return

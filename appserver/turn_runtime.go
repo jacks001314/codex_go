@@ -1799,6 +1799,10 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	}
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnStarted(threadID))
 	r.notify(NotificationTurnStarted, &TurnStartedNotification{ThreadID: threadID, Turn: appTurn})
+	// Rust #61356: a deferred MCP reprojection is claimed after the turn is
+	// visible and before tools are bound, so the first model request of this
+	// turn sees the rebuilt projection.
+	r.startDeferredMCPReprojection(threadID)
 	r.beginGuardianTurn(threadID, turnID)
 	r.bindRealtimeTurn(threadID, turnID)
 	// Rust #49686: the active turn owns a live remote-board receiver. Its first

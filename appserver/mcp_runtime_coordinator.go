@@ -36,9 +36,13 @@ type mcpRuntimeCoordinator struct {
 	lifecycleEpoch map[string]uint64
 	prewarming     map[string]bool
 	prewarmPending map[string]bool
-	globalEpoch    uint64
-	nextRevision   uint64
-	closed         bool
+	// reprojectNextTurn records deferred MCP reprojections requested for the
+	// next regular turn (Rust #61356). It stays separate from the dirty flags
+	// so background prewarm cannot claim work reserved for a real turn.
+	reprojectNextTurn map[string]bool
+	globalEpoch       uint64
+	nextRevision      uint64
+	closed            bool
 }
 
 type mcpRuntimeBinding struct {
@@ -55,13 +59,44 @@ type mcpRuntimeBuild struct {
 
 func newMCPRuntimeCoordinator() *mcpRuntimeCoordinator {
 	return &mcpRuntimeCoordinator{
-		bindings:       map[string]*mcpRuntimeBinding{},
-		inflight:       map[string]*mcpRuntimeBuild{},
-		threadEpoch:    map[string]uint64{},
-		lifecycleEpoch: map[string]uint64{},
-		prewarming:     map[string]bool{},
-		prewarmPending: map[string]bool{},
+		bindings:          map[string]*mcpRuntimeBinding{},
+		inflight:          map[string]*mcpRuntimeBuild{},
+		threadEpoch:       map[string]uint64{},
+		lifecycleEpoch:    map[string]uint64{},
+		prewarming:        map[string]bool{},
+		prewarmPending:    map[string]bool{},
+		reprojectNextTurn: map[string]bool{},
 	}
+}
+
+// requestReprojectOnNextTurn records a deferred MCP reprojection request for
+// the next regular turn. Repeated requests coalesce and start no background
+// refresh (Rust #61356).
+func (c *mcpRuntimeCoordinator) requestReprojectOnNextTurn(threadID string) {
+	threadID = strings.TrimSpace(threadID)
+	if c == nil || threadID == "" {
+		return
+	}
+	c.mu.Lock()
+	if !c.closed {
+		c.reprojectNextTurn[threadID] = true
+	}
+	c.mu.Unlock()
+}
+
+// claimReprojectOnNextTurn consumes a deferred request exactly once.
+func (c *mcpRuntimeCoordinator) claimReprojectOnNextTurn(threadID string) bool {
+	threadID = strings.TrimSpace(threadID)
+	if c == nil || threadID == "" {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.reprojectNextTurn[threadID] {
+		return false
+	}
+	delete(c.reprojectNextTurn, threadID)
+	return true
 }
 
 func (c *mcpRuntimeCoordinator) serviceForThread(
@@ -336,6 +371,7 @@ func (c *mcpRuntimeCoordinator) closeThread(threadID string) error {
 	binding := c.bindings[threadID]
 	delete(c.bindings, threadID)
 	delete(c.prewarmPending, threadID)
+	delete(c.reprojectNextTurn, threadID)
 	c.mu.Unlock()
 	if binding == nil || binding.service == nil {
 		return nil
@@ -354,6 +390,7 @@ func (c *mcpRuntimeCoordinator) close() error {
 	}
 	c.closed = true
 	clear(c.prewarmPending)
+	clear(c.reprojectNextTurn)
 	services := make([]*mcp.MCPService, 0, len(c.bindings))
 	for threadID, binding := range c.bindings {
 		if binding != nil && binding.service != nil {
