@@ -56,6 +56,9 @@ type PluginSourceLocation struct {
 	// Cloud fields; ResourceURI is opaque.
 	ResourceURI string
 	BundleURI   string
+	// ReleaseID is the opaque release selected by the cloud catalog for this
+	// declaration (Rust #61393). Empty when the catalog did not pin a release.
+	ReleaseID string
 	// Executor fields: the environment that owns Root and the local
 	// `name@marketplace` key used for this installation in configuration.
 	EnvironmentID string
