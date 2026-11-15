@@ -2361,6 +2361,47 @@ func TestSessionItemForToolOutputPreservesToolSearchPayloadKind(t *testing.T) {
 	}
 }
 
+func TestExecStreamCollectorRecordsLiveThreadItems(t *testing.T) {
+	store := session.NewStore(filepath.Join(t.TempDir(), "sessions"))
+	live := session.OpenLiveThreadItems(store, "thread-live", "turn-7")
+	defer live.Close()
+	collector := &execStreamEventCollector{
+		sink:       newExecEventSink(nil, false),
+		live:       live,
+		liveTurnID: "turn-7",
+		liveNow:    fixedExecTime,
+	}
+	collector.CompletedResponseItem(model.AgentItem{ID: "rs-live", Type: "reasoning", Text: "checking", Data: map[string]any{"encryptedContent": "opaque"}})
+	collector.CompletedResponseItem(model.AgentItem{ID: "msg-live", Type: "message", Text: "Inspecting the repo."})
+	collector.CompletedResponseItem(model.AgentItem{ID: "fc-live", Type: "function_call", Name: "shell", CallID: "call-live", Arguments: `{"command":"git status"}`})
+	collector.ToolCompleted(context.Background(), &turn.ToolExecutionResult{
+		Invocation: &tool.Invocation{
+			CallID:   "call-live",
+			ToolName: tool.PlainName("shell"),
+			Payload:  tool.Payload{Kind: tool.PayloadFunction},
+		},
+		Output:     &tool.Output{Body: "clean", Success: true},
+		StartedAt:  fixedExecTime(),
+		FinishedAt: fixedExecTime().Add(time.Second),
+	})
+	items := live.Snapshot()
+	if len(items) != 4 {
+		t.Fatalf("live items = %#v, want reasoning plus assistant and call/output", items)
+	}
+	if items[0].Type != "reasoning" || items[0].Text != "checking" {
+		t.Fatalf("reasoning live item = %#v", items[0])
+	}
+	if items[1].Type != "agent_message" || items[1].Text != "Inspecting the repo." {
+		t.Fatalf("assistant live item = %#v", items[1])
+	}
+	if items[2].Type != "function_call" || items[2].CallID != "call-live" {
+		t.Fatalf("tool call live item = %#v", items[2])
+	}
+	if items[3].Type != "tool_output" || items[3].CallID != "call-live" || items[3].Text != "clean" {
+		t.Fatalf("tool output live item = %#v", items[3])
+	}
+}
+
 func TestRunExecResumeLastSelectsNewestSession(t *testing.T) {
 	home := t.TempDir()
 	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {

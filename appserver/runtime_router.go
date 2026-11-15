@@ -6343,6 +6343,9 @@ func (r *RuntimeRouter) handleEphemeralThreadForkRuntime(request *Request) (*Thr
 	if err != nil {
 		return nil, true, threadForkRecordError(err)
 	}
+	if strings.TrimSpace(params.BeforeTurnID) == "" && strings.TrimSpace(params.LastTurnID) == "" {
+		r.appendLiveThreadItemsForFork(sourceID, record, mode, params.ExcludeTurns)
+	}
 	if params.ExperimentalPredictionMode {
 		enableThreadConfigFeatureOverride(record, "reasoning_effort_override")
 	}
@@ -8129,7 +8132,14 @@ func (r *RuntimeRouter) handleActiveThreadForkRuntime(request *Request) (any, bo
 			return nil, true, err
 		}
 	}
-	annotateActiveForkSourceSnapshot(record, active, now)
+	var liveItems []session.Item
+	if !params.ExcludeTurns && mode != session.ForkNone &&
+		strings.TrimSpace(params.BeforeTurnID) == "" && strings.TrimSpace(params.LastTurnID) == "" {
+		if live := r.services.ThreadRouter.store.LiveItems(sourceID); live != nil {
+			liveItems = live.Snapshot()
+		}
+	}
+	annotateActiveForkSourceSnapshot(record, active, now, liveItems)
 	applyThreadForkName(record, sourceRecord)
 	record.Metadata.RolloutTurns = activeForkTurnSnapshots(record, active, now)
 	if params.ThreadSource != nil {
@@ -8222,17 +8232,25 @@ func (r *RuntimeRouter) rollbackRuntimeForkInitialization(record *session.Record
 	r.services.ThreadRouter.rollbackThreadForkInitialization(record)
 }
 
-func annotateActiveForkSourceSnapshot(record *session.Record, active activeRuntimeTurnForkSnapshot, now time.Time) {
-	if record == nil || strings.TrimSpace(active.TurnID) == "" {
+func annotateActiveForkSourceSnapshot(record *session.Record, active activeRuntimeTurnForkSnapshot, now time.Time, liveItems []session.Item) {
+	if record == nil {
 		return
 	}
-	startedAt := activeForkStartedAt(active, now)
-	if promptItem, ok := runtimeUserPromptSessionItem(active.TurnID, active.Params, startedAt); ok && !sessionRecordHasItemID(record, promptItem.ID) {
-		record.Items = append(record.Items, promptItem)
+	hasActiveTurn := strings.TrimSpace(active.TurnID) != ""
+	if hasActiveTurn {
+		startedAt := activeForkStartedAt(active, now)
+		if promptItem, ok := runtimeUserPromptSessionItem(active.TurnID, active.Params, startedAt); ok && !sessionRecordHasItemID(record, promptItem.ID) {
+			record.Items = append(record.Items, promptItem)
+		}
 	}
-	marker := interruptedTurnMarkerSessionItem(active.TurnID, now)
-	if !sessionRecordHasItemID(record, marker.ID) && !sessionRecordHasTurnAbortedMarker(record, active.TurnID) {
-		record.Items = append(record.Items, marker)
+	if len(liveItems) > 0 {
+		record.Items = append(record.Items, session.MissingItems(record.Items, liveItems)...)
+	}
+	if hasActiveTurn {
+		marker := interruptedTurnMarkerSessionItem(active.TurnID, now)
+		if !sessionRecordHasItemID(record, marker.ID) && !sessionRecordHasTurnAbortedMarker(record, active.TurnID) {
+			record.Items = append(record.Items, marker)
+		}
 	}
 }
 
@@ -12410,6 +12428,21 @@ func (r *RuntimeRouter) threadRecordForFork(threadID session.ThreadID, includeAr
 		return record, nil
 	}
 	return r.threadRecord(threadID, includeArchived, includeHistory)
+}
+
+// appendLiveThreadItemsForFork copies a running turn's completed items into the
+// fork as local items after ForkRecord has established the child's history
+// reference. Appending earlier would make a paginated fork's HistoryBase point
+// past the source's durable items.
+func (r *RuntimeRouter) appendLiveThreadItemsForFork(sourceThreadID session.ThreadID, record *session.Record, mode session.ForkMode, excludeTurns bool) {
+	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil || record == nil || excludeTurns || mode == session.ForkNone {
+		return
+	}
+	live := r.services.ThreadRouter.store.LiveItems(sourceThreadID)
+	if live == nil {
+		return
+	}
+	record.Items = append(record.Items, session.MissingItems(record.Items, live.Snapshot())...)
 }
 
 func (r *RuntimeRouter) threadRecord(threadID session.ThreadID, includeArchived bool, includeHistory bool) (*session.Record, error) {

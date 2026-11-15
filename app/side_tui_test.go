@@ -126,6 +126,58 @@ func TestInteractiveLocalSideCoordinatorCloseAll(t *testing.T) {
 	}
 }
 
+func TestInteractiveLocalSideCoordinatorForkIncludesLiveParentItems(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	now := time.Now().UTC()
+	parent := &session.Record{
+		ID:        "thread-parent",
+		SessionID: "thread-parent",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			HistoryMode: "paginated",
+			RolloutTurns: []session.TurnSnapshot{
+				{ID: "turn-1", Status: "completed"},
+				{ID: "turn-2", Status: "running"},
+			},
+		},
+		Items: []session.Item{
+			{ID: "user-1", Type: "message", Role: "user", Text: "parent question", CreatedAt: now, Metadata: map[string]any{"turnId": "turn-1"}},
+		},
+	}
+	if err := store.Create(parent); err != nil {
+		t.Fatalf("Create(parent) error = %v", err)
+	}
+	live := session.OpenLiveThreadItems(store, "thread-parent", "turn-2")
+	defer live.Close()
+	live.Append(
+		session.Item{ID: "assistant-2", Type: "agent_message", Role: "assistant", Text: "Inspecting the repo.", CreatedAt: now.Add(time.Second), Metadata: map[string]any{"turnId": "turn-2"}},
+		session.Item{ID: "tool-call-2", Type: "function_call", Name: "shell", CallID: "call-2", Text: "git status", CreatedAt: now.Add(2 * time.Second), Metadata: map[string]any{"turnId": "turn-2"}},
+		session.Item{ID: "output-2", Type: "tool_output", CallID: "call-2", Text: "clean", CreatedAt: now.Add(3 * time.Second), Metadata: map[string]any{"turnId": "turn-2"}},
+	)
+
+	coordinator := newInteractiveLocalSideCoordinator(store)
+	response, err := coordinator.Start(codextea.SideStartParams{ParentThreadID: "thread-parent"})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	side, err := store.Read(session.ThreadID(response.SideThreadID), true, true)
+	if err != nil {
+		t.Fatalf("Read(side) error = %v", err)
+	}
+	if len(side.Items) != 5 {
+		t.Fatalf("side items = %#v, want inherited user, live suffix, and boundary", side.Items)
+	}
+	if side.Items[0].ID != "user-1" || side.Items[1].ID != "assistant-2" || side.Items[2].CallID != "call-2" || side.Items[3].CallID != "call-2" {
+		t.Fatalf("side live item order = %#v", side.Items)
+	}
+	if side.Items[4].Text != codextea.SideBoundaryPrompt {
+		t.Fatalf("side boundary item = %#v", side.Items[4])
+	}
+}
+
 func TestInteractiveLocalSideCoordinatorRequiresStartedConversation(t *testing.T) {
 	home := t.TempDir()
 	store := session.NewStore(filepath.Join(home, "sessions"))

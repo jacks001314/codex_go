@@ -1947,7 +1947,11 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			samplingFollowUp = rolloutFollowUp
 		}
 	}
-	samplingCompaction := r.midTurnSamplingCompaction(threadID, turnID, connectionID, params, runConfig, startedAt)
+	liveItems := r.openLiveThreadItems(threadID, turnID)
+	if liveItems != nil {
+		defer liveItems.Close()
+	}
+	samplingCompaction := r.midTurnSamplingCompaction(threadID, turnID, connectionID, params, runConfig, startedAt, liveItems)
 	// Rust #44675/#50050: refresh AGENTS.md, plugin, and skill context from the
 	// capability snapshot captured for every model request.
 	instructionsProvider := r.turnStepInstructionsProvider(threadID, turnID, params, runConfig)
@@ -1973,6 +1977,10 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	if criticalPathTiming {
 		timingState.EnableCriticalPath()
 	}
+	onToolCompleted := r.runtimeToolCompletedNotifier(threadID, turnID, firstNonEmpty(params.CWD, r.services.DefaultCWD), runConfig.UnifiedExecEnabled)
+	onToolCompleted = r.liveToolCompletedRecorder(liveItems, turnID, onToolCompleted)
+	onCompletedResponseItem := r.agentResponseRecorder(ctx, threadID, turnID, runConfig)
+	onCompletedResponseItem = r.liveResponseItemRecorder(liveItems, turnID, onCompletedResponseItem)
 	agentRequest := &turn.AgentLoopRequest{
 		Prompt:                       agentPrompt,
 		Timing:                       timingState,
@@ -2025,7 +2033,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		OutputSchema:                 params.OutputSchema,
 		PostToolInputItems:           runConfig.PostToolInputItems,
 		OnToolStarted:                r.runtimeToolStartedNotifier(threadID, turnID, firstNonEmpty(params.CWD, r.services.DefaultCWD), runConfig.UnifiedExecEnabled),
-		OnToolCompleted:              r.runtimeToolCompletedNotifier(threadID, turnID, firstNonEmpty(params.CWD, r.services.DefaultCWD), runConfig.UnifiedExecEnabled),
+		OnToolCompleted:              onToolCompleted,
 		EmitCodeModeNestedLifecycle:  true,
 		OnWarning: func(message string) {
 			r.notify(NotificationWarning, &WarningNotification{ThreadID: stringPtrIfNotEmpty(threadID), Message: message})
@@ -2047,7 +2055,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		OnTokenUsage: func(usage model.AgentUsage) {
 			r.recordGoalTokenUsageWithDescendants(threadID, turnID, usage)
 		},
-		OnCompletedResponseItem: r.agentResponseRecorder(ctx, threadID, turnID, runConfig),
+		OnCompletedResponseItem: onCompletedResponseItem,
 		// Rust #53670: the usage a terminal incomplete response reported is
 		// charged to the cumulative total and to the shared rollout budget
 		// instead of being dropped with the error, while the context baseline
@@ -2500,7 +2508,7 @@ func (r *RuntimeRouter) autoCompactFallbackFollowUp(threadID string, runConfig *
 // The active context is measured from the last sampled response (Rust's
 // context_window_token_status uses the last response plus items recorded after
 // it), not the accumulated turn usage.
-func (r *RuntimeRouter) midTurnSamplingCompaction(threadID string, turnID string, connectionID string, params *turn.TurnStartParams, runConfig *appTurnRunConfig, startedAt time.Time) turn.SamplingCompaction {
+func (r *RuntimeRouter) midTurnSamplingCompaction(threadID string, turnID string, connectionID string, params *turn.TurnStartParams, runConfig *appTurnRunConfig, startedAt time.Time, liveItems *session.LiveThreadItems) turn.SamplingCompaction {
 	if r == nil || runConfig == nil || params == nil || strings.TrimSpace(threadID) == "" {
 		return nil
 	}
@@ -2595,6 +2603,10 @@ func (r *RuntimeRouter) midTurnSamplingCompaction(threadID string, turnID string
 		if err != nil {
 			return nil, err
 		}
+		// Compaction replaced the durable history with a baseline that already
+		// includes every item recorded so far, so the pre-compaction suffix must
+		// not reappear in a later fork.
+		_ = liveItems.Rebase(nil)
 		if len(compactedItems) == 0 {
 			return nil, nil
 		}

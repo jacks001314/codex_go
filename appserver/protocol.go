@@ -3760,6 +3760,10 @@ func (r *ThreadItemsListResponse) MarshalJSON() ([]byte, error) {
 type ThreadInjectItemsParams struct {
 	ThreadID string            `json:"threadId"`
 	Items    []json.RawMessage `json:"items"`
+	// SessionItems carries in-process items whose exact storage form must be
+	// preserved. The TUI uses it to hand a fork the running parent turn's
+	// completed items, which Rust reads from its live thread store.
+	SessionItems []session.Item `json:"-"`
 }
 
 func (p *ThreadInjectItemsParams) Validate() error {

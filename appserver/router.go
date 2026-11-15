@@ -346,6 +346,23 @@ func (r *Router) readThreadRecordForFork(threadID session.ThreadID, includeArchi
 	return r.readThreadRecord(threadID, includeArchived, includeHistory)
 }
 
+// appendLiveThreadItemsForFork copies a running turn's completed items into the
+// fork as local items. The suffix cannot join the source record before
+// ForkRecord: a paginated fork's HistoryBase refers to the source's durable
+// items, so appending to that snapshot would make the base exceed its source.
+// Appending after ForkRecord keeps the reference valid while still making the
+// fork see the same in-flight transcript as Rust's live thread store.
+func (r *Router) appendLiveThreadItemsForFork(sourceThreadID session.ThreadID, record *session.Record, mode session.ForkMode, excludeTurns bool) {
+	if r == nil || r.store == nil || record == nil || excludeTurns || mode == session.ForkNone {
+		return
+	}
+	live := r.store.LiveItems(sourceThreadID)
+	if live == nil {
+		return
+	}
+	record.Items = append(record.Items, session.MissingItems(record.Items, live.Snapshot())...)
+}
+
 func (r *Router) readThreadRecord(threadID session.ThreadID, includeArchived bool, includeHistory bool) (*session.Record, error) {
 	var record *session.Record
 	var err error
@@ -2666,6 +2683,9 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 	record, err := r.store.ForkRecord(sourceRecord, forkOptions)
 	if err != nil {
 		return nil, threadForkRecordError(err)
+	}
+	if strings.TrimSpace(params.BeforeTurnID) == "" && strings.TrimSpace(params.LastTurnID) == "" {
+		r.appendLiveThreadItemsForFork(sourceID, record, mode, params.ExcludeTurns)
 	}
 	// Rust #60559: a reference-backed fork has no local opening user message in
 	// its own rollout, so inherit the preview the source carries.
@@ -5160,8 +5180,8 @@ func threadQueueError(err error) error {
 }
 
 func (r *Router) handleThreadInjectItems(request *Request) (*ThreadInjectItemsResponse, error) {
-	var params ThreadInjectItemsParams
-	if err := request.DecodeParams(&params); err != nil {
+	params, err := decodeThreadInjectItemsParams(request)
+	if err != nil {
 		return nil, err
 	}
 	if err := params.Validate(); err != nil {
@@ -5177,7 +5197,10 @@ func (r *Router) handleThreadInjectItems(request *Request) (*ThreadInjectItemsRe
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	items := make([]session.Item, 0, len(params.Items))
+	// SessionItems precede the wire items so a fork receives the live parent
+	// suffix before the side-conversation boundary that closes it.
+	items := make([]session.Item, 0, len(params.SessionItems)+len(params.Items))
+	items = append(items, params.SessionItems...)
 	for i, raw := range params.Items {
 		item, err := sessionItemFromRaw(raw, now, i)
 		if err != nil {
@@ -5203,6 +5226,35 @@ func (r *Router) handleThreadInjectItems(request *Request) (*ThreadInjectItemsRe
 	}
 	_ = r.appendThreadRollout(record.ID, items, now)
 	return &ThreadInjectItemsResponse{}, nil
+}
+
+// decodeThreadInjectItemsParams prefers the in-process params object so
+// host-only fields such as SessionItems survive the JSON boundary.
+func decodeThreadInjectItemsParams(request *Request) (*ThreadInjectItemsParams, error) {
+	if request != nil {
+		switch params := request.InternalParams.(type) {
+		case *ThreadInjectItemsParams:
+			if params != nil {
+				clone := *params
+				clone.Items = append([]json.RawMessage(nil), params.Items...)
+				clone.SessionItems = cloneRuntimeSessionItems(params.SessionItems)
+				return &clone, nil
+			}
+		case ThreadInjectItemsParams:
+			clone := params
+			clone.Items = append([]json.RawMessage(nil), params.Items...)
+			clone.SessionItems = cloneRuntimeSessionItems(params.SessionItems)
+			return &clone, nil
+		}
+	}
+	if request == nil {
+		return nil, jsonRPCInvalidRequest("thread/injectItems requires a request")
+	}
+	var params ThreadInjectItemsParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return &params, nil
 }
 
 func ParseRequest(data []byte) (*Request, error) {

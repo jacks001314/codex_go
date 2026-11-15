@@ -504,6 +504,13 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 			return nil, err
 		}
 	}
+	liveItems := r.openExecLiveThreadItems(req, threadID, turnID)
+	if liveItems != nil {
+		streamCollector.live = liveItems
+		streamCollector.liveTurnID = turnID
+		streamCollector.liveNow = r.now
+		defer liveItems.Close()
+	}
 	runPrompt := prompt
 	execStartupItems := execStartupInputItems(req, permissionProfile, sandbox.PermissionPromptProfileOptions{
 		ApprovalPolicy:                 approvalPolicy,
@@ -687,7 +694,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		SteerMailbox:                      firstSteerMailbox(req.SteerMailbox, execAgentSteerMailboxFromTools(req, multiAgentTools)),
 		OnSteerCommitted:                  req.OnSteerCommitted,
 		SamplingFollowUp:                  r.execAutoCompactFallbackFollowUp(cfg, modelID),
-		SamplingCompaction:                r.execMidTurnSamplingCompaction(cfg, modelID, providerID, cyberAccessProgram, agent, req, threadID, turnID, prompt, requestInputs, resumeContext, eventSink, execStartupItems, req.AdditionalInputItems),
+		SamplingCompaction:                r.execMidTurnSamplingCompaction(cfg, modelID, providerID, cyberAccessProgram, agent, req, threadID, turnID, prompt, requestInputs, resumeContext, eventSink, execStartupItems, req.AdditionalInputItems, liveItems),
 	}
 	turnResult, err := r.runAgentTurn(ctx, req, agent, runConfig)
 	if err != nil {
@@ -715,6 +722,9 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	sessionPath, err := r.persistSession(req, threadID, turnID, prompt, requestInputs, turnResult, resumeContext, tokenUsage)
 	if err != nil {
 		return nil, err
+	}
+	if liveItems != nil {
+		liveItems.Close()
 	}
 
 	if req.Exec.LastMessageFile != "" {
@@ -1053,6 +1063,12 @@ type execStreamEventCollector struct {
 	completedAgentItems map[string]bool
 	retrying            bool
 	warningCount        int
+	// live records the items this turn has completed for fork readers, matching
+	// Rust's live thread store, which exposes a running turn's transcript before
+	// the turn commits.
+	live       *session.LiveThreadItems
+	liveTurnID string
+	liveNow    func() time.Time
 }
 
 func (c *execStreamEventCollector) Handle(event *model.ResponsesStreamEvent) {
@@ -1242,6 +1258,7 @@ func (c *execStreamEventCollector) ToolCompleted(_ context.Context, execution *t
 	if c == nil || execution == nil {
 		return
 	}
+	c.recordLiveToolExecution(execution)
 	if item, ok := subAgentActivityProtocolItem(execution); ok {
 		c.emitInternal(protocol.ItemStarted(item))
 		c.emitInternal(protocol.ItemCompleted(item))
@@ -1250,6 +1267,45 @@ func (c *execStreamEventCollector) ToolCompleted(_ context.Context, execution *t
 	for _, event := range eventsFromToolExecution(execution) {
 		c.emit(event)
 	}
+}
+
+// CompletedResponseItem keeps the live overlay in step with Rust's
+// Session::record_conversation_items: every completed response item that the
+// turn will persist is recorded immediately, including reasoning and
+// collaboration calls. Tool outputs follow from recordLiveToolExecution; a
+// call recorded here is deduped by call id there.
+func (c *execStreamEventCollector) CompletedResponseItem(item model.AgentItem) {
+	if c == nil || c.live == nil || strings.TrimSpace(c.liveTurnID) == "" {
+		return
+	}
+	if strings.TrimSpace(item.ID) == "" && strings.TrimSpace(item.CallID) == "" && strings.TrimSpace(item.Text) == "" {
+		return
+	}
+	suffix := strings.TrimPrefix(c.liveTurnID, "turn-")
+	sessionItem := sessionItemFromAgentItem(c.liveTurnID, fallbackExecAssistantSessionItemID(suffix, 0), "", &item, nil, c.liveTime(), nil, nil)
+	if strings.TrimSpace(sessionItem.ID) == "" {
+		return
+	}
+	c.live.Append(sessionItem)
+}
+
+func (c *execStreamEventCollector) recordLiveToolExecution(execution *turn.ToolExecutionResult) {
+	if c == nil || c.live == nil || strings.TrimSpace(c.liveTurnID) == "" || execution == nil {
+		return
+	}
+	createdAt := execution.FinishedAt
+	if createdAt.IsZero() {
+		createdAt = c.liveTime()
+	}
+	suffix := strings.TrimPrefix(c.liveTurnID, "turn-")
+	c.live.Append(sessionItemsForToolExecution(c.liveTurnID, suffix, execution, createdAt, nil)...)
+}
+
+func (c *execStreamEventCollector) liveTime() time.Time {
+	if c != nil && c.liveNow != nil {
+		return c.liveNow().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func (c *execStreamEventCollector) emitInternal(event protocol.ThreadEvent) {
@@ -1683,10 +1739,24 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		OnCodeModeNotify:             run.StreamEvents.CodeModeNotify,
 		OnWarning:                    run.StreamEvents.Warning,
 		OnAssistantMessage:           run.StreamEvents.AssistantMessage,
+		OnCompletedResponseItem:      run.StreamEvents.CompletedResponseItem,
 		OnSteerCommitted:             run.OnSteerCommitted,
 		SamplingFollowUp:             run.SamplingFollowUp,
 		SamplingCompaction:           run.SamplingCompaction,
 	})
+}
+
+// openExecLiveThreadItems starts the fork-visible overlay for a running exec
+// turn. Ephemeral runs never persist history, so there is nothing to overlay.
+func (r *Runner) openExecLiveThreadItems(req *Request, threadID string, turnID string) *session.LiveThreadItems {
+	if r == nil || req == nil || req.Exec.Ephemeral {
+		return nil
+	}
+	if strings.TrimSpace(r.CodexHome) == "" || strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
+		return nil
+	}
+	store := session.NewStore(filepath.Join(r.CodexHome, "sessions"))
+	return session.OpenLiveThreadItems(store, session.ThreadID(threadID), turnID)
 }
 
 // applyUnifiedExecEnvironments installs the host-resolved environments.toml
@@ -5466,7 +5536,7 @@ func (r *Runner) execAutoCompactFallbackFollowUp(cfg *config.Config, modelID str
 // pending tool calls. The active context is measured from the last sampled
 // response (Rust's context_window_token_status), not the accumulated turn
 // usage.
-func (r *Runner) execMidTurnSamplingCompaction(cfg *config.Config, modelID string, providerID string, cyberAccessProgram string, agent model.AgentRunner, req *Request, threadID string, turnID string, userPrompt string, userInputs []turn.TurnUserInput, resumeContext *execResumeContext, eventSink *execEventSink, startupItems []any, additionalInputItems []any) turn.SamplingCompaction {
+func (r *Runner) execMidTurnSamplingCompaction(cfg *config.Config, modelID string, providerID string, cyberAccessProgram string, agent model.AgentRunner, req *Request, threadID string, turnID string, userPrompt string, userInputs []turn.TurnUserInput, resumeContext *execResumeContext, eventSink *execEventSink, startupItems []any, additionalInputItems []any, liveItems *session.LiveThreadItems) turn.SamplingCompaction {
 	if r == nil || req == nil || req.Exec.Ephemeral || cfg == nil || strings.TrimSpace(threadID) == "" {
 		return nil
 	}
@@ -5586,7 +5656,7 @@ func (r *Runner) execMidTurnSamplingCompaction(cfg *config.Config, modelID strin
 		}
 		usage.ModelContextWindow = effectiveExecModelContextWindow(modelID, cfg)
 		record.Metadata.Extra = execTokenUsageMetadata(extra, &usage)
-		if err := store.Save(record); err != nil {
+		if err := liveItems.Rebase(func() error { return store.Save(record) }); err != nil {
 			return nil, err
 		}
 		if err := r.appendExecCompacted(threadID, record, compacted.Summary, now); err != nil {

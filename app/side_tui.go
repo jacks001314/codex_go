@@ -108,9 +108,11 @@ func (c *interactiveLocalSideCoordinator) Start(params codextea.SideStartParams)
 		return codextea.SideStartResponse{}, errors.New("thread/fork response did not include a side thread id")
 	}
 	sideThreadID := strings.TrimSpace(forked.Thread.ID)
+	liveItems := c.liveParentItems(parentThreadID, sideThreadID)
 	_, err = localSideRequest(router, appserver.IntID(2), appserver.MethodThreadInjectItems, appserver.ThreadInjectItemsParams{
-		ThreadID: sideThreadID,
-		Items:    []json.RawMessage{codextea.SideBoundaryPromptItem()},
+		ThreadID:     sideThreadID,
+		Items:        []json.RawMessage{codextea.SideBoundaryPromptItem()},
+		SessionItems: liveItems,
 	})
 	if err != nil {
 		_, _ = localSideRequest(router, appserver.IntID(3), appserver.MethodThreadDelete, appserver.ThreadDeleteParams{ThreadID: sideThreadID})
@@ -141,6 +143,28 @@ func (c *interactiveLocalSideCoordinator) Start(params codextea.SideStartParams)
 	c.sideByParent[parentThreadID] = sideThreadID
 	c.parentBySide[sideThreadID] = parentThreadID
 	return codextea.SideStartResponse{ParentThreadID: parentThreadID, SideThreadID: sideThreadID}, nil
+}
+
+// liveParentItems returns the running parent turn's completed items that the
+// fork's inherited history does not already contain. Rust forks read the live
+// thread store, so a side conversation started mid-turn sees the assistant and
+// tool transcript the parent has produced before the boundary.
+func (c *interactiveLocalSideCoordinator) liveParentItems(parentThreadID string, sideThreadID string) []session.Item {
+	if c == nil || c.store == nil {
+		return nil
+	}
+	live := c.store.LiveItems(session.ThreadID(parentThreadID))
+	if live == nil {
+		return nil
+	}
+	items := live.Snapshot()
+	if len(items) == 0 {
+		return nil
+	}
+	if record, err := c.store.Read(session.ThreadID(sideThreadID), true, true); err == nil && record != nil {
+		items = session.MissingItems(record.Items, items)
+	}
+	return items
 }
 
 func (c *interactiveLocalSideCoordinator) Close(params codextea.SideCloseParams) (codextea.SideCloseResponse, error) {
@@ -252,11 +276,12 @@ func localSideRequest(router *appserver.Router, id appserver.RequestID, method a
 		return nil, fmt.Errorf("%s failed in TUI: %w", method, err)
 	}
 	response := router.Handle(&appserver.Request{
-		JSONRPC:      "2.0",
-		ID:           id,
-		Method:       method,
-		Params:       raw,
-		ConnectionID: interactiveSideConnectionID,
+		JSONRPC:        "2.0",
+		ID:             id,
+		Method:         method,
+		Params:         raw,
+		ConnectionID:   interactiveSideConnectionID,
+		InternalParams: params,
 	})
 	if response == nil {
 		return nil, errors.New(string(method) + " failed in TUI: no response")
