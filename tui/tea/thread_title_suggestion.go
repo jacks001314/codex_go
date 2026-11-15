@@ -21,6 +21,7 @@ type ThreadNameSuggestedMsg struct {
 	OK            bool
 	Automatic     bool
 	ExpectedTitle string
+	FallbackTitle string
 	RenameFailed  bool
 }
 

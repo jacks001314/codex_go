@@ -255,6 +255,15 @@ type StartManagedWorktreeFunc func(mode string, name string, cwd string, threadI
 
 type ThreadRenameFunc func(threadID string, name string) error
 
+// CloudTitleGenerateFunc generates a Cloud conversation title with the
+// selected Cloud account, without starting a temporary thread (Rust #61600).
+type CloudTitleGenerateFunc = RecapGenerateFunc
+
+// CloudThreadNameSaveFunc saves an automatic Cloud title outside the
+// conversation command queue. It must preserve an existing saved name that no
+// longer matches expected (Rust AutomaticThreadName::save).
+type CloudThreadNameSaveFunc func(threadID string, title string, expected string) error
+
 // approvalsReviewerFromState restores the thread reviewer the session state
 // carries so the first permission-menu render matches the daemon.
 func approvalsReviewerFromState(state *codextui.State) chatwidget.ApprovalsReviewer {
@@ -1444,6 +1453,13 @@ type Options struct {
 	// OnSuggestThreadName runs the temporary structured title turn for the
 	// /rename suggestion (Rust #40495). Nil keeps the plain rename prompt.
 	OnSuggestThreadName RecapGenerateFunc
+	// OnGenerateCloudThreadTitle generates automatic titles through the Cloud
+	// backend itself (Rust #61600). When set, automatic titles no longer start a
+	// temporary thread, and OnSaveCloudThreadName persists them.
+	OnGenerateCloudThreadTitle CloudTitleGenerateFunc
+	// OnSaveCloudThreadName persists an automatic Cloud title. Nil falls back to
+	// OnRenameThread.
+	OnSaveCloudThreadName CloudThreadNameSaveFunc
 	// AutoRecap is the configured `tui.auto_recap` value (Rust local_settings).
 	// Nil keeps scheduled recaps enabled, matching Rust's config default.
 	AutoRecap *bool
@@ -3125,6 +3141,9 @@ type Model struct {
 	automaticThreadTitleThreadID     string
 	automaticThreadTitleExpected     string
 	automaticThreadTitleEpoch        atomic.Uint64
+	onGenerateCloudThreadTitle       CloudTitleGenerateFunc
+	onSaveCloudThreadName            CloudThreadNameSaveFunc
+	cloudTitleSaves                  *cloudTitleSavesState
 	pendingTokenActivityRequestID    uint64
 	pendingRateLimitResetRequestID   uint64
 	pendingRateLimitResetForPopup    bool
@@ -3618,6 +3637,9 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onExportTranscript:               options.OnExportTranscript,
 		onGenerateRecap:                  options.OnGenerateRecap,
 		onSuggestThreadName:              options.OnSuggestThreadName,
+		onGenerateCloudThreadTitle:       options.OnGenerateCloudThreadTitle,
+		onSaveCloudThreadName:            options.OnSaveCloudThreadName,
+		cloudTitleSaves:                  &cloudTitleSavesState{},
 		onUpdateDaybreak:                 options.OnUpdateDaybreak,
 		onLoadTranscriptPreview:          options.OnLoadTranscriptPreview,
 		onReadSessionTranscript:          options.OnReadSessionTranscript,
@@ -3979,6 +4001,9 @@ func Run(ctx context.Context, state *codextui.State, options Options, input io.R
 	if !ok {
 		return nil, nil
 	}
+	// Rust #61600: pending Cloud title saves get a bounded chance to finish
+	// before the connection they use is closed.
+	model.cloudTitleSaves.shutdown(3 * time.Second)
 	model.mentionUsage.flush()
 	if model.petRuntime != nil {
 		model.petRuntime.clearImmediately()

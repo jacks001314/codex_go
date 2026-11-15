@@ -20,6 +20,7 @@ import (
 	"codex_go/cloudclient"
 	"codex_go/config"
 	"codex_go/features"
+	"codex_go/model"
 	codextea "codex_go/tui/tea"
 	"codex_go/turn"
 )
@@ -71,8 +72,24 @@ func openCloudTUIAppServer(ctx context.Context, root *cli.RootOptions) (cloudApp
 	// A lost reply stream of the displayed conversation is reopened quietly,
 	// but only while the stored ChatGPT credentials still match the ones this
 	// client was opened with (Rust #60969).
-	return cloudbackend.ConnectWithIdleRecovery(ctx, client, account, cloudbackend.IdleRecoveryOptions{
-		LoginCurrent: cloudTUILoginChecker(accessToken, accountID),
+	// Rust #61600: Cloud titles are generated with the selected account's own
+	// backend routing. An unusable title client leaves generation unavailable,
+	// so the TUI saves the first-message title instead.
+	var titleGenerator cloudbackend.ThreadTitleGenerator
+	if titleClient, err := model.NewCloudTitleClient(model.CloudTitleOptions{
+		BaseURL:            loaded.ChatGPTBaseURL(),
+		BearerToken:        accessToken,
+		AccountID:          accountID,
+		RequireOriginMatch: cloudChatGPTBaseURLIsExplicit(loaded),
+		Originator:         tuiClientName,
+	}); err == nil {
+		titleGenerator = titleClient
+	}
+	return cloudbackend.ConnectWithOptions(ctx, client, account, cloudbackend.ConnectOptions{
+		IdleRecovery: cloudbackend.IdleRecoveryOptions{
+			LoginCurrent: cloudTUILoginChecker(accessToken, accountID),
+		},
+		TitleGenerator: titleGenerator,
 	}), nil
 }
 
@@ -122,6 +139,49 @@ type cloudAppServerRequester interface {
 	// protocol (Rust #60007).
 	SetLocalProject(project *cloudclient.ProjectEnvironment)
 	Close()
+}
+
+// cloudThreadTitleRequester is the optional title/name capability of a Cloud
+// requester (Rust #61600 AppServerRequestHandle::Cloud).
+type cloudThreadTitleRequester interface {
+	GenerateThreadTitle(ctx context.Context, model string, effort string, prompt string, schema map[string]any) (string, error)
+	ReadThreadName(ctx context.Context, threadID string) (string, bool, error)
+	SaveThreadName(ctx context.Context, threadID string, name string) (bool, error)
+}
+
+// GenerateThreadTitle delegates to the Cloud backend's title client.
+func (t *cloudAppServerTransport) GenerateThreadTitle(ctx context.Context, model string, effort string, prompt string, schema map[string]any) (string, error) {
+	requester, ok := t.titleRequester()
+	if !ok {
+		return "", errors.New("Cloud title generation is unavailable")
+	}
+	return requester.GenerateThreadTitle(ctx, model, effort, prompt, schema)
+}
+
+// ReadThreadName delegates to the native Cloud name read.
+func (t *cloudAppServerTransport) ReadThreadName(ctx context.Context, threadID string) (string, bool, error) {
+	requester, ok := t.titleRequester()
+	if !ok {
+		return "", false, nil
+	}
+	return requester.ReadThreadName(ctx, threadID)
+}
+
+// SaveThreadName delegates to the native Cloud name write.
+func (t *cloudAppServerTransport) SaveThreadName(ctx context.Context, threadID string, name string) (bool, error) {
+	requester, ok := t.titleRequester()
+	if !ok {
+		return false, nil
+	}
+	return requester.SaveThreadName(ctx, threadID, name)
+}
+
+func (t *cloudAppServerTransport) titleRequester() (cloudThreadTitleRequester, bool) {
+	if t == nil || t.client == nil {
+		return nil, false
+	}
+	requester, ok := t.client.(cloudThreadTitleRequester)
+	return requester, ok
 }
 
 // SubmitUserMessage admits a user message through Cloud's native

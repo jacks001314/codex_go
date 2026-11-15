@@ -29,6 +29,8 @@ type fakeCloud struct {
 	interrupt      func(ctx context.Context, request cloudclient.InterruptTurnRequest) error
 	archive        func(ctx context.Context, threadID string) error
 	unarchive      func(ctx context.Context, threadID string) (cloudclient.ThreadSnapshot, error)
+	setThreadName  func(ctx context.Context, threadID string, name string) error
+	readThreadName func(ctx context.Context, threadID string) (string, error)
 	closeHook      func()
 }
 
@@ -44,6 +46,20 @@ func (f *fakeCloud) Attach(ctx context.Context, threadID string) (<-chan cloudcl
 		return nil, nil, errors.New("no attach configured")
 	}
 	return f.attach(ctx, threadID)
+}
+
+func (f *fakeCloud) SetThreadName(ctx context.Context, threadID string, name string) error {
+	if f.setThreadName == nil {
+		return errors.New("no rename configured")
+	}
+	return f.setThreadName(ctx, threadID, name)
+}
+
+func (f *fakeCloud) ReadThreadName(ctx context.Context, threadID string) (string, error) {
+	if f.readThreadName == nil {
+		return "", errors.New("no name read configured")
+	}
+	return f.readThreadName(ctx, threadID)
 }
 
 func (f *fakeCloud) ListThreads(ctx context.Context, query cloudclient.ThreadListQuery) (cloudclient.ThreadPage, error) {

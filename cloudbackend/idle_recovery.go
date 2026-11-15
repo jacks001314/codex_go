@@ -22,6 +22,14 @@ const (
 	// idleRecoveryStableWindow rejects a reopen for a stream that died right
 	// after it was installed; that stream never proved it could stay open.
 	idleRecoveryStableWindow = 15 * time.Second
+	// signInAgainReason is Rust's SIGN_IN_AGAIN. The credential that opened
+	// this client is no longer current, so a reopen cannot succeed.
+	signInAgainReason = "Your cloud sign-in changed or expired. Sign in again to access this conversation."
+	// recoveryFailedReason reports a nontransient Attach failure that is not
+	// one of the specific conversation access errors.
+	recoveryFailedReason = "Cloud could not restore the reply stream for this conversation."
+	// recoveryExhaustedReason reports that every bounded retry was transient.
+	recoveryExhaustedReason = "Cloud did not restore the reply stream after several attempts."
 )
 
 // idleRecoveryDelays is the retry schedule of one episode: an immediate
@@ -73,10 +81,45 @@ type idleRecovery struct {
 type idleRecoveryResult struct {
 	threadID  string
 	connected bool
-	events    <-chan cloudclient.Event
-	errs      <-chan error
-	cancel    context.CancelFunc
-	first     *cloudclient.Event
+	// failureReason is the specific disconnect reason Rust's idle::Login::attach
+	// returns for a rejected recovery; empty means the generic stream-ended
+	// message.
+	failureReason string
+	events        <-chan cloudclient.Event
+	errs          <-chan error
+	cancel        context.CancelFunc
+	first         *cloudclient.Event
+}
+
+// blockedCloudRecoveryReason maps a non-retryable RPC status to Rust's
+// blocked_recovery message (cloud_backend/idle.rs #61599). A missing
+// conversation, lost access, and changed sign-in are reported specifically;
+// other nontransient failures use the generic recovery message.
+func blockedCloudRecoveryReason(err error) string {
+	var rpcErr *cloudclient.RpcError
+	if !errors.As(err, &rpcErr) {
+		return ""
+	}
+	switch rpcErr.Status.Code {
+	case codes.NotFound:
+		return "Cloud could not find this conversation."
+	case codes.PermissionDenied:
+		return "Your account no longer has access to this cloud conversation."
+	case codes.Unauthenticated:
+		return signInAgainReason
+	default:
+		return ""
+	}
+}
+
+// recoveryFailureReason resolves the disconnect message for a nontransient
+// recovery error: the specific access error when known, otherwise the generic
+// recovery failure.
+func recoveryFailureReason(err error) string {
+	if reason := blockedCloudRecoveryReason(err); reason != "" {
+		return reason
+	}
+	return recoveryFailedReason
 }
 
 // transientCloudError reports whether a failed Attach or a stream end is worth
@@ -202,8 +245,11 @@ func attachWithRetry(ctx context.Context, source cloudSource, threadID string, l
 				return idleRecoveryResult{threadID: threadID}
 			}
 		}
-		if ctx.Err() != nil || !loginCurrent() {
+		if ctx.Err() != nil {
 			return idleRecoveryResult{threadID: threadID}
+		}
+		if !loginCurrent() {
+			return idleRecoveryResult{threadID: threadID, failureReason: signInAgainReason}
 		}
 		streamCtx, streamCancel := context.WithCancel(ctx)
 		events, errs, err := source.Attach(streamCtx, threadID)
@@ -212,7 +258,7 @@ func attachWithRetry(ctx context.Context, source cloudSource, threadID string, l
 			if transientCloudError(err) {
 				continue
 			}
-			return idleRecoveryResult{threadID: threadID}
+			return idleRecoveryResult{threadID: threadID, failureReason: recoveryFailureReason(err)}
 		}
 		// A buffered first event is kept with the stream, so the event that
 		// proved the Attach usable is forwarded once the stream is installed.
@@ -224,7 +270,7 @@ func attachWithRetry(ctx context.Context, source cloudSource, threadID string, l
 			}
 			if !loginCurrent() {
 				streamCancel()
-				return idleRecoveryResult{threadID: threadID}
+				return idleRecoveryResult{threadID: threadID, failureReason: signInAgainReason}
 			}
 			return idleRecoveryResult{threadID: threadID, connected: true, events: events, errs: errs, cancel: streamCancel, first: &event}
 		default:
@@ -236,7 +282,7 @@ func attachWithRetry(ctx context.Context, source cloudSource, threadID string, l
 			if !ok || err != nil {
 				streamCancel()
 				if ok && err != nil && !transientCloudError(err) {
-					return idleRecoveryResult{threadID: threadID}
+					return idleRecoveryResult{threadID: threadID, failureReason: recoveryFailureReason(err)}
 				}
 				continue
 			}
@@ -245,11 +291,11 @@ func attachWithRetry(ctx context.Context, source cloudSource, threadID string, l
 		// A healthy idle stream needs no event to prove that it is ready.
 		if !loginCurrent() {
 			streamCancel()
-			return idleRecoveryResult{threadID: threadID}
+			return idleRecoveryResult{threadID: threadID, failureReason: signInAgainReason}
 		}
 		return idleRecoveryResult{threadID: threadID, connected: true, events: events, errs: errs, cancel: streamCancel}
 	}
-	return idleRecoveryResult{threadID: threadID}
+	return idleRecoveryResult{threadID: threadID, failureReason: recoveryExhaustedReason}
 }
 
 // handleIdleRecoveryResult installs a recovered attachment or, when the episode
@@ -271,7 +317,7 @@ func (c *Client) handleIdleRecoveryResult(result idleRecoveryResult) {
 	if !result.connected {
 		c.recovery.state = idleReconnectInactive
 		c.recovery.root = ""
-		c.reportStreamLoss(result.threadID)
+		c.reportStreamLossWithReason(result.threadID, result.failureReason)
 		return
 	}
 	c.recovery.installed = time.Now()
@@ -334,6 +380,13 @@ func (c *Client) resetIdleRecovery() {
 
 // reportStreamLoss records one undelivered loss and queues its notification.
 func (c *Client) reportStreamLoss(threadID string) {
+	c.reportStreamLossWithReason(threadID, "")
+}
+
+// reportStreamLossWithReason queues one loss with the specific disconnect
+// reason Rust's report_loss accepts (#61599). An empty reason keeps the generic
+// stream-ended message.
+func (c *Client) reportStreamLossWithReason(threadID string, reason string) {
 	c.recordStreamLoss(threadID)
-	c.enqueue(cloudStreamEndedNotification(threadID))
+	c.enqueue(cloudStreamEndedNotificationWithReason(threadID, reason))
 }

@@ -111,6 +111,7 @@ type Client struct {
 	account json.RawMessage
 
 	requests  chan *pendingRequest
+	nameSaves chan *threadNameSaved
 	done      chan struct{}
 	closed    chan struct{}
 	cancel    context.CancelFunc
@@ -127,6 +128,7 @@ type Client struct {
 
 	runCtx          context.Context
 	recoveryOptions IdleRecoveryOptions
+	titleGenerator  ThreadTitleGenerator
 	recovery        idleRecovery
 	recoveryResults chan idleRecoveryResult
 
@@ -145,6 +147,11 @@ type pendingRequest struct {
 	params json.RawMessage
 	mode   cloudclient.SubmissionMode
 	typed  bool
+	// ctx is canceled when the caller abandons the request. Reads and thread
+	// starts use it so a dropped caller releases the native worker instead of
+	// leaving the cloud RPC running (Rust #61599).
+	ctx    context.Context
+	cancel context.CancelFunc
 	reply  chan requestReply
 }
 
@@ -177,6 +184,12 @@ func Connect(ctx context.Context, source cloudSource, account json.RawMessage) *
 // ConnectWithIdleRecovery opens an app-server client that quietly reopens the
 // lost reply stream of the attached Cloud conversation (Rust #60969).
 func ConnectWithIdleRecovery(ctx context.Context, source cloudSource, account json.RawMessage, options IdleRecoveryOptions) *Client {
+	return ConnectWithOptions(ctx, source, account, ConnectOptions{IdleRecovery: options})
+}
+
+// ConnectWithOptions opens an app-server client with the full set of Cloud
+// backend capabilities (Rust cloud_backend::start_worker, #61600).
+func ConnectWithOptions(ctx context.Context, source cloudSource, account json.RawMessage, options ConnectOptions) *Client {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -185,13 +198,15 @@ func ConnectWithIdleRecovery(ctx context.Context, source cloudSource, account js
 		source:          source,
 		account:         cloneRawMessage(account),
 		requests:        make(chan *pendingRequest, commandBufferSize),
+		nameSaves:       make(chan *threadNameSaved),
 		done:            make(chan struct{}),
 		closed:          make(chan struct{}),
 		cancel:          cancel,
 		outCh:           make(chan Notification),
 		status:          map[string]any{},
 		runCtx:          runCtx,
-		recoveryOptions: options,
+		recoveryOptions: options.IdleRecovery,
+		titleGenerator:  options.TitleGenerator,
 		recoveryResults: make(chan idleRecoveryResult, 1),
 	}
 	client.outCond = sync.NewCond(&client.outMu)
@@ -242,20 +257,36 @@ func (c *Client) request(ctx context.Context, method appserver.Method, params js
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	pending := &pendingRequest{method: method, params: cloneRawMessage(params), mode: mode, typed: typed, reply: make(chan requestReply, 1)}
+	requestCtx, cancelRequest := context.WithCancel(ctx)
+	pending := &pendingRequest{
+		method: method,
+		params: cloneRawMessage(params),
+		mode:   mode,
+		typed:  typed,
+		ctx:    requestCtx,
+		cancel: cancelRequest,
+		reply:  make(chan requestReply, 1),
+	}
 	select {
 	case c.requests <- pending:
 	case <-c.done:
+		cancelRequest()
 		return nil, &RPCError{Code: internalErrorCode, Message: "cloud client is closed"}
 	case <-ctx.Done():
+		cancelRequest()
 		return nil, &RPCError{Code: internalErrorCode, Message: ctx.Err().Error()}
 	}
 	select {
 	case reply := <-pending.reply:
+		cancelRequest()
 		return reply.result, reply.err
 	case <-c.done:
+		cancelRequest()
 		return nil, &RPCError{Code: internalErrorCode, Message: "cloud client is closed"}
 	case <-ctx.Done():
+		// The worker observes the canceled request context and drops the
+		// in-flight cloud read.
+		cancelRequest()
 		return nil, &RPCError{Code: internalErrorCode, Message: ctx.Err().Error()}
 	}
 }
@@ -295,6 +326,13 @@ func (c *Client) run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case saved := <-c.nameSaves:
+			if saved == nil {
+				return
+			}
+			c.applyThreadNameSaved(saved.params)
+			close(saved.done)
+			continue
 		case pending := <-c.requests:
 			if pending == nil {
 				return
@@ -306,7 +344,14 @@ func (c *Client) run(ctx context.Context) {
 			if pending.method == appserver.MethodThreadStart || pending.method == appserver.MethodThreadResume {
 				canceledRoot, canceledOpening = c.cancelIdleRecovery()
 			}
-			result, rpcErr := c.handleRequest(ctx, pending.method, pending.params, pending.mode, pending.typed)
+			requestCtx := pending.ctx
+			if requestCtx == nil {
+				requestCtx = ctx
+			}
+			result, rpcErr := c.handleRequest(requestCtx, pending.method, pending.params, pending.mode, pending.typed)
+			if pending.cancel != nil {
+				pending.cancel()
+			}
 			if rpcErr != nil && canceledOpening {
 				c.reportStreamLoss(canceledRoot)
 			}
@@ -428,7 +473,13 @@ func (c *Client) streamEnded(active *attachment, endErr error) {
 		c.holdStreamInput(threadID)
 		return
 	}
-	c.enqueue(cloudStreamEndedNotification(threadID))
+	reason := ""
+	if endErr != nil {
+		// Missing conversations, lost access, and changed sign-in get their own
+		// message; other ends keep the generic reopen hint.
+		reason = blockedCloudRecoveryReason(endErr)
+	}
+	c.enqueue(cloudStreamEndedNotificationWithReason(threadID, reason))
 }
 
 // replaceAttachment opens threadID and activates it only once its stream is

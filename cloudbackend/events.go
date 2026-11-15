@@ -3,6 +3,7 @@ package cloudbackend
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"codex_go/appserver"
 	"codex_go/cloudclient"
@@ -265,7 +266,16 @@ func cloudStreamReconnectedNotification(threadID string) Notification {
 }
 
 func cloudStreamEndedNotification(threadID string) Notification {
-	notification := cloudErrorNotification(threadID, "Cloud stream ended. Reopen the conversation to reconnect.")
+	return cloudStreamEndedNotificationWithReason(threadID, "")
+}
+
+// cloudStreamEndedNotificationWithReason queues a stream loss with Rust's
+// specific disconnect reason when one is known (#61599).
+func cloudStreamEndedNotificationWithReason(threadID string, reason string) Notification {
+	if strings.TrimSpace(reason) == "" {
+		reason = "Cloud stream ended. Reopen the conversation to reconnect."
+	}
+	notification := cloudErrorNotification(threadID, reason)
 	notification.streamDisconnect = true
 	return notification
 }

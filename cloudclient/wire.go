@@ -12,10 +12,11 @@ import (
 type rawMessage []byte
 
 const (
-	threadServiceResumeMethod    = "/oaiproto.codex_app_server_backend.ThreadService/Resume"
-	threadServiceAttachMethod    = "/oaiproto.codex_app_server_backend.ThreadService/Attach"
-	threadServiceArchiveMethod   = "/oaiproto.codex_app_server_backend.ThreadService/ArchiveThread"
-	threadServiceUnarchiveMethod = "/oaiproto.codex_app_server_backend.ThreadService/UnarchiveThread"
+	threadServiceResumeMethod     = "/oaiproto.codex_app_server_backend.ThreadService/Resume"
+	threadServiceAttachMethod     = "/oaiproto.codex_app_server_backend.ThreadService/Attach"
+	threadServiceArchiveMethod    = "/oaiproto.codex_app_server_backend.ThreadService/ArchiveThread"
+	threadServiceUnarchiveMethod  = "/oaiproto.codex_app_server_backend.ThreadService/UnarchiveThread"
+	threadServiceReadThreadMethod = "/oaiproto.codex_app_server_backend.ThreadService/ReadThread"
 )
 
 func encodeResumeRequest(request ResumeRequest) []byte {

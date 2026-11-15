@@ -510,6 +510,20 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	brokers := newRemoteTUIBrokers()
 	interrupts := newRemoteTUIInterruptController(ctx, endpoint)
 	paramsMode := threadParamsModeForLaunch(root)
+	// Rust #61600: only a Cloud session generates and saves automatic titles
+	// through the Cloud account, and only there does a manual rename report an
+	// in-flight automatic write instead of waiting for it.
+	renameThreadHandler := interactiveRemoteRenameThreadHandler(ctx, endpoint)
+	renameAgentsOverviewHandler := interactiveRemoteAgentsOverviewRename(ctx, endpoint)
+	var cloudTitleGenerator codextea.CloudTitleGenerateFunc
+	var cloudThreadNameSaver codextea.CloudThreadNameSaveFunc
+	if paramsMode == ThreadParamsModeCloud {
+		cloudNameGate := newAutomaticThreadNameGate()
+		cloudTitleGenerator = interactiveCloudTitleGenerator(ctx, endpoint)
+		cloudThreadNameSaver = interactiveCloudThreadNameSaver(ctx, endpoint, cloudNameGate)
+		renameThreadHandler = interactiveCloudRenameThreadHandler(ctx, endpoint, cloudNameGate)
+		renameAgentsOverviewHandler = interactiveCloudAgentsOverviewRename(ctx, endpoint, cloudNameGate)
+	}
 	taskToolsHost := remoteTUITaskToolsHostForSession(paramsMode, endpoint, root, state, func() *taskToolsMCPHost {
 		return &taskToolsMCPHost{}
 	})
@@ -640,11 +654,13 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnExportTranscript:          interactiveRemoteTranscriptExportHandler(ctx, endpoint, showRawReasoning),
 		OnGenerateRecap:             recapGenerateFuncForMode(paramsMode, interactiveRemoteRecapGenerateHandler(ctx, endpoint)),
 		OnSuggestThreadName:         recapGenerateFuncForMode(paramsMode, interactiveRemoteRecapGenerateHandler(ctx, endpoint)),
+		OnGenerateCloudThreadTitle:  cloudTitleGenerator,
+		OnSaveCloudThreadName:       cloudThreadNameSaver,
 		OnLoadTranscriptPreview:     interactiveRemoteTranscriptPreviewHandler(ctx, endpoint),
 		OnReadSessionTranscript:     interactiveRemoteSessionTranscriptHandler(ctx, endpoint, showRawReasoning),
 		LoadOlderHistory:            interactiveRemoteOlderHistoryLoader(ctx, endpoint),
 		OnAcknowledgeSessionRead:    interactiveRemoteSessionReadAcknowledgeHandler(ctx, endpoint),
-		OnRenameThread:              interactiveRemoteRenameThreadHandler(ctx, endpoint),
+		OnRenameThread:              renameThreadHandler,
 		OnUpdateDaybreak:            interactiveRemoteDaybreakUpdateHandler(ctx, endpoint),
 		OnLogout:                    interactiveRemoteLogoutHandler(ctx, endpoint),
 		KeymapConfig:                keymapConfig,
@@ -678,7 +694,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnAgentsOverviewStop:             interactiveRemoteAgentsOverviewStop(ctx, endpoint),
 		OnAgentsOverviewArchive:          interactiveRemoteAgentsOverviewArchive(ctx, endpoint),
 		OnAgentsOverviewDelete:           interactiveRemoteAgentsOverviewDelete(ctx, endpoint),
-		OnAgentsOverviewRename:           interactiveRemoteAgentsOverviewRename(ctx, endpoint),
+		OnAgentsOverviewRename:           renameAgentsOverviewHandler,
 		OnWriteSettings:                  interactiveRemoteSettingsWriteHandler(ctx, endpoint),
 		OnUpdateCollaborationMode:        interactiveRemoteCollaborationModeUpdateHandler(ctx, endpoint),
 		OnWriteMemorySettings:            interactiveRemoteMemorySettingsWriteHandler(ctx, endpoint),
