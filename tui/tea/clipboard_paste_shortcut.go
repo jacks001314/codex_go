@@ -6,6 +6,7 @@ import (
 	bubbletea "charm.land/bubbletea/v2"
 
 	bottompane "codex_go/tui/bottom_pane"
+	"codex_go/tui/keymsg"
 )
 
 // readClipboardTextForPaste reads clipboard text for an explicit paste
@@ -100,9 +101,18 @@ func (m *Model) handleShiftInsertPaste(message bubbletea.Msg) (bool, bubbletea.C
 	if m == nil || runtime.GOOS != "windows" {
 		return false, nil
 	}
-	stringer, ok := message.(interface{ String() string })
-	if !ok || stringer.String() != windowsShiftInsertCSI {
-		return false, nil
+	if key, ok := message.(keymsg.KeyMsg); ok {
+		// Bubble Tea v2 decodes Shift+Insert into a key press, so the legacy v1 CSI
+		// string below never matches; Rust binds the Windows-only Shift+Insert paste
+		// shortcut on the decoded key.
+		if key.Type != keymsg.KeyInsert || !key.Mod.Contains(bubbletea.ModShift) {
+			return false, nil
+		}
+	} else {
+		stringer, ok := message.(interface{ String() string })
+		if !ok || stringer.String() != windowsShiftInsertCSI {
+			return false, nil
+		}
 	}
 	if m.modal != nil || m.overlay != nil {
 		return true, nil

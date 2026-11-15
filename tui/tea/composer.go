@@ -172,9 +172,10 @@ func (c *ComposerComponent) SetValue(value string) {
 	}
 }
 
-// applyComposerTextareaStyles drops Bubbles' cursor-line background. Rust
-// paints the composer draft on the shaded user-message block with no per-row
-// highlight, so the cursor's row must not turn into its own darker band.
+// applyComposerTextareaStyles drops Bubbles' cursor-line background and its
+// reverse-video virtual cursor. Rust paints the composer draft on the shaded
+// user-message block with no per-row highlight, and it lets the terminal draw
+// a thin bar instead of coloring the whole character cell under the caret.
 func applyComposerTextareaStyles(composer *textarea.Model) {
 	if composer == nil {
 		return
@@ -183,4 +184,5 @@ func applyComposerTextareaStyles(composer *textarea.Model) {
 	styles.Focused.CursorLine = lipgloss.NewStyle()
 	styles.Blurred.CursorLine = lipgloss.NewStyle()
 	composer.SetStyles(styles)
+	composer.SetVirtualCursor(false)
 }

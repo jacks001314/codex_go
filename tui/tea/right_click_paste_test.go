@@ -62,6 +62,27 @@ func TestRightClickPasteDeliversClipboardTextAtRender(t *testing.T) {
 	}
 }
 
+// The press triggers a render before the clipboard worker answers; that render
+// must keep the pending target so the late result can still be delivered.
+func TestRightClickPasteSurvivesRenderBeforeReadCompletes(t *testing.T) {
+	model := rightClickPasteTestModel(t, "auto", func() (string, error) { return "hello world", nil })
+
+	_, cmd := model.Update(rightButtonPress())
+	if cmd == nil {
+		t.Fatal("an eligible right click should start a clipboard read")
+	}
+	model.viewString()
+	if model.rightClickPasteTarget == nil {
+		t.Fatal("a render before the read completed dropped the pending target")
+	}
+
+	model.Update(cmd())
+	model.viewString()
+	if got := model.composer.Value(); got != "hello world" {
+		t.Fatalf("composer after render = %q, want %q", got, "hello world")
+	}
+}
+
 func TestRightClickPasteInvalidatedByInterveningInputAndDraftChanges(t *testing.T) {
 	// Intervening input before the read completes discards it.
 	model := rightClickPasteTestModel(t, "auto", func() (string, error) { return "hello", nil })

@@ -218,8 +218,9 @@ func (m *Model) handleComposerWheel(msg mousemsg.MouseMsg) bool {
 
 // renderComposerWindow paints the complete prompt through the textarea widget
 // and crops the current window. Rendering the whole draft keeps Bubbles'
-// wrapping, cursor glyph, and styles intact while the model owns the scroll
-// offset independently of the caret.
+// wrapping and styles intact while the model owns the scroll offset
+// independently of the caret. The visible caret is the terminal's real bar,
+// positioned from the same wrap state so it never becomes a solid block cell.
 func (m *Model) renderComposerWindow() string {
 	if m == nil {
 		return ""
@@ -240,11 +241,11 @@ func (m *Model) renderComposerWindow() string {
 		m.composer.MaxHeight = total
 	}
 	m.composer.SetHeight(total)
-	// Bubbles paints the caret into the text it returns and renders only the
-	// rows its own viewport offset selects. MoveToBegin resets that offset to
-	// the first row, so the caret has to be restored before View: with every
-	// wrapped row visible the restore cannot scroll the viewport again, and the
-	// painted caret stays on the draft's real position.
+	// Bubbles renders only the rows its own viewport offset selects.
+	// MoveToBegin resets that offset to the first row, so the caret has to be
+	// restored before View: with every wrapped row visible the restore cannot
+	// scroll the viewport again, and the caret position stays on the draft's
+	// real row.
 	cursorRow, cursorColumn := m.composer.Line(), m.composer.Column()
 	m.composer.MoveToBegin()
 	m.restoreComposerCursor(cursorRow, cursorColumn)
@@ -273,6 +274,10 @@ func (m *Model) renderComposerWindow() string {
 	if scroll+target < total {
 		visible[len(visible)-1] = composerScrollArrowLine(visible[len(visible)-1], "↓", m.width)
 	}
+	caretRow := m.composerCursorVisualRow() - scroll
+	m.composerCaretX = codextui.DisplayWidth(m.composer.Prompt) + m.composer.LineInfo().CharOffset
+	m.composerCaretRow = caretRow
+	m.composerCaretVisible = m.composer.Focused() && caretRow >= 0 && caretRow < target
 	return strings.Join(visible, "\n")
 }
 

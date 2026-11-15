@@ -4,26 +4,19 @@ import (
 	"strings"
 	"testing"
 
+	bubbletea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	codextui "codex_go/tui"
 )
 
-// reverseVideoPrefix returns the plain text the composer painted before the
-// caret cell. Bubbles renders the caret as a reverse-video cell, so the text in
-// front of that sequence is the caret's painted position.
-func reverseVideoPrefix(t *testing.T, rendered string) string {
+func composerCursor(t *testing.T, model *Model) *bubbletea.Cursor {
 	t.Helper()
-	index := -1
-	for _, marker := range []string{"\x1b[7m", "\x1b[7;"} {
-		if found := strings.Index(rendered, marker); found >= 0 && (index < 0 || found < index) {
-			index = found
-		}
+	view := model.View()
+	if view.Cursor == nil {
+		t.Fatalf("rendered composer has no visible caret:\n%q", view.Content)
 	}
-	if index < 0 {
-		t.Fatalf("rendered composer has no visible caret:\n%q", rendered)
-	}
-	return ansi.Strip(rendered[:index])
+	return view.Cursor
 }
 
 func newCaretComposerModel(t *testing.T, width int, height int) *Model {
@@ -31,18 +24,23 @@ func newCaretComposerModel(t *testing.T, width int, height int) *Model {
 	return NewModel(codextui.NewState(nil), Options{Width: width, Height: height})
 }
 
-// TestComposerCaretRendersAfterDraftLikeRust pins the full-height prompt render
-// used to top-anchor the window: resetting the textarea viewport must not move
-// the painted caret to the first row, which is where the draft's leading
-// character was being shown under the block cursor.
-func TestComposerCaretRendersAfterDraftLikeRust(t *testing.T) {
+// TestComposerCaretUsesThinBarLikeRust pins the terminal cursor Rust uses for
+// the composer: the draft text keeps its own cells instead of turning the
+// character under the caret into a reverse-video block.
+func TestComposerCaretUsesThinBarLikeRust(t *testing.T) {
 	model := newCaretComposerModel(t, 80, 24)
 	model.composer.SetValue("ni hao a")
 	model.composer.CursorEnd()
 
-	prefix := reverseVideoPrefix(t, model.renderComposerWindow())
-	if !strings.HasSuffix(prefix, "ni hao a") {
-		t.Fatalf("caret painted at %q, want it after the whole draft", prefix)
+	cursor := composerCursor(t, model)
+	if cursor.Shape != bubbletea.CursorBar {
+		t.Fatalf("caret shape = %v, want the thin bar cursor", cursor.Shape)
+	}
+	if got, want := cursor.X, codextui.DisplayWidth(model.composer.Prompt)+len("ni hao a"); got != want {
+		t.Fatalf("caret column = %d, want %d", got, want)
+	}
+	if strings.Contains(model.renderComposerWindow(), "\x1b[7m") {
+		t.Fatalf("composer painted a reverse-video block caret:\n%q", model.renderComposerWindow())
 	}
 	if got := model.composer.Value(); got != "ni hao a" {
 		t.Fatalf("draft after render = %q, want it unchanged", got)
@@ -52,17 +50,17 @@ func TestComposerCaretRendersAfterDraftLikeRust(t *testing.T) {
 	}
 }
 
-// TestComposerCaretRendersAtCursorPositionLikeRust checks that the painted
-// caret follows the model's caret instead of the render pass resetting it, so a
-// mid-draft edit keeps the block cursor over the character being replaced.
+// TestComposerCaretRendersAtCursorPositionLikeRust checks that the terminal
+// cursor follows the model's caret instead of the render pass resetting it, so
+// a mid-draft edit keeps the bar over the character being replaced.
 func TestComposerCaretRendersAtCursorPositionLikeRust(t *testing.T) {
 	model := newCaretComposerModel(t, 80, 24)
 	model.composer.SetValue("ni hao a")
 	model.composer.SetCursorColumn(7)
 
-	prefix := reverseVideoPrefix(t, model.renderComposerWindow())
-	if !strings.HasSuffix(prefix, "ni hao ") {
-		t.Fatalf("caret painted at %q, want it over the last character", prefix)
+	cursor := composerCursor(t, model)
+	if got, want := cursor.X, codextui.DisplayWidth(model.composer.Prompt)+7; got != want {
+		t.Fatalf("caret column = %d, want %d", got, want)
 	}
 }
 
@@ -83,13 +81,18 @@ func TestComposerCaretStaysInScrolledWindowLikeRust(t *testing.T) {
 	model.composer.SetValue(strings.Join(lines, "\n"))
 	model.composer.CursorEnd()
 
-	window := model.renderComposerWindow()
-	rows := strings.Split(window, "\n")
-	if len(rows) != model.composerTargetRows() {
-		t.Fatalf("composer window rows = %d, want %d", len(rows), model.composerTargetRows())
+	view := model.View()
+	if view.Cursor == nil {
+		t.Fatalf("scrolled composer has no visible caret:\n%q", view.Content)
 	}
-	prefix := reverseVideoPrefix(t, rows[len(rows)-1])
-	if !strings.HasSuffix(prefix, "draft-row-last") {
-		t.Fatalf("caret painted at %q, want it after the last visible draft row", prefix)
+	rows := strings.Split(ansi.Strip(view.Content), "\n")
+	if view.Cursor.Y < 0 || view.Cursor.Y >= len(rows) {
+		t.Fatalf("caret row = %d, want inside %d rendered rows", view.Cursor.Y, len(rows))
+	}
+	if row := strings.TrimRight(rows[view.Cursor.Y], " "); !strings.HasSuffix(row, "draft-row-last") {
+		t.Fatalf("caret row = %q, want the last visible draft row", row)
+	}
+	if got, want := view.Cursor.X, codextui.DisplayWidth(model.composer.Prompt)+len("draft-row-last"); got != want {
+		t.Fatalf("caret column = %d, want %d", got, want)
 	}
 }

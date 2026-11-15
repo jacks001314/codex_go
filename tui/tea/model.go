@@ -1988,9 +1988,15 @@ type Model struct {
 	composerTextTopRow     int
 	composerTextLeft       int
 	composerPromptWidth    int
-	composerLinkValue      string
-	composerLinkCache      []composerHyperlink
-	composerLinkValid      bool
+	// composerCaretX/composerCaretRow place the terminal's own bar cursor over
+	// the draft. Rust paints no block cell into the composer text, so the
+	// caret must be a real cursor rather than a reverse-video character.
+	composerCaretX       int
+	composerCaretRow     int
+	composerCaretVisible bool
+	composerLinkValue    string
+	composerLinkCache    []composerHyperlink
+	composerLinkValid    bool
 	// composerSparkle is the one-shot Astra starfield state (Rust #46096).
 	sparkle              composerSparkleState
 	sparkleObservedModel string
@@ -5444,6 +5450,11 @@ func (m *Model) View() bubbletea.View {
 		return bubbletea.NewView("")
 	}
 	v := bubbletea.NewView(m.viewString())
+	if m.composerCaretVisible && m.composerCaretRow >= 0 && m.composerCaretRow < strings.Count(v.Content, "\n")+1 {
+		cursor := bubbletea.NewCursor(m.composerCaretX, m.composerCaretRow)
+		cursor.Shape = bubbletea.CursorBar
+		v.Cursor = cursor
+	}
 	v.AltScreen = !m.noAltScreen && (m.ownedScreen || m.overlayAltScreen || m.sessionPickerAltScreen)
 	v.ReportFocus = true
 	if m.mouseCaptureActive {
@@ -5462,6 +5473,7 @@ func (m *Model) viewString() string {
 	if m == nil {
 		return ""
 	}
+	m.composerCaretVisible = false
 	if inset := m.conversationInset; inset != nil && m.conversationInsetApplies() {
 		return m.renderConversationInset(*inset)
 	}
@@ -5640,6 +5652,9 @@ func (m *Model) viewString() string {
 		}
 		m.composerTextTopRow = m.composerTopRow + 1 + composerStripRows
 		m.composerTextLeft = 0
+		if m.composerCaretVisible {
+			m.composerCaretRow += 1 + composerStripRows
+		}
 		composerIndex = len(sections)
 		sections = append(sections, composer)
 		if strings.TrimSpace(statusLine) != "" {
@@ -5686,6 +5701,15 @@ func (m *Model) viewString() string {
 			&previewIndex,
 			&warningBodyIndex,
 		)
+	}
+	if m.composerCaretVisible && composerIndex >= 0 && composerIndex < len(sections) {
+		row := 0
+		for _, section := range sections[:composerIndex] {
+			row += sectionHeight(section)
+		}
+		m.composerCaretRow += row
+	} else {
+		m.composerCaretVisible = false
 	}
 	m.captureRenderedSelectionRegions(sections, statusIndex, footerIndex)
 	m.captureTurnTipSelectionRegions(sections, workingIndex, transcriptIndex)

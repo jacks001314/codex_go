@@ -194,14 +194,26 @@ func (m *Model) deliverRightClickPasteAtRender() {
 	if m == nil {
 		return
 	}
-	result := m.rightClickPasteResult
 	pending := m.rightClickPasteTarget
-	m.rightClickPasteResult = nil
-	m.rightClickPasteTarget = nil
-	if result == nil || pending == nil {
+	if pending == nil {
+		m.rightClickPasteResult = nil
 		return
 	}
+	// Rust App::finish_right_click_paste keeps the pending read across draws that
+	// arrive before the clipboard worker answers. Clearing the target here would
+	// discard every read, because the press always triggers a render first.
 	current, currentOK := m.rightClickPasteTargetFor()
+	if !currentOK || *pending != current {
+		m.rightClickPasteTarget = nil
+		m.rightClickPasteResult = nil
+		return
+	}
+	result := m.rightClickPasteResult
+	if result == nil {
+		return
+	}
+	m.rightClickPasteTarget = nil
+	m.rightClickPasteResult = nil
 	decision := tuiapp.RightClickPasteDeliveryFor(*pending, true, current, currentOK, result.text, result.err)
 	switch decision.Kind {
 	case tuiapp.RightClickPasteDeliveryPaste:

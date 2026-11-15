@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	codextui "codex_go/tui"
 	"codex_go/tui/keymsg"
 )
@@ -97,6 +99,22 @@ func TestWindowsShiftInsertPastesLikeRust(t *testing.T) {
 
 	if got := model.composerText(); got != "shift insert" {
 		t.Fatalf("composer after Shift+Insert = %q", got)
+	}
+}
+
+// Rust #53224: Bubble Tea v2 decodes Shift+Insert into a key press, so the
+// Windows paste shortcut must recognize that decoded key as well.
+func TestWindowsShiftInsertPastesDecodedV2KeyLikeRust(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Shift+Insert paste shortcut is Windows-only")
+	}
+	stubClipboardShortcut(t, "shift insert v2", nil)
+	model := clipboardShortcutModel(t)
+
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyInsert, Mod: tea.ModShift})
+
+	if got := model.composerText(); got != "shift insert v2" {
+		t.Fatalf("composer after decoded Shift+Insert = %q", got)
 	}
 }
 
