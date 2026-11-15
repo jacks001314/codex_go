@@ -169,12 +169,19 @@ func (b *LocalBackend) Set(scope *SecretScope, name *SecretName, value string) e
 	if strings.TrimSpace(value) == "" {
 		return fmt.Errorf("%w: secret value must not be empty", ErrInvalidSecret)
 	}
-	file, err := b.load()
+	file, passphrase, existed, err := b.loadWithPassphrase()
 	if err != nil {
 		return err
 	}
+	if !existed {
+		// Only a brand-new store may generate a passphrase (Rust #61401).
+		passphrase, err = b.loadOrCreatePassphrase()
+		if err != nil {
+			return err
+		}
+	}
 	file.Secrets[scope.CanonicalKey(name)] = value
-	return b.save(file)
+	return b.save(file, passphrase)
 }
 
 func (b *LocalBackend) Get(scope *SecretScope, name *SecretName) (string, bool, error) {
@@ -187,15 +194,18 @@ func (b *LocalBackend) Get(scope *SecretScope, name *SecretName) (string, bool, 
 }
 
 func (b *LocalBackend) Delete(scope *SecretScope, name *SecretName) (bool, error) {
-	file, err := b.load()
+	file, passphrase, fileExisted, err := b.loadWithPassphrase()
 	if err != nil {
 		return false, err
+	}
+	if !fileExisted {
+		return false, nil
 	}
 	key := scope.CanonicalKey(name)
 	_, existed := file.Secrets[key]
 	delete(file.Secrets, key)
 	if existed {
-		if err := b.save(file); err != nil {
+		if err := b.save(file, passphrase); err != nil {
 			return false, err
 		}
 	}
@@ -291,18 +301,39 @@ func (b *LocalBackend) path() string {
 }
 
 func (b *LocalBackend) load() (*localFile, error) {
+	file, _, _, err := b.loadWithPassphrase()
+	return file, err
+}
+
+// loadWithPassphrase captures the ciphertext before touching the keyring, then
+// reports the passphrase needed to decrypt that snapshot so an updating caller
+// can reuse it instead of looking the keyring up twice (Rust #61401). An
+// existing file with no keyring passphrase is an error, never a reason to
+// generate a replacement key.
+func (b *LocalBackend) loadWithPassphrase() (*localFile, string, bool, error) {
 	path := b.path()
 	ciphertext, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return emptyLocalFile(), nil
+		return emptyLocalFile(), "", false, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to read secrets file at %s: %w", path, err)
+		return nil, "", false, fmt.Errorf("failed to read secrets file at %s: %w", path, err)
 	}
-	passphrase, err := b.loadOrCreatePassphrase()
+	passphrase, found, err := b.loadPassphrase()
 	if err != nil {
-		return nil, err
+		return nil, "", false, err
 	}
+	if !found {
+		return nil, "", false, fmt.Errorf("missing keyring passphrase for the existing encrypted secrets file")
+	}
+	file, err := b.decryptCiphertext(path, ciphertext, passphrase)
+	if err != nil {
+		return nil, "", false, err
+	}
+	return file, passphrase, true, nil
+}
+
+func (b *LocalBackend) decryptCiphertext(path string, ciphertext []byte, passphrase string) (*localFile, error) {
 	ciphertextHash := sha256.Sum256(ciphertext)
 	passphraseHash := sha256.Sum256([]byte(passphrase))
 	// Every read still checks the file and the keyring. Holding the namespace
@@ -343,15 +374,11 @@ func (b *LocalBackend) load() (*localFile, error) {
 	return &file, nil
 }
 
-func (b *LocalBackend) save(file *localFile) error {
+func (b *LocalBackend) save(file *localFile, passphrase string) error {
 	path := b.path()
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("failed to create secrets dir %s: %w", dir, err)
-	}
-	passphrase, err := b.loadOrCreatePassphrase()
-	if err != nil {
-		return err
 	}
 	// Rust serializes SecretsFile with serde (compact, version then secrets);
 	// Go's map marshaling also sorts the canonical keys.

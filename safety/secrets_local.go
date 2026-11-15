@@ -79,17 +79,33 @@ func (b *LocalBackend) keyringStore() keyring.Store {
 	return keyring.New()
 }
 
-func (b *LocalBackend) loadOrCreatePassphrase() (string, error) {
+// loadPassphrase reports the keyring-held passphrase for this namespace. A
+// present encrypted file must never be decrypted with a freshly generated key,
+// so callers distinguish a missing entry from a keyring failure (Rust #61401).
+func (b *LocalBackend) loadPassphrase() (string, bool, error) {
 	account := SecretKeyringAccount(b.codexHome, b.namespace)
 	store := b.keyringStore()
 	existing, err := store.Load(KeyringService(), account)
 	switch {
 	case err == nil:
-		return existing, nil
+		return existing, true, nil
 	case errors.Is(err, keyring.ErrNotFound):
+		return "", false, nil
 	default:
-		return "", fmt.Errorf("failed to load secrets key from keyring for %s: %w", account, err)
+		return "", false, fmt.Errorf("failed to load secrets key from keyring for %s: %w", account, err)
 	}
+}
+
+func (b *LocalBackend) loadOrCreatePassphrase() (string, error) {
+	existing, found, err := b.loadPassphrase()
+	if err != nil {
+		return "", err
+	}
+	if found {
+		return existing, nil
+	}
+	account := SecretKeyringAccount(b.codexHome, b.namespace)
+	store := b.keyringStore()
 	// Generate a high-entropy key and persist it in the OS keyring so secrets
 	// stay out of plaintext files while remaining fully local.
 	generated, err := generateSecretsPassphrase()
