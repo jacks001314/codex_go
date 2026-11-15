@@ -4667,6 +4667,7 @@ func interruptionNoticeMessage() codextui.Message {
 // rebuilt from the durable rollout snapshot and the per-item turn
 // attribution ListItems also uses.
 type interactiveHistoryTurn struct {
+	id          string
 	status      string
 	firstItemID string
 	lastItemID  string
@@ -4675,30 +4676,55 @@ type interactiveHistoryTurn struct {
 
 const interactiveTurnStatusInterrupted = "interrupted"
 
-// interactiveHistoryTurns reads the thread's turn snapshots so a page can
-// tell where each turn ends. Item pages split turns, so the notice belongs
-// to the page holding that interrupted turn's last item.
-func interactiveHistoryTurns(store *session.Store, threadID session.ThreadID) []interactiveHistoryTurn {
+// interactiveHistoryItemKey scopes an item identity to its owning turn. Item
+// IDs are unique only within a turn, so a page that reuses an ID across turns
+// must not confuse the two boundaries (Rust #61595).
+type interactiveHistoryItemKey struct {
+	turnID string
+	itemID string
+}
+
+// interactiveHistory carries the stored turn spans and the turn attribution of
+// each item so a page can tell where each turn ends. Item pages split turns, so
+// the notice belongs to the page holding that interrupted turn's last item.
+type interactiveHistory struct {
+	turns       []interactiveHistoryTurn
+	itemTurnIDs map[uint64]string
+}
+
+// interactiveHistoryFor reads the thread's turn snapshots and item attribution.
+func interactiveHistoryFor(store *session.Store, threadID session.ThreadID) interactiveHistory {
 	if store == nil || strings.TrimSpace(string(threadID)) == "" {
-		return nil
+		return interactiveHistory{}
 	}
 	record, err := store.Read(threadID, true, true)
 	if err != nil || record == nil || len(record.Metadata.RolloutTurns) == 0 {
-		return nil
+		return interactiveHistory{}
 	}
 	turns := make([]interactiveHistoryTurn, len(record.Metadata.RolloutTurns))
 	positions := make(map[string]int, len(turns))
 	for index, snapshot := range record.Metadata.RolloutTurns {
+		turns[index].id = strings.TrimSpace(snapshot.ID)
+		if turns[index].id == "" {
+			turns[index].id = fmt.Sprintf("turn-%d", index+1)
+		}
 		turns[index].status = strings.ToLower(strings.TrimSpace(snapshot.Status))
 		if id := strings.TrimSpace(snapshot.ID); id != "" {
 			positions[id] = index
 		}
 	}
+	itemTurnIDs := make(map[uint64]string, len(record.Items))
 	for index := range record.Items {
-		position, ok := positions[strings.TrimSpace(session.ItemTurnID(&record.Items[index], index))]
+		turnID := strings.TrimSpace(session.ItemTurnID(&record.Items[index], index))
+		position, ok := positions[turnID]
 		if !ok {
 			continue
 		}
+		ordinal := record.Items[index].CreatedAtOrdinal
+		if ordinal == 0 {
+			ordinal = uint64(index + 1)
+		}
+		itemTurnIDs[ordinal] = turnID
 		itemID := strings.TrimSpace(record.Items[index].ID)
 		if itemID == "" {
 			continue
@@ -4710,7 +4736,7 @@ func interactiveHistoryTurns(store *session.Store, threadID session.ThreadID) []
 		turn.lastItemID = itemID
 		turn.itemCount++
 	}
-	return turns
+	return interactiveHistory{turns: turns, itemTurnIDs: itemTurnIDs}
 }
 
 // interactiveHistoryPageGroup is one rendered slice of an older page: an
@@ -4727,7 +4753,7 @@ type interactiveHistoryPageGroup struct {
 // item is on this page, so a turn split across pages gains its row exactly
 // once. An itemless interrupted turn keeps the preceding boundary: its
 // notice follows the previous turn, or precedes the first item of history.
-func interactiveHistoryPageGroups(items []session.Item, turns []interactiveHistoryTurn) []interactiveHistoryPageGroup {
+func interactiveHistoryPageGroups(items []session.Item, itemTurnIDs map[uint64]string, turns []interactiveHistoryTurn) []interactiveHistoryPageGroup {
 	groups := make([]interactiveHistoryPageGroup, 0, len(turns)+1)
 	if len(items) == 0 {
 		return groups
@@ -4735,10 +4761,14 @@ func interactiveHistoryPageGroups(items []session.Item, turns []interactiveHisto
 	if len(turns) == 0 {
 		return append(groups, interactiveHistoryPageGroup{start: 0, end: len(items), turn: -1})
 	}
-	offsets := make(map[string]int, len(items))
+	offsets := make(map[interactiveHistoryItemKey]int, len(items))
 	for index, item := range items {
 		if id := strings.TrimSpace(item.ID); id != "" {
-			offsets[id] = index + 1
+			turnID := strings.TrimSpace(itemTurnIDs[item.CreatedAtOrdinal])
+			if turnID == "" {
+				turnID = strings.TrimSpace(session.ItemTurnID(&item, index))
+			}
+			offsets[interactiveHistoryItemKey{turnID: turnID, itemID: id}] = index + 1
 		}
 	}
 	end := -1
@@ -4746,7 +4776,7 @@ func interactiveHistoryPageGroups(items []session.Item, turns []interactiveHisto
 		if turns[index].itemCount == 0 {
 			continue
 		}
-		if offsets[turns[index].firstItemID] == 1 {
+		if offsets[interactiveHistoryItemKey{turnID: turns[index].id, itemID: turns[index].firstItemID}] == 1 {
 			end = 0
 		}
 		break
@@ -4755,7 +4785,7 @@ func interactiveHistoryPageGroups(items []session.Item, turns []interactiveHisto
 	for index := range turns {
 		turn := turns[index]
 		if turn.itemCount > 0 {
-			if offset, ok := offsets[turn.lastItemID]; ok {
+			if offset, ok := offsets[interactiveHistoryItemKey{turnID: turn.id, itemID: turn.lastItemID}]; ok {
 				end = offset
 			} else {
 				end = -1
@@ -4763,7 +4793,9 @@ func interactiveHistoryPageGroups(items []session.Item, turns []interactiveHisto
 		} else if turn.status != interactiveTurnStatusInterrupted {
 			continue
 		}
-		if end < 0 {
+		// A boundary that would move backward through the page is not this
+		// page's boundary; skip it instead of emitting a reversed range.
+		if end < 0 || end < start {
 			continue
 		}
 		groups = append(groups, interactiveHistoryPageGroup{start: start, end: end, turn: index})
@@ -4782,11 +4814,12 @@ func interactivePageMessagesWithTurnBoundaries(store *session.Store, threadID se
 	if len(items) == 0 {
 		return nil
 	}
-	turns := interactiveHistoryTurns(store, threadID)
+	history := interactiveHistoryFor(store, threadID)
+	turns := history.turns
 	if len(turns) == 0 {
 		return interactiveSessionMessagesFromItems(items, cwd, reasoningProjectionChatWidget, false)
 	}
-	groups := interactiveHistoryPageGroups(items, turns)
+	groups := interactiveHistoryPageGroups(items, history.itemTurnIDs, turns)
 	messages := make([]codextui.Message, 0, len(items)+2)
 	for _, group := range groups {
 		messages = append(messages, interactiveSessionMessagesFromItems(items[group.start:group.end], cwd, reasoningProjectionChatWidget, false)...)
