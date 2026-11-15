@@ -92,10 +92,11 @@ func TestIdleRecoveryLoginChangeReportsSignInLikeRust(t *testing.T) {
 	}
 }
 
-// Mirrors Rust #61599: dropping the caller cancels an in-flight turns/items
-// read so it does not keep the native worker occupied.
+// Mirrors Rust #61599 and #61342: dropping the caller cancels an in-flight
+// turns/items/thread-list read so it does not keep the native worker occupied,
+// and the worker can service the next request.
 func TestAbandonedCloudReadCancelsRequestContextLikeRust(t *testing.T) {
-	for _, method := range []appserver.Method{appserver.MethodThreadTurnsList, appserver.MethodThreadItemsList} {
+	for _, method := range []appserver.Method{appserver.MethodThreadTurnsList, appserver.MethodThreadItemsList, appserver.MethodThreadList} {
 		t.Run(string(method), func(t *testing.T) {
 			started := make(chan struct{}, 1)
 			canceled := make(chan struct{}, 1)
@@ -116,6 +117,9 @@ func TestAbandonedCloudReadCancelsRequestContextLikeRust(t *testing.T) {
 			}
 			fake.listItems = func(ctx context.Context, _ cloudclient.ListItemsRequest) (cloudclient.HistoryPage[cloudclient.HistoryItem], error) {
 				return cloudclient.HistoryPage[cloudclient.HistoryItem]{}, blockingRead(ctx)
+			}
+			fake.listThreads = func(ctx context.Context, _ cloudclient.ThreadListQuery) (cloudclient.ThreadPage, error) {
+				return cloudclient.ThreadPage{}, blockingRead(ctx)
 			}
 			client := Connect(context.Background(), fake, nil)
 			t.Cleanup(client.Close)
@@ -141,6 +145,19 @@ func TestAbandonedCloudReadCancelsRequestContextLikeRust(t *testing.T) {
 			case <-canceled:
 			case <-time.After(5 * time.Second):
 				t.Fatal("abandoned read did not cancel the native request")
+			}
+
+			probeCtx, probeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer probeCancel()
+			probeDone := make(chan struct{})
+			go func() {
+				defer close(probeDone)
+				_, _ = client.Request(probeCtx, appserver.MethodGetAccount, json.RawMessage(`{}`))
+			}()
+			select {
+			case <-probeDone:
+			case <-time.After(5 * time.Second):
+				t.Fatal("native worker stayed blocked after the abandoned read")
 			}
 		})
 	}
