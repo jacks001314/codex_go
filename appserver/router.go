@@ -4985,8 +4985,13 @@ func (r *Router) handleThreadQueueAdd(request *Request) (*ThreadQueueAddResponse
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
-	submission, err := r.store.EnqueueSubmission(session.ThreadID(strings.TrimSpace(params.ThreadID)), session.QueuedSubmission{
-		Input:               append([]any(nil), params.Input...),
+	threadID := session.ThreadID(strings.TrimSpace(params.ThreadID))
+	input, err := r.resolveQueuedAttachmentPaths(threadID, params.Input)
+	if err != nil {
+		return nil, err
+	}
+	submission, err := r.store.EnqueueSubmission(threadID, session.QueuedSubmission{
+		Input:               input,
 		ClientUserMessageID: strings.TrimSpace(params.ClientUserMessageID),
 	})
 	if err != nil {
@@ -5034,11 +5039,71 @@ func (r *Router) handleThreadQueueUpdate(request *Request) (*ThreadQueueUpdateRe
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
-	submission, err := r.store.UpdateQueueSubmission(session.ThreadID(strings.TrimSpace(params.ThreadID)), strings.TrimSpace(params.QueuedSubmissionID), params.Input)
+	threadID := session.ThreadID(strings.TrimSpace(params.ThreadID))
+	input, err := r.resolveQueuedAttachmentPaths(threadID, params.Input)
+	if err != nil {
+		return nil, err
+	}
+	submission, err := r.store.UpdateQueueSubmission(threadID, strings.TrimSpace(params.QueuedSubmissionID), input)
 	if err != nil {
 		return nil, threadQueueError(err)
 	}
 	return &ThreadQueueUpdateResponse{QueuedSubmission: queuedSubmissionFromSession(submission)}, nil
+}
+
+// resolveQueuedAttachmentPaths resolves relative local image and audio paths in
+// a queued submission against the thread's working directory (Rust #61359), so
+// a relative attachment names the thread's file even when the app server runs
+// from a different directory. Absolute paths keep their meaning, and a relative
+// path that cannot be resolved to an absolute path is rejected.
+func (r *Router) resolveQueuedAttachmentPaths(threadID session.ThreadID, input []any) ([]any, error) {
+	resolved := append([]any(nil), input...)
+	cwd := ""
+	cwdLoaded := false
+	for index, item := range resolved {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(stringFromAny(entry["type"])) {
+		case "localImage", "local_image", "localAudio", "local_audio":
+		default:
+			continue
+		}
+		path := strings.TrimSpace(stringFromAny(entry["path"]))
+		if path == "" || filepath.IsAbs(path) {
+			continue
+		}
+		if !cwdLoaded {
+			cwdLoaded = true
+			var err error
+			if cwd, err = r.queuedSubmissionThreadCWD(threadID); err != nil {
+				return nil, threadQueueError(err)
+			}
+		}
+		joined := filepath.Join(cwd, path)
+		if strings.TrimSpace(cwd) == "" || !filepath.IsAbs(joined) {
+			return nil, jsonRPCInvalidRequest("local queued attachment path cannot be resolved against the thread working directory")
+		}
+		clone := make(map[string]any, len(entry))
+		for key, value := range entry {
+			clone[key] = value
+		}
+		clone["path"] = joined
+		resolved[index] = clone
+	}
+	return resolved, nil
+}
+
+// queuedSubmissionThreadCWD reports the directory queued attachment paths are
+// relative to. Queued submissions are persisted with the thread record, so its
+// stored working directory covers both the loaded and the unloaded case.
+func (r *Router) queuedSubmissionThreadCWD(threadID session.ThreadID) (string, error) {
+	record, err := r.store.Read(threadID, true, false)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(record.Metadata.CWD), nil
 }
 
 func (r *Router) handleThreadQueueDelete(request *Request) (*ThreadQueueDeleteResponse, error) {
