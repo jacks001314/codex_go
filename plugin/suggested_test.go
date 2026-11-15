@@ -52,6 +52,27 @@ func TestSuggestedPluginsURLCodexRouteLikeRust(t *testing.T) {
 	if !strings.Contains(url, "/ps/plugins/suggested/codex") || !strings.Contains(url, "scope=GLOBAL") {
 		t.Fatalf("suggested plugins URL = %q", url)
 	}
+	// Rust #61374: the endpoint filters installed plugins for us.
+	if !strings.Contains(url, "includeInstalled=false") {
+		t.Fatalf("suggested plugins URL = %q, want includeInstalled=false", url)
+	}
+}
+
+// TestSuggestedCandidatesTrustEndpointInstalledFilteringLikeRust mirrors Rust
+// #61374: the recommendation endpoint owns installed-plugin filtering, so the
+// client keeps its results and only disabled tools are removed later.
+func TestSuggestedCandidatesTrustEndpointInstalledFilteringLikeRust(t *testing.T) {
+	candidates := discoverableCandidatesFromSuggested([]SuggestedPlugin{
+		{ID: "github@openai-curated-remote", RemotePluginID: "plugin_github", Name: "github", DisplayName: "GitHub"},
+		{ID: "linear@openai-curated-remote", RemotePluginID: "plugin_linear", Name: "linear", DisplayName: "Linear"},
+	})
+	if len(candidates) != 2 {
+		t.Fatalf("candidates = %#v, want every endpoint recommendation", candidates)
+	}
+	filtered := ListDiscoverablePlugins(candidates, &DiscoverableConfig{DisabledPluginIDs: []string{"github@openai-curated-remote"}})
+	if len(filtered) != 1 || filtered[0].Name != "Linear" {
+		t.Fatalf("filtered candidates = %#v, want only the enabled recommendation", filtered)
+	}
 }
 
 type gatedSuggestedPluginProvider struct {

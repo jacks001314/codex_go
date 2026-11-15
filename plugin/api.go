@@ -2464,7 +2464,7 @@ func (s *PluginService) DiscoverableInstallCandidatesContext(ctx context.Context
 	loadedDetails, _ := loadMarketplacePlugins(marketplaces, s.manifests)
 	details := routePluginDetails(mergePluginDetails(storedDetails, loadedDetails, policy), target)
 	details = s.materializeInstalledDiscoverableDetailsBestEffort(details)
-	if endpointCandidates, ok := s.suggestedDiscoverableCandidates(ctx, details); ok {
+	if endpointCandidates, ok := s.suggestedDiscoverableCandidates(ctx); ok {
 		return endpointCandidates
 	}
 	out := make([]DiscoverableInfo, 0, len(details))

@@ -179,7 +179,7 @@ func (s *PluginService) ClearRecommendedPluginsCache() {
 	s.mu.Unlock()
 }
 
-func (s *PluginService) suggestedDiscoverableCandidates(ctx context.Context, details []PluginDetail) ([]DiscoverableInfo, bool) {
+func (s *PluginService) suggestedDiscoverableCandidates(ctx context.Context) ([]DiscoverableInfo, bool) {
 	if s == nil {
 		return nil, false
 	}
@@ -190,7 +190,7 @@ func (s *PluginService) suggestedDiscoverableCandidates(ctx context.Context, det
 	if !suggested.Enabled {
 		return nil, false
 	}
-	return discoverableCandidatesFromSuggested(suggested.Plugins, details), true
+	return discoverableCandidatesFromSuggested(suggested.Plugins), true
 }
 
 // PrewarmSuggestedPlugins fetches and publishes the recommendation catalog
@@ -257,33 +257,18 @@ func (s *PluginService) suggestedPluginList(ctx context.Context) (*SuggestedPlug
 	return cloneSuggestedPluginList(fetched), err
 }
 
-func discoverableCandidatesFromSuggested(plugins []SuggestedPlugin, details []PluginDetail) []DiscoverableInfo {
-	installedIDs := map[string]bool{}
-	installedRemoteIDs := map[string]bool{}
-	for _, detail := range details {
-		summary := detail.Summary
-		if !summary.Installed {
-			continue
-		}
-		for _, value := range []string{summary.ID, pluginID(summary.Name, summary.MarketplaceName)} {
-			if strings.TrimSpace(value) != "" {
-				installedIDs[strings.TrimSpace(value)] = true
-			}
-		}
-		if strings.TrimSpace(summary.RemotePluginID) != "" {
-			installedRemoteIDs[strings.TrimSpace(summary.RemotePluginID)] = true
-		}
-	}
+// discoverableCandidatesFromSuggested projects the endpoint's recommendation
+// list. Rust #61374 asks the endpoint for uninstalled plugins
+// (`includeInstalled=false`), so installed filtering happens server-side and
+// the client only removes tools the user disabled.
+func discoverableCandidatesFromSuggested(plugins []SuggestedPlugin) []DiscoverableInfo {
 	out := make([]DiscoverableInfo, 0, len(plugins))
 	for _, plugin := range plugins {
 		id := strings.TrimSpace(firstNonEmpty(plugin.ID, pluginID(plugin.Name, RemoteGlobalMarketplaceName)))
-		if id == "" || installedIDs[id] {
+		if id == "" {
 			continue
 		}
 		remoteID := strings.TrimSpace(plugin.RemotePluginID)
-		if remoteID != "" && installedRemoteIDs[remoteID] {
-			continue
-		}
 		name := strings.TrimSpace(firstNonEmpty(plugin.DisplayName, plugin.Name, id))
 		out = append(out, DiscoverableInfo{
 			ID:              id,
@@ -360,6 +345,8 @@ func suggestedPluginsURL(baseURL string) string {
 	}
 	query := parsed.Query()
 	query.Set("scope", "GLOBAL")
+	// Rust #61374: the endpoint owns installed-plugin filtering.
+	query.Set("includeInstalled", "false")
 	parsed.RawQuery = query.Encode()
 	return parsed.String()
 }
