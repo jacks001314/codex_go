@@ -15,7 +15,7 @@ func TestStandaloneToolOutputInputItemStructuredLikeRust(t *testing.T) {
 			turn.FunctionCallOutputContentItem{Type: "input_text", Text: "Captured."},
 			turn.FunctionCallOutputContentItem{Type: "input_image", ImageURL: "data:image/png;base64,AAAA"},
 		),
-	})
+	}, false)
 	item, ok := structured.(map[string]any)
 	if !ok {
 		t.Fatalf("standalone tool output = %#v, want a map", structured)
@@ -28,7 +28,7 @@ func TestStandaloneToolOutputInputItemStructuredLikeRust(t *testing.T) {
 		t.Fatalf("structured output image = %#v", body[1])
 	}
 
-	text := standaloneToolOutputInputItem(&turn.TurnToolOutput{Name: "inspect", Output: turn.ToolOutputText("done")})
+	text := standaloneToolOutputInputItem(&turn.TurnToolOutput{Name: "inspect", Output: turn.ToolOutputText("done")}, false)
 	if got := text.(map[string]any)["output"]; got != "done" {
 		t.Fatalf("text output body = %#v, want the plain string", got)
 	}

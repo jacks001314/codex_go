@@ -4196,8 +4196,11 @@ func TestRouterInjectItemsMarksClientDeveloperMessagesWhenFeatureEnabled(t *test
 	default:
 		t.Fatalf("unexpected harness metadata type %T", metadata)
 	}
-	if decoded["client_authored"] != true {
+	if decoded["retain_across_windows"] != true {
 		t.Fatalf("harness metadata = %#v", metadata)
+	}
+	if _, legacy := decoded["client_authored"]; legacy {
+		t.Fatalf("harness metadata keeps the legacy marker: %#v", metadata)
 	}
 }
 

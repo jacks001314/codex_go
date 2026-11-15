@@ -23,6 +23,7 @@ func TestHarnessMetadataTypedMembersDecodeLikeRust(t *testing.T) {
 			"complete": true
 		},
 		"client_authored": true,
+		"retain_across_windows": true,
 		"fallback_token_limit_override": 24000,
 		"delivered_assistant_message": "the delivered text",
 		"harness_authored_configuration": true,
@@ -54,6 +55,9 @@ func TestHarnessMetadataTypedMembersDecodeLikeRust(t *testing.T) {
 	}
 	if !metadata.ClientAuthored {
 		t.Fatal("client_authored = false, want true")
+	}
+	if metadata.RetainAcrossWindows == nil || !*metadata.RetainAcrossWindows {
+		t.Fatalf("retain_across_windows = %v, want true", metadata.RetainAcrossWindows)
 	}
 	if metadata.HistoryTruncationTokenLimit == nil || *metadata.HistoryTruncationTokenLimit != 24000 {
 		t.Fatalf("fallback_token_limit_override = %v, want 24000", metadata.HistoryTruncationTokenLimit)

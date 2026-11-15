@@ -28708,7 +28708,7 @@ func TestDecideClockToolEnablementLikeRust(t *testing.T) {
 }
 
 func TestStandaloneToolOutputInputItemLikeRust(t *testing.T) {
-	input := standaloneToolOutputInputItem(&turn.TurnToolOutput{Name: "notifications", Namespace: "slack", Output: turn.ToolOutputText("Alice mentioned you.")})
+	input := standaloneToolOutputInputItem(&turn.TurnToolOutput{Name: "notifications", Namespace: "slack", Output: turn.ToolOutputText("Alice mentioned you.")}, false)
 	item, ok := input.(map[string]any)
 	if !ok {
 		t.Fatalf("input = %#v, want map", input)

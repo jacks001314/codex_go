@@ -162,33 +162,6 @@ func startRequestSpan(tracer *telemetry.Tracer, request *Request, transport stri
 	return span
 }
 
-func markClientAuthoredDeveloperItem(item *session.Item) {
-	if item == nil || !strings.EqualFold(strings.TrimSpace(item.Role), "developer") {
-		return
-	}
-	if item.Data == nil {
-		item.Data = map[string]any{}
-	}
-	var metadata map[string]any
-	switch value := item.Data["harness_metadata"].(type) {
-	case json.RawMessage:
-		_ = json.Unmarshal(value, &metadata)
-	case string:
-		if strings.TrimSpace(value) != "" {
-			_ = json.Unmarshal([]byte(value), &metadata)
-		}
-	case map[string]any:
-		metadata = cloneAnyMapForRouter(value)
-	}
-	if metadata == nil {
-		metadata = map[string]any{}
-	}
-	metadata["client_authored"] = true
-	if encoded, err := json.Marshal(metadata); err == nil {
-		item.Data["harness_metadata"] = json.RawMessage(encoded)
-	}
-}
-
 func NewRouter(store *session.Store) *Router {
 	threads := NewThreadManager(nil)
 	router := &Router{
@@ -5283,30 +5256,20 @@ func (r *Router) handleThreadInjectItems(request *Request) (*ThreadInjectItemsRe
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
-	if err := validateResponseItemImageURLs(params.Items); err != nil {
-		return nil, err
-	}
-	if err := validateResponseItemAudioFiles(params.Items); err != nil {
-		return nil, err
-	}
 	now := r.now().UTC()
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
+	retainClientDeveloperMessages := r != nil && r.retainClientDeveloperMessages != nil && r.retainClientDeveloperMessages()
+	_, injectedItems, err := injectedSessionItemsForRequest(params, now, retainClientDeveloperMessages)
+	if err != nil {
+		return nil, err
+	}
 	// SessionItems precede the wire items so a fork receives the live parent
 	// suffix before the side-conversation boundary that closes it.
-	items := make([]session.Item, 0, len(params.SessionItems)+len(params.Items))
+	items := make([]session.Item, 0, len(params.SessionItems)+len(injectedItems))
 	items = append(items, params.SessionItems...)
-	for i, raw := range params.Items {
-		item, err := sessionItemFromRaw(raw, now, i)
-		if err != nil {
-			return nil, err
-		}
-		if r != nil && r.retainClientDeveloperMessages != nil && r.retainClientDeveloperMessages() {
-			markClientAuthoredDeveloperItem(&item)
-		}
-		items = append(items, item)
-	}
+	items = append(items, injectedItems...)
 	record, err := r.appendThreadItems(session.ThreadID(params.ThreadID), items)
 	if err != nil {
 		if !errors.Is(err, session.ErrThreadNotFound) {

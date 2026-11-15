@@ -267,6 +267,15 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 			c.cleanupProvisionalSpawn(string(threadID))
 			return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextChildStartup, forkMode)
 		}
+		// Rust #61344 `retained_items_for_fresh_child`: a new child keeps the
+		// parent's explicitly retained items even without a full-history fork.
+		if parent, readErr := c.router.threadRecord(session.ThreadID(c.parentID), true, true); readErr == nil && parent != nil {
+			if inherited := retainedItemsForFreshChild(parent, now); len(inherited) > 0 {
+				if updated, appendErr := c.router.services.ThreadRouter.store.AppendItems(session.ThreadID(threadID), inherited); appendErr == nil && updated != nil {
+					record = updated
+				}
+			}
+		}
 	}
 	record.Metadata.CWD = c.cwd
 	record.Metadata.Model = modelID

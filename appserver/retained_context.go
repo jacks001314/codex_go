@@ -1199,7 +1199,9 @@ func markInheritedUserMessages(items []session.Item) {
 		// inherited developer commentary is not approval evidence.
 		inheritedManualApproval := sessionItemIsManualApprovalMessage(item)
 		metadata := harnessMetadataFromSessionItem(item)
-		markInherited := userMessage || sessionItemIsAssistantMessage(item) || inheritedManualApproval
+		// Rust #61344 keeps explicitly retained items and marks them inherited,
+		// including retained tool exchanges.
+		markInherited := userMessage || sessionItemIsAssistantMessage(item) || inheritedManualApproval || sessionItemIsAlwaysRetained(item)
 		dropParentOrder := !userMessage || (metadata != nil && metadata.SenderUserMessages != nil)
 		if !markInherited && !(dropParentOrder && metadata != nil && metadata.UserInputOrder != nil) {
 			continue

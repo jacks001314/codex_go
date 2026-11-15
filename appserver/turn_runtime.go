@@ -1937,7 +1937,10 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		// Rust #40991/#41002: a standalone named tool output starts the turn
 		// without a user prompt. It is surfaced as a function_call_output item
 		// (no call_id) so it is not treated as a user message.
-		inputItems = append(inputItems, standaloneToolOutputInputItem(params.ToolOutput))
+		inputItems = append(inputItems, standaloneToolOutputInputItem(
+			params.ToolOutput,
+			features.Enabled(runConfig.Config.FeatureSettings(), compact.RetainClientToolOutputsKey),
+		))
 		agentPrompt = ""
 	}
 	samplingFollowUp, tokenBudgetDelivery := r.autoCompactFallbackFollowUp(threadID, runConfig)
@@ -14222,7 +14225,7 @@ func userContentItemKinds(content []map[string]any) []string {
 // input item from a turn/start toolOutput (Rust #41002). It carries a name and
 // optional namespace but no call_id, so it is preserved as external context
 // rather than paired to a tool call.
-func standaloneToolOutputInputItem(output *turn.TurnToolOutput) any {
+func standaloneToolOutputInputItem(output *turn.TurnToolOutput, retainClientToolOutputs bool) any {
 	if output == nil {
 		return nil
 	}
@@ -14234,11 +14237,11 @@ func standaloneToolOutputInputItem(output *turn.TurnToolOutput) any {
 	if strings.TrimSpace(output.Namespace) != "" {
 		item["namespace"] = output.Namespace
 	}
-	if output.Retain {
-		// Rust #52671: a retained client output is marked as client-authored in
-		// harness metadata so compaction keeps it; the marker stays out of model
-		// requests (session history sanitization drops harness metadata).
-		item["harness_metadata"] = map[string]any{"client_authored": true}
+	if output.Retain && retainClientToolOutputs && strings.TrimSpace(output.Name) != "" {
+		// Rust #61344 `pending_turn_input`: a retained, named client tool output
+		// carries an explicit context-window retention decision. The marker stays
+		// out of model requests (session history sanitization drops it).
+		item["harness_metadata"] = map[string]any{"retain_across_windows": true}
 	}
 	return item
 }

@@ -452,8 +452,21 @@ func CompactLocally(request *Request, maxSummaryChars int, initialContext []Item
 			budget = 0
 		}
 	}
-	users := retainedUserMessagesForLocalCompaction(history, budget)
-	retained := append(cloneItems(users), cloneItems(pending)...)
+	selected := selectRetainedItems(history, IsAlwaysRetained, RemoteRetainedMessageTokenBudget, false, nil)
+	selected = selectLocalUserMessages(history, budget, selected)
+	retained := itemsFromPositions(history, selected)
+	if hasPending {
+		// A client may also have explicitly retained this mail. Use the final
+		// compactor input for pending mail so each delivery appears once.
+		filtered := retained[:0]
+		for _, item := range retained {
+			if !isRetainedPendingMail(item, pendingFirst) {
+				filtered = append(filtered, item)
+			}
+		}
+		retained = filtered
+	}
+	retained = append(retained, cloneItems(pending)...)
 	if hasPending {
 		sortByHistorySequence(retained)
 	}
@@ -579,9 +592,7 @@ func FilterCompactedHistory(items []Item, retention ...bool) []Item {
 	policy := retentionPolicyFromFlags(retention)
 	filtered := make([]Item, 0, len(items))
 	for _, item := range items {
-		if ShouldKeepCompactedHistoryItem(item) ||
-			(policy.clientDeveloperMessages && IsClientAuthoredDeveloperMessage(item)) ||
-			(policy.clientToolOutputs && IsRetainedToolOutput(item)) {
+		if ShouldKeepCompactedHistoryItem(item) || shouldRetainClientItem(item, policy) {
 			filtered = append(filtered, item)
 		}
 	}
@@ -693,21 +704,33 @@ func TrimFunctionCallHistoryToFitContextWindow(items []Item, contextWindow int, 
 	if estimated <= contextWindow {
 		return trimmed, 0
 	}
-	rewritten := 0
-	for i := len(trimmed) - 1; i >= 0 && estimated > contextWindow; i-- {
-		// Rust turns feature-enabled retained client outputs into the same
-		// boundary as user/developer messages: they are never rewritten.
-		if retainClientToolOutputs && IsRetainedToolOutput(trimmed[i]) {
+	rewrittenItems := make([]Item, 0, len(trimmed))
+	retainedLen := len(trimmed)
+	for _, group := range newestHistoryItemGroups(trimmed) {
+		if estimated <= contextWindow {
 			break
 		}
-		replacement, ok := rewrittenOutputForContextWindow(&trimmed[i])
+		// Rust #61344 `should_retain_client_item`: retained client items form the
+		// same boundary as user/developer messages, so they are never rewritten.
+		if shouldRetainClientItem(group.source, retentionPolicy{clientToolOutputs: retainClientToolOutputs}) {
+			break
+		}
+		replacement, ok := rewrittenOutputForContextWindow(&group.source)
 		if !ok {
 			break
 		}
-		estimated -= EstimateItemTokens(&trimmed[i])
+		estimated -= EstimateItemTokens(&group.source)
 		estimated += EstimateItemTokens(&replacement)
-		trimmed[i] = replacement
-		rewritten++
+		retainedLen = group.sourcePosition
+		rewrittenItems = append(rewrittenItems, replacement)
+	}
+	rewritten := len(rewrittenItems)
+	if rewritten > 0 {
+		out := cloneItems(trimmed[:retainedLen])
+		for i := len(rewrittenItems) - 1; i >= 0; i-- {
+			out = append(out, rewrittenItems[i])
+		}
+		trimmed = out
 	}
 	return trimmed, rewritten
 }
@@ -804,90 +827,368 @@ func retainedMessagesForRemoteCompaction(items []Item, maxTokens int, policy ret
 }
 
 // retainedMessagesForRemoteCompactionWithAudio mirrors Rust
-// truncate_retained_messages (#59237, #59268): measured uploaded-audio
-// durations replace the conservative maximum when the store knows them.
+// truncate_retained_messages (#59237, #59268, #61344): measured uploaded-audio
+// durations replace the conservative maximum when the store knows them, and
+// explicitly retained items are selected around their tool-call and
+// image-resize-notice groups.
 func retainedMessagesForRemoteCompactionWithAudio(items []Item, maxTokens int, policy retentionPolicy, durations FileAudioDurations) []Item {
-	if maxTokens <= 0 {
-		return nil
-	}
-	candidates := make([]Item, 0, len(items))
 	pendingFirst, hasPending := pendingMailSequence(items)
-	for _, item := range items {
-		pending := hasPending && isRetainedPendingMail(item, pendingFirst)
-		keep := (item.Type == "message" || item.Type == "user_message") && item.Role == "user" && ShouldKeepCompactedHistoryItem(item)
-		if policy.clientDeveloperMessages && IsClientAuthoredDeveloperMessage(item) {
-			keep = true
-		}
-		// Rust session/mod.rs:4666-4678 (#52937): retained standalone outputs share
-		// the same retention budget as the retained client messages.
-		if policy.clientToolOutputs && IsRetainedToolOutput(item) {
-			keep = true
-		}
-		if isStructuredAgentMessage(&item) {
-			cost := EstimateItemTokens(&item)
-			keep = pending || (!isAgentCompletionMessage(&item) && cost <= MaxRetainedAgentMessageTokens)
-		} else {
-			keep = keep || pending
-		}
-		if keep {
-			candidates = append(candidates, item)
-		}
-	}
+	selected := selectRetainedItems(
+		items,
+		func(item Item) bool {
+			pending := hasPending && isRetainedPendingMail(item, pendingFirst)
+			// Rust #61344 `should_retain_client_item`: an explicit per-item
+			// policy wins over the feature flags for both client developer
+			// messages and standalone retained tool outputs.
+			if shouldRetainClientItem(item, policy) {
+				return true
+			}
+			if isStructuredAgentMessage(&item) {
+				cost := EstimateItemTokens(&item)
+				return pending || (!isAgentCompletionMessage(&item) && cost <= MaxRetainedAgentMessageTokens)
+			}
+			keep := (item.Type == "message" || item.Type == "user_message") &&
+				item.Role == "user" && ShouldKeepCompactedHistoryItem(item)
+			return keep || pending
+		},
+		maxTokens,
+		policy.imageBudget,
+		durations,
+	)
+	return itemsFromPositions(items, selected)
+}
 
+// retainedHistoryGroup is one newest-first retention unit (Rust
+// `HistoryItemGroup`): an optional explicitly retained tool call, its output,
+// and an optional image-resize notice attached to that output.
+type retainedHistoryGroup struct {
+	sourcePosition int
+	source         Item
+	attachedNotice *Item
+	toolCall       *Item
+}
+
+// estimatedTokenCount charges every member of the group.
+func (g retainedHistoryGroup) estimatedTokenCount(durations FileAudioDurations) int {
+	total := 0
+	if g.toolCall != nil {
+		total += EstimateItemTokensWithAudio(g.toolCall, durations)
+	}
+	total += EstimateItemTokensWithAudio(&g.source, durations)
+	if g.attachedNotice != nil {
+		total += EstimateItemTokensWithAudio(g.attachedNotice, durations)
+	}
+	return total
+}
+
+// newestHistoryItemGroups mirrors Rust `newest_history_item_groups`: an
+// attached image-resize notice folds into the item it describes, and an
+// explicitly retained tool exchange folds its call into the output's group.
+func newestHistoryItemGroups(items []Item) []retainedHistoryGroup {
+	groups := make([]retainedHistoryGroup, 0, len(items))
+	end := len(items)
+	for end > 0 {
+		last := end - 1
+		sourceIndex := last
+		var notice *Item
+		if last > 0 && isAttachedImageResizeNotice(items[last-1], items[last]) {
+			sourceIndex = last - 1
+			copied := items[last]
+			notice = &copied
+		}
+		source := items[sourceIndex]
+		group := retainedHistoryGroup{sourcePosition: sourceIndex, source: source, attachedNotice: notice}
+		next := sourceIndex
+		if sourceIndex > 0 {
+			call := items[sourceIndex-1]
+			if IsAlwaysRetained(source) && IsAlwaysRetained(call) && isMatchingRetainedToolOutput(call, source) {
+				copied := call
+				group.toolCall = &copied
+				next = sourceIndex - 1
+			}
+		}
+		end = next
+		groups = append(groups, group)
+	}
+	return groups
+}
+
+// isAttachedImageResizeNotice mirrors Rust `is_attached_notice`: only a
+// user message or tool output can carry the notice, and a client that sent the
+// same text with its own retention decision keeps it as its own item.
+func isAttachedImageResizeNotice(source Item, notice Item) bool {
+	switch strings.ToLower(strings.TrimSpace(source.Type)) {
+	case "message", "user_message":
+		if !strings.EqualFold(strings.TrimSpace(source.Role), "user") {
+			return false
+		}
+	case "function_call_output", "custom_tool_call_output":
+	default:
+		return false
+	}
+	if _, explicit := RetentionOverride(notice); explicit || IsClientAuthoredItem(notice) {
+		return false
+	}
+	if strings.ToLower(strings.TrimSpace(notice.Type)) != "message" ||
+		!strings.EqualFold(strings.TrimSpace(notice.Role), "developer") {
+		return false
+	}
+	text, ok := singleTextPart(notice)
+	if !ok {
+		return false
+	}
+	return markedTextMatches(text, "<image_resize_notice>", "</image_resize_notice>")
+}
+
+// singleTextPart returns the text of a single-part input_text message,
+// including the legacy flattened shape that carries the text without parts.
+func singleTextPart(item Item) (string, bool) {
+	if len(item.Content) == 0 {
+		text := strings.TrimSpace(item.Text)
+		return text, text != ""
+	}
+	if len(item.Content) != 1 {
+		return "", false
+	}
+	part := item.Content[0]
+	if !contentPartIsText(part) {
+		return "", false
+	}
+	return part.Text, true
+}
+
+// markedTextMatches mirrors `matches_marked_text`: the markers are compared
+// case-insensitively after trimming surrounding whitespace.
+func markedTextMatches(text string, startMarker string, endMarker string) bool {
+	trimmedStart := strings.TrimLeft(text, " \t\r\n")
+	if len(trimmedStart) < len(startMarker) || !strings.EqualFold(trimmedStart[:len(startMarker)], startMarker) {
+		return false
+	}
+	trimmedEnd := strings.TrimRight(trimmedStart, " \t\r\n")
+	if len(trimmedEnd) < len(endMarker) {
+		return false
+	}
+	return strings.EqualFold(trimmedEnd[len(trimmedEnd)-len(endMarker):], endMarker)
+}
+
+// isMatchingRetainedToolOutput mirrors Rust `is_matching_tool_output`: the
+// output answers the call id and both sides belong to the same tool family.
+func isMatchingRetainedToolOutput(call Item, output Item) bool {
+	callID := retainedInputCallID(call)
+	if callID == "" || retainedOutputCallID(output) != callID {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(call.Type)) {
+	case "function_call", "local_shell_call":
+		return strings.EqualFold(strings.TrimSpace(output.Type), "function_call_output")
+	case "custom_tool_call":
+		return strings.EqualFold(strings.TrimSpace(output.Type), "custom_tool_call_output")
+	case "tool_search_call":
+		return strings.EqualFold(strings.TrimSpace(output.Type), "tool_search_output")
+	}
+	return false
+}
+
+func retainedInputCallID(item Item) string {
+	switch strings.ToLower(strings.TrimSpace(item.Type)) {
+	case "function_call", "custom_tool_call", "tool_search_call", "local_shell_call":
+		return strings.TrimSpace(item.CallID)
+	}
+	return ""
+}
+
+func retainedOutputCallID(item Item) string {
+	switch strings.ToLower(strings.TrimSpace(item.Type)) {
+	case "function_call_output", "custom_tool_call_output", "tool_search_output":
+		return toolOutputCallID(item)
+	}
+	return ""
+}
+
+// selectRetainedItems mirrors Rust `select_retained_items`: it walks groups
+// newest first under one shared budget and returns the selected items keyed by
+// their original history position.
+func selectRetainedItems(items []Item, shouldRetain func(Item) bool, maxTokens int, imageBudget bool, durations FileAudioDurations) map[int]Item {
+	selected := map[int]Item{}
+	if maxTokens <= 0 {
+		return selected
+	}
 	remaining := maxTokens
-	retainedReversed := make([]Item, 0, len(candidates))
-	for i := len(candidates) - 1; i >= 0 && remaining > 0; i-- {
-		item := candidates[i]
-		clientDeveloper := IsClientAuthoredDeveloperMessage(item)
-		chargeImages := policy.imageBudget && !clientDeveloper
-		cost := max(1, EstimateItemTokensWithAudio(&item, durations))
-		itemType := strings.ToLower(strings.TrimSpace(item.Type))
-		isMessage := itemType == "message" || itemType == "user_message" || itemType == "assistant_message"
-		if isMessage && !clientDeveloper {
-			// Retained messages charge their content parts: text, images only
-			// with the image budget (Rust #40280), and uploaded file audio
-			// always at its measured or maximum budget (Rust #59237).
-			cost = max(1, retainedMessageTokens(item, chargeImages, durations))
-		}
-		if cost <= remaining {
-			retainedReversed = append(retainedReversed, item)
-			remaining -= cost
-			continue
-		}
-		// Rust compact_remote_v2.rs:641-649 (#52937): a retained output is kept
-		// whole or dropped, and the scan stops so newer-first ordering is
-		// preserved. Only retained output candidates reach this point because the
-		// filter above gates on the feature.
-		if IsRetainedToolOutput(item) {
+groupLoop:
+	for _, group := range newestHistoryItemGroups(items) {
+		if remaining <= 0 {
 			break
 		}
-		if isStructuredAgentMessage(&item) {
+		if !shouldRetain(group.source) {
 			continue
 		}
-		if requiresMediaBoundaryTruncation(item, chargeImages) {
-			// Rust #40280/#59237: media at the truncation boundary is kept or
-			// dropped whole with its adjacent labels. Once it does not fit, stop
-			// backfilling the remaining budget with older messages.
-			budget := remaining
-			remaining = 0
-			if truncated, ok := truncateRetainedMessageWithMedia(item, budget, chargeImages, durations); ok {
-				retainedReversed = append(retainedReversed, truncated)
+		chargeWhole := IsAlwaysRetained(group.source) || IsClientAuthoredDeveloperMessage(group.source)
+		chargeImages := imageBudget && !chargeWhole
+		needsMediaBoundary := requiresMediaBoundaryTruncation(group.source, chargeImages)
+		noticeTokens := 0
+		if group.attachedNotice != nil {
+			// Rust #40280/#59237: charged media is truncated as a message
+			// boundary, while each modality keeps its own cost.
+			noticeTokens = max(1, retainedMessageTokens(*group.attachedNotice, false, durations))
+		}
+		contentTokens := retainedMessageTokens(group.source, chargeImages, durations)
+		sourceTokens := max(1, contentTokens)
+		if chargeWhole {
+			sourceTokens = max(1, EstimateItemTokensWithAudio(&group.source, durations))
+		}
+		tokenCount := sourceTokens + noticeTokens
+		if group.toolCall != nil {
+			tokenCount = group.estimatedTokenCount(durations)
+		}
+		var kept Item
+		switch {
+		case tokenCount <= remaining:
+			remaining -= tokenCount
+			kept = group.source
+		case IsRetainedToolOutput(group.source) || (IsAlwaysRetained(group.source) && !isMessageItemType(group.source.Type)):
+			// Structured items such as tool results must stay whole.
+			break groupLoop
+		case remaining > noticeTokens:
+			available := remaining - noticeTokens
+			contentBudget := available
+			if chargeWhole {
+				contentBudget = available - (sourceTokens - contentTokens)
+				if contentBudget < 0 {
+					contentBudget = 0
+				}
 			}
+			if needsMediaBoundary {
+				// Oversized media can leave no boundary content. Do not
+				// backfill the remaining budget with older messages.
+				remaining = 0
+			}
+			truncated, ok := truncateRetainedGroupSource(group.source, contentBudget, chargeImages, needsMediaBoundary, durations)
+			if !ok {
+				continue
+			}
+			if chargeWhole {
+				adjusted, ok := adjustChargeWholeTruncation(truncated, available, contentBudget, chargeImages, needsMediaBoundary, durations)
+				if !ok {
+					continue
+				}
+				truncated = adjusted
+			}
+			remaining = 0
+			kept = truncated
+		case needsMediaBoundary:
+			break groupLoop
+		default:
 			continue
 		}
-		item.Text = truncateTextToTokens(ItemText(&item), remaining)
-		item.Content = nil
-		item.Data = nil
-		item.Raw = nil
-		if strings.TrimSpace(item.Text) != "" {
-			retainedReversed = append(retainedReversed, item)
+		keepRetainedGroup(selected, group, kept)
+	}
+	return selected
+}
+
+// truncateRetainedGroupSource shortens a retained source to the available
+// content budget (Rust `truncate_message_to_token_budget` /
+// `truncate_message_text_to_token_budget`).
+func truncateRetainedGroupSource(source Item, contentBudget int, chargeImages bool, mediaBoundary bool, durations FileAudioDurations) (Item, bool) {
+	if mediaBoundary {
+		return truncateRetainedMessageWithMedia(source, contentBudget, chargeImages, durations)
+	}
+	item := source
+	harnessMetadata, hasHarnessMetadata := retainedHarnessMetadata(item)
+	item.Text = truncateTextToTokens(ItemText(&item), contentBudget)
+	item.Content = nil
+	item.Data = nil
+	item.Raw = nil
+	if hasHarnessMetadata {
+		// Rust truncates the item payload but keeps the envelope metadata, so a
+		// retained message stays retained on the next context window.
+		item.Data = map[string]any{"harness_metadata": harnessMetadata}
+	}
+	if strings.TrimSpace(item.Text) == "" {
+		return Item{}, false
+	}
+	return item, true
+}
+
+// retainedHarnessMetadata returns a detached copy of the host-only harness
+// metadata carried by a compact item.
+func retainedHarnessMetadata(item Item) (any, bool) {
+	if item.Data == nil {
+		return nil, false
+	}
+	value, ok := item.Data["harness_metadata"]
+	if !ok {
+		return nil, false
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneAnyMap(typed), true
+	case json.RawMessage:
+		return append(json.RawMessage(nil), typed...), true
+	case string:
+		return typed, true
+	default:
+		return typed, true
+	}
+}
+
+// adjustChargeWholeTruncation mirrors the media-inclusive accounting Rust
+// applies after truncating an explicitly retained item.
+func adjustChargeWholeTruncation(item Item, available int, contentBudget int, chargeImages bool, mediaBoundary bool, durations FileAudioDurations) (Item, bool) {
+	itemTokens := max(1, EstimateItemTokensWithAudio(&item, durations))
+	if itemTokens <= available {
+		return item, true
+	}
+	adjustedBudget := contentBudget - (itemTokens - available) - 1
+	if adjustedBudget < 0 {
+		adjustedBudget = 0
+	}
+	adjusted, ok := truncateRetainedGroupSource(item, adjustedBudget, chargeImages, mediaBoundary, durations)
+	if !ok {
+		return Item{}, false
+	}
+	if EstimateItemTokensWithAudio(&adjusted, durations) > available {
+		return Item{}, false
+	}
+	return adjusted, true
+}
+
+// keepRetainedGroup writes every member of the group at its history position.
+func keepRetainedGroup(selected map[int]Item, group retainedHistoryGroup, kept Item) {
+	if group.toolCall != nil {
+		selected[group.sourcePosition-1] = *group.toolCall
+	}
+	selected[group.sourcePosition] = kept
+	if group.attachedNotice != nil {
+		selected[group.sourcePosition+1] = *group.attachedNotice
+	}
+}
+
+// itemsFromPositions returns the selected items in their original history
+// order (Rust `BTreeMap::into_values`).
+func itemsFromPositions(items []Item, selected map[int]Item) []Item {
+	if len(selected) == 0 {
+		return nil
+	}
+	positions := make([]int, 0, len(selected))
+	for position := range selected {
+		if position >= 0 && position < len(items) {
+			positions = append(positions, position)
 		}
-		remaining = 0
 	}
-	for left, right := 0, len(retainedReversed)-1; left < right; left, right = left+1, right-1 {
-		retainedReversed[left], retainedReversed[right] = retainedReversed[right], retainedReversed[left]
+	sort.Ints(positions)
+	out := make([]Item, 0, len(positions))
+	for _, position := range positions {
+		out = append(out, cloneItems([]Item{selected[position]})...)
 	}
-	return cloneItems(retainedReversed)
+	return out
+}
+
+func isMessageItemType(itemType string) bool {
+	switch strings.ToLower(strings.TrimSpace(itemType)) {
+	case "message", "user_message", "assistant_message":
+		return true
+	}
+	return false
 }
 
 // retainedMessageImageCount counts input images in a retained message.
@@ -1130,6 +1431,42 @@ func IsClientAuthoredItem(item Item) bool {
 	return authored
 }
 
+// RetainAcrossWindowsMetadataKey is the harness-metadata field that records an
+// explicit per-item retention decision (Rust #61344
+// `CodexHarnessMetadata::retain_across_windows`). It is separate from the
+// legacy `client_authored` annotation, which is only interpreted for older
+// rollouts.
+const RetainAcrossWindowsMetadataKey = "retain_across_windows"
+
+// RetentionOverride returns the explicit per-item retention decision and
+// whether the item carries one.
+func RetentionOverride(item Item) (bool, bool) {
+	metadata := itemHarnessMetadata(item)
+	if metadata == nil {
+		return false, false
+	}
+	retain, ok := metadata[RetainAcrossWindowsMetadataKey].(bool)
+	return retain, ok
+}
+
+// IsAlwaysRetained reports whether the client explicitly asked the item to
+// survive context-window changes and forks.
+func IsAlwaysRetained(item Item) bool {
+	retain, ok := RetentionOverride(item)
+	return ok && retain
+}
+
+// shouldRetainClientItem mirrors Rust `should_retain_client_item`: an explicit
+// per-item policy wins, otherwise the feature flags govern client developer
+// messages and standalone retained tool outputs.
+func shouldRetainClientItem(item Item, policy retentionPolicy) bool {
+	if retain, ok := RetentionOverride(item); ok {
+		return retain
+	}
+	return (policy.clientDeveloperMessages && IsClientAuthoredDeveloperMessage(item)) ||
+		(policy.clientToolOutputs && IsRetainedToolOutput(item))
+}
+
 func itemHarnessMetadata(item Item) map[string]any {
 	raw, ok := item.Data["harness_metadata"]
 	if !ok {
@@ -1150,15 +1487,20 @@ func itemHarnessMetadata(item Item) map[string]any {
 }
 
 // IsRetainedToolOutput mirrors Rust
-// `compact_retained_tool_outputs::is_retained_tool_output` (#52937,
-// core/src/compact_retained_tool_outputs.rs:7-20): an explicitly client-authored,
-// named `function_call_output` with no matching call. Such an output carries
+// `compact_retained_tool_outputs::is_retained_tool_output` (#52937, #61344):
+// a named `function_call_output` with no matching call whose harness metadata
+// explicitly retains it, or - for rollouts written before `retain_across_windows`
+// existed - carries the legacy `client_authored` marker. Such an output carries
 // instructions of its own instead of being a tool result of this session, so it
 // must survive compaction. `custom_tool_call_output` and unnamed outputs are
 // excluded, like the Rust pattern
 // `ResponseItem::FunctionCallOutput { call_id: None, name: Some(_), .. }`.
 func IsRetainedToolOutput(item Item) bool {
-	if !IsClientAuthoredItem(item) {
+	if retained, explicit := RetentionOverride(item); explicit {
+		if !retained {
+			return false
+		}
+	} else if !IsClientAuthoredItem(item) {
 		return false
 	}
 	if !strings.EqualFold(strings.TrimSpace(item.Type), "function_call_output") {
@@ -2102,27 +2444,53 @@ func lastUserMessages(history []Item, count int) []Item {
 // empty text part instead of its wrapper labels - and ends the selection, so older
 // messages are dropped rather than truncated.
 func retainedUserMessagesForLocalCompaction(items []Item, maxTokens int) []Item {
-	if maxTokens <= 0 {
-		return nil
+	selected := selectLocalUserMessages(items, maxTokens, nil)
+	return itemsFromPositions(items, selected)
+}
+
+// selectLocalUserMessages adds the retained user messages to the already
+// selected positions. Rust #61344 `build_compacted_history_with_limit` skips a
+// message that an explicit retention decision already selected, charging its
+// tokens against the user-message budget instead of inserting it twice.
+func selectLocalUserMessages(items []Item, maxTokens int, selected map[int]Item) map[int]Item {
+	if selected == nil {
+		selected = map[int]Item{}
 	}
-	candidates := make([]Item, 0, len(items))
-	for _, item := range items {
+	if maxTokens <= 0 {
+		return selected
+	}
+	type candidate struct {
+		position int
+		item     Item
+	}
+	candidates := make([]candidate, 0, len(items))
+	for position, item := range items {
 		if item.Role != "user" || item.Kind == "compaction_summary" {
 			continue
 		}
 		if !ShouldKeepCompactedHistoryItem(item) {
 			continue
 		}
-		candidates = append(candidates, item)
+		candidates = append(candidates, candidate{position: position, item: item})
 	}
 
 	remaining := maxTokens
-	selected := make([]Item, 0, len(candidates))
 	for index := len(candidates) - 1; index >= 0; index-- {
-		item := candidates[index]
+		if remaining <= 0 {
+			break
+		}
+		candidate := candidates[index]
+		item := candidate.item
 		tokens := max(1, EstimateTextTokens(ItemText(&item)))
+		if _, already := selected[candidate.position]; already {
+			remaining -= tokens
+			if remaining < 0 {
+				remaining = 0
+			}
+			continue
+		}
 		if tokens <= remaining && contentPartsAreText(item.Content) {
-			selected = append(selected, item)
+			selected[candidate.position] = item
 			remaining -= tokens
 			continue
 		}
@@ -2157,11 +2525,8 @@ func retainedUserMessagesForLocalCompaction(items []Item, maxTokens int) []Item 
 		if tokens > remaining {
 			markRetainedSourcesIncomplete(&fallback)
 		}
-		selected = append(selected, fallback)
+		selected[candidate.position] = fallback
 		break
-	}
-	for left, right := 0, len(selected)-1; left < right; left, right = left+1, right-1 {
-		selected[left], selected[right] = selected[right], selected[left]
 	}
 	return selected
 }
@@ -2449,4 +2814,19 @@ func maxInt(a int, b int) int {
 		return a
 	}
 	return b
+}
+
+// SelectAlwaysRetainedItems selects explicitly retained items newest-first
+// under one shared token budget (Rust #61344 `retained_client_items`). Messages
+// may be truncated to the remaining budget; structured items stay whole and
+// stop the scan so history order is preserved.
+func SelectAlwaysRetainedItems(items []Item, maxTokens int, durations FileAudioDurations) []Item {
+	selected := SelectAlwaysRetainedPositions(items, maxTokens, durations)
+	return itemsFromPositions(items, selected)
+}
+
+// SelectAlwaysRetainedPositions returns the explicitly retained items keyed by
+// their original history position (Rust `retained_client_items`).
+func SelectAlwaysRetainedPositions(items []Item, maxTokens int, durations FileAudioDurations) map[int]Item {
+	return selectRetainedItems(items, IsAlwaysRetained, maxTokens, false, durations)
 }

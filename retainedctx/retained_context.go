@@ -149,7 +149,12 @@ type HarnessMetadata struct {
 	RetainedSource *RetainedSource `json:"retained_source,omitempty"`
 	// ClientAuthored records a developer message supplied by an app-server
 	// client. Rust always serializes this member, so it carries no `omitempty`.
+	// New decisions use RetainAcrossWindows; this member only interprets older
+	// rollouts.
 	ClientAuthored bool `json:"client_authored"`
+	// RetainAcrossWindows is the per-item override of the thread's context-window
+	// retention policy (Rust `CodexHarnessMetadata::retain_across_windows`).
+	RetainAcrossWindows *bool `json:"retain_across_windows,omitempty"`
 	// HistoryTruncationTokenLimit is the originating history budget in tokens,
 	// reused when replaying persisted history. Rust renames it on the wire.
 	HistoryTruncationTokenLimit *uint64 `json:"fallback_token_limit_override,omitempty"`

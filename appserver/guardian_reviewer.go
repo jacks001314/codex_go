@@ -3705,12 +3705,6 @@ func (r *RuntimeRouter) handleThreadInjectItemsRuntime(request *Request) (*Threa
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
-	if err := validateResponseItemImageURLs(params.Items); err != nil {
-		return nil, err
-	}
-	if err := validateResponseItemAudioFiles(params.Items); err != nil {
-		return nil, err
-	}
 	// Ephemeral forks (used by TUI side conversations) live only in the
 	// runtime thread manager. They have no persisted store entry, so injected
 	// boundary items must be appended through the ephemeral runtime path.
@@ -3720,18 +3714,12 @@ func (r *RuntimeRouter) handleThreadInjectItemsRuntime(request *Request) (*Threa
 		r.invalidateGoalTurnLineage(params.ThreadID)
 	}
 	now := runtimeRouterNow(r)
-	items := make([]session.Item, 0, len(params.Items))
-	for i, raw := range params.Items {
-		item, err := sessionItemFromRaw(raw, now, i)
-		if err != nil {
-			return nil, err
-		}
-		if r.services.ThreadRouter != nil &&
-			r.services.ThreadRouter.retainClientDeveloperMessages != nil &&
-			r.services.ThreadRouter.retainClientDeveloperMessages() {
-			markClientAuthoredDeveloperItem(&item)
-		}
-		items = append(items, item)
+	retainClientDeveloperMessages := r.services.ThreadRouter != nil &&
+		r.services.ThreadRouter.retainClientDeveloperMessages != nil &&
+		r.services.ThreadRouter.retainClientDeveloperMessages()
+	parsedItems, items, err := injectedSessionItemsForRequest(&params, now, retainClientDeveloperMessages)
+	if err != nil {
+		return nil, err
 	}
 	r.markThreadMemoryPollutedOnExternalContext(params.ThreadID, items)
 	if _, ok := r.appendEphemeralThreadItems(session.ThreadID(params.ThreadID), items); ok {
@@ -3749,13 +3737,9 @@ func (r *RuntimeRouter) handleThreadInjectItemsRuntime(request *Request) (*Threa
 	if active == nil || strings.TrimSpace(active.ID) == "" || len(params.Items) == 0 {
 		return response, nil
 	}
-	inputItems := make([]any, 0, len(params.Items))
-	for _, raw := range params.Items {
-		var item any
-		if err := json.Unmarshal(raw, &item); err != nil {
-			return nil, jsonRPCInvalidRequest(err.Error())
-		}
-		inputItems = append(inputItems, item)
+	inputItems := make([]any, 0, len(parsedItems))
+	for _, injected := range parsedItems {
+		inputItems = append(inputItems, injected.Payload)
 	}
 	if err := r.requireSteerMailbox().Enqueue(&turn.SteerEnqueueParams{ThreadID: params.ThreadID, TurnID: active.ID, InputItems: inputItems}); err != nil {
 		return nil, err

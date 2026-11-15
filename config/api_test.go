@@ -273,6 +273,24 @@ func TestServiceReadConfigWithLayersAndOrigins(t *testing.T) {
 	}
 }
 
+// Rust #61663: config reads with a relative cwd succeed and reflect external
+// configuration edits made after the service was created.
+func TestServiceReadConfigWithRelativeCWDPicksUpExternalEditsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	service := NewConfigService(home)
+	cwd := "."
+	for _, model := range []string{"before", "after"} {
+		writeConfig(t, home, "model = \""+model+"\"\n")
+		response, err := service.Read(&ConfigReadParams{CWD: &cwd})
+		if err != nil {
+			t.Fatalf("Read(cwd=%q) error = %v", cwd, err)
+		}
+		if got := response.Config["model"]; got != model {
+			t.Fatalf("model = %v, want %s", got, model)
+		}
+	}
+}
+
 func TestServiceReadToolsAndAppsOriginsMatchRustConfigRPC(t *testing.T) {
 	home := t.TempDir()
 	writeConfig(t, home, `
