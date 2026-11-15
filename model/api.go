@@ -348,6 +348,16 @@ func NewModelService(manager ModelsManager) *ModelService {
 	return &ModelService{manager: manager}
 }
 
+// Manager exposes the catalog manager backing the service. Callers that own a
+// thread-scoped catalog comparison use it to reuse the startup manager when a
+// thread resolves to the same provider and catalog (Rust ThreadModelCatalog).
+func (s *ModelService) Manager() ModelsManager {
+	if s == nil || s.manager == nil {
+		return NewStaticModelsManager(BundledModelsResponse())
+	}
+	return s.manager
+}
+
 // RefreshAfterAuthChange forwards Rust #46508's best-effort catalog refresh
 // (Rust ModelsManager::refresh_after_auth_change) to the underlying manager.
 func (s *ModelService) RefreshAfterAuthChange() {

@@ -40,7 +40,24 @@ func (r *RuntimeRouter) predictionForkDisablesMCP(source, fork *session.Record) 
 		return false
 	}
 	modelID := firstNonEmpty(strings.TrimSpace(fork.Metadata.Model), strings.TrimSpace(source.Metadata.Model))
+	overrides := threadRecordConfigOverrides(fork)
+	if provider := strings.TrimSpace(source.Metadata.ModelProvider); provider != "" {
+		if overrides == nil {
+			overrides = map[string]any{}
+		}
+		overrides["model_provider"] = provider
+	}
+	// Rust #61421 resolves the prediction fork's capability through the parent
+	// thread's catalog, not the app server's startup catalog.
 	info := r.modelInfoForRuntime(modelID)
+	if cfg, err := r.effectiveConfigForTurn(&turn.TurnStartParams{
+		ThreadID: string(source.ID),
+		CWD:      source.Metadata.CWD,
+		Model:    modelID,
+		Config:   overrides,
+	}); err == nil && cfg != nil {
+		info = r.modelInfoForRuntimeWithConfig(modelID, cfg)
+	}
 	return info != nil && info.UseResponsesLite
 }
 

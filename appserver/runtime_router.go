@@ -372,6 +372,20 @@ type RuntimeRouter struct {
 	// cache for uploaded audio (Rust #59268 SessionState::file_audio_durations).
 	audioStateMu   sync.Mutex
 	audioDurations map[string]*audiofiles.Durations
+	// threadModelsMu guards startupModelsKey and threadModels, the per-provider
+	// catalogs thread lookups resolve through (Rust #61421
+	// ThreadModelCatalog::for_config). startupModelsKey names the catalog behind
+	// services.Models so matching threads reuse it.
+	threadModelsMu   sync.Mutex
+	startupModelsKey string
+	threadModels     map[string]model.ModelsManager
+	// externalImportOriginatorMu guards the originator of the client that
+	// requested the in-flight external-agent import. The completion runs on a
+	// background goroutine, so the request connection's client info is captured
+	// when the RPC is accepted (Rust #61421 imports under the destination
+	// provider and originator's catalog).
+	externalImportOriginatorMu sync.Mutex
+	externalImportOriginator   string
 	// agentOutcomeWG tracks host outcome handoffs so Close waits for them
 	// before services stop (Rust #59725).
 	agentOutcomeWG sync.WaitGroup
@@ -5328,6 +5342,9 @@ func (r *RuntimeRouter) refreshModelCatalogAfterAuthChange() {
 	invalidated := r.modelCatalogInvalidated
 	r.modelCatalogInvalidated = false
 	r.authRevisionMu.Unlock()
+	if invalidated {
+		r.clearThreadModelCatalogs()
+	}
 	if r.services.Models == nil || r.services.Config == nil {
 		return
 	}
@@ -5351,6 +5368,7 @@ func (r *RuntimeRouter) refreshModelCatalogAfterAuthChange() {
 		r.services.Models.RefreshAfterAuthChange()
 		return
 	}
+	r.clearThreadModelCatalogs()
 	manager, err := buildAccountScopedModelsManagerForCWD(codexHome, read, requirements, r.startupCWD())
 	if err != nil || manager == nil {
 		// Rust keeps the existing cache or bundled fallback when discovery fails.
@@ -5364,6 +5382,7 @@ func (r *RuntimeRouter) refreshModelCatalogAfterAuthChange() {
 	r.servicesMu.Lock()
 	r.services.Models = service
 	r.servicesMu.Unlock()
+	r.rememberStartupModelsCatalogKey(config.NewConfigFromRead(read))
 }
 
 // modelCatalogRefreshPending reports whether an account change happened after the
@@ -15107,6 +15126,11 @@ func (r *RuntimeRouter) handleExternalAgentConfigImport(request *Request) (*conf
 	var params config.ExternalAgentConfigImportParams
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
+	}
+	if info, ok := r.connectionClientInfo(request.normalizedConnectionID()); ok {
+		r.externalImportOriginatorMu.Lock()
+		r.externalImportOriginator = strings.TrimSpace(info.Name)
+		r.externalImportOriginatorMu.Unlock()
 	}
 	service := r.requireConfig()
 	r.applyExternalMemoryImportSettings(service)

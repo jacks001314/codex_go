@@ -384,7 +384,9 @@ func (r *RuntimeRouter) startMemoriesStartupTask(response *ThreadStartResponse, 
 		consolidationModel = strings.TrimSpace(*memoryConfig.ConsolidationModel)
 	}
 	modelInfo := model.ModelInfo{Slug: extractModel}
-	if info := r.requireModels().Info(&model.ModelInfoReadParams{Model: extractModel}); info != nil {
+	if manager := r.modelsManagerForConfig(cfg); manager != nil {
+		modelInfo = model.ModelsManagerForOriginator(manager, record.Metadata.Originator).GetModelInfo(extractModel, modelConfigForAppTurn(cfg))
+	} else if info := r.requireModels().Info(&model.ModelInfoReadParams{Model: extractModel}); info != nil {
 		modelInfo = *info
 	}
 	reasoningSummary := firstNonEmpty(stringConfigValue(cfg, "model_reasoning_summary"), modelInfo.DefaultReasoningSummary)

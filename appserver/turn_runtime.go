@@ -13925,6 +13925,10 @@ func (r *RuntimeRouter) modelInfoForRuntimeWithModelsConfigAndOriginator(modelID
 		info := model.NewStaticModelsManager(*catalog).GetModelInfo(modelID, modelConfig)
 		return &info
 	}
+	if manager := r.modelsManagerForConfig(cfg); manager != nil {
+		info := model.ModelsManagerForOriginator(manager, originator).GetModelInfo(modelID, modelConfig)
+		return &info
+	}
 	return r.requireModels().Info(&model.ModelInfoReadParams{Model: modelID, Config: modelConfig, Originator: originator})
 }
 
@@ -13942,6 +13946,10 @@ func (r *RuntimeRouter) catalogModelForRuntimeWithModelsConfigAndOriginator(mode
 	}
 	if catalog := model.ModelsCatalogFromConfigValues(values); catalog != nil {
 		resolved := model.NewStaticModelsManager(*catalog).GetCatalogModel(modelID, modelConfig)
+		return &resolved
+	}
+	if manager := r.modelsManagerForConfig(cfg); manager != nil {
+		resolved := model.ModelsManagerForOriginator(manager, originator).GetCatalogModel(modelID, modelConfig)
 		return &resolved
 	}
 	return r.requireModels().CatalogInfo(&model.ModelInfoReadParams{Model: modelID, Config: modelConfig, Originator: originator})

@@ -294,6 +294,7 @@ func (r *RuntimeRouter) captureStartupModelProviderRoute() {
 	}
 	r.startupModelProviderRoute = threadModelProviderRoute{providerID: providerID, provider: *provider}
 	r.startupModelProviderRouteSet = true
+	r.rememberStartupModelsCatalogKey(cfg)
 }
 
 // checkStartupModelProvider rejects catalog access when the retained startup

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"codex_go/config"
+	"codex_go/model"
 	"codex_go/rollout"
 	"codex_go/session"
 )
@@ -133,6 +134,7 @@ func (r *RuntimeRouter) importExternalAgentSession(migration config.SessionMigra
 	if strings.TrimSpace(record.Metadata.ModelProvider) == "" {
 		record.Metadata.ModelProvider = "openai"
 	}
+	r.applyExternalAgentImportDestination(record)
 	appendExternalAgentImportMarker(record)
 	if err := r.services.ThreadRouter.store.Create(record); err != nil {
 		return fail("session_persist", "session_persist_failed", err)
@@ -146,6 +148,54 @@ func (r *RuntimeRouter) importExternalAgentSession(migration config.SessionMigra
 		ItemType: config.MigrationSessions, Source: externalAgentStringPointer(path), Target: &target,
 		Title: externalAgentStringPointer(record.Title),
 	}, nil, true
+}
+
+// applyExternalAgentImportDestination mirrors Rust #61421: an imported session
+// belongs to the destination provider and resolves its model instructions
+// through the destination provider's originator catalog. A pinned model skips
+// discovery, but the catalog is loaded offline-or-online only when nothing has
+// been refreshed yet.
+func (r *RuntimeRouter) applyExternalAgentImportDestination(record *session.Record) {
+	if r == nil || record == nil || r.services.Config == nil {
+		return
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return
+	}
+	cfg := config.NewConfigFromRead(read)
+	providerID := configuredModelProviderID(cfg)
+	if providerID != "" {
+		record.Metadata.ModelProvider = providerID
+	}
+	r.externalImportOriginatorMu.Lock()
+	originator := strings.TrimSpace(r.externalImportOriginator)
+	r.externalImportOriginatorMu.Unlock()
+	if originator != "" {
+		record.Metadata.Originator = originator
+	}
+	manager := r.modelsManagerForConfig(cfg)
+	if manager == nil {
+		return
+	}
+	manager = model.ModelsManagerForOriginator(manager, originator)
+	manager.RawModelCatalog(model.RefreshOnlineIfUncached)
+	modelID := firstNonEmpty(strings.TrimSpace(record.Metadata.Model), strings.TrimSpace(stringConfigValue(cfg, "model")))
+	if modelID == "" {
+		modelID = manager.GetDefaultModel("", false, model.RefreshInMemory)
+	}
+	info := manager.GetModelInfo(modelID, modelConfigForAppTurn(cfg))
+	if slug := strings.TrimSpace(info.Slug); slug != "" {
+		modelID = slug
+	}
+	record.Metadata.Model = modelID
+	if strings.TrimSpace(record.Metadata.BaseInstructions) != "" {
+		return
+	}
+	if text := strings.TrimSpace(info.ModelInstructions(appPersonalityForTurn(cfg, nil))); text != "" {
+		record.Metadata.BaseInstructions = text
+		record.Metadata.BaseInstructionsProvenance = &session.BaseInstructionsProvenance{Type: "model", Model: modelID}
+	}
 }
 
 func (r *RuntimeRouter) appendExistingExternalAgentSession(sourcePath string, sourceHash string, mapping config.ExternalSessionImportMapping, source *session.Record) bool {
