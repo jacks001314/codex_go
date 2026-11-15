@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"codex_go/agent"
 	"codex_go/appserver"
@@ -40,6 +41,7 @@ import (
 	"codex_go/memories"
 	"codex_go/model"
 	codexnetwork "codex_go/network"
+	"codex_go/plugin"
 	"codex_go/rollout"
 	"codex_go/sandbox"
 	"codex_go/sandbox/integrity"
@@ -2140,6 +2142,11 @@ func appServerRuntimeOptionsFromCLI(opts cli.AppServerOptions, loadedConfig *con
 		RemoteControlStartupMode: mode,
 		AnalyticsDefaultEnabled:  opts.AnalyticsDefaultEnabled,
 	}
+	launchCwds, err := appServerMCPLaunchCwds(opts)
+	if err != nil {
+		return nil, err
+	}
+	options.MCPLaunchCwds = launchCwds
 	if loadedConfig != nil {
 		options.CodeModeHostEnabled = features.Enabled(loadedConfig.FeatureSettings(), "code_mode_host")
 	}
@@ -2165,6 +2172,74 @@ func appServerRuntimeOptionsFromCLI(opts cli.AppServerOptions, loadedConfig *con
 		options.CloudSkillProvider = provider
 	}
 	return options, nil
+}
+
+// appServerMCPLaunchCwds validates the hidden host-supplied launch directories
+// before they reach Core. They are process-local and never persisted (Rust
+// #61444).
+func appServerMCPLaunchCwds(opts cli.AppServerOptions) (*config.MCPLaunchCwds, error) {
+	if len(opts.PluginMCPLaunchCwds) == 0 && len(opts.MCPLaunchCwds) == 0 {
+		return nil, nil
+	}
+	out := &config.MCPLaunchCwds{
+		Plugins:    map[string]map[string]string{},
+		Configured: map[string]config.MCPLaunchCwd{},
+	}
+	for _, entry := range opts.PluginMCPLaunchCwds {
+		pluginID := entry.PluginID
+		if _, err := plugin.ParsePluginId(pluginID); err != nil {
+			return nil, err
+		}
+		server, err := launchServerName(entry.Server)
+		if err != nil {
+			return nil, err
+		}
+		directory, err := absoluteLaunchDirectory(entry.Directory)
+		if err != nil {
+			return nil, err
+		}
+		servers := out.Plugins[pluginID]
+		if servers == nil {
+			servers = map[string]string{}
+			out.Plugins[pluginID] = servers
+		}
+		servers[server] = directory
+	}
+	for _, entry := range opts.MCPLaunchCwds {
+		server, err := launchServerName(entry.Server)
+		if err != nil {
+			return nil, err
+		}
+		// Rust validates the executable as an absolute path but compares the
+		// configured command against the caller's original string, so the
+		// executable is deliberately kept verbatim.
+		if !utf8.ValidString(entry.Executable) {
+			return nil, errors.New("executable must be UTF-8")
+		}
+		if !filepath.IsAbs(entry.Executable) {
+			return nil, fmt.Errorf("launch executable must be an absolute path: %q", entry.Executable)
+		}
+		directory, err := absoluteLaunchDirectory(entry.Directory)
+		if err != nil {
+			return nil, err
+		}
+		out.Configured[server] = config.MCPLaunchCwd{Executable: entry.Executable, Directory: directory}
+	}
+	return out, nil
+}
+
+func launchServerName(value string) (string, error) {
+	if value == "" || !utf8.ValidString(value) {
+		return "", errors.New("server name must be nonempty UTF-8")
+	}
+	return value, nil
+}
+
+func absoluteLaunchDirectory(value string) (string, error) {
+	if value == "" || !utf8.ValidString(value) || !filepath.IsAbs(value) {
+		return "", fmt.Errorf("launch directory must be an absolute path: %q", value)
+	}
+	return filepath.Clean(value), nil
 }
 
 func webSocketAuthSettingsFromCLI(opts cli.AppServerOptions) *appserver.WebSocketAuthSettings {

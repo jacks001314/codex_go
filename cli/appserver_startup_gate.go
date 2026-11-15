@@ -16,6 +16,8 @@ type appServerOption struct {
 	token string
 	// takesValue reports whether clap consumes a separate value token.
 	takesValue bool
+	// valueCount is clap's num_args for a value-taking option. Zero means one.
+	valueCount int
 	// hidden reports whether clap declares the argument with hide(true), which
 	// keeps it out of every usage echo.
 	hidden bool
@@ -52,6 +54,8 @@ var appServerOptions = []appServerOption{
 	{name: "ws-audience", token: "--ws-audience <AUDIENCE>", takesValue: true, group: "ws"},
 	{name: "ws-max-clock-skew-seconds", token: "--ws-max-clock-skew-seconds <SECONDS>", takesValue: true, group: "ws"},
 	{name: "remote-control", token: "--remote-control", hidden: true},
+	{name: "plugin-mcp-launch-cwd", token: "--plugin-mcp-launch-cwd <PLUGIN_ID> <SERVER> <DIRECTORY>", takesValue: true, valueCount: 3, hidden: true},
+	{name: "mcp-launch-cwd", token: "--mcp-launch-cwd <SERVER> <EXECUTABLE> <DIRECTORY>", takesValue: true, valueCount: 3, hidden: true},
 }
 
 // appServerConflicts mirrors the symmetric conflicts_with_all relations clap
@@ -141,7 +145,7 @@ func appServerScan(args []string) []appServerOptionHit {
 		hit := appServerOptionHit{opt: opt, flagAt: index, valueAt: -1}
 		if opt.takesValue && !strings.Contains(arg, "=") && index+1 < len(args) {
 			hit.valueAt = index + 1
-			index++
+			index += appServerOptionValueCount(opt)
 		}
 		hits = append(hits, hit)
 	}
@@ -161,10 +165,17 @@ func appServerSubcommandIndex(args []string) int {
 			return index
 		}
 		if known, found := appServerLookupArg(arg); found && known.takesValue && !strings.Contains(arg, "=") {
-			index++
+			index += appServerOptionValueCount(known)
 		}
 	}
 	return -1
+}
+
+func appServerOptionValueCount(opt appServerOption) int {
+	if opt.valueCount > 0 {
+		return opt.valueCount
+	}
+	return 1
 }
 
 // appServerPresentOptions replays the arguments clap marks present after a

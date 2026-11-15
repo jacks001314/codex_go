@@ -598,7 +598,27 @@ type AppServerOptions struct {
 	// (Rust #55631). It is loaded during app-server startup, so a missing or
 	// malformed file fails the process.
 	CloudSkillsSnapshot string
+	// PluginMCPLaunchCwds carries hidden --plugin-mcp-launch-cwd triples for
+	// shared stdio MCP servers (Rust #61444).
+	PluginMCPLaunchCwds []PluginMCPLaunchCwd
+	// MCPLaunchCwds carries hidden --mcp-launch-cwd triples for configured
+	// stdio MCP servers (Rust #61444).
+	MCPLaunchCwds []ConfiguredMCPLaunchCwd
 	WebSocketAuthOptions
+}
+
+// PluginMCPLaunchCwd is one --plugin-mcp-launch-cwd triple.
+type PluginMCPLaunchCwd struct {
+	PluginID  string
+	Server    string
+	Directory string
+}
+
+// ConfiguredMCPLaunchCwd is one --mcp-launch-cwd triple.
+type ConfiguredMCPLaunchCwd struct {
+	Server     string
+	Executable string
+	Directory  string
 }
 
 type AppServerDaemonOptions struct {
@@ -4221,6 +4241,50 @@ func parseAppServer(args []string, appServer *AppServerOptions) error {
 				return valueRequiredError("--cloud-skills-snapshot")
 			}
 			appServer.CloudSkillsSnapshot = value
+		case arg == "--plugin-mcp-launch-cwd":
+			values, next, err := requireFixedValues(args, i, arg, 3)
+			if err != nil {
+				return err
+			}
+			appServer.PluginMCPLaunchCwds = append(appServer.PluginMCPLaunchCwds, PluginMCPLaunchCwd{
+				PluginID:  values[0],
+				Server:    values[1],
+				Directory: values[2],
+			})
+			i = next
+		case strings.HasPrefix(arg, "--plugin-mcp-launch-cwd="):
+			values, next, err := requireFixedValuesWithFirst(args, i, "--plugin-mcp-launch-cwd", strings.TrimPrefix(arg, "--plugin-mcp-launch-cwd="), 2)
+			if err != nil {
+				return err
+			}
+			appServer.PluginMCPLaunchCwds = append(appServer.PluginMCPLaunchCwds, PluginMCPLaunchCwd{
+				PluginID:  values[0],
+				Server:    values[1],
+				Directory: values[2],
+			})
+			i = next
+		case arg == "--mcp-launch-cwd":
+			values, next, err := requireFixedValues(args, i, arg, 3)
+			if err != nil {
+				return err
+			}
+			appServer.MCPLaunchCwds = append(appServer.MCPLaunchCwds, ConfiguredMCPLaunchCwd{
+				Server:     values[0],
+				Executable: values[1],
+				Directory:  values[2],
+			})
+			i = next
+		case strings.HasPrefix(arg, "--mcp-launch-cwd="):
+			values, next, err := requireFixedValuesWithFirst(args, i, "--mcp-launch-cwd", strings.TrimPrefix(arg, "--mcp-launch-cwd="), 2)
+			if err != nil {
+				return err
+			}
+			appServer.MCPLaunchCwds = append(appServer.MCPLaunchCwds, ConfiguredMCPLaunchCwd{
+				Server:     values[0],
+				Executable: values[1],
+				Directory:  values[2],
+			})
+			i = next
 		case strings.HasPrefix(arg, "--ws-"):
 			handled, next, err := applyWebSocketAuthFlag(args, i, arg, &appServer.WebSocketAuthOptions)
 			if !handled {
@@ -6075,6 +6139,35 @@ func requireValue(args []string, i int, flag string) (string, int, error) {
 		return "", i, pendingValueRequiredError(flag, args, i)
 	}
 	return args[i+1], i + 1, nil
+}
+
+// requireFixedValues consumes clap's `num_args = N` value list starting after
+// the flag at index i.
+func requireFixedValues(args []string, i int, flag string, count int) ([]string, int, error) {
+	values := make([]string, 0, count)
+	next := i
+	for len(values) < count {
+		value, consumed, err := requireValue(args, next, flag)
+		if err != nil {
+			return nil, i, err
+		}
+		next = consumed
+		values = append(values, value)
+	}
+	return values, next, nil
+}
+
+// requireFixedValuesWithFirst consumes the remaining values of a fixed-arity
+// option whose first value used the `--flag=value` spelling.
+func requireFixedValuesWithFirst(args []string, i int, flag string, first string, remaining int) ([]string, int, error) {
+	if first == "" {
+		return nil, i, valueRequiredError(flag)
+	}
+	rest, next, err := requireFixedValues(args, i, flag, remaining)
+	if err != nil {
+		return nil, i, err
+	}
+	return append([]string{first}, rest...), next, nil
 }
 
 // missingImageValueError mirrors clap's diagnostic for `--image`, whose

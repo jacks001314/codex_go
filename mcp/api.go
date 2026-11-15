@@ -717,6 +717,10 @@ type MCPToolCallParams struct {
 	// the server advertised `codex/sandbox-state` or its deprecated `-meta`
 	// alias (#53709).
 	SupportsSandboxStateMeta bool `json:"-"`
+	// Direct marks a host-side `mcpServer/tool/call` request. Direct callers
+	// cannot supply sandbox, launcher, or entitlement authority; the runtime
+	// resolves those values itself (Rust #61444).
+	Direct bool `json:"-"`
 }
 
 func (p MCPToolCallParams) MarshalJSON() ([]byte, error) {
@@ -3405,6 +3409,15 @@ func (s *MCPService) prepareToolCallSandboxState(server string, environmentID st
 // runtime config; callers that already set a field keep their value.
 func (s *MCPService) sandboxStateToolCallParams(server string, environmentID string, localStdio bool, params *MCPToolCallParams, httpNegotiated bool, stdioNegotiated bool) *MCPToolCallParams {
 	clone := *params
+	if clone.Direct {
+		clone.Meta = stripDirectCallAuthorityMeta(clone.Meta)
+		clone.PermissionProfile = ""
+		clone.SandboxCWD = ""
+		clone.CodexLinuxSandboxExe = ""
+		clone.UseLegacyLandlock = false
+		clone.UseMXC = false
+		clone.SandboxLauncherExecutable = ""
+	}
 	clone.SupportsSandboxStateMeta = params.SupportsSandboxStateMeta || httpNegotiated || stdioNegotiated
 	if !clone.SupportsSandboxStateMeta {
 		return &clone
@@ -3433,6 +3446,22 @@ func (s *MCPService) sandboxStateToolCallParams(server string, environmentID str
 		clone.SandboxLauncherExecutable = sandboxLauncherExecutable(s.codexSelfExe, clone.ServerEnvironmentID, localStdio)
 	}
 	return &clone
+}
+
+// stripDirectCallAuthorityMeta removes host-owned authority keys from a direct
+// caller's tool-call metadata. The runtime re-attaches the real values after
+// negotiation, so forged metadata can never reach the server (Rust #61444).
+func stripDirectCallAuthorityMeta(meta any) any {
+	current, ok := meta.(map[string]any)
+	if !ok {
+		return meta
+	}
+	out := cloneAnyMap(current)
+	delete(out, entitlementContextKey)
+	delete(out, mcpSandboxStateCapability)
+	delete(out, mcpSandboxStateMetaCapability)
+	delete(out, mcpSandboxLauncherMetaKey)
+	return out
 }
 
 // permissionProfileJSONForServer serializes the authority published for the

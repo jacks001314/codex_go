@@ -331,6 +331,9 @@ type RuntimeRouterOptions struct {
 	// The app server no longer asks the client for the time, so an external
 	// clock without a provider fails thread startup.
 	TimeProvider runtimeutil.TimeProvider
+	// MCPLaunchCwds carries process-local launch directories for shared stdio
+	// MCP servers supplied on the app-server command line (Rust #61444).
+	MCPLaunchCwds *config.MCPLaunchCwds
 }
 
 type RuntimeRouter struct {
@@ -359,6 +362,9 @@ type RuntimeRouter struct {
 	// timeProviderMu guards timeProvider, the host-supplied external clock.
 	timeProviderMu sync.RWMutex
 	timeProvider   runtimeutil.TimeProvider
+	// mcpLaunchCwds holds the host's process-local stdio launch directories
+	// (Rust #61444). The app server never writes them to shared configuration.
+	mcpLaunchCwds *config.MCPLaunchCwds
 	// audioStateMu guards audioDurations, the runtime-only measured-duration
 	// cache for uploaded audio (Rust #59268 SessionState::file_audio_durations).
 	audioStateMu   sync.Mutex
@@ -2194,6 +2200,7 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 		router.agentMCPMetadataDefault = options.AgentMCPMetadataRecipient
 		router.mcpToolRequestMetaDefault = options.MCPToolRequestMetaHook
 		router.timeProvider = options.TimeProvider
+		router.mcpLaunchCwds = options.MCPLaunchCwds.Clone()
 	}
 	router.codexHomeScanCancel = func() { atomic.StoreInt32(&codexHomeScanCanceled, 1) }
 	router.configureEnvironmentHTTPPolicy()
@@ -14034,6 +14041,10 @@ func (r *RuntimeRouter) runtimeMCPConfigForThread(contributionContext mcp.MCPSer
 	}()
 	threadID := contributionContext.ThreadID()
 	base := mcp.RuntimeConfigFromValuesWithAuthAndRequirements(values, codexHome, runtimeAuth, requirements)
+	useLaunchCwds := mcpSharedReplCwdsEnabled(values)
+	if useLaunchCwds && r != nil {
+		applyConfiguredMCPLaunchCwds(base, r.mcpLaunchCwds)
+	}
 	if selections := contributionContext.SelectedEnvironments(); selections != nil {
 		base.SelectedEnvironments = selections
 	}
@@ -14098,6 +14109,9 @@ func (r *RuntimeRouter) runtimeMCPConfigForThread(contributionContext mcp.MCPSer
 		if server.Command != "" && server.CWD == "" {
 			server.CWD = contribution.PluginRoot
 		}
+		if useLaunchCwds && r != nil {
+			applyPluginMCPLaunchCwd(server, contribution, r.mcpLaunchCwds)
+		}
 		overlays = append(overlays, mcp.ConfigOverlay{
 			Name:              contribution.Name,
 			Config:            *server,
@@ -14115,6 +14129,49 @@ func (r *RuntimeRouter) runtimeMCPConfigForThread(contributionContext mcp.MCPSer
 	merged := mcp.NewManager(nil).RuntimeConfig(*base, overlays)
 	r.attachEnterpriseMCPAuthorization(merged, codexHome, runtimeAuth, r.currentCachedAuthSnapshot())
 	return merged
+}
+
+// mcpSharedReplCwdsEnabled mirrors Rust Config::mcp_server_catalog's gate: the
+// process-local launch directories apply only while both connection sharing and
+// the shared-REPL cwd feature are enabled (Rust #61444).
+func mcpSharedReplCwdsEnabled(values map[string]any) bool {
+	raw, _ := values["features"].(map[string]any)
+	settings, _ := features.ResolveSettings(raw)
+	return features.Enabled(settings, "mcp_shared_repl_cwd") && features.Enabled(settings, "mcp_connection_sharing")
+}
+
+// applyConfiguredMCPLaunchCwds points matching configured stdio servers at the
+// host's process-local launch directory, preserving any explicit cwd (Rust
+// #61444).
+func applyConfiguredMCPLaunchCwds(runtime *mcp.RuntimeConfig, launchCwds *config.MCPLaunchCwds) {
+	if runtime == nil || launchCwds == nil {
+		return
+	}
+	for name, registration := range runtime.Servers {
+		server := registration.Config
+		if !server.IsLocalEnvironment() || strings.TrimSpace(server.Command) == "" || strings.TrimSpace(server.CWD) != "" {
+			continue
+		}
+		directory, ok := launchCwds.ConfiguredDirectory(name, server.Command)
+		if !ok {
+			continue
+		}
+		server.CWD = directory
+		registration.Config = server
+		runtime.Servers[name] = registration
+	}
+}
+
+// applyPluginMCPLaunchCwd points an eligible plugin stdio server at the host's
+// process-local launch directory. Agent Plugins keep their declared cwd (Rust
+// #61444).
+func applyPluginMCPLaunchCwd(server *mcp.ServerConfig, contribution plugin.MCPServerContribution, launchCwds *config.MCPLaunchCwds) {
+	if server == nil || contribution.AgentPlugin || !server.IsLocalEnvironment() || strings.TrimSpace(server.Command) == "" {
+		return
+	}
+	if directory, ok := launchCwds.PluginDirectory(contribution.PluginID, contribution.Name); ok {
+		server.CWD = directory
+	}
 }
 
 func (r *RuntimeRouter) attachEnterpriseMCPAuthorization(runtime *mcp.RuntimeConfig, codexHome string, runtimeAuth *mcp.RuntimeAuth, expected *auth.AuthDotJSON) {
@@ -14357,6 +14414,9 @@ func (r *RuntimeRouter) handleMCPServerToolCall(request *Request) (*mcp.MCPToolC
 	if err := r.ensureDirectInputAllowed(request, params.ThreadID); err != nil {
 		return nil, err
 	}
+	// Rust #61444: a direct caller cannot supply host-owned sandbox, launcher,
+	// or entitlement authority; the MCP runtime resolves it from the thread.
+	params.Direct = true
 	params.Context = requestTraceContext(request)
 	return r.mcpServiceForThread(params.ThreadID, nil).CallTool(&params)
 }

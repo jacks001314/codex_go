@@ -15,6 +15,10 @@ type MCPServerContribution struct {
 	PluginRoot        string
 	Config            map[string]any
 	Order             int
+	// AgentPlugin reports whether the contribution came from an Agent Plugins
+	// manifest. Host-supplied shared launch directories skip these plugins
+	// (Rust #61444).
+	AgentPlugin bool
 }
 
 func (s *PluginService) EnabledMCPServerContributions() []MCPServerContribution {
@@ -48,6 +52,7 @@ func (s *PluginService) EnabledMCPServerContributions() []MCPServerContribution 
 				PluginRoot:        root,
 				Config:            configs[name],
 				Order:             order,
+				AgentPlugin:       pluginRootUsesAgentPluginManifest(root),
 			})
 		}
 	}

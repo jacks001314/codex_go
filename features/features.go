@@ -195,6 +195,9 @@ var Registry = []Spec{
 	// initializing eligible local stdio servers, and share those connections
 	// across chats when they negotiate MCP 2026-07-28 (#57211).
 	{Key: "mcp_connection_sharing", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs #61444): use the app server's
+	// process-local launch directories for shared REPL stdio servers.
+	{Key: "mcp_shared_repl_cwd", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs #60039): defer optional stdio server
 	// startup in regular chats when a warm tool catalog already covers them.
 	{Key: "mcp_lazy_stdio_startup", Stage: StageUnderDevelopment, DefaultEnabled: false},
