@@ -32,23 +32,16 @@ func materializeOversizedGoalObjective(fs appServerGoalFS, codexHome, objective 
 	return materializeGoalDraft(fs, codexHome, codextui.GoalDraft{Objective: objective})
 }
 
-// materializeGoalDraft writes pasted text, local images, remote image URLs, and
-// oversized objectives into $CODEX_HOME/attachments/<uuid>/ app-server files
-// and rewrites the objective with file references, mirroring Rust
-// goal_files::materialize_goal_draft. On failure the output directory is
-// removed.
+// materializeGoalDraft expands pasted text inline, then writes local images,
+// remote image URLs, and oversized objectives into
+// $CODEX_HOME/attachments/<uuid>/ app-server files and rewrites the objective
+// with file references, mirroring Rust goal_files::materialize_goal_draft. On
+// failure the output directory is removed.
 func materializeGoalDraft(fs appServerGoalFS, codexHome string, draft codextui.GoalDraft) (string, error) {
-	objective := draft.Objective
+	objective, _ := expandPendingPastes(draft.Objective, draft.PendingPastes)
 	if strings.TrimSpace(objective) == "" {
 		return "", errors.New("Goal objective must not be empty.")
 	}
-	if len(draft.PendingPastes) > 0 {
-		expanded, _ := expandPendingPastes(objective, draft.PendingPastes)
-		if strings.TrimSpace(expanded) == "" {
-			return "", errors.New("Goal objective must not be empty.")
-		}
-	}
-	objective = strings.TrimSpace(objective)
 
 	var outputDir string
 	cleanup := func() {
@@ -73,33 +66,6 @@ func materializeGoalDraft(fs appServerGoalFS, codexHome string, draft codextui.G
 			return err
 		}
 		return nil
-	}
-
-	pasteCount := 0
-	for _, paste := range draft.PendingPastes {
-		placeholder := paste[0]
-		if placeholder == "" || !strings.Contains(objective, placeholder) {
-			continue
-		}
-		if strings.TrimSpace(paste[1]) == "" {
-			continue
-		}
-		pasteCount++
-		if err := ensureOutputDir(); err != nil {
-			cleanup()
-			return "", err
-		}
-		path := filepath.Join(outputDir, fmt.Sprintf("pasted-text-%d.txt", pasteCount))
-		if err := writeFile(path, []byte(paste[1])); err != nil {
-			cleanup()
-			return "", err
-		}
-		objective = strings.Replace(
-			objective,
-			placeholder,
-			fmt.Sprintf("pasted text file: %s. Read this file before continuing.", path),
-			1,
-		)
 	}
 
 	var imageLines []string
@@ -133,6 +99,7 @@ func materializeGoalDraft(fs appServerGoalFS, codexHome string, draft codextui.G
 			)
 		}
 	}
+	objective = strings.TrimSpace(objective)
 	appendGoalSection(&objective, "Referenced image files:", imageLines)
 
 	var urlLines []string

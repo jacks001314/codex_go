@@ -13313,6 +13313,7 @@ func (r *RuntimeRouter) handlePluginList(request *Request) (*plugin.PluginListRe
 	if len(cwds) == 0 {
 		cwds = []string{""}
 	}
+	selection := plugin.NewMarketplaceSelection()
 	for _, cwd := range cwds {
 		if r.services.Config == nil {
 			continue
@@ -13341,7 +13342,7 @@ func (r *RuntimeRouter) handlePluginList(request *Request) (*plugin.PluginListRe
 			}
 			r.requirePlugins().StartConfiguredPluginCacheRefresh(read.Config, params.ForceRefetch, reload, r.effectivePluginsChanged)
 		}
-		if entries, loadErrors := r.services.Plugins.ResolveConfigMarketplaces(read.Config); len(entries) > 0 || len(loadErrors) > 0 {
+		if entries, loadErrors := r.services.Plugins.ResolveConfigMarketplacesWithSelection(read.Config, selection); len(entries) > 0 || len(loadErrors) > 0 {
 			response.Marketplaces = mergePluginMarketplaceEntries(response.Marketplaces, entries)
 			response.MarketplaceLoadErrors = append(response.MarketplaceLoadErrors, loadErrors...)
 		}
@@ -13354,31 +13355,66 @@ func (r *RuntimeRouter) handlePluginList(request *Request) (*plugin.PluginListRe
 	return response, nil
 }
 
-// mergePluginMarketplaceEntries concatenates config-declared marketplaces onto
-// the primary (installed) marketplace entries, keeping the first occurrence of a
-// name so the installed/cached entry wins.
+// mergePluginMarketplaceEntries folds config-declared marketplaces into the
+// primary (installed) entries. The installed/cached entry wins for a duplicate
+// name, and later project scopes contribute only plugin IDs the first source
+// did not claim.
 func mergePluginMarketplaceEntries(primary, extra []plugin.PluginMarketplaceEntry) []plugin.PluginMarketplaceEntry {
 	if len(extra) == 0 {
 		return primary
 	}
-	seen := make(map[string]bool, len(primary)+len(extra))
-	merged := make([]plugin.PluginMarketplaceEntry, 0, len(primary)+len(extra))
-	for _, entry := range primary {
-		merged = append(merged, entry)
+	merged := append([]plugin.PluginMarketplaceEntry(nil), primary...)
+	indexByName := make(map[string]int, len(primary)+len(extra))
+	seenIDs := make([]map[string]bool, len(merged))
+	for index, entry := range primary {
 		if entry.Name != "" {
-			seen[entry.Name] = true
+			indexByName[entry.Name] = index
 		}
+		seenIDs[index] = pluginIDsForMarketplaceEntry(entry)
 	}
 	for _, entry := range extra {
-		if entry.Name != "" && seen[entry.Name] {
+		if entry.Name == "" {
+			merged = append(merged, entry)
+			seenIDs = append(seenIDs, pluginIDsForMarketplaceEntry(entry))
+			continue
+		}
+		if index, ok := indexByName[entry.Name]; ok {
+			if marketplaceEntryPathsEqual(merged[index].Path, entry.Path) {
+				continue
+			}
+			for _, summary := range entry.Plugins {
+				if summary.ID != "" && seenIDs[index][summary.ID] {
+					continue
+				}
+				merged[index].Plugins = append(merged[index].Plugins, summary)
+				if summary.ID != "" {
+					seenIDs[index][summary.ID] = true
+				}
+			}
 			continue
 		}
 		merged = append(merged, entry)
-		if entry.Name != "" {
-			seen[entry.Name] = true
-		}
+		indexByName[entry.Name] = len(merged) - 1
+		seenIDs = append(seenIDs, pluginIDsForMarketplaceEntry(entry))
 	}
 	return merged
+}
+
+func marketplaceEntryPathsEqual(left *string, right *string) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return strings.TrimSpace(*left) == strings.TrimSpace(*right)
+}
+
+func pluginIDsForMarketplaceEntry(entry plugin.PluginMarketplaceEntry) map[string]bool {
+	ids := make(map[string]bool, len(entry.Plugins))
+	for _, summary := range entry.Plugins {
+		if summary.ID != "" {
+			ids[summary.ID] = true
+		}
+	}
+	return ids
 }
 
 // pluginCatalogConfigDisabled mirrors Rust PluginRequestProcessor::load_catalog_config
@@ -13424,6 +13460,7 @@ func (r *RuntimeRouter) handlePluginInstalled(request *Request) (*plugin.PluginI
 	response := r.requirePlugins().Installed(&params)
 	// Rust #41208: honor per-repository plugin configuration by surfacing
 	// marketplaces declared in the effective config stack for every requested cwd.
+	selection := plugin.NewMarketplaceSelection()
 	for _, cwd := range cleanStringSlice(params.CWDs) {
 		if r.services.Config == nil {
 			break
@@ -13436,7 +13473,7 @@ func (r *RuntimeRouter) handlePluginInstalled(request *Request) (*plugin.PluginI
 		if err != nil || read == nil || pluginCatalogDisabledFromValues(read.Config) {
 			continue
 		}
-		if entries, loadErrors := r.services.Plugins.ResolveConfigMarketplaces(read.Config); len(entries) > 0 || len(loadErrors) > 0 {
+		if entries, loadErrors := r.services.Plugins.ResolveConfigMarketplacesWithSelection(read.Config, selection); len(entries) > 0 || len(loadErrors) > 0 {
 			response.Marketplaces = mergePluginMarketplaceEntries(response.Marketplaces, entries)
 			response.MarketplaceLoadErrors = append(response.MarketplaceLoadErrors, loadErrors...)
 		}

@@ -24,11 +24,19 @@ type marketplaceManifestFile struct {
 type marketplaceManifestPlugin struct {
 	Name              string                  `json:"name"`
 	Source            marketplacePluginSource `json:"source"`
+	Policy            marketplacePluginPolicy `json:"policy"`
 	Interface         *PluginInterface        `json:"interface"`
 	Keywords          []string                `json:"keywords"`
 	Apps              []AppSummary            `json:"apps"`
 	AppTemplates      []AppTemplateSummary    `json:"appTemplates"`
 	AppTemplatesSnake []AppTemplateSummary    `json:"app_templates"`
+}
+
+// marketplacePluginPolicy mirrors Rust MarketplacePluginPolicy. Products is
+// nil when the entry has no restriction, non-nil and empty when the entry is
+// hidden from every product, and otherwise the allowed products.
+type marketplacePluginPolicy struct {
+	Products *[]string `json:"products"`
 }
 
 type marketplacePluginSource struct {
@@ -81,6 +89,248 @@ func loadMarketplacePlugins(marketplaces []Marketplace, cache *manifestCache) ([
 		return errors[i].MarketplacePath < errors[j].MarketplacePath
 	})
 	return details, errors
+}
+
+// MarketplaceSelection tracks marketplace paths and plugin IDs already claimed
+// by earlier project scopes in one request (Rust MarketplaceSelection, #61686).
+// A nil selection keeps the single-scope behavior: plugin IDs are still
+// deduplicated within the listing, but repeated paths are not suppressed.
+type MarketplaceSelection struct {
+	paths     map[string]bool
+	pluginIDs map[string]bool
+}
+
+// NewMarketplaceSelection creates the request-wide selection shared across
+// project scopes.
+func NewMarketplaceSelection() *MarketplaceSelection {
+	return &MarketplaceSelection{
+		paths:     map[string]bool{},
+		pluginIDs: map[string]bool{},
+	}
+}
+
+// claimPath reports whether this scope may list the marketplace manifest at
+// path, preserving first-scope precedence.
+func (s *MarketplaceSelection) claimPath(path string) bool {
+	if s == nil {
+		return true
+	}
+	key := cleanPluginPathForCompare(path)
+	if key == "" {
+		key = path
+	}
+	if s.paths[key] {
+		return false
+	}
+	s.paths[key] = true
+	return true
+}
+
+// claimPluginID reports whether this scope may load the plugin, preserving the
+// first-source precedence established across scopes.
+func (s *MarketplaceSelection) claimPluginID(id string) bool {
+	if s == nil {
+		return true
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return false
+	}
+	if s.pluginIDs[id] {
+		return false
+	}
+	s.pluginIDs[id] = true
+	return true
+}
+
+// marketplacePluginEntry is a validated catalog row whose plugin manifest has
+// not been read yet (Rust MarketplacePluginEntry).
+type marketplacePluginEntry struct {
+	name              string
+	source            marketplacePluginSource
+	sourceKind        string
+	pluginRoot        string
+	policyProducts    *[]string
+	interfaceOverride *PluginInterface
+	keywords          []string
+	apps              []AppSummary
+	appTemplates      []AppTemplateSummary
+}
+
+func (e marketplacePluginEntry) manifestPlugin() marketplaceManifestPlugin {
+	return marketplaceManifestPlugin{
+		Name:         e.name,
+		Source:       e.source,
+		Interface:    e.interfaceOverride,
+		Keywords:     e.keywords,
+		Apps:         e.apps,
+		AppTemplates: e.appTemplates,
+	}
+}
+
+// marketplacePluginManifestLoadHook observes selected plugin manifest loads in
+// tests, so discarded rows can be proven unread (Rust logs the same reads).
+var marketplacePluginManifestLoadHook func(pluginRoot string)
+
+// loadConfiguredMarketplacePlugins lists configured marketplaces with Rust's
+// #61686 ordering: validate entries, claim IDs before product visibility,
+// claim marketplace paths, then load manifests only for the selected rows.
+func loadConfiguredMarketplacePlugins(marketplaces []Marketplace, cache *manifestCache, selection *MarketplaceSelection, restrictionProduct string) ([]PluginMarketplaceEntry, []MarketplaceLoadErrorInfo) {
+	var entries []PluginMarketplaceEntry
+	var loadErrors []MarketplaceLoadErrorInfo
+	seenPluginKeys := map[string]bool{}
+	for _, marketplace := range marketplaces {
+		manifestPath := findMarketplaceManifestPath(marketplace.RootPath)
+		if manifestPath == "" {
+			continue
+		}
+		marketplaceName, root, marketplaceInterface, rawEntries, err := readMarketplaceEntries(marketplace, manifestPath)
+		if err != nil {
+			loadErrors = append(loadErrors, MarketplaceLoadErrorInfo{MarketplacePath: manifestPath, Message: err.Error()})
+			continue
+		}
+		selected := make([]marketplacePluginEntry, 0, len(rawEntries))
+		for _, entry := range rawEntries {
+			key := pluginID(entry.name, marketplaceName)
+			if seenPluginKeys[key] {
+				continue
+			}
+			// The first valid source claims its ID before product visibility.
+			seenPluginKeys[key] = true
+			if !marketplacePluginProductAllowed(entry.policyProducts, restrictionProduct) {
+				continue
+			}
+			selected = append(selected, entry)
+		}
+		if len(selected) == 0 {
+			continue
+		}
+		// A visible entry claims the path even if an earlier project claimed its ID.
+		if !claimMarketplaceSelectionPath(selection, manifestPath) {
+			continue
+		}
+		filtered := selected[:0]
+		for _, entry := range selected {
+			if !claimMarketplaceSelectionPluginID(selection, pluginID(entry.name, marketplaceName)) {
+				continue
+			}
+			filtered = append(filtered, entry)
+		}
+		if len(filtered) == 0 {
+			continue
+		}
+		loaded := loadPluginsConcurrently(len(filtered), func(index int) PluginDetail {
+			return loadMarketplaceEntryDetail(marketplaceName, root, manifestPath, filtered[index], cache)
+		})
+		plugins := make([]PluginSummary, 0, len(loaded))
+		for _, detail := range loaded {
+			plugins = append(plugins, cloneSummary(detail.Summary))
+		}
+		path := manifestPath
+		entries = append(entries, PluginMarketplaceEntry{
+			Name:      marketplaceName,
+			Path:      &path,
+			Interface: marketplaceInterface,
+			Plugins:   plugins,
+		})
+	}
+	sort.SliceStable(loadErrors, func(i int, j int) bool {
+		return loadErrors[i].MarketplacePath < loadErrors[j].MarketplacePath
+	})
+	return entries, loadErrors
+}
+
+func claimMarketplaceSelectionPath(selection *MarketplaceSelection, path string) bool {
+	return selection == nil || selection.claimPath(path)
+}
+
+func claimMarketplaceSelectionPluginID(selection *MarketplaceSelection, id string) bool {
+	return selection == nil || selection.claimPluginID(id)
+}
+
+func readMarketplaceEntries(marketplace Marketplace, manifestPath string) (string, string, *MarketplaceInterface, []marketplacePluginEntry, error) {
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return "", "", nil, nil, err
+	}
+	var manifest marketplaceManifestFile
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return "", "", nil, nil, err
+	}
+	marketplaceName := strings.TrimSpace(manifest.Name)
+	if marketplaceName == "" {
+		marketplaceName = marketplace.Name
+	}
+	root := marketplaceRootForManifest(marketplace.RootPath, manifestPath)
+	entries := make([]marketplacePluginEntry, 0, len(manifest.Plugins))
+	for _, plugin := range manifest.Plugins {
+		name := strings.TrimSpace(plugin.Name)
+		if name == "" {
+			continue
+		}
+		sourceKind := marketplaceManifestPluginSourceKind(&plugin.Source)
+		pluginRoot := ""
+		if sourceKind == "" || sourceKind == "local" {
+			pluginRoot = resolveMarketplacePluginPath(root, plugin.Source.Path)
+		}
+		entries = append(entries, marketplacePluginEntry{
+			name:              name,
+			source:            plugin.Source,
+			sourceKind:        sourceKind,
+			pluginRoot:        pluginRoot,
+			policyProducts:    plugin.Policy.Products,
+			interfaceOverride: clonePluginInterfacePtr(plugin.Interface),
+			keywords:          trimPluginInterfaceStrings(plugin.Keywords),
+			apps:              cloneAppSummaries(plugin.Apps),
+			appTemplates:      cloneAppTemplateSummaries(firstMarketplacePluginAppTemplates(plugin)),
+		})
+	}
+	return marketplaceName, root, manifest.Interface, entries, nil
+}
+
+func loadMarketplaceEntryDetail(marketplaceName string, marketplaceRoot string, manifestPath string, entry marketplacePluginEntry, cache *manifestCache) PluginDetail {
+	var manifest *pluginManifestFile
+	if entry.sourceKind == "" || entry.sourceKind == "local" {
+		if marketplacePluginManifestLoadHook != nil {
+			marketplacePluginManifestLoadHook(entry.pluginRoot)
+		}
+		if resolved, _ := parsePluginManifestAtRoot(entry.pluginRoot, cache); resolved != nil {
+			manifest = &resolved.Manifest
+		}
+	}
+	return marketplacePluginDetailFromManifest(entry.name, marketplaceName, marketplaceRoot, manifestPath, entry.pluginRoot, entry.manifestPlugin(), manifest)
+}
+
+func marketplacePluginProductAllowed(products *[]string, restrictionProduct string) bool {
+	if products == nil {
+		return true
+	}
+	if len(*products) == 0 {
+		return false
+	}
+	restrictionProduct = normalizeMarketplaceProduct(restrictionProduct)
+	if restrictionProduct == "" {
+		return false
+	}
+	for _, product := range *products {
+		if normalizeMarketplaceProduct(product) == restrictionProduct {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeMarketplaceProduct(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "chatgpt":
+		return "chatgpt"
+	case "codex":
+		return "codex"
+	case "atlas":
+		return "atlas"
+	default:
+		return ""
+	}
 }
 
 func findMarketplaceManifestPath(root string) string {

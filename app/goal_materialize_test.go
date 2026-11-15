@@ -38,7 +38,7 @@ func TestMaterializeGoalDraftOversizedWritesGoalFile(t *testing.T) {
 	}
 }
 
-func TestMaterializeGoalDraftPasteWritesPasteFile(t *testing.T) {
+func TestMaterializeGoalDraftPasteStaysInline(t *testing.T) {
 	root := t.TempDir()
 	placeholder := "[Pasted Content 5 chars]"
 	draft := codextui.GoalDraft{
@@ -49,17 +49,61 @@ func TestMaterializeGoalDraftPasteWritesPasteFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("materialize: %v", err)
 	}
-	path, ok := strings.CutPrefix(objective, "Use pasted text file: ")
-	if !ok {
+	if objective != "Use hello" {
 		t.Fatalf("objective = %q", objective)
 	}
-	path, ok = strings.CutSuffix(path, ". Read this file before continuing.")
+	if _, err := os.Stat(filepath.Join(root, codextui.GoalAttachmentDir)); !os.IsNotExist(err) {
+		t.Fatalf("inline paste should not create attachments dir")
+	}
+}
+
+func TestMaterializeGoalDraftOversizedPasteUsesGoalFile(t *testing.T) {
+	root := t.TempDir()
+	longPaste := strings.Repeat("한글", codextui.MaxGoalObjectiveRune/2)
+	placeholder := "[Pasted Content 4000 chars]"
+	objective := "Prefix " + placeholder + " suffix"
+	reference, err := materializeGoalDraft(osGoalFS(root), root, codextui.GoalDraft{
+		Objective:     objective,
+		PendingPastes: [][2]string{{placeholder, longPaste}},
+	})
+	if err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+	path, ok := codextui.GoalObjectiveFilePath(reference, root)
 	if !ok {
-		t.Fatalf("objective = %q", objective)
+		t.Fatalf("reference = %q", reference)
 	}
 	data, err := os.ReadFile(path)
-	if err != nil || string(data) != "hello" {
-		t.Fatalf("paste file = %q err=%v", data, err)
+	if err != nil {
+		t.Fatalf("read goal file: %v", err)
+	}
+	want := "Prefix " + longPaste + " suffix"
+	if string(data) != want {
+		t.Fatalf("goal file content mismatch")
+	}
+}
+
+func TestMaterializeGoalDraftPasteCombinedWithImage(t *testing.T) {
+	root := t.TempDir()
+	imagePath := filepath.Join(root, "local-image.png")
+	if err := os.WriteFile(imagePath, []byte("png bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	placeholder := "[Pasted Content 5 chars]"
+	objective, err := materializeGoalDraft(osGoalFS(root), root, codextui.GoalDraft{
+		Objective:     "Describe " + placeholder + " [Image #1]",
+		PendingPastes: [][2]string{{placeholder, "hello"}},
+		LocalImages:   []codextui.GoalLocalImage{{Placeholder: "[Image #1]", Path: imagePath}},
+	})
+	if err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+	imageFile, ok := strings.CutPrefix(objective, "Describe hello image file: ")
+	if !ok {
+		t.Fatalf("objective = %q", objective)
+	}
+	if _, err := os.Stat(imageFile); err != nil {
+		t.Fatalf("image file = %q err=%v", imageFile, err)
 	}
 }
 

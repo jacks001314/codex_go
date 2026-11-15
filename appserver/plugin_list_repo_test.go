@@ -23,7 +23,18 @@ func TestPluginListHonorsPerRepositoryConfigLikeRust(t *testing.T) {
 	if err := os.MkdirAll(localMarket, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(localMarket, "plugin.json"), []byte(`{"name":"sample","description":"Sample"}`), 0o600); err != nil {
+	pluginRoot := filepath.Join(localMarket, "plugins", "sample")
+	if err := os.MkdirAll(filepath.Join(pluginRoot, ".codex-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginRoot, ".codex-plugin", "plugin.json"), []byte(`{"name":"sample","description":"Sample"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	marketplaceManifest := `{"name":"local","plugins":[{"name":"sample","source":{"source":"local","path":"./plugins/sample"}}]}`
+	if err := os.MkdirAll(filepath.Join(localMarket, ".agents", "plugins"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(localMarket, ".agents", "plugins", "marketplace.json"), []byte(marketplaceManifest), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	dotCodex := filepath.Join(workspace, ".gcode")

@@ -238,8 +238,13 @@ func (s *StatusIndicator) Render(width int, now time.Time) []string {
 		wrapped = wrapped[:maxLines]
 		wrapped[len(wrapped)-1] = appendEllipsisToWidth(wrapped[len(wrapped)-1], contentWidth)
 	}
-	for _, detail := range wrapped {
-		lines = append(lines, prefix+detail)
+	subsequentPrefix := strings.Repeat(" ", DisplayWidth(prefix))
+	for index, detail := range wrapped {
+		if index == 0 {
+			lines = append(lines, prefix+detail)
+			continue
+		}
+		lines = append(lines, subsequentPrefix+detail)
 	}
 	return lines
 }

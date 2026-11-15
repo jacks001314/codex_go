@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -73,5 +74,24 @@ func TestStatusIndicatorWidgetInterruptHintToggle(t *testing.T) {
 	lines := widget.Render(80, start)
 	if len(lines) == 0 || strings.Contains(lines[0], "to interrupt") {
 		t.Fatalf("interrupt hint should be hidden: %#v", lines)
+	}
+}
+
+func TestStatusIndicatorWidgetTruncatesWideUnicodeDetailsByDisplayWidth(t *testing.T) {
+	start := time.Unix(0, 0)
+	widget := NewStatusIndicatorWidgetState(start)
+	widget.UpdateDetails(strings.Repeat("界", 20), StatusDetailsPreserve, StatusDetailsDefaultMaxLines)
+	lines := widget.Render(10, start)
+	if len(lines) != 1+StatusDetailsDefaultMaxLines {
+		t.Fatalf("lines = %#v", lines)
+	}
+	for _, line := range lines {
+		if DisplayWidth(line) > 10 {
+			t.Fatalf("line exceeds width: %q (%d)", line, DisplayWidth(line))
+		}
+	}
+	wantDetails := []string{"  └ 界界界", "    界界界", "    界界…"}
+	if got := lines[1:]; !reflect.DeepEqual(got, wantDetails) {
+		t.Fatalf("details = %#v, want %#v", got, wantDetails)
 	}
 }

@@ -1419,8 +1419,12 @@ type PluginService struct {
 	targetCuratedMarketplace      TargetCuratedMarketplace
 	marketplacePolicy             *MarketplacePolicy
 	marketplacePolicyConfig       map[string]any
-	curatedSyncInFlight           bool
-	curatedSyncMetricsObserver    CuratedSyncMetricsObserver
+	// restrictionProduct is the session product used by marketplace entry
+	// visibility rules (Rust SessionSource::restriction_product). App-server and
+	// CLI surfaces are Codex, matching the default product.
+	restrictionProduct         string
+	curatedSyncInFlight        bool
+	curatedSyncMetricsObserver CuratedSyncMetricsObserver
 	// manifests reuses parsed manifest revisions across the service's
 	// marketplace materialization (Rust #49099). Go's discovery path carries no
 	// plugin store, so the service owns the cache; it is the same
@@ -1495,9 +1499,33 @@ func NewPluginService() *PluginService {
 		marketplacePluginMaterializer: &GitMarketplaceMaterializer{},
 		marketplaceRevision:           &GitMarketplaceRevisionResolver{},
 		targetCuratedMarketplace:      TargetCuratedOpenAI,
+		restrictionProduct:            "codex",
 		manifests:                     newManifestCache(),
 		remoteHTTPPool:                NewRemotePluginHTTPPool(),
 	}
+}
+
+// SetRestrictionProduct overrides the session product matched against
+// marketplace plugin `policy.products`, mirroring Rust's per-session
+// restriction product. An empty value matches no product-restricted entry.
+func (s *PluginService) SetRestrictionProduct(product string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.restrictionProduct = normalizeMarketplaceProduct(product)
+	s.mu.Unlock()
+}
+
+// RestrictionProduct returns the normalized session product used for
+// marketplace entry visibility.
+func (s *PluginService) RestrictionProduct() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.restrictionProduct
 }
 
 // RemotePluginHTTPPool returns the service's remote plugin connection pool

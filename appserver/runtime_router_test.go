@@ -29281,6 +29281,35 @@ func TestMergePluginMarketplaceEntries(t *testing.T) {
 	}
 }
 
+func TestMergePluginMarketplaceEntriesKeepsLaterScopePluginsLikeRust(t *testing.T) {
+	path1 := "p1"
+	path2 := "p2"
+	primary := []plugin.PluginMarketplaceEntry{{
+		Name:    "team",
+		Path:    &path1,
+		Plugins: []plugin.PluginSummary{{ID: "shared@team", Name: "shared"}},
+	}}
+	extra := []plugin.PluginMarketplaceEntry{{
+		Name: "team",
+		Path: &path2,
+		Plugins: []plugin.PluginSummary{
+			{ID: "shared@team", Name: "shared"},
+			{ID: "repo-only@team", Name: "repo-only"},
+		},
+	}}
+	merged := mergePluginMarketplaceEntries(primary, extra)
+	if len(merged) != 1 {
+		t.Fatalf("merged = %#v", merged)
+	}
+	ids := make([]string, 0, len(merged[0].Plugins))
+	for _, summary := range merged[0].Plugins {
+		ids = append(ids, summary.ID)
+	}
+	if want := []string{"shared@team", "repo-only@team"}; strings.Join(ids, ",") != strings.Join(want, ",") {
+		t.Fatalf("merged plugins = %#v, want %#v", ids, want)
+	}
+}
+
 // TestRuntimeRouterRejectsTransportMismatchedMCPOverridesLikeRust covers the
 // request-override boundary: Rust converts `thread/start` / `turn/start`
 // `config` overrides through the typed config layer, so a transport-mismatched

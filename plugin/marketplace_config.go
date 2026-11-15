@@ -3,6 +3,7 @@ package plugin
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -92,6 +93,14 @@ func (s *PluginService) ReloadConfig() error {
 // config stack (#40954). Marketplaces declared in config but not yet materialized
 // (no manifest on disk) are silently skipped rather than cloned here.
 func (s *PluginService) ResolveConfigMarketplaces(values map[string]any) ([]PluginMarketplaceEntry, []MarketplaceLoadErrorInfo) {
+	return s.ResolveConfigMarketplacesWithSelection(values, nil)
+}
+
+// ResolveConfigMarketplacesWithSelection is ResolveConfigMarketplaces plus the
+// request-wide selection shared across project scopes. It applies marketplace
+// path and plugin ID precedence before reading plugin manifests, mirroring
+// Rust #61686.
+func (s *PluginService) ResolveConfigMarketplacesWithSelection(values map[string]any, selection *MarketplaceSelection) ([]PluginMarketplaceEntry, []MarketplaceLoadErrorInfo) {
 	if s == nil || len(values) == 0 {
 		return nil, nil
 	}
@@ -101,6 +110,7 @@ func (s *PluginService) ResolveConfigMarketplaces(values map[string]any) ([]Plug
 	now := s.now
 	codexHome := s.codexHome
 	marketplacePolicy := s.marketplacePolicy
+	restrictionProduct := s.restrictionProduct
 	s.mu.Unlock()
 	if marketplacePolicy != nil {
 		if filtered, ok := marketplacePolicy.FilterPluginConfig(codexHome, values); ok {
@@ -111,12 +121,13 @@ func (s *PluginService) ResolveConfigMarketplaces(values map[string]any) ([]Plug
 	if len(marketplaces) == 0 {
 		return nil, nil
 	}
-	details, loadErrors := loadMarketplacePlugins(marketplaces, manifests)
-	summaries := make([]PluginSummary, 0, len(details))
-	for i := range details {
-		summaries = append(summaries, cloneSummary(details[i].Summary))
-	}
-	return marketplaceEntries(marketplaces, summaries), loadErrors
+	sort.SliceStable(marketplaces, func(i int, j int) bool {
+		if marketplaces[i].RootPath == marketplaces[j].RootPath {
+			return marketplaces[i].Name < marketplaces[j].Name
+		}
+		return marketplaces[i].RootPath < marketplaces[j].RootPath
+	})
+	return loadConfiguredMarketplacePlugins(marketplaces, manifests, selection, restrictionProduct)
 }
 
 func recordMarketplaceConfig(configPath string, marketplace *Marketplace) error {
