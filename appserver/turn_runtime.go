@@ -12561,7 +12561,11 @@ func (r *RuntimeRouter) orchestratorSkillMetadataForRuntime(threadID string, tur
 			}
 			return
 		}
-		state.clearSkillBackoff()
+		if len(cache.catalog.Warnings) > 0 {
+			state.recordSkillFailure(scope)
+		} else {
+			state.clearSkillBackoff()
+		}
 		// Rust #56530 measures the published cloud skill catalog.
 		r.recordCatalogEntries(skillCatalogEntriesMetric, catalogStageCloud, len(cache.catalog.Skills), false, len(cache.catalog.Warnings))
 	})

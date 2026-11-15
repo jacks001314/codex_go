@@ -82,6 +82,44 @@ type Config struct {
 	filesystemRequirementsSource string
 }
 
+// ConfigLayers returns the precedence-bearing configuration sources used to
+// resolve this Config, ordered from lowest to highest precedence.
+func (c *Config) ConfigLayers() []Layer {
+	if c == nil {
+		return nil
+	}
+	return cloneLayers(c.featureLayers)
+}
+
+// ActiveProfileMCPLayer returns the selected profile's user layer when that
+// layer defines serverName. Rust's `codex mcp get` uses the active user layer
+// to decide whether `codex mcp remove` can edit the definition or only the
+// global config.
+func (c *Config) ActiveProfileMCPLayer(serverName string) (*Layer, bool) {
+	if c == nil {
+		return nil, false
+	}
+	for index := len(c.featureLayers) - 1; index >= 0; index-- {
+		layer := &c.featureLayers[index]
+		if layer.Name.Type != LayerSourceUser || layer.Name.Profile == nil || layer.DisabledReason != nil {
+			continue
+		}
+		values, ok := layer.Config.(map[string]any)
+		if !ok {
+			continue
+		}
+		servers, ok := values["mcp_servers"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, exists := servers[serverName]; exists {
+			cloned := cloneLayer(layer)
+			return &cloned, true
+		}
+	}
+	return nil, false
+}
+
 type ForcedLoginMethod string
 
 const (
@@ -507,9 +545,10 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 		if err != nil {
 			return nil, err
 		}
+		profilePath, _ := ResolveProfileConfigPath(codexHome, profile)
 		chatgptBaseURLExplicit = chatgptBaseURLExplicit || profileSetsBaseURL
 		featureLayers = append(featureLayers, Layer{
-			Name:   LayerSource{Type: LayerSourceUser, Profile: stringPtrIfNotEmpty(profile)},
+			Name:   LayerSource{Type: LayerSourceUser, File: profilePath, Profile: stringPtrIfNotEmpty(profile)},
 			Config: cloneMap(profileValues),
 		})
 	}

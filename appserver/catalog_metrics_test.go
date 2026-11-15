@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"codex_go/config"
 	"codex_go/mcp"
@@ -32,6 +33,8 @@ func TestCloudPluginCatalogEntriesMetricLikeRust(t *testing.T) {
 	}}
 	router := newCloudCatalogTestRouter(t, provider)
 	router.metrics = state.NewTaskMetrics()
+	now := time.Unix(1_700_000_000, 0)
+	router.cloudCatalogs.forThread("thread-metrics").now = func() time.Time { return now }
 	cfg := &config.Config{}
 
 	router.refreshCloudPluginCatalogForStep(context.Background(), cfg, "thread-metrics", "turn-1")
@@ -39,6 +42,7 @@ func TestCloudPluginCatalogEntriesMetricLikeRust(t *testing.T) {
 		t.Fatalf("cloud plugin metric = %#v, want one cloud/warning sample", got)
 	}
 	provider.catalog = &plugin.PluginCatalog{IsPartial: true, Warnings: []string{"cloud listing was truncated"}}
+	now = now.Add(5 * time.Second)
 	router.refreshCloudPluginCatalogForStep(context.Background(), cfg, "thread-metrics", "turn-2")
 	if got := catalogMetricRecords(t, router, pluginCatalogEntriesMetric); len(got) != 2 || got[1] != "cloud/partial" {
 		t.Fatalf("cloud plugin metric = %#v, want partial to outrank the warning", got)

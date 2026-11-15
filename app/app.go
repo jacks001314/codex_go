@@ -130,7 +130,7 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 	case cli.CommandFeatures:
 		return runFeatures(parsed.Features, parsed.Root, stdout, stderr)
 	case cli.CommandMCP:
-		return runMCP(ctx, &parsed.MCP, stdin, stdout)
+		return runMCP(ctx, &parsed.MCP, parsed.Root.Shared.Profile, stdin, stdout)
 	case cli.CommandPlugin:
 		return runPlugin(&parsed.Plugin, stdout)
 	case cli.CommandInteractive:

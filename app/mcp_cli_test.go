@@ -183,6 +183,46 @@ func TestMCPAddListGetRemove(t *testing.T) {
 	}
 }
 
+// TestMCPGetReportsProfileRemovalScopeLikeRust mirrors Rust #61357: a server
+// defined by the selected profile points at the profile settings file because
+// `codex mcp remove` only edits the global config.
+func TestMCPGetReportsProfileRemovalScopeLikeRust(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("[mcp_servers.shadowed]\ncommand = \"basecmd\"\n\n[mcp_servers.inherited]\ncommand = \"basecmd\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config error = %v", err)
+	}
+	profilePath := filepath.Join(home, "work.config.toml")
+	if err := os.WriteFile(profilePath, []byte("[mcp_servers.shadowed]\ncommand = \"profilecmd\"\n\n[mcp_servers.profile_only]\ncommand = \"profilecmd\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile profile error = %v", err)
+	}
+
+	for _, name := range []string{"shadowed", "profile_only"} {
+		var stdout bytes.Buffer
+		if err := Run(context.Background(), []string{"-p", "work", "mcp", "get", name}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+			t.Fatalf("mcp get %s returned error: %v", name, err)
+		}
+		out := stdout.String()
+		if !strings.Contains(out, "profile settings: "+profilePath) {
+			t.Fatalf("mcp get %s stdout = %q, want profile settings path", name, out)
+		}
+		if !strings.Contains(out, "removal scope: `codex mcp remove` only edits the global config.") {
+			t.Fatalf("mcp get %s stdout = %q, want removal scope", name, out)
+		}
+		if strings.Contains(out, "remove: codex mcp remove "+name) {
+			t.Fatalf("mcp get %s stdout = %q, want the profile hint instead of remove", name, out)
+		}
+	}
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"-p", "work", "mcp", "get", "inherited"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("mcp get inherited returned error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "remove: codex mcp remove inherited") {
+		t.Fatalf("mcp get inherited stdout = %q, want the global removal hint", stdout.String())
+	}
+}
+
 // TestMCPAddRemovePackageStyleServerNameLikeRust mirrors Rust #41700: package
 // coordinates are valid MCP server names, round-trip through config.toml, and
 // remain addressable by get/list/remove.

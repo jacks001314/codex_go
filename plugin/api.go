@@ -1408,19 +1408,16 @@ type PluginService struct {
 	suggestedFetch                *suggestedPluginFetch
 	cloudCapabilities             []CapabilitySummary
 	cloudCatalogKey               string
-	// cloudCatalogComplete records that the published cloud catalog came from a
-	// complete listing; a later partial refresh must not replace it (#55301).
-	cloudCatalogComplete       bool
-	cloudCatalog               *PluginCatalog
-	shareBackend               PluginShareBackend
-	codexHome                  string
-	authMode                   string
-	modelProviderID            string
-	targetCuratedMarketplace   TargetCuratedMarketplace
-	marketplacePolicy          *MarketplacePolicy
-	marketplacePolicyConfig    map[string]any
-	curatedSyncInFlight        bool
-	curatedSyncMetricsObserver CuratedSyncMetricsObserver
+	cloudCatalog                  *PluginCatalog
+	shareBackend                  PluginShareBackend
+	codexHome                     string
+	authMode                      string
+	modelProviderID               string
+	targetCuratedMarketplace      TargetCuratedMarketplace
+	marketplacePolicy             *MarketplacePolicy
+	marketplacePolicyConfig       map[string]any
+	curatedSyncInFlight           bool
+	curatedSyncMetricsObserver    CuratedSyncMetricsObserver
 	// manifests reuses parsed manifest revisions across the service's
 	// marketplace materialization (Rust #49099). Go's discovery path carries no
 	// plugin store, so the service owns the cache; it is the same
@@ -2330,7 +2327,9 @@ func (s *PluginService) EnabledCapabilities() []CapabilitySummary {
 }
 
 // SetCloudPluginCatalog publishes the Apps-only projection of a cloud plugin
-// catalog. Cloud entries never contribute MCP servers (Rust #46572).
+// catalog. Cloud entries never contribute MCP servers (Rust #46572). Each
+// accepted result replaces the prior catalog, including partial results
+// (Rust #61400).
 func (s *PluginService) SetCloudPluginCatalog(catalog *PluginCatalog, cacheKey string) {
 	if s == nil {
 		return
@@ -2338,13 +2337,8 @@ func (s *PluginService) SetCloudPluginCatalog(catalog *PluginCatalog, cacheKey s
 	cacheKey = strings.TrimSpace(cacheKey)
 	capabilities := cloudCapabilitiesFromCatalog(catalog)
 	s.mu.Lock()
-	if catalog != nil && catalog.IsPartial && s.cloudCatalogComplete && cacheKey != "" && cacheKey == s.cloudCatalogKey {
-		s.mu.Unlock()
-		return
-	}
 	s.cloudCatalogKey = cacheKey
 	s.cloudCapabilities = capabilities
-	s.cloudCatalogComplete = catalog != nil && !catalog.IsPartial
 	s.cloudCatalog = nil
 	if catalog != nil {
 		s.cloudCatalog = catalog.Clone()

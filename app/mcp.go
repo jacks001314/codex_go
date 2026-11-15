@@ -128,8 +128,9 @@ type mcpHTTPTransportJSON struct {
 	HTTPHeadersHelper *string           `json:"http_headers_helper"`
 }
 
-func runMCP(ctx context.Context, opts *cli.MCPOptions, stdin io.Reader, stdout io.Writer) error {
+func runMCP(ctx context.Context, opts *cli.MCPOptions, profile string, stdin io.Reader, stdout io.Writer) error {
 	store := newMCPCLIStore(auth.DefaultCodexHome())
+	store.profile = strings.TrimSpace(profile)
 	switch opts.Action {
 	case "list":
 		return runMCPList(ctx, store, opts, stdout)
@@ -285,7 +286,12 @@ func runMCPGet(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, st
 	if server.DefaultToolsApprovalMode != "" {
 		fmt.Fprintf(stdout, "  default_tools_approval_mode: %s\n", server.DefaultToolsApprovalMode)
 	}
-	fmt.Fprintf(stdout, "  remove: codex mcp remove %s\n", opts.Name)
+	if layer, ok := store.activeProfileMCPServerLayer(opts.Name); ok {
+		fmt.Fprintf(stdout, "  profile settings: %s\n", layer.Name.File)
+		fmt.Fprintln(stdout, "  removal scope: `codex mcp remove` only edits the global config.")
+	} else {
+		fmt.Fprintf(stdout, "  remove: codex mcp remove %s\n", opts.Name)
+	}
 	return nil
 }
 
@@ -1044,7 +1050,9 @@ func cloneStringMap(values map[string]string) map[string]string {
 
 type mcpCLIStore struct {
 	codexHome  string
+	profile    string
 	httpClient *http.Client
+	loaded     *config.Config
 	// policy is the host-owned live policy every config this store loads
 	// republishes into (Rust `EmbeddedNetworkPolicy`), so the clients already
 	// built from an earlier load observe later reloads and failures.
@@ -1066,7 +1074,10 @@ func (s *mcpCLIStore) Load(overrides []string) (*mcpCLIConfig, error) {
 		s.policy.Unavailable()
 		return nil, err
 	}
-	loaded, err := config.LoadEffective(s.codexHome, overrides, nil, nil)
+	loaded, err := config.LoadEffectiveWithOptions(s.codexHome, &config.EffectiveOptions{
+		Profile:      s.profile,
+		RawOverrides: append([]string(nil), overrides...),
+	})
 	if err != nil {
 		s.policy.Unavailable()
 		return nil, mcpLoadConfigurationError(err)
@@ -1074,6 +1085,7 @@ func (s *mcpCLIStore) Load(overrides []string) (*mcpCLIConfig, error) {
 	// The host publishes its application network policy for the config and every
 	// client it builds from that config binds it.
 	publishHostApplicationNetworkPolicy(s.policy, loaded)
+	s.loaded = loaded
 	s.httpClient = policyHTTPClient(loaded, codexnetwork.NewHTTPClient(loaded.RespectSystemProxyEnabled(), 0))
 	return mcpCLIConfigFromValues(loaded.Values), nil
 }
@@ -1087,12 +1099,16 @@ func (s *mcpCLIStore) LoadManaged(ctx context.Context, overrides []string) (*mcp
 		s.policy.Unavailable()
 		return nil, err
 	}
-	bootstrap, err := config.LoadEffective(s.codexHome, overrides, nil, nil)
+	bootstrap, err := config.LoadEffectiveWithOptions(s.codexHome, &config.EffectiveOptions{
+		Profile:      s.profile,
+		RawOverrides: append([]string(nil), overrides...),
+	})
 	if err != nil {
 		s.policy.Unavailable()
 		return nil, mcpLoadConfigurationError(err)
 	}
 	publishHostApplicationNetworkPolicy(s.policy, bootstrap)
+	s.loaded = bootstrap
 	s.httpClient = policyHTTPClient(bootstrap, codexnetwork.NewHTTPClient(bootstrap.RespectSystemProxyEnabled(), 0))
 	var loader *config.CloudConfigLoader
 	if bootstrap.RequiresRemoteConfig() {
@@ -1131,6 +1147,7 @@ func (s *mcpCLIStore) LoadManaged(ctx context.Context, overrides []string) (*mcp
 		})
 	}
 	loaded, err := config.LoadEffectiveWithOptions(s.codexHome, &config.EffectiveOptions{
+		Profile:              s.profile,
 		RawOverrides:         append([]string(nil), overrides...),
 		IncludeManagedConfig: true,
 		ManagedConfigPath:    filepath.Join(s.codexHome, "managed_config.toml"),
@@ -1140,8 +1157,16 @@ func (s *mcpCLIStore) LoadManaged(ctx context.Context, overrides []string) (*mcp
 		return nil, err
 	}
 	publishHostApplicationNetworkPolicy(s.policy, loaded)
+	s.loaded = loaded
 	s.httpClient = policyHTTPClient(loaded, codexnetwork.NewHTTPClient(loaded.RespectSystemProxyEnabled(), 0))
 	return mcpCLIConfigFromValues(loaded.Values), nil
+}
+
+func (s *mcpCLIStore) activeProfileMCPServerLayer(name string) (*config.Layer, bool) {
+	if s == nil || s.loaded == nil {
+		return nil, false
+	}
+	return s.loaded.ActiveProfileMCPLayer(name)
 }
 
 func mcpCLICloudConfigEligibleAuth(snapshot *auth.AuthDotJSON) bool {

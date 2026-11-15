@@ -37,7 +37,7 @@ func TestCloudPluginCatalogProjectsAppsOnlyCapabilitiesLikeRust(t *testing.T) {
 	}
 }
 
-func TestCloudPluginCatalogRetainsCompleteSnapshotOnPartialRefreshLikeRust(t *testing.T) {
+func TestCloudPluginCatalogReplacesCompleteSnapshotOnPartialRefreshLikeRust(t *testing.T) {
 	service := NewPluginService()
 	service.SetCloudPluginCatalog(&PluginCatalog{Entries: []PluginCatalogEntry{{
 		ID:           PluginIdentity{Kind: PluginIdentityRemote, RemotePluginID: "plugins~Plugin_complete"},
@@ -49,7 +49,7 @@ func TestCloudPluginCatalogRetainsCompleteSnapshotOnPartialRefreshLikeRust(t *te
 		DisplayName: "Partial",
 	}}}, "scope")
 	capabilities := service.EnabledCapabilities()
-	if len(capabilities) != 1 || capabilities[0].RemotePluginID != "plugins~Plugin_complete" {
-		t.Fatalf("partial refresh replaced the complete catalog: %#v", capabilities)
+	if len(capabilities) != 1 || capabilities[0].RemotePluginID != "plugins~Plugin_partial" {
+		t.Fatalf("partial refresh did not replace the complete catalog: %#v", capabilities)
 	}
 }

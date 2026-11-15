@@ -17,9 +17,10 @@ import (
 
 const (
 	// cloudCatalogRetryBaseDelay and cloudCatalogRetryMaxDelay bound the
-	// per-thread cooldown after a failed cloud catalog discovery, mirroring
-	// Rust's CatalogRefreshBackoff (#55968): 30 seconds doubling to 5 minutes.
-	cloudCatalogRetryBaseDelay = 30 * time.Second
+	// per-thread cooldown after an incomplete cloud catalog discovery,
+	// mirroring Rust's CatalogRefreshBackoff (#61400): 5 seconds doubling to
+	// 5 minutes.
+	cloudCatalogRetryBaseDelay = 5 * time.Second
 	cloudCatalogRetryMaxDelay  = 5 * time.Minute
 )
 
@@ -89,10 +90,12 @@ type cloudCatalogRefreshState struct {
 	refreshMu     sync.Mutex
 	pluginBackoff *cloudCatalogRefreshBackoff
 	skillBackoff  *cloudCatalogRefreshBackoff
-	// refreshedTurn/refreshedScope record the last successful plugin discovery
-	// so later steps of the same turn and auth scope reuse it (Rust #55957).
-	refreshedTurn  string
-	refreshedScope string
+	// pluginCompleteScope records the auth/provider generation of the last
+	// complete, warning-free plugin catalog. Later steps and turns in that scope
+	// reuse it; partial or warning-bearing catalogs keep retrying (Rust #61386
+	// and #61400).
+	pluginCompleteScope string
+	pluginComplete      bool
 	// skillWarningTurn deduplicates the cloud skill discovery warning to once
 	// per turn (Rust #55957).
 	skillWarningTurn string
@@ -116,31 +119,36 @@ func (s *cloudCatalogRefreshState) recordPluginFailure(scope string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pluginBackoff = nextCloudCatalogBackoff(scope, s.pluginBackoff, s.clock())
-	s.refreshedTurn = ""
-	s.refreshedScope = ""
+	s.pluginComplete = false
+	s.pluginCompleteScope = ""
 }
 
-func (s *cloudCatalogRefreshState) recordPluginSuccess(turnID string, scope string) {
+func (s *cloudCatalogRefreshState) recordPluginResult(scope string, retry bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if retry {
+		s.pluginBackoff = nextCloudCatalogBackoff(scope, s.pluginBackoff, s.clock())
+		s.pluginComplete = false
+		s.pluginCompleteScope = ""
+		return
+	}
 	s.pluginBackoff = nil
-	s.refreshedTurn = strings.TrimSpace(turnID)
-	s.refreshedScope = scope
+	s.pluginComplete = true
+	s.pluginCompleteScope = scope
 }
 
 func (s *cloudCatalogRefreshState) resetPlugin() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pluginBackoff = nil
-	s.refreshedTurn = ""
-	s.refreshedScope = ""
+	s.pluginComplete = false
+	s.pluginCompleteScope = ""
 }
 
-func (s *cloudCatalogRefreshState) pluginRefreshed(turnID string, scope string) bool {
+func (s *cloudCatalogRefreshState) pluginCatalogComplete(scope string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	turnID = strings.TrimSpace(turnID)
-	return turnID != "" && s.refreshedTurn == turnID && s.refreshedScope == scope
+	return scope != "" && s.pluginComplete && s.pluginCompleteScope == scope
 }
 
 func (s *cloudCatalogRefreshState) skillBackoffPending(scope string) bool {
@@ -232,7 +240,7 @@ func (r *RuntimeRouter) refreshCloudPluginCatalogForStep(ctx context.Context, cf
 	if scope == "" {
 		return
 	}
-	if state.pluginRefreshed(turnID, scope) {
+	if state.pluginCatalogComplete(scope) {
 		return
 	}
 	if state.pluginBackoffPending(scope) {
@@ -240,7 +248,7 @@ func (r *RuntimeRouter) refreshCloudPluginCatalogForStep(ctx context.Context, cf
 	}
 	state.refreshMu.Lock()
 	defer state.refreshMu.Unlock()
-	if state.pluginRefreshed(turnID, scope) || state.pluginBackoffPending(scope) {
+	if state.pluginCatalogComplete(scope) || state.pluginBackoffPending(scope) {
 		return
 	}
 	catalog, err := plugin.ListPluginCatalog(ctx, r.services.PluginCatalogProvider, plugin.PluginListQuery{
@@ -257,7 +265,8 @@ func (r *RuntimeRouter) refreshCloudPluginCatalogForStep(ctx context.Context, cf
 		return
 	}
 	r.services.Plugins.SetCloudPluginCatalog(catalog, scope)
-	state.recordPluginSuccess(turnID, scope)
+	needsRetry := catalog == nil || catalog.IsPartial || len(catalog.Warnings) > 0
+	state.recordPluginResult(scope, needsRetry)
 	// Rust #56530 measures the published cloud plugin catalog.
 	r.recordCatalogEntries(pluginCatalogEntriesMetric, catalogStageCloud, len(catalog.Entries), catalog.IsPartial, len(catalog.Warnings))
 }

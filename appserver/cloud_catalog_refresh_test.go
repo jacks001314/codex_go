@@ -23,6 +23,32 @@ type countingPluginCatalogProvider struct {
 	err   error
 }
 
+type sequencePluginCatalogProvider struct {
+	mu       sync.Mutex
+	calls    int
+	catalogs []*plugin.PluginCatalog
+}
+
+func (p *sequencePluginCatalogProvider) ListPlugins(context.Context, plugin.PluginListQuery) (*plugin.PluginCatalog, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls++
+	if len(p.catalogs) == 0 {
+		return &plugin.PluginCatalog{}, nil
+	}
+	index := p.calls - 1
+	if index >= len(p.catalogs) {
+		index = len(p.catalogs) - 1
+	}
+	return p.catalogs[index], nil
+}
+
+func (p *sequencePluginCatalogProvider) count() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
 func (p *countingPluginCatalogProvider) ListPlugins(context.Context, plugin.PluginListQuery) (*plugin.PluginCatalog, error) {
 	p.mu.Lock()
 	p.calls++
@@ -52,7 +78,7 @@ func newCloudCatalogTestRouter(t *testing.T, provider any) *RuntimeRouter {
 func TestCloudCatalogBackoffEscalatesToCapLikeRust(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	var backoff *cloudCatalogRefreshBackoff
-	want := []time.Duration{30 * time.Second, 60 * time.Second, 120 * time.Second, 240 * time.Second, 300 * time.Second, 300 * time.Second}
+	want := []time.Duration{5 * time.Second, 10 * time.Second, 20 * time.Second, 40 * time.Second, 80 * time.Second, 160 * time.Second, 300 * time.Second, 300 * time.Second}
 	for index, delay := range want {
 		backoff = nextCloudCatalogBackoff("scope", backoff, now)
 		if backoff.delay != delay {
@@ -77,7 +103,7 @@ func TestCloudCatalogBackoffScopedToAuthAndResourcesLikeRust(t *testing.T) {
 	if backoff.pending("account-a\x002", now) {
 		t.Fatal("backoff applied to another resource generation")
 	}
-	if !backoff.pending("account-a\x001", now.Add(29*time.Second)) {
+	if !backoff.pending("account-a\x001", now.Add(4*time.Second)) {
 		t.Fatal("backoff not pending within its window")
 	}
 }
@@ -93,7 +119,7 @@ func TestRefreshCloudPluginCatalogForStepBacksOffFailuresLikeRust(t *testing.T) 
 	if got := provider.count(); got != 1 {
 		t.Fatalf("first step discovery calls = %d, want 1", got)
 	}
-	now = now.Add(29 * time.Second)
+	now = now.Add(4 * time.Second)
 	router.refreshCloudPluginCatalogForStep(context.Background(), cfg, "thread-a", "turn-2")
 	if got := provider.count(); got != 1 {
 		t.Fatalf("step inside cooldown discovery calls = %d, want 1", got)
@@ -103,8 +129,8 @@ func TestRefreshCloudPluginCatalogForStepBacksOffFailuresLikeRust(t *testing.T) 
 	if got := provider.count(); got != 2 {
 		t.Fatalf("step after cooldown discovery calls = %d, want 2", got)
 	}
-	// The second failure doubles the cooldown: 60s from now.
-	now = now.Add(59 * time.Second)
+	// The second failure doubles the cooldown: 10s from now.
+	now = now.Add(9 * time.Second)
 	router.refreshCloudPluginCatalogForStep(context.Background(), cfg, "thread-a", "turn-4")
 	if got := provider.count(); got != 2 {
 		t.Fatalf("step inside doubled cooldown discovery calls = %d, want 2", got)
@@ -118,6 +144,59 @@ func TestRefreshCloudPluginCatalogForStepBacksOffFailuresLikeRust(t *testing.T) 
 	router.refreshCloudPluginCatalogForStep(context.Background(), cfg, "thread-b", "turn-1")
 	if got := provider.count(); got != 4 {
 		t.Fatalf("other thread discovery calls = %d, want 4", got)
+	}
+}
+
+func TestRefreshCloudPluginCatalogRetriesPartialCatalogWithBackoffLikeRust(t *testing.T) {
+	provider := &sequencePluginCatalogProvider{catalogs: []*plugin.PluginCatalog{
+		{
+			IsPartial: true,
+			Warnings:  []string{"cloud listing was truncated"},
+			Entries: []plugin.PluginCatalogEntry{{
+				ID:          plugin.PluginIdentity{Kind: plugin.PluginIdentityRemote, RemotePluginID: "plugins~Plugin_partial"},
+				DisplayName: "Partial",
+			}},
+		},
+		{
+			Entries: []plugin.PluginCatalogEntry{{
+				ID:          plugin.PluginIdentity{Kind: plugin.PluginIdentityRemote, RemotePluginID: "plugins~Plugin_complete"},
+				DisplayName: "Complete",
+			}},
+		},
+	}}
+	router := newCloudCatalogTestRouter(t, provider)
+	now := time.Unix(1_700_000_000, 0)
+	router.cloudCatalogs.forThread("thread-a").now = func() time.Time { return now }
+	cfg := &config.Config{}
+
+	router.refreshCloudPluginCatalogForStep(context.Background(), cfg, "thread-a", "turn-1")
+	if got := provider.count(); got != 1 {
+		t.Fatalf("partial discovery calls = %d, want 1", got)
+	}
+	capabilities := router.services.Plugins.EnabledCapabilities()
+	if len(capabilities) != 1 || capabilities[0].RemotePluginID != "plugins~Plugin_partial" {
+		t.Fatalf("published partial catalog = %#v", capabilities)
+	}
+	if !router.cloudCatalogs.forThread("thread-a").pluginBackoffPending(router.cloudPluginCatalogScope()) {
+		t.Fatal("partial catalog did not schedule a retry")
+	}
+
+	now = now.Add(4 * time.Second)
+	router.refreshCloudPluginCatalogForStep(context.Background(), cfg, "thread-a", "turn-2")
+	if got := provider.count(); got != 1 {
+		t.Fatalf("partial discovery calls inside cooldown = %d, want 1", got)
+	}
+	now = now.Add(1 * time.Second)
+	router.refreshCloudPluginCatalogForStep(context.Background(), cfg, "thread-a", "turn-3")
+	if got := provider.count(); got != 2 {
+		t.Fatalf("partial discovery calls after cooldown = %d, want 2", got)
+	}
+	capabilities = router.services.Plugins.EnabledCapabilities()
+	if len(capabilities) != 1 || capabilities[0].RemotePluginID != "plugins~Plugin_complete" {
+		t.Fatalf("published complete catalog = %#v", capabilities)
+	}
+	if router.cloudCatalogs.forThread("thread-a").pluginBackoffPending(router.cloudPluginCatalogScope()) {
+		t.Fatal("complete warning-free catalog kept a retry cooldown")
 	}
 }
 
@@ -136,7 +215,7 @@ func TestRefreshCloudPluginCatalogForStepRetriesCancellationImmediatelyLikeRust(
 	}
 }
 
-func TestRefreshCloudPluginCatalogForStepReusesTurnDiscoveryLikeRust(t *testing.T) {
+func TestRefreshCloudPluginCatalogForStepReusesCompleteCatalogAcrossTurnsLikeRust(t *testing.T) {
 	provider := &countingPluginCatalogProvider{}
 	router := newCloudCatalogTestRouter(t, provider)
 	cfg := &config.Config{}
@@ -150,8 +229,25 @@ func TestRefreshCloudPluginCatalogForStepReusesTurnDiscoveryLikeRust(t *testing.
 		t.Fatalf("published catalog key = %q, want %q", key, router.cloudPluginCatalogScope())
 	}
 	router.refreshCloudPluginCatalogForStep(context.Background(), cfg, "thread-a", "turn-2")
-	if got := provider.count(); got != 2 {
-		t.Fatalf("next-turn discovery calls = %d, want 2", got)
+	if got := provider.count(); got != 1 {
+		t.Fatalf("next-turn discovery calls = %d, want the complete catalog reused", got)
+	}
+}
+
+func TestRefreshCloudPluginCatalogForStepInvalidatesOnProviderChangeLikeRust(t *testing.T) {
+	first := &countingPluginCatalogProvider{}
+	router := newCloudCatalogTestRouter(t, first)
+	cfg := &config.Config{}
+
+	router.refreshCloudPluginCatalogForStep(context.Background(), cfg, "thread-a", "turn-1")
+	if got := first.count(); got != 1 {
+		t.Fatalf("first provider discovery calls = %d, want 1", got)
+	}
+	second := &sequencePluginCatalogProvider{}
+	router.services.PluginCatalogProvider = second
+	router.refreshCloudPluginCatalogForStep(context.Background(), cfg, "thread-a", "turn-2")
+	if got := second.count(); got != 1 {
+		t.Fatalf("replacement provider discovery calls = %d, want 1", got)
 	}
 }
 
@@ -220,7 +316,7 @@ func TestOrchestratorSkillDiscoveryBacksOffAndWarnsOncePerTurnLikeRust(t *testin
 	}
 	// A later turn inside the cooldown must not start discovery or report the
 	// failure again: Rust returns before discovering while a retry is pending.
-	now = now.Add(20 * time.Second)
+	now = now.Add(4 * time.Second)
 	_, cooledWarnings := router.orchestratorSkillMetadataForRuntime(threadID, "turn-2")
 	requestMu.Lock()
 	cooledRequestCount := requestCount
@@ -232,7 +328,7 @@ func TestOrchestratorSkillDiscoveryBacksOffAndWarnsOncePerTurnLikeRust(t *testin
 		t.Fatalf("cooldown discovery requests = %d, want no new requests after %d", cooledRequestCount, firstRequestCount)
 	}
 	// Once the cooldown elapses, a new resource generation retries discovery.
-	now = now.Add(11 * time.Second)
+	now = now.Add(6 * time.Second)
 	router.services.MCP.Refresh()
 	_, retriedWarnings := router.orchestratorSkillMetadataForRuntime(threadID, "turn-3")
 	requestMu.Lock()
