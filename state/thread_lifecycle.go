@@ -208,6 +208,11 @@ func (r *StateRuntime) DeleteThreadsStrict(ctx context.Context, threadIDs []stri
 		if _, err := tx.ExecContext(ctx, `DELETE FROM thread_read_receipts WHERE thread_id = ?`, threadID); err != nil {
 			return 0, fmt.Errorf("delete read receipt for thread %s: %w", threadID, err)
 		}
+		// Rust #61339 removes a session's model-facing aliases in the same
+		// delete transaction as the rest of its state.
+		if err := deleteSessionModelIDs(ctx, tx, threadID); err != nil {
+			return 0, err
+		}
 	}
 	for _, threadID := range ids {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM thread_spawn_edges WHERE parent_thread_id = ? OR child_thread_id = ?`, threadID, threadID); err != nil {

@@ -7,7 +7,9 @@
 package modelfacingid
 
 import (
+	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -56,7 +58,7 @@ func (id ID) String() string {
 // Digits renders the value zero-padded to a multiple of three digits for
 // protocols that supply their own type prefix.
 func (id ID) Digits() string {
-	return fmt.Sprintf("%0*d", decimalWidth(id.Value), id.Value)
+	return PaddedDigits(id.Value)
 }
 
 // decimalWidth reports the number of digits rounded up to a multiple of three.
@@ -133,6 +135,17 @@ func (g *Generator) Snapshot() State {
 	return g.state
 }
 
+// IDAt recovers the identifier at a stored binding ordinal in this generator's
+// sequence (Rust #61339 ModelFacingIdGeneratorState::id_at).
+func (s State) IDAt(ordinal uint64) (ID, error) {
+	s.NextOrdinal = ordinal
+	generator, err := Restore(s)
+	if err != nil {
+		return ID{}, err
+	}
+	return generator.Next(), nil
+}
+
 // Restore continues a snapshot's sequence from its next unissued ordinal.
 func Restore(state State) (*Generator, error) {
 	if state.Version != Version {
@@ -143,6 +156,95 @@ func Restore(state State) (*Generator, error) {
 	}
 	return &Generator{state: state}, nil
 }
+
+// PaddedDigits renders a raw value the way a model-facing ID displays it.
+func PaddedDigits(value uint64) string {
+	return fmt.Sprintf("%0*d", decimalWidth(value), value)
+}
+
+// ModelIDKey identifies one external object within a stable alias namespace.
+// Kind is the namespace prefix and Key is the canonical JSON encoding of the
+// external identifier (Rust #61339 ModelIdKey).
+type ModelIDKey struct {
+	Kind string
+	Key  string
+}
+
+// ModelIDKind is implemented by values that can be aliased in a namespace.
+type ModelIDKind interface {
+	ModelIDPrefix() string
+}
+
+// NewModelIDKey canonicalizes key so equal values always produce the same
+// alias lookup. Object keys are sorted recursively, matching Rust's
+// sort_all_objects before serialization.
+func NewModelIDKey[K ModelIDKind](key K) (ModelIDKey, error) {
+	encoded, err := json.Marshal(key)
+	if err != nil {
+		return ModelIDKey{}, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return ModelIDKey{}, err
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return ModelIDKey{}, err
+	}
+	return ModelIDKey{Kind: key.ModelIDPrefix(), Key: string(canonical)}, nil
+}
+
+// ModelIDMap is one namespace's initial generator state and the external keys
+// in allocation order (Rust #61339 ModelIdMap).
+type ModelIDMap struct {
+	Initial State    `json:"initial"`
+	Keys    []string `json:"keys"`
+}
+
+// NewModelIDMap starts an empty namespace from a session seed.
+func NewModelIDMap(seed uint64, kind string) (ModelIDMap, error) {
+	generator, err := New(seed, kind)
+	if err != nil {
+		return ModelIDMap{}, err
+	}
+	return ModelIDMap{Initial: generator.Snapshot()}, nil
+}
+
+// Lookup returns the alias bound to key, if any.
+func (m ModelIDMap) Lookup(key string) (*ID, error) {
+	for ordinal, bound := range m.Keys {
+		if bound != key {
+			continue
+		}
+		id, err := m.Initial.IDAt(uint64(ordinal))
+		if err != nil {
+			return nil, err
+		}
+		return &id, nil
+	}
+	return nil, nil
+}
+
+// RegisteredEnvironmentID is an executor ID assigned by the client.
+type RegisteredEnvironmentID string
+
+// ModelIDPrefix implements ModelIDKind.
+func (RegisteredEnvironmentID) ModelIDPrefix() string { return "env" }
+
+// String returns the registered identifier.
+func (id RegisteredEnvironmentID) String() string { return string(id) }
+
+// ModelEnvironmentID is the model-facing `env` alias for a registered
+// environment (Rust #61339).
+type ModelEnvironmentID uint64
+
+// String renders the alias with its namespace prefix.
+func (id ModelEnvironmentID) String() string { return "env" + PaddedDigits(uint64(id)) }
+
+// ModelEnvironmentIDFromID converts a generated alias.
+func ModelEnvironmentIDFromID(id ID) ModelEnvironmentID { return ModelEnvironmentID(id.Value) }
 
 // deriveSeed salts the session seed with the ID kind's name. The salt prefix in
 // the displayed ID and the derived seed must stay in step, so the derivation is

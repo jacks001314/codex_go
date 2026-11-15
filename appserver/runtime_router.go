@@ -66,8 +66,11 @@ import (
 )
 
 type RuntimeServices struct {
-	ThreadRouter           *Router
-	StateRuntime           *state.StateRuntime
+	ThreadRouter *Router
+	StateRuntime *state.StateRuntime
+	// ModelIDs is the session-scoped alias authority (Rust #61339
+	// ThreadStore::model_ids). Nil falls back to StateRuntime when available.
+	ModelIDs               state.SessionModelIDStore
 	CloseStateRuntime      bool
 	LogDBHandler           *state.LogDBHandler
 	LogDBInstallation      *state.LogDBInstallation
@@ -1100,6 +1103,19 @@ func (r *RuntimeRouter) rolloutBudgetFollowUp(threadID string) turn.SamplingFoll
 		}
 		return nil
 	}
+}
+
+// SessionModelIDs returns the alias authority this store exposes, mirroring
+// Rust #61339 ThreadStore::model_ids. Local SQLite storage is authoritative
+// unless a caller installs a different implementation.
+func (s RuntimeServices) SessionModelIDs() state.SessionModelIDStore {
+	if s.ModelIDs != nil {
+		return s.ModelIDs
+	}
+	if s.StateRuntime != nil {
+		return s.StateRuntime
+	}
+	return nil
 }
 
 func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
