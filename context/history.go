@@ -474,6 +474,7 @@ func IsModelGeneratedHistoryItem(item *HistoryItem) bool {
 	return false
 }
 
+// Configuration updates and internal system messages require harness provenance.
 func IsAPIMessage(item *HistoryItem) bool {
 	if item == nil {
 		return false

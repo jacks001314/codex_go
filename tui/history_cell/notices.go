@@ -13,6 +13,9 @@ import (
 const (
 	SafetyAccessBlockTitle        = "This content can't be shown"
 	SafetyAccessBlockLearnMoreURL = "https://help.openai.com/en/articles/20001326"
+	// SafetyAccessAstraLearnMoreURL explains the Astra-specific reduced-refusals
+	// behavior (Rust #61402 new_cyber_policy_error_event Notice::Astra).
+	SafetyAccessAstraLearnMoreURL = "https://help.openai.com/en/articles/20001258-openai-daybreak-trusted-access-for-cyber-overview#reduced-refusals-behavior-by-model"
 )
 
 type UpdateAvailableHistoryCell struct {
@@ -106,11 +109,11 @@ func NewCyberPolicyErrorEvent(notice tui.DaybreakNotice) SafetyAccessBlockCell {
 		cell.Body = "If you\u2019re doing authorized security work, apply for Daybreak to get broader access."
 		cell.Actions = []SafetyAccessAction{
 			{Label: "Learn more", URL: SafetyAccessBlockLearnMoreURL},
-			{Label: "Apply for Daybreak", URL: "https://openai.com/form/enterprise-trusted-access-for-cyber/"},
+			{Label: "Apply for Daybreak", URL: "https://chatgpt.com/admin/status-and-access"},
 		}
 	case tui.DaybreakNoticeAstra:
 		cell.Body = "Daybreak isn\u2019t available for Astra. Some cybersecurity requests may still be limited."
-		cell.Actions = []SafetyAccessAction{{Label: "Learn more", URL: SafetyAccessBlockLearnMoreURL}}
+		cell.Actions = []SafetyAccessAction{{Label: "Learn more", URL: SafetyAccessAstraLearnMoreURL}}
 	case tui.DaybreakNoticeDisabled:
 		cell.Body = "Daybreak is currently off. If you\u2019re doing authorized security work, turn it on and try your request again."
 		cell.Actions = []SafetyAccessAction{{Label: "Learn more", URL: SafetyAccessBlockLearnMoreURL}}

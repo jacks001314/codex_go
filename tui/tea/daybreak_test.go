@@ -28,7 +28,7 @@ func TestModelCyberPolicyErrorRendersDaybreakRefusalCell(t *testing.T) {
 	text := modelRawMessageText(model)
 	if !strings.Contains(text, "This content can\u2019t be shown") ||
 		!strings.Contains(text, "apply for Daybreak to get broader access") ||
-		!strings.Contains(text, "Apply for Daybreak: https://openai.com/form/enterprise-trusted-access-for-cyber/") {
+		!strings.Contains(text, "Apply for Daybreak: https://chatgpt.com/admin/status-and-access") {
 		t.Fatalf("missing apply refusal cell:\n%s", text)
 	}
 }

@@ -391,7 +391,7 @@ func TestNoticeHistoryCells(t *testing.T) {
 		t.Fatalf("safety raw:\n%s", got)
 	}
 	cyber := NewCyberPolicyErrorEvent(tui.DaybreakNoticeApply)
-	if got := strings.Join(cyber.RawLines(), "\n"); !strings.Contains(got, "you\u2019re doing authorized security work") || !strings.Contains(got, "https://openai.com/form/enterprise-trusted-access-for-cyber/") {
+	if got := strings.Join(cyber.RawLines(), "\n"); !strings.Contains(got, "you\u2019re doing authorized security work") || !strings.Contains(got, "https://chatgpt.com/admin/status-and-access") {
 		t.Fatalf("cyber raw:\n%s", got)
 	}
 
@@ -793,14 +793,14 @@ func TestCyberPolicyCopyFollowsDaybreakNotice(t *testing.T) {
 	apply := NewCyberPolicyErrorEvent(tui.DaybreakNoticeApply)
 	if got := strings.Join(apply.RawLines(), "\n"); !strings.Contains(got, "This content can\u2019t be shown") ||
 		!strings.Contains(got, "apply for Daybreak to get broader access") ||
-		!strings.Contains(got, "Apply for Daybreak: https://openai.com/form/enterprise-trusted-access-for-cyber/") ||
+		!strings.Contains(got, "Apply for Daybreak: https://chatgpt.com/admin/status-and-access") ||
 		!strings.Contains(got, learnMore) {
 		t.Fatalf("apply raw:\n%s", got)
 	}
 
 	astra := NewCyberPolicyErrorEvent(tui.DaybreakNoticeAstra)
 	if got := strings.Join(astra.RawLines(), "\n"); !strings.Contains(got, "Daybreak isn\u2019t available for Astra") ||
-		strings.Contains(got, "Apply for Daybreak:") || !strings.Contains(got, learnMore) {
+		strings.Contains(got, "Apply for Daybreak:") || !strings.Contains(got, "Learn more: "+SafetyAccessAstraLearnMoreURL) {
 		t.Fatalf("astra raw:\n%s", got)
 	}
 

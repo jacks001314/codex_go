@@ -18,8 +18,7 @@ func TestSafetyAccessBlockLinesMatchRustSnapshot(t *testing.T) {
 		"  We take extra care with some cybersecurity requests. If you’re doing",
 		"  authorized security work, apply for Daybreak to get broader access.",
 		"  Learn more: https://help.openai.com/en/articles/20001326",
-		"  Apply for Daybreak: https://openai.com/form/enterprise-trusted-access-for-",
-		"  cyber/",
+		"  Apply for Daybreak: https://chatgpt.com/admin/status-and-access",
 	}, "\n"), "\n")
 	if got := loading.DisplayLines(80); strings.Join(got, "\n") != strings.Join(wantLoading, "\n") {
 		t.Fatalf("loading block =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(wantLoading, "\n"))
@@ -34,8 +33,7 @@ func TestSafetyAccessBlockLinesMatchRustSnapshot(t *testing.T) {
 		"  account security and recovery. If you’re doing authorized security work,",
 		"  apply for Daybreak to get broader access.",
 		"  Learn more: https://help.openai.com/en/articles/20001326",
-		"  Apply for Daybreak: https://openai.com/form/enterprise-trusted-access-for-",
-		"  cyber/",
+		"  Apply for Daybreak: https://chatgpt.com/admin/status-and-access",
 	}, "\n"), "\n")
 	if got := explained.DisplayLines(80); strings.Join(got, "\n") != strings.Join(wantExplained, "\n") {
 		t.Fatalf("explained block =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(wantExplained, "\n"))
