@@ -24,6 +24,11 @@ func (m *Model) applyNewSessionStartFailed(message NewSessionStartFailedMsg) {
 	}
 	m.removeOptimisticUserPrompt(message.Request)
 	m.restoreSubmissionDraft(message.Request)
+	// The replacement thread never produced turn/started, so no receipt will
+	// clear the pending start (Rust take_submitted_message does it when the
+	// submission is rejected). Leaving it set would hold queued follow-ups
+	// forever even though the composer is editable again.
+	m.userTurnPendingStart = false
 	m.programStatusAfterTurn = codextui.ProgramStatus{State: codextui.ProgramStatusError}
 	m.setStatus("error")
 	m.addErrorHistoryMessage(text)
