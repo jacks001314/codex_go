@@ -3,7 +3,6 @@ package config
 import (
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -200,7 +199,7 @@ func managedNetworkDomainRules(values map[string]any) map[string]struct{} {
 	domains, _ := values["domains"].(map[string]any)
 	for pattern, raw := range domains {
 		permission := strings.ToLower(strings.TrimSpace(fmt.Sprint(raw)))
-		rules[permission+"\\x00"+managedNetworkPatternIdentity(pattern)] = struct{}{}
+		rules[permission+"\\x00"+managedNetworkDomainPatternIdentity(permission, pattern)] = struct{}{}
 	}
 	return rules
 }
@@ -208,7 +207,13 @@ func managedNetworkDomainRules(values map[string]any) map[string]struct{} {
 func managedNetworkReviewPatterns(values map[string]any) map[string]struct{} {
 	patterns := map[string]struct{}{}
 	for _, pattern := range managedNetworkStringList(values["review_domains"]) {
-		patterns[managedNetworkPatternIdentity(pattern)] = struct{}{}
+		identity, err := network.CanonicalReviewProxyPattern(pattern)
+		if err != nil {
+			// Unsupported patterns retain their exact spelling, so they can never
+			// compare equal to a valid selector (Rust #61351).
+			identity = pattern
+		}
+		patterns[identity] = struct{}{}
 	}
 	return patterns
 }
@@ -240,27 +245,23 @@ func equalManagedNetworkStringSets(left, right map[string]struct{}) bool {
 	return true
 }
 
-// managedNetworkPatternIdentity canonicalizes one selector the way the proxy
-// compares it, retaining the original spelling when it cannot be parsed.
-func managedNetworkPatternIdentity(pattern string) string {
-	pattern = strings.TrimSpace(pattern)
-	prefix := ""
-	remainder := pattern
-	for _, candidate := range []string{"**.", "*."} {
-		if strings.HasPrefix(remainder, candidate) {
-			prefix = candidate
-			remainder = strings.TrimPrefix(remainder, candidate)
-			break
-		}
+// managedNetworkDomainPatternIdentity uses the proxy's permission-specific
+// comparison key (Rust #61351): grants keep IPv6 spelling and local wildcard
+// ports, while denials compare unscoped IPv6 literals by address. Unsupported
+// patterns retain their exact spelling and can never compare equal to a valid
+// selector.
+func managedNetworkDomainPatternIdentity(permission string, pattern string) string {
+	var identity string
+	var err error
+	if permission == strings.ToLower(string(NetworkDeny)) {
+		identity, err = network.CanonicalDenyProxyPattern(pattern)
+	} else {
+		identity, err = network.CanonicalAllowProxyPattern(pattern)
 	}
-	host := network.NormalizeProxyHost(remainder)
-	if host == "" {
+	if err != nil {
 		return pattern
 	}
-	if ip := net.ParseIP(host); ip != nil {
-		host = ip.String()
-	}
-	return prefix + host
+	return identity
 }
 
 // validatePermissionProfileRequirements mirrors Rust's

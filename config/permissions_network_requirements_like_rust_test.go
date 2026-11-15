@@ -102,3 +102,76 @@ enabled = false
 		}
 	}
 }
+
+// TestDualNetworkSpellingsUsePermissionSpecificSelectorIdentitiesLikeRust
+// mirrors Rust #61351: grant and restriction comparison keys differ, so an
+// allow selector with a wildcard port is not the same grant as the bare literal.
+func TestDualNetworkSpellingsUsePermissionSpecificSelectorIdentitiesLikeRust(t *testing.T) {
+	accepted := map[string]string{
+		"subdomain glob spelling": `
+[network_proxy]
+enabled = false
+[network_proxy.domains]
+"?*.EXAMPLE.com." = "allow"
+[permissions.network]
+enabled = false
+[permissions.network.domains]
+"*.example.com" = "allow"
+`,
+		"deny IPv6 spelling": `
+[network_proxy]
+enabled = false
+[network_proxy.domains]
+"2001:0db8:0:0:0:0:0:1" = "deny"
+[permissions.network]
+enabled = false
+[permissions.network.domains]
+"2001:db8::1" = "deny"
+`,
+		"review subdomain glob": `
+[network_proxy]
+enabled = false
+review_domains = ["?*.Example.com."]
+[permissions.network]
+enabled = false
+review_domains = ["*.example.com"]
+`,
+	}
+	for name, document := range accepted {
+		if _, err := ParseRequirementsTOML([]byte(document)); err != nil {
+			t.Fatalf("%s rejected: %v", name, err)
+		}
+	}
+
+	rejected := map[string]string{
+		"allow wildcard port": `
+[network_proxy]
+enabled = false
+[network_proxy.domains]
+"[::1]:*" = "allow"
+[permissions.network]
+enabled = false
+[permissions.network.domains]
+"::1" = "allow"
+`,
+		"deny IPv4 spelling": `
+[network_proxy]
+enabled = false
+[network_proxy.domains]
+"127.000.000.001" = "deny"
+[permissions.network]
+enabled = false
+[permissions.network.domains]
+"127.0.0.1" = "deny"
+`,
+	}
+	for name, document := range rejected {
+		_, err := ParseRequirementsTOML([]byte(document))
+		if err == nil {
+			t.Fatalf("%s accepted, want a network policy mismatch", name)
+		}
+		if !strings.Contains(err.Error(), "same network policy") {
+			t.Fatalf("%s error = %v, want the shared-policy guidance", name, err)
+		}
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"unicode"
 
 	"github.com/gobwas/glob"
 )
@@ -265,6 +266,173 @@ func ParseProxyDomainPattern(input string) ProxyDomainPattern {
 	default:
 		return ProxyDomainPattern{Kind: ProxyPatternExact, Domain: normalizeDomain(input)}
 	}
+}
+
+// CanonicalAllowProxyPattern validates an allow selector and returns the
+// comparison identity the proxy uses for it (Rust #61351
+// network-proxy/src/domain_matcher.rs::canonical_allow_pattern).
+//
+// A grant keeps the textual spelling of IPv4/IPv6 literals, and a wildcard in a
+// stripped port still disqualifies the rule from the local-binding exception, so
+// `[::1]:*` and `::1` are different grants.
+func CanonicalAllowProxyPattern(pattern string) (string, error) {
+	host, err := canonicalProxyDomainPattern(pattern, false)
+	if err != nil {
+		return "", err
+	}
+	if strings.ContainsAny(pattern, "*?") && !strings.ContainsAny(host, "*?") && isLocalProxyLiteral(host) {
+		if strings.Contains(host, ":") {
+			return "[" + host + "]:*", nil
+		}
+		return host + ":*", nil
+	}
+	return host, nil
+}
+
+// CanonicalDenyProxyPattern validates a deny selector, including the global
+// wildcard restriction, and compresses unscoped IPv6 literals by address
+// (Rust #61351 canonical_deny_pattern).
+func CanonicalDenyProxyPattern(pattern string) (string, error) {
+	host, err := canonicalProxyDomainPattern(pattern, true)
+	if err != nil {
+		return "", err
+	}
+	return restrictiveProxyDomainIdentity(host), nil
+}
+
+// CanonicalReviewProxyPattern mirrors CanonicalDenyProxyPattern's identity but
+// allows global wildcards like an allow selector (Rust #61351
+// canonical_review_pattern).
+func CanonicalReviewProxyPattern(pattern string) (string, error) {
+	host, err := canonicalProxyDomainPattern(pattern, false)
+	if err != nil {
+		return "", err
+	}
+	return restrictiveProxyDomainIdentity(host), nil
+}
+
+// restrictiveProxyDomainIdentity compares unscoped IPv6 literals by address.
+func restrictiveProxyDomainIdentity(pattern string) string {
+	ip := net.ParseIP(pattern)
+	if ip == nil || ip.To4() != nil {
+		return pattern
+	}
+	return ip.String()
+}
+
+func canonicalProxyDomainPattern(pattern string, rejectGlobalWildcard bool) (string, error) {
+	normalized, err := validateProxyDomainPattern(pattern, rejectGlobalWildcard)
+	if err != nil {
+		return "", err
+	}
+	// Subdomains-only selectors compile to the single-byte glob `?*.`. Treat the
+	// explicitly written glob as the same selector for comparisons.
+	if domain, ok := strings.CutPrefix(normalized, "?*."); ok {
+		return "*." + domain, nil
+	}
+	return normalized, nil
+}
+
+func validateProxyDomainPattern(pattern string, rejectGlobalWildcard bool) (string, error) {
+	if rejectGlobalWildcard && isGlobalWildcardProxyDomainPattern(pattern) {
+		return "", fmt.Errorf("unsupported global wildcard domain pattern %q; use exact hosts or scoped wildcards like *.example.com or **.example.com", strings.TrimSpace(pattern))
+	}
+	raw := strings.TrimSpace(pattern)
+	if strings.Contains(raw, "{") || strings.Contains(raw, "}") || strings.Contains(raw, "\\") || strings.Contains(raw, "/") || strings.IndexFunc(raw, unicode.IsSpace) >= 0 {
+		return "", fmt.Errorf("unsupported domain pattern syntax: %s", pattern)
+	}
+	host := raw
+	if trimmed, ok := strings.CutPrefix(host, "**."); ok {
+		host = trimmed
+	} else if trimmed, ok := strings.CutPrefix(host, "*."); ok {
+		host = trimmed
+	}
+	if strings.Contains(host, "**") {
+		return "", fmt.Errorf("unsupported repeated wildcard: %s", pattern)
+	}
+	if strings.ContainsAny(host, "[]") && !proxyDomainBracketsSupported(host) {
+		return "", fmt.Errorf("brackets are only supported for IPv6 literals or [*]: %s", pattern)
+	}
+	normalized := normalizeProxyConstraintPattern(pattern)
+	switch normalized {
+	case "", "*.", "**.":
+		return "", fmt.Errorf("domain pattern is empty")
+	}
+	return normalized, nil
+}
+
+func proxyDomainBracketsSupported(host string) bool {
+	rest, ok := strings.CutPrefix(host, "[")
+	if !ok {
+		return false
+	}
+	ip, suffix, ok := strings.Cut(rest, "]")
+	if !ok || strings.ContainsAny(ip, "[]") || strings.ContainsAny(suffix, "[]") {
+		return false
+	}
+	normalized := normalizeDNSHostOrIPLiteral(ip)
+	unscoped := normalized
+	if before, _, found := strings.Cut(normalized, "%"); found {
+		unscoped = before
+	}
+	if normalized != "*" && !isProxyIPv6Literal(unscoped) {
+		return false
+	}
+	return proxyDomainSuffixAllDots(suffix) || strings.HasPrefix(suffix, ":")
+}
+
+func isProxyIPv6Literal(value string) bool {
+	return strings.Contains(value, ":") && net.ParseIP(value) != nil
+}
+
+func proxyDomainSuffixAllDots(suffix string) bool {
+	for _, char := range suffix {
+		if char != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+// isLocalProxyLiteral reports whether host names localhost or a non-public IP
+// literal (Rust #61351 policy::is_local_literal).
+func isLocalProxyLiteral(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	value := host
+	if unscoped := unscopedIPLiteral(host); unscoped != "" {
+		value = unscoped
+	}
+	return IsNonPublicProxyIP(net.ParseIP(value))
+}
+
+func isGlobalWildcardProxyDomainPattern(pattern string) bool {
+	for _, candidate := range expandProxyDomainPattern(normalizeProxyConstraintPattern(pattern)) {
+		if candidate == "*" {
+			return true
+		}
+	}
+	return false
+}
+
+func expandProxyDomainPattern(pattern string) []string {
+	pattern = strings.TrimSpace(pattern)
+	if domain, ok := strings.CutPrefix(pattern, "**."); ok {
+		domain = strings.TrimSpace(domain)
+		if domain == "" {
+			return []string{""}
+		}
+		return []string{domain, "?*." + domain}
+	}
+	if domain, ok := strings.CutPrefix(pattern, "*."); ok {
+		domain = strings.TrimSpace(domain)
+		if domain == "" {
+			return []string{""}
+		}
+		return []string{"?*." + domain}
+	}
+	return []string{pattern}
 }
 
 func (p *ProxyDomainPattern) Allows(candidate ProxyDomainPattern) bool {
