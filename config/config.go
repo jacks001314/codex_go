@@ -1675,7 +1675,16 @@ func validateKnownFeatureFieldsAt(value any, prefix string) error {
 		}
 	}
 	if tokenBudget, ok := features["token_budget"].(map[string]any); ok {
-		known := map[string]bool{"enabled": true, "reminder_threshold_tokens": true, "reminder_message_template": true, "guidance_message": true, "auto_compact_fallback_prompt": true, "auto_compact_fallback_buffer_tokens": true}
+		known := map[string]bool{
+			"enabled":                             true,
+			"use_history_notes_extension":         true,
+			"context_window_as_tool_output":       true,
+			"reminder_threshold_tokens":           true,
+			"reminder_message_template":           true,
+			"guidance_message":                    true,
+			"auto_compact_fallback_prompt":        true,
+			"auto_compact_fallback_buffer_tokens": true,
+		}
 		for key := range tokenBudget {
 			if !known[key] {
 				return fmt.Errorf("unknown configuration field `%s.token_budget.%s`", prefix, key)

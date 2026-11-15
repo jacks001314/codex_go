@@ -619,13 +619,15 @@ type RuntimeRouter struct {
 	// invocationRegistries holds the live V2 tool-call registry of each thread
 	// (Rust #57586 HostToolInvocationLookup). Host child creation looks a call up
 	// here before preparing or starting a reserved child.
-	invocationRegistriesMu sync.Mutex
-	invocationRegistries   map[string]*agent.InvocationRegistry
-	newContextWindowMu     sync.Mutex
-	newContextWindowReq    map[string]bool
-	contextWindowMu        sync.Mutex
-	contextWindowIDs       map[string]string
-	windowNumbers          map[string]uint64
+	invocationRegistriesMu   sync.Mutex
+	invocationRegistries     map[string]*agent.InvocationRegistry
+	newContextWindowMu       sync.Mutex
+	newContextWindowReq      map[string]bool
+	contextWindowMu          sync.Mutex
+	contextWindowIDs         map[string]string
+	firstContextWindowIDs    map[string]string
+	previousContextWindowIDs map[string]string
+	windowNumbers            map[string]uint64
 	// threadSampleCancels tracks in-flight thread/sample requests by connection
 	// and JSON-RPC request id so thread/sample/cancel can stop only that sample.
 	threadSampleMu      sync.Mutex
@@ -21721,7 +21723,54 @@ func (r *RuntimeRouter) contextWindowIDForThread(threadID string) string {
 	}
 	id := newContextWindowID()
 	r.contextWindowIDs[threadID] = id
+	if r.firstContextWindowIDs == nil {
+		r.firstContextWindowIDs = map[string]string{}
+	}
+	if r.firstContextWindowIDs[threadID] == "" {
+		r.firstContextWindowIDs[threadID] = id
+	}
 	return id
+}
+
+// autoCompactWindowIDs is the thread's context-window lineage. Rust keeps the
+// first, previous, and current IDs in AutoCompactWindowIds so every context
+// window can identify itself and the windows it descended from.
+type autoCompactWindowIDs struct {
+	First    string
+	Previous string
+	Current  string
+}
+
+// autoCompactWindowIDsForThread returns the thread's context-window lineage,
+// initializing the first ID together with the current one on first use.
+func (r *RuntimeRouter) autoCompactWindowIDsForThread(threadID string) autoCompactWindowIDs {
+	threadID = strings.TrimSpace(threadID)
+	if r == nil || threadID == "" {
+		return autoCompactWindowIDs{}
+	}
+	r.contextWindowMu.Lock()
+	defer r.contextWindowMu.Unlock()
+	if r.contextWindowIDs == nil {
+		r.contextWindowIDs = map[string]string{}
+	}
+	current := r.contextWindowIDs[threadID]
+	if current == "" {
+		current = newContextWindowID()
+		r.contextWindowIDs[threadID] = current
+	}
+	if r.firstContextWindowIDs == nil {
+		r.firstContextWindowIDs = map[string]string{}
+	}
+	first := r.firstContextWindowIDs[threadID]
+	if first == "" {
+		first = current
+		r.firstContextWindowIDs[threadID] = first
+	}
+	return autoCompactWindowIDs{
+		First:    first,
+		Previous: r.previousContextWindowIDs[threadID],
+		Current:  current,
+	}
 }
 
 // windowNumberForThread returns the zero-based context window number for a
@@ -21780,6 +21829,20 @@ func (r *RuntimeRouter) advanceContextWindowID(threadID string) {
 	if r.contextWindowIDs == nil {
 		r.contextWindowIDs = map[string]string{}
 	}
+	previous := r.contextWindowIDs[threadID]
+	if previous == "" {
+		previous = newContextWindowID()
+	}
+	if r.firstContextWindowIDs == nil {
+		r.firstContextWindowIDs = map[string]string{}
+	}
+	if r.firstContextWindowIDs[threadID] == "" {
+		r.firstContextWindowIDs[threadID] = previous
+	}
+	if r.previousContextWindowIDs == nil {
+		r.previousContextWindowIDs = map[string]string{}
+	}
+	r.previousContextWindowIDs[threadID] = previous
 	r.contextWindowIDs[threadID] = newContextWindowID()
 }
 
@@ -21819,6 +21882,10 @@ func (r *RuntimeRouter) restoreConversationWindow(threadID string) {
 	number, hasNumber := extra["auto_compact_window_number"]
 	windowID, _ := extra["auto_compact_context_window_id"].(string)
 	windowID = strings.TrimSpace(windowID)
+	firstWindowID, _ := extra["auto_compact_first_context_window_id"].(string)
+	firstWindowID = strings.TrimSpace(firstWindowID)
+	previousWindowID, _ := extra["auto_compact_previous_context_window_id"].(string)
+	previousWindowID = strings.TrimSpace(previousWindowID)
 	if !hasNumber && windowID == "" {
 		return
 	}
@@ -21840,6 +21907,24 @@ func (r *RuntimeRouter) restoreConversationWindow(threadID string) {
 		}
 		if r.contextWindowIDs[threadID] == "" {
 			r.contextWindowIDs[threadID] = parsed.String()
+		}
+		if r.firstContextWindowIDs == nil {
+			r.firstContextWindowIDs = map[string]string{}
+		}
+		if r.firstContextWindowIDs[threadID] == "" {
+			if parsedFirst, firstOK := protocol.ParseContextWindowID(firstWindowID); firstOK {
+				r.firstContextWindowIDs[threadID] = parsedFirst.String()
+			} else {
+				r.firstContextWindowIDs[threadID] = parsed.String()
+			}
+		}
+		if parsedPrevious, previousOK := protocol.ParseContextWindowID(previousWindowID); previousOK {
+			if r.previousContextWindowIDs == nil {
+				r.previousContextWindowIDs = map[string]string{}
+			}
+			if r.previousContextWindowIDs[threadID] == "" {
+				r.previousContextWindowIDs[threadID] = parsedPrevious.String()
+			}
 		}
 	}
 }

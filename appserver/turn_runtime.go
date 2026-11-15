@@ -7710,6 +7710,14 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	if windowID := r.contextWindowIDForThread(request.ThreadID); windowID != "" {
 		extra["auto_compact_context_window_id"] = windowID
 	}
+	if ids := r.autoCompactWindowIDsForThread(request.ThreadID); ids.Current != "" {
+		extra["auto_compact_first_context_window_id"] = ids.First
+		if ids.Previous != "" {
+			extra["auto_compact_previous_context_window_id"] = ids.Previous
+		} else {
+			delete(extra, "auto_compact_previous_context_window_id")
+		}
+	}
 	record.Metadata.Extra = extra
 	if replacementContext != nil {
 		record.Metadata.WorldState = append(json.RawMessage(nil), replacementContext.WorldState...)
@@ -7817,6 +7825,14 @@ func (r *RuntimeRouter) resetContextWindow(threadID string, turnID string) error
 	extra["auto_compact_window_number"] = r.windowNumberForThread(threadID)
 	if windowID := r.contextWindowIDForThread(threadID); windowID != "" {
 		extra["auto_compact_context_window_id"] = windowID
+	}
+	if ids := r.autoCompactWindowIDsForThread(threadID); ids.Current != "" {
+		extra["auto_compact_first_context_window_id"] = ids.First
+		if ids.Previous != "" {
+			extra["auto_compact_previous_context_window_id"] = ids.Previous
+		} else {
+			delete(extra, "auto_compact_previous_context_window_id")
+		}
 	}
 	status := compactTokenStatusFromMetadata(extra)
 	status.ShouldCompact = false
@@ -9120,21 +9136,17 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 	if tokenBudget.Enabled {
 		featureEnabled = true
 	}
+	if item := r.contextWindowInputItemForTurn(threadID, cfg, params, modelInfo, tokenBudget); item != nil {
+		inputItems = append(inputItems, item)
+	}
 	if item, err := r.contextWindowGuidanceWorldStateInputItem(
 		threadID,
-		tokenBudget.Enabled && modelInfo != nil && modelInfo.ContextWindow > 0,
+		tokenBudget.Enabled && modelInfo != nil && (modelInfo.ContextWindow > 0 || modelInfo.MaxContextWindow > 0),
 		tokenBudget.GuidanceMessage,
 	); err != nil {
 		return nil, err
 	} else if item != nil {
 		inputItems = append(inputItems, item)
-	}
-	// Rust #40539: inject the history-notes thread hint into the context window
-	// when the extension is enabled and the hint is present.
-	if tokenBudget != nil && tokenBudget.UseHistoryNotesExtension {
-		if item, ok := r.historyNotesThreadHintInputItem(cfg, params, threadID); ok && item != nil {
-			inputItems = append(inputItems, item)
-		}
 	}
 	realtimeStateSessionItems := []session.Item{}
 	if item, err := r.realtimeWorldStateInputItem(threadID, cfg); err != nil {
@@ -15615,24 +15627,23 @@ func (r *RuntimeRouter) contextWindowGuidanceWorldStateInputItem(threadID string
 	return buildRenderedMessage(rendered), nil
 }
 
-// historyNotesThreadHintInputItem fetches the history-notes context-window hint
-// (Rust #40539 contribute_thread_context) and renders it as a developer fragment
-// tagged with the notes.thread_hint content kind.
-func (r *RuntimeRouter) historyNotesThreadHintInputItem(cfg *config.Config, params *turn.TurnStartParams, threadID string) (any, bool) {
+// historyNotesThreadHintText fetches the history-notes context-window hint
+// (Rust #40539 contribute_thread_context). The hint belongs inside the
+// context-window metadata instead of a separate developer message (#61452).
+func (r *RuntimeRouter) historyNotesThreadHintText(cfg *config.Config, params *turn.TurnStartParams, threadID string) (string, bool) {
 	if r == nil || cfg == nil {
-		return nil, false
+		return "", false
 	}
 	backend, sessionID, agentName, ok := r.historyNotesBackendForTurn(cfg, params, threadID)
 	if !ok {
-		return nil, false
+		return "", false
 	}
 	text, ok := backend.ThreadHint(context.Background(), sessionID, agentName)
 	trackHistoryNotesThreadHintStatus(r.services.Analytics, threadID, sessionID, text, ok, time.Now().UTC())
 	if !ok || strings.TrimSpace(text) == "" {
-		return nil, false
+		return "", false
 	}
-	fragment := contextfrag.NewSimpleFragmentWithKind(contextfrag.RoleDeveloper, "", "", text, "notes.thread_hint")
-	return buildRenderedMessage(contextfrag.Render(fragment)), true
+	return strings.TrimSpace(text), true
 }
 
 func sameJSONValue(left json.RawMessage, right json.RawMessage) bool {

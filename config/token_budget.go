@@ -25,6 +25,7 @@ type TokenBudgetDefaults struct {
 type TokenBudgetConfig struct {
 	Enabled                         bool
 	UseHistoryNotesExtension        bool
+	ContextWindowAsToolOutput       bool
 	ReminderThresholdTokens         *int
 	ReminderMessageTemplate         string
 	GuidanceMessage                 string
@@ -91,15 +92,18 @@ func (c *Config) TokenBudgetConfigWithDefaults(defaults *TokenBudgetDefaults) (*
 	out.Enabled, _ = table["enabled"].(bool)
 	hasExplicitSettings := false
 	for key := range table {
-		// Rust #39830: use_history_notes_extension is a gate, not an explicit
-		// token-budget setting.
-		if key != "enabled" && key != "use_history_notes_extension" {
+		// Rust #39830/#61452: the history-notes gate and the context-window
+		// rendering mode are switches, not explicit token-budget overrides.
+		if key != "enabled" && key != "use_history_notes_extension" && key != "context_window_as_tool_output" {
 			hasExplicitSettings = true
 			break
 		}
 	}
 	if value, ok := table["use_history_notes_extension"].(bool); ok {
 		out.UseHistoryNotesExtension = value
+	}
+	if value, ok := table["context_window_as_tool_output"].(bool); ok {
+		out.ContextWindowAsToolOutput = value
 	}
 	if out.Enabled && !hasExplicitSettings && defaults != nil {
 		candidate := *out
@@ -160,7 +164,7 @@ func (c *Config) HasExplicitTokenBudgetSettings() bool {
 	features, _ := c.Values["features"].(map[string]any)
 	table, _ := features["token_budget"].(map[string]any)
 	for key := range table {
-		if key != "enabled" && key != "use_history_notes_extension" {
+		if key != "enabled" && key != "use_history_notes_extension" && key != "context_window_as_tool_output" {
 			return true
 		}
 	}
@@ -204,6 +208,7 @@ func ResolveTokenBudgetConfig(configured *TokenBudgetConfig, useModelDefaults bo
 	candidate := &TokenBudgetConfig{
 		Enabled:                         resolved.Enabled || defaults.Enabled,
 		UseHistoryNotesExtension:        resolved.UseHistoryNotesExtension,
+		ContextWindowAsToolOutput:       resolved.ContextWindowAsToolOutput,
 		ReminderThresholdTokens:         &threshold,
 		ReminderMessageTemplate:         strings.TrimSpace(defaults.ReminderMessageTemplate),
 		GuidanceMessage:                 strings.TrimSpace(defaults.GuidanceMessage),

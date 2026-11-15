@@ -50,6 +50,31 @@ func TestTokenBudgetConfigParsesUseHistoryNotesExtensionLikeRust(t *testing.T) {
 	}
 }
 
+func TestTokenBudgetContextWindowAsToolOutputLikeRust(t *testing.T) {
+	cfg := &Config{Values: map[string]any{"features": map[string]any{"token_budget": map[string]any{
+		"enabled": true, "context_window_as_tool_output": true,
+	}}}}
+	got, err := cfg.TokenBudgetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Enabled || !got.ContextWindowAsToolOutput {
+		t.Fatalf("config = %+v, want the tool-output rendering mode", got)
+	}
+	if cfg.HasExplicitTokenBudgetSettings() {
+		t.Fatal("context_window_as_tool_output must not count as an explicit token-budget override")
+	}
+
+	modelDefaults := &TokenBudgetDefaults{
+		ReminderThresholdTokens: 12000,
+		ReminderMessageTemplate: "model reminder",
+	}
+	resolved := ResolveTokenBudgetConfig(got, true, modelDefaults, true)
+	if !resolved.ContextWindowAsToolOutput {
+		t.Fatalf("model defaults dropped context_window_as_tool_output: %+v", resolved)
+	}
+}
+
 func TestTokenBudgetConfigRejectsInvalidFallback(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
