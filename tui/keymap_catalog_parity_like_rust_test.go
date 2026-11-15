@@ -39,8 +39,10 @@ import (
 // taking it to 155. #54381 added chat.open_presets, taking it to 156, and
 // #59130/#59208/#59287 added the five workspace pane actions, taking it to 161.
 // #57223 adds global.select_transcript as a config-only TuiKeymap field, so it
-// stays out of this catalog (Rust keeps it out of KEYMAP_ACTIONS too).
-const keymapCatalogEntryCount = 172
+// stays out of this catalog (Rust keeps it out of KEYMAP_ACTIONS too), and
+// pager.mark_markdown (#61422) joined the catalog with its table-cell consumer,
+// taking it to 173.
+const keymapCatalogEntryCount = 173
 
 // rustOnlyKeymapActions: Rust actions this Go tree does not register and whose
 // behavior is genuinely missing (still blocked). T-b14 landed agents.fork and
@@ -351,15 +353,15 @@ func TestKeymapCatalogMatchesRustActionsLikeRust(t *testing.T) {
 		}
 	}
 	// A truncated parse would silently shrink RUST_KEYS, so pin the parsed shape:
-	// upstream declares 171 actions across 12 contexts after the workspace focus
-	// shortcuts (#59007/#59130/#59208/#59287), pane layout shortcuts (#59595)
-	// and the sidebar tab chooser (#59767) landed.
+	// upstream declares 172 actions across 12 contexts after the workspace focus
+	// shortcuts (#59007/#59130/#59208/#59287), pane layout shortcuts (#59595),
+	// the sidebar tab chooser (#59767), and pager.mark_markdown (#61422) landed.
 	contexts := map[string]bool{}
 	for _, key := range rustKeys {
 		context, _, _ := strings.Cut(key, ".")
 		contexts[context] = true
 	}
-	if len(rustKeys) != 171 || len(contexts) != 12 {
-		t.Fatalf("parsed %d upstream actions across %d contexts, want 171 across 12", len(rustKeys), len(contexts))
+	if len(rustKeys) != 172 || len(contexts) != 12 {
+		t.Fatalf("parsed %d upstream actions across %d contexts, want 172 across 12", len(rustKeys), len(contexts))
 	}
 }

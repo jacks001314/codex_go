@@ -45,6 +45,9 @@ func (m *Model) updateTranscriptSelectionKey(msg keymsg.KeyMsg) bubbletea.Cmd {
 		return nil
 	}
 	keySpec := keySpecFromKeyMsg(msg)
+	if handled, cmd := m.handleLeaderChordKey(keySpec, markMarkdownOnly); handled {
+		return cmd
+	}
 	if m.keyMatches("global", "find_transcript", keySpec) {
 		m.overlay.HandleSelectCommand(chatwidget.SelectCmdBeginFind)
 		return nil
@@ -163,6 +166,9 @@ func (m *Model) overlaySelectCommand(msg keymsg.KeyMsg, keySpec string) (chatwid
 		case 'G':
 			return chatwidget.SelectCmdEnd, true
 		}
+	}
+	if m.keyMatches("pager", "mark_markdown", keySpec) {
+		return chatwidget.SelectCmdMarkTable, true
 	}
 	// Configured pager motions still drive the caret (Rust pager_motion).
 	for action, command := range map[string]chatwidget.SelectCommand{

@@ -71,6 +71,9 @@ type TranscriptOverlay struct {
 	// plainLines caches the ANSI-stripped content rows used by keyboard and
 	// mouse selection (#57221-#57224).
 	plainLines []string
+	// tables caches the rendered Markdown table grids recovered from
+	// plainLines (Rust transcript_view text layout table cells, #61380/#61422).
+	tables []tableLayout
 	// selectMode is Rust transcript_view::SelectMode over this pager's rows.
 	selectMode selectModeState
 	// dragActive keeps a mouse drag extending the current selection.
@@ -352,6 +355,17 @@ func (o *TranscriptOverlay) refreshPlainLines() {
 		plain[index] = utils.StripANSI(row)
 	}
 	o.plainLines = plain
+	o.tables = buildTableLayouts(plain)
+	if o.selectMode.tableMark {
+		// A refreshed transcript can renumber rows; drop a cell mark whose
+		// table no longer exists instead of highlighting unrelated text.
+		if _, ok := o.tableCellRow(o.selectMode.anchorCell); !ok {
+			o.selectMode.tableMark = false
+			o.selectMode.tableText = false
+			o.selectMode.marked = false
+			o.selectMode.unit = SelectUnitCharacter
+		}
+	}
 }
 
 // applyCellStyle wraps the display cells [from, to) of one rendered row in the
@@ -645,6 +659,30 @@ func (o *TranscriptOverlay) handleSelectMouse(msg mousemsg.MouseMsg) bool {
 				savedFollow:     o.viewport.AtBottom(),
 			}
 		}
+		if clicks == 1 || clicks == 3 {
+			// Rust #61380: a press inside a table cell anchors a cell drag so
+			// dragging marks the cell rectangle instead of raw text. Triple
+			// click marks the whole cell.
+			if cell, ok := o.tableCellAt(point); ok {
+				start, end, _ := o.tableCellTextSpan(cell)
+				o.selectMode.unit = SelectUnitTableCells
+				o.selectMode.tableMark = true
+				o.selectMode.tableText = false
+				o.selectMode.anchorCell = cell
+				o.selectMode.activeCell = cell
+				o.selectMode.anchor = start
+				o.selectMode.activeEnd = start
+				o.selectMode.originStart = start
+				o.selectMode.originEnd = end
+				o.selectMode.preferredColumn = -1
+				o.selectMode.marked = clicks == 3
+				o.dragActive = true
+				o.dragOriginRow = msg.Y
+				o.dragMovedVertically = false
+				o.viewport.SetContent(o.viewContent())
+				return true
+			}
+		}
 		unit := selectUnitForClicks(clicks)
 		start, end := o.unitRangeAt(unit, point)
 		o.selectMode.marked = start != end
@@ -727,6 +765,27 @@ func (o *TranscriptOverlay) mouseClickCount(msg mousemsg.MouseMsg) int {
 // clicks and continued dragging can extend it in either direction (#47414).
 func (o *TranscriptOverlay) extendMouseSelection(point selectPoint) {
 	if !o.selectMode.active {
+		return
+	}
+	if o.selectMode.tableMark {
+		if cell, ok := o.tableCellAt(point); ok && cell.Table == o.selectMode.anchorCell.Table {
+			o.selectMode.activeCell = cell
+			o.selectMode.activeEnd = o.tableCellPoint(cell)
+			o.selectMode.marked = true
+			return
+		}
+		// The pointer left the table: Rust keeps the release endpoint and falls
+		// back to a text selection from the anchor cell's text.
+		start, _, ok := o.tableCellTextSpan(o.selectMode.anchorCell)
+		if !ok {
+			start = o.selectMode.anchor
+		}
+		o.selectMode.tableMark = false
+		o.selectMode.unit = SelectUnitCharacter
+		o.selectMode.anchor = start
+		o.selectMode.originStart = start
+		o.selectMode.activeEnd = point
+		o.selectMode.marked = true
 		return
 	}
 	start, end := o.unitRangeAt(o.selectMode.unit, point)

@@ -25,6 +25,9 @@ const (
 	SelectUnitLine
 	// SelectUnitWord marks the word under a double-click (Rust #47414).
 	SelectUnitWord
+	// SelectUnitTableCells marks whole Markdown table cells (Rust
+	// select_mode::table::TableMarkKind::Cells, #61422).
+	SelectUnitTableCells
 )
 
 // SelectAction reports what the key handler asks the owner to do next.
@@ -70,6 +73,8 @@ const (
 	SelectCmdHalfPageDown
 	SelectCmdMarkCharacter
 	SelectCmdMarkLine
+	// SelectCmdMarkTable marks the table cells under the caret (`pager.mark_markdown`).
+	SelectCmdMarkTable
 	SelectCmdSwapEnds
 	SelectCmdCopy
 	SelectCmdCopyAndFollow
@@ -105,6 +110,10 @@ type selectOrigin struct {
 	anchor          selectPoint
 	active          selectPoint
 	preferredColumn int
+	tableMark       bool
+	anchorCell      tableCellPosition
+	activeCell      tableCellPosition
+	tableText       bool
 }
 
 type selectModeState struct {
@@ -113,6 +122,14 @@ type selectModeState struct {
 	unit      SelectUnit
 	anchor    selectPoint
 	activeEnd selectPoint
+	// tableMark records a Markdown table cell mark. Rust keeps the cell
+	// rectangle beside the text anchors on `Mark.table`.
+	tableMark  bool
+	anchorCell tableCellPosition
+	activeCell tableCellPosition
+	// tableText marks the character mark that `v` creates from a cell mark
+	// (Rust TableMarkKind::Text).
+	tableText bool
 	// originStart/originEnd remember the text unit a mouse gesture started on so
 	// Shift-click can extend it in either direction without losing the anchor
 	// (Rust transcript_view::Selection::origin, #47414).
@@ -206,6 +223,11 @@ func (o *TranscriptOverlay) ClearSelectionMark() SelectAction {
 	}
 	cursor := o.selectCursor()
 	o.selectMode.marked = false
+	o.selectMode.unit = SelectUnitCharacter
+	o.selectMode.tableMark = false
+	o.selectMode.tableText = false
+	o.selectMode.anchorCell = tableCellPosition{}
+	o.selectMode.activeCell = tableCellPosition{}
 	o.selectMode.anchor = cursor
 	o.selectMode.activeEnd = cursor
 	o.selectMode.preferredColumn = -1
@@ -268,6 +290,14 @@ func (o *TranscriptOverlay) selectionRange() (selectPoint, selectPoint) {
 	if !o.selectMode.marked {
 		return start, end
 	}
+	if table, minRow, maxRow, minCol, maxCol, ok := o.tableSelectionRect(); ok {
+		first := table.Rows[minRow]
+		last := table.Rows[maxRow]
+		if minCol < len(first.Cells) && maxCol < len(last.Cells) {
+			return selectPoint{Row: first.Line, Col: first.Cells[minCol].Start},
+				selectPoint{Row: last.Line, Col: last.Cells[maxCol].End}
+		}
+	}
 	if end.before(start) {
 		start, end = end, start
 	}
@@ -290,6 +320,9 @@ func (o *TranscriptOverlay) lineWidth(row int) int {
 func (o *TranscriptOverlay) hasSelectionRange() bool {
 	if o == nil || !o.selectMode.active || !o.selectMode.marked {
 		return false
+	}
+	if o.selectMode.tableMark {
+		return o.selectMode.anchorCell != o.selectMode.activeCell
 	}
 	start, end := o.selectionRange()
 	return start != end
@@ -357,6 +390,9 @@ func (o *TranscriptOverlay) SelectedText() string {
 	if o == nil || !o.selectMode.active || !o.selectMode.marked {
 		return ""
 	}
+	if o.selectMode.tableMark {
+		return o.selectedTableText()
+	}
 	start, end := o.selectionRange()
 	if start.Row == end.Row && start.Col == end.Col {
 		return ""
@@ -409,6 +445,11 @@ func (o *TranscriptOverlay) HandleSelectCommand(command SelectCommand) SelectAct
 	case SelectCmdMarkLine:
 		o.startSelectMark(SelectUnitLine)
 		return SelectActionChanged
+	case SelectCmdMarkTable:
+		if !o.startSelectTable() {
+			return SelectActionNone
+		}
+		return SelectActionChanged
 	case SelectCmdSwapEnds:
 		o.swapSelectEnds()
 		return SelectActionChanged
@@ -438,6 +479,27 @@ func (o *TranscriptOverlay) HandleSelectCommand(command SelectCommand) SelectAct
 			return SelectActionChanged
 		}
 		return SelectActionNone
+	}
+	if o.selectMode.tableMark {
+		var moved bool
+		switch command {
+		case SelectCmdLeft:
+			moved = o.moveTableCell(-1, 0)
+		case SelectCmdRight:
+			moved = o.moveTableCell(1, 0)
+		case SelectCmdUp:
+			moved = o.moveTableCell(0, -1)
+		case SelectCmdDown:
+			moved = o.moveTableCell(0, 1)
+		default:
+			return SelectActionNone
+		}
+		if !moved {
+			return SelectActionNone
+		}
+		o.revealSelectionCursor()
+		o.viewport.SetContent(o.viewContent())
+		return SelectActionChanged
 	}
 	moved := true
 	switch command {
@@ -488,6 +550,29 @@ func (o *TranscriptOverlay) startSelectMark(unit SelectUnit) {
 		return
 	}
 	cursor := o.selectCursor()
+	if unit == SelectUnitCharacter && o.selectMode.tableMark {
+		// Rust start_select_cell_text: `v` on a cell mark selects the active
+		// cell's text instead of clearing the mark.
+		if start, end, ok := o.tableCellTextSpan(o.selectMode.activeCell); ok {
+			o.selectMode.tableMark = false
+			o.selectMode.tableText = true
+			o.selectMode.unit = SelectUnitCharacter
+			o.selectMode.anchor = start
+			o.selectMode.activeEnd = end
+			o.selectMode.marked = start != end
+			o.selectMode.preferredColumn = -1
+			return
+		}
+	}
+	if unit == SelectUnitCharacter && o.selectMode.tableText && o.selectMode.unit == SelectUnitCharacter {
+		// Rust replaces a cell-text mark with a new character mark at the caret.
+		o.selectMode.tableText = false
+		o.selectMode.anchor = cursor
+		o.selectMode.activeEnd = cursor
+		o.selectMode.marked = false
+		o.selectMode.preferredColumn = -1
+		return
+	}
 	if o.selectMode.marked && o.selectMode.unit == unit {
 		o.selectMode.marked = false
 		o.selectMode.anchor = cursor
@@ -497,13 +582,82 @@ func (o *TranscriptOverlay) startSelectMark(unit SelectUnit) {
 	}
 	o.selectMode.marked = true
 	o.selectMode.unit = unit
+	o.selectMode.tableMark = false
+	o.selectMode.tableText = false
+	o.selectMode.anchorCell = tableCellPosition{}
+	o.selectMode.activeCell = tableCellPosition{}
 	o.selectMode.anchor = cursor
 	o.selectMode.activeEnd = cursor
 	o.selectMode.preferredColumn = -1
 }
 
+// startSelectTable marks the table cell under the caret. Repeating the action
+// clears the mark, matching Rust start_select_table (#61422).
+func (o *TranscriptOverlay) startSelectTable() bool {
+	if o == nil || !o.selectMode.active {
+		return false
+	}
+	if o.selectMode.marked && o.selectMode.tableMark {
+		cursor := o.selectCursor()
+		o.selectMode.marked = false
+		o.selectMode.unit = SelectUnitCharacter
+		o.selectMode.tableMark = false
+		o.selectMode.tableText = false
+		o.selectMode.anchorCell = tableCellPosition{}
+		o.selectMode.activeCell = tableCellPosition{}
+		o.selectMode.anchor = cursor
+		o.selectMode.activeEnd = cursor
+		o.selectMode.preferredColumn = -1
+		return true
+	}
+	cell, ok := o.tableCellAt(o.selectCursor())
+	if !ok {
+		return false
+	}
+	point := o.tableCellPoint(cell)
+	o.selectMode.marked = true
+	o.selectMode.unit = SelectUnitTableCells
+	o.selectMode.tableMark = true
+	o.selectMode.tableText = false
+	o.selectMode.anchorCell = cell
+	o.selectMode.activeCell = cell
+	o.selectMode.anchor = point
+	o.selectMode.activeEnd = point
+	o.selectMode.originStart = point
+	o.selectMode.originEnd = point
+	o.selectMode.preferredColumn = -1
+	o.selectMode.searchOrigin = nil
+	return true
+}
+
+// moveTableCell extends a cell mark by one cell (Rust move_select_table).
+func (o *TranscriptOverlay) moveTableCell(deltaColumn int, deltaRow int) bool {
+	active := o.selectMode.activeCell
+	target := tableCellPosition{Table: active.Table, Row: active.Row + deltaRow, Col: active.Col + deltaColumn}
+	if _, ok := o.tableCellRow(target); !ok {
+		return false
+	}
+	o.selectMode.activeCell = target
+	o.selectMode.marked = true
+	if target == o.selectMode.anchorCell {
+		o.selectMode.activeEnd = o.selectMode.anchor
+		return true
+	}
+	o.selectMode.activeEnd = o.tableCellPoint(target)
+	return true
+}
+
 func (o *TranscriptOverlay) swapSelectEnds() {
 	if !o.selectMode.active || !o.selectMode.marked {
+		return
+	}
+	if o.selectMode.tableMark {
+		o.selectMode.anchorCell, o.selectMode.activeCell = o.selectMode.activeCell, o.selectMode.anchorCell
+		o.selectMode.anchor = o.tableCellPoint(o.selectMode.anchorCell)
+		o.selectMode.activeEnd = o.tableCellPoint(o.selectMode.activeCell)
+		o.selectMode.preferredColumn = -1
+		o.revealSelectionCursor()
+		o.viewport.SetContent(o.viewContent())
 		return
 	}
 	o.selectMode.anchor, o.selectMode.activeEnd = o.selectMode.activeEnd, o.selectMode.anchor
@@ -678,6 +832,10 @@ func (o *TranscriptOverlay) beginSelectFind() {
 		anchor:          o.selectMode.anchor,
 		active:          o.selectMode.activeEnd,
 		preferredColumn: o.selectMode.preferredColumn,
+		tableMark:       o.selectMode.tableMark,
+		anchorCell:      o.selectMode.anchorCell,
+		activeCell:      o.selectMode.activeCell,
+		tableText:       o.selectMode.tableText,
 	}
 	o.find.editing = true
 	o.find.accepted = false
@@ -706,7 +864,19 @@ func (o *TranscriptOverlay) acceptSelectFind(line int) {
 		o.selectMode.anchor = origin.anchor
 		o.selectMode.activeEnd = origin.active
 		o.selectMode.preferredColumn = origin.preferredColumn
+		o.selectMode.tableMark = origin.tableMark
+		o.selectMode.anchorCell = origin.anchorCell
+		o.selectMode.activeCell = origin.activeCell
+		o.selectMode.tableText = origin.tableText
 		o.selectMode.searchOrigin = nil
+	}
+	if o.selectMode.tableMark {
+		// A find hit is a text position, so a cell rectangle no longer applies.
+		o.selectMode.tableMark = false
+		o.selectMode.tableText = false
+		o.selectMode.unit = SelectUnitCharacter
+		o.selectMode.anchorCell = tableCellPosition{}
+		o.selectMode.activeCell = tableCellPosition{}
 	}
 	o.selectMode.preferredColumn = -1
 	if o.selectMode.marked {
@@ -734,6 +904,10 @@ func (o *TranscriptOverlay) restoreSelectFindOrigin() {
 	o.selectMode.anchor = origin.anchor
 	o.selectMode.activeEnd = origin.active
 	o.selectMode.preferredColumn = origin.preferredColumn
+	o.selectMode.tableMark = origin.tableMark
+	o.selectMode.anchorCell = origin.anchorCell
+	o.selectMode.activeCell = origin.activeCell
+	o.selectMode.tableText = origin.tableText
 	o.revealSelectionCursor()
 	o.viewport.SetContent(o.viewContent())
 }
@@ -755,6 +929,13 @@ func (o *TranscriptOverlay) repeatSelectFind(newer bool) bool {
 	o.find.index = index
 	point := o.selectPointForMatch(o.find.matches[index])
 	o.selectMode.preferredColumn = -1
+	if o.selectMode.tableMark {
+		o.selectMode.tableMark = false
+		o.selectMode.tableText = false
+		o.selectMode.unit = SelectUnitCharacter
+		o.selectMode.anchorCell = tableCellPosition{}
+		o.selectMode.activeCell = tableCellPosition{}
+	}
 	if o.selectMode.marked {
 		o.selectMode.activeEnd = point
 	} else {
@@ -770,6 +951,9 @@ func (o *TranscriptOverlay) repeatSelectFind(newer bool) bool {
 func (o *TranscriptOverlay) selectionSpanForRow(row int) (int, int, bool) {
 	if o == nil || !o.selectMode.active || !o.selectMode.marked {
 		return 0, 0, false
+	}
+	if o.selectMode.tableMark {
+		return o.tableSelectionSpan(row)
 	}
 	start, end := o.selectionRange()
 	if row < start.Row || row > end.Row {

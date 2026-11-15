@@ -6,6 +6,7 @@ import (
 	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
+	chatwidget "codex_go/tui/chatwidget"
 )
 
 // Rust #54381/#57223: persistent leader chords for `chat.open_presets`
@@ -52,6 +53,12 @@ func selectTranscriptOnly(action string) bool {
 	return action == "global.select_transcript"
 }
 
+// markMarkdownOnly restricts leader chords inside transcript selection mode to
+// the Markdown cell mark (Rust keymap/chords.rs contains_action).
+func markMarkdownOnly(action string) bool {
+	return action == "pager.mark_markdown"
+}
+
 // leaderShortcuts lists the actions with implicit leader defaults in the same
 // order Rust installs them (leader_defaults.rs).
 var leaderShortcuts = []struct {
@@ -77,6 +84,7 @@ var leaderShortcuts = []struct {
 	{"global", "resize_panes", true},
 	{"global", "move_divider_left", true},
 	{"global", "move_divider_right", true},
+	{"pager", "mark_markdown", true},
 }
 
 // implicitWorkspaceLeaderCompletions are the free leader chords Rust installs
@@ -101,6 +109,9 @@ var implicitWorkspaceLeaderCompletions = map[string][]string{
 	"global.resize_panes":         {"r"},
 	"global.move_divider_left":    {"shift-h"},
 	"global.move_divider_right":   {"shift-l"},
+	// Rust keymap/chords/leader_defaults.rs installs `leader v` for the
+	// transcript-only Markdown cell mark (#61422).
+	"pager.mark_markdown": {"v"},
 }
 
 // leaderBindingsFor collects every leader completion reachable from keySpec.
@@ -214,6 +225,11 @@ func (m *Model) dispatchLeaderAction(action string) bubbletea.Cmd {
 		return m.nudgeSidePaneWidth(2)
 	case "global.move_divider_right":
 		return m.nudgeSidePaneWidth(-2)
+	case "pager.mark_markdown":
+		if m.overlay != nil {
+			m.overlay.HandleSelectCommand(chatwidget.SelectCmdMarkTable)
+		}
+		return nil
 	default:
 		return nil
 	}
