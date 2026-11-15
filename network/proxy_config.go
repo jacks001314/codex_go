@@ -95,6 +95,11 @@ type ProxyConfig struct {
 	// Unlike the settings table it is never serialized to remote executors and
 	// is never reloaded from the wire.
 	PrivateIPsViaUpstream bool
+	// TcpUpstreamProxy is the executor-provisioned mandatory HTTP CONNECT next
+	// hop for opaque SOCKS TCP (Rust #61372 TcpUpstreamProxy). When set, SOCKS
+	// TCP never falls back to a direct dial. It is internal-only startup state
+	// and is never serialized to or from remote configs.
+	TcpUpstreamProxy *TcpUpstreamProxy
 	// CredentialBroker reuses an executor-session broker across proxy launches.
 	// It is internal-only and never serialized to or from remote configs.
 	CredentialBroker *ProxyCredentialBroker

@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+
+	"codex_go/network"
 )
 
 type Command string
@@ -409,6 +411,13 @@ type ExecServerOptions struct {
 	// destinations use the configured upstream proxy. Destination policy still
 	// decides access, and the setting defaults to disabled.
 	ProxyPrivateIPsViaUpstream bool
+	// LinuxSandboxTransparentTCP mirrors Rust #61372
+	// `--linux-sandbox-transparent-tcp`: route managed Linux sandbox TCP
+	// through the executor-local SOCKS proxy.
+	LinuxSandboxTransparentTCP bool
+	// TcpUpstreamProxy mirrors Rust #61372 `--tcp-upstream-proxy <HOST:PORT>`:
+	// the trusted mandatory HTTP CONNECT next hop for raw SOCKS TCP.
+	TcpUpstreamProxy *network.TcpUpstreamProxy
 	// RemoteTransport mirrors Rust #42781 `--remote-transport`: "noise" (the
 	// default rendezvous transport) or "direct" (plain JSON-RPC over an
 	// authenticated WebSocket).
@@ -3925,6 +3934,33 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 		case arg == "--proxy-private-ips-via-upstream":
 			// Rust #48568: clap `ArgAction::SetTrue`, so the flag takes no value.
 			execServer.ProxyPrivateIPsViaUpstream = true
+		case arg == "--linux-sandbox-transparent-tcp":
+			// Rust #61372: clap `ArgAction::SetTrue`, so the flag takes no value.
+			execServer.LinuxSandboxTransparentTCP = true
+		case arg == "--tcp-upstream-proxy":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			proxy, err := parseExecServerTcpUpstreamProxy(value)
+			if err != nil {
+				if !deferClapValueError(args, &i, &deferred, err) {
+					return err
+				}
+			} else {
+				execServer.TcpUpstreamProxy = proxy
+			}
+			i = next
+		case strings.HasPrefix(arg, "--tcp-upstream-proxy="):
+			value := strings.TrimPrefix(arg, "--tcp-upstream-proxy=")
+			proxy, err := parseExecServerTcpUpstreamProxy(value)
+			if err != nil {
+				if !deferClapValueError(args, &i, &deferred, err) {
+					return err
+				}
+			} else {
+				execServer.TcpUpstreamProxy = proxy
+			}
 		case arg == "--linux-sandbox-pid-namespace":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -6236,6 +6272,16 @@ func validateLinuxSandboxPIDNamespace(value string) error {
 		return nil
 	}
 	return &UsageError{Message: "invalid value '" + value + "' for '--linux-sandbox-pid-namespace <MODE>': expected 'isolate' or 'inherit'"}
+}
+
+// parseExecServerTcpUpstreamProxy applies Rust's `TcpUpstreamProxy` value
+// parser for `--tcp-upstream-proxy <HOST:PORT>`.
+func parseExecServerTcpUpstreamProxy(value string) (*network.TcpUpstreamProxy, error) {
+	proxy, err := network.ParseTcpUpstreamProxy(value)
+	if err != nil {
+		return nil, &UsageError{Message: "invalid value '" + value + "' for '--tcp-upstream-proxy <HOST:PORT>': " + err.Error()}
+	}
+	return proxy, nil
 }
 
 // parseConcurrentRequestsValue applies clap's NonZeroUsize parser for

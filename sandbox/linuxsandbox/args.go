@@ -33,6 +33,14 @@ func CreateCommandArgsWithSandboxExe(sandboxExe string, command []string, comman
 // an empty context the emitted argv is byte-identical to
 // CreateCommandArgsWithSandboxExe.
 func CreateCommandArgsWithSandboxExeAndManagedNetwork(sandboxExe string, command []string, commandCWD string, profileJSON string, sandboxPolicyCWD string, useLegacyLandlock bool, allowNetworkForProxy bool, managedNetworkJSON string) ([]string, error) {
+	return CreateCommandArgsWithSandboxExeAndManagedNetworkAndTransparentTCP(sandboxExe, command, commandCWD, profileJSON, sandboxPolicyCWD, useLegacyLandlock, allowNetworkForProxy, managedNetworkJSON, false)
+}
+
+// CreateCommandArgsWithSandboxExeAndManagedNetworkAndTransparentTCP adds the
+// opt-in transparent TCP switch. The Linux helper rejects it without managed
+// networking, so the flag is only emitted with a managed-network launch
+// (Rust #61372 SandboxManager::with_linux_sandbox_transparent_tcp).
+func CreateCommandArgsWithSandboxExeAndManagedNetworkAndTransparentTCP(sandboxExe string, command []string, commandCWD string, profileJSON string, sandboxPolicyCWD string, useLegacyLandlock bool, allowNetworkForProxy bool, managedNetworkJSON string, transparentTCP bool) ([]string, error) {
 	if len(command) == 0 {
 		return nil, fmt.Errorf("%w: command is required", ErrInvalidCommandArgs)
 	}
@@ -73,6 +81,9 @@ func CreateCommandArgsWithSandboxExeAndManagedNetwork(sandboxExe string, command
 	}
 	if managedNetworkJSON != "" {
 		args = append(args, "--managed-network", managedNetworkJSON)
+	}
+	if transparentTCP && managedNetwork {
+		args = append(args, "--transparent-tcp")
 	}
 	args = append(args, "--")
 	args = append(args, command...)

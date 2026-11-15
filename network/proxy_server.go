@@ -60,6 +60,10 @@ type ProxyServer struct {
 	// NetworkProxyState::proxy_private_ips_via_upstream); the wire policy
 	// cannot override it.
 	proxyPrivateIPsViaUpstream atomic.Bool
+	// tcpUpstreamProxy is the executor-provisioned mandatory HTTP CONNECT next
+	// hop for opaque SOCKS TCP (Rust #61372 NetworkProxyState::tcp_upstream_proxy).
+	// The wire policy cannot set or clear it.
+	tcpUpstreamProxy atomic.Pointer[TcpUpstreamProxy]
 	// serveErr records the first listener failure so Wait can fail fast
 	// (Rust NetworkProxyHandle::wait).
 	serveErrMu sync.Mutex
@@ -197,6 +201,7 @@ func startProxyServer(parent context.Context, config ProxyConfig, runtimeConfig 
 	}
 	server.policy.Store(policy)
 	server.SetProxyPrivateIPsViaUpstream(config.PrivateIPsViaUpstream)
+	server.SetTcpUpstreamProxy(config.TcpUpstreamProxy)
 	server.httpProxy, err = server.newHTTPProxy(baseEnv)
 	if err != nil {
 		_ = httpListener.Close()
@@ -592,6 +597,24 @@ func (s *ProxyServer) proxyPrivateIPsViaUpstreamEnabled() bool {
 		return false
 	}
 	return s.proxyPrivateIPsViaUpstream.Load()
+}
+
+// SetTcpUpstreamProxy records the executor-provisioned mandatory HTTP CONNECT
+// next hop for opaque SOCKS TCP (Rust #61372
+// NetworkProxyState::set_tcp_upstream_proxy). It never changes destination
+// policy, and the wire policy cannot set or clear it.
+func (s *ProxyServer) SetTcpUpstreamProxy(proxy *TcpUpstreamProxy) {
+	if s == nil {
+		return
+	}
+	s.tcpUpstreamProxy.Store(normalizeTcpUpstreamProxy(proxy))
+}
+
+func (s *ProxyServer) tcpUpstreamProxyValue() *TcpUpstreamProxy {
+	if s == nil {
+		return nil
+	}
+	return s.tcpUpstreamProxy.Load()
 }
 
 // requestMayUseUpstreamProxy is the managed-network half of the upstream proxy
@@ -1827,6 +1850,12 @@ func (s *ProxyServer) dialSOCKSUpstreamTunnel(ctx context.Context, address strin
 	if s == nil {
 		return nil, false, nil
 	}
+	if upstream := s.tcpUpstreamProxyValue(); upstream != nil {
+		// Rust #61372: a provisioned next hop is mandatory for opaque SOCKS
+		// TCP. Failures never fall back to a direct dial.
+		conn, err := s.dialMandatoryTCPUpstream(ctx, upstream, address)
+		return conn, true, err
+	}
 	policy := s.runtimePolicy()
 	if policy == nil || !policy.settings.AllowUpstreamProxy || !s.mayUseUpstreamProxyForAddress(address) {
 		return nil, false, nil
@@ -1856,6 +1885,106 @@ func (s *ProxyServer) dialSOCKSUpstreamTunnel(ctx context.Context, address strin
 		return nil, true, err
 	}
 	return tunnel, true, nil
+}
+
+// dialMandatoryTCPUpstream forwards one already-authorized SOCKS TCP target
+// through the executor's provisioned HTTP CONNECT next hop (Rust #61372
+// TcpUpstreamProxy::connect). Destination policy ran before this point; the
+// checks here preserve the Rust restrictions on the target spelling and on
+// tunnelling back into the upstream listener.
+func (s *ProxyServer) dialMandatoryTCPUpstream(ctx context.Context, upstream *TcpUpstreamProxy, address string) (net.Conn, error) {
+	policy := s.runtimePolicy()
+	if policy == nil || !policy.settings.AllowUpstreamProxy {
+		return nil, errors.New("upstream proxies are disabled by network policy")
+	}
+	host, portText, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	port, err := strconv.ParseUint(portText, 10, 16)
+	if err != nil || port == 0 {
+		return nil, fmt.Errorf("invalid SOCKS TCP target port %q", portText)
+	}
+	targetHost := NormalizeProxyHost(host)
+	upstreamAddress := upstream.Address()
+	if upstreamAddress == "" {
+		return nil, errors.New("TCP upstream proxy is unconfigured")
+	}
+	if uint16(port) == upstream.Port && targetHost == NormalizeProxyHost(upstream.Host) {
+		return nil, errors.New("cannot tunnel back into the TCP upstream proxy")
+	}
+	authority := address
+	targetIP := proxyIPLiteral(targetHost)
+	if targetIP != nil {
+		if reason := s.resolvedAddressPolicyReason(ctx, ProxyProtocolSocks5TCP, host, portText, targetIP); reason != "" {
+			return nil, fmt.Errorf("IP destination cannot use the TCP upstream proxy: %s", reason)
+		}
+		if IsNonPublicProxyIP(targetIP) && !(s.proxyPrivateIPsViaUpstreamEnabled() && IsPrivateNetworkProxyIP(targetIP)) {
+			return nil, errors.New("IP destination cannot use the TCP upstream proxy")
+		}
+		authority = net.JoinHostPort(targetIP.String(), portText)
+	} else if targetHost == "localhost" || strings.HasSuffix(targetHost, ".localhost") || !s.permitsRemoteTCPDNS() {
+		return nil, errors.New("destination requires local address enforcement")
+	}
+	dialer := net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+	raw, err := dialer.DialContext(ctx, "tcp", upstreamAddress)
+	if err != nil {
+		return nil, fmt.Errorf("dial TCP upstream proxy: %w", err)
+	}
+	if targetIP != nil && uint16(port) == upstream.Port {
+		if peer, ok := raw.RemoteAddr().(*net.TCPAddr); ok && peer != nil && peer.IP.Equal(targetIP) {
+			_ = raw.Close()
+			return nil, errors.New("cannot tunnel back into the TCP upstream proxy")
+		}
+	}
+	_ = raw.SetDeadline(time.Now().Add(10 * time.Second))
+	tunnel, err := authenticateProxyTunnel(ctx, raw, authority, upstream.Host, nil)
+	_ = raw.SetDeadline(time.Time{})
+	if err != nil {
+		_ = raw.Close()
+		return nil, err
+	}
+	return tunnel, nil
+}
+
+// permitsRemoteTCPDNS mirrors Rust's
+// NetworkProxyState::permits_remote_tcp_dns: a hostname target may be sent to
+// the upstream proxy only when local binding is allowed and no deny or review
+// rule can constrain the addresses it resolves to.
+func (s *ProxyServer) permitsRemoteTCPDNS() bool {
+	if s == nil {
+		return false
+	}
+	policy := s.runtimePolicy()
+	if policy == nil {
+		return false
+	}
+	return policy.settings.AllowLocalBinding &&
+		!proxyPatternsMayRestrictIP(policy.settings.DeniedDomains()) &&
+		!proxyPatternsMayRestrictIP(policy.settings.ReviewDomains)
+}
+
+// proxyPatternsMayRestrictIP reports whether any selector is written in an
+// address-only spelling, including IPv4/IPv6 literals and numeric wildcards.
+// Domain selectors never restrict an address the upstream proxy resolves.
+func proxyPatternsMayRestrictIP(patterns []string) bool {
+	for _, pattern := range patterns {
+		value := strings.TrimSpace(pattern)
+		if value == "" {
+			continue
+		}
+		if value == "*" {
+			return true
+		}
+		unbracketed := strings.Trim(value, "[]")
+		if ip := net.ParseIP(strings.SplitN(unbracketed, "%", 2)[0]); ip != nil {
+			return true
+		}
+		if !strings.ContainsAny(value, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_") {
+			return true
+		}
+	}
+	return false
 }
 
 // listenerOwnsAddress reports whether address is one of this proxy's own listen

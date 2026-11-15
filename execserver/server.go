@@ -252,6 +252,15 @@ type Server struct {
 	// configured upstream proxy. It is carried into the executor-local managed
 	// network proxy launch; request policy still controls destination access.
 	proxyPrivateIPsViaUpstream bool
+	// linuxSandboxTransparentTCP mirrors Rust #61372
+	// ExecServerRuntimeOptions::linux_sandbox_transparent_tcp: route managed
+	// Linux command traffic through the transparent TCP adapter. Request policy
+	// is unaffected.
+	linuxSandboxTransparentTCP bool
+	// tcpUpstreamProxy mirrors Rust #61372
+	// ExecServerRuntimeOptions::tcp_upstream_proxy: the trusted mandatory HTTP
+	// CONNECT next hop for opaque SOCKS TCP. It is never read from a request.
+	tcpUpstreamProxy *network.TcpUpstreamProxy
 	// environmentConfigReader implements `environmentConfig/read`
 	// (execserver/environment_config_read.go). It is nil on a bare stub, which
 	// is why the advertised capability follows this field.
@@ -345,6 +354,56 @@ func (s *Server) proxyPrivateIPsViaUpstreamValue() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.proxyPrivateIPsViaUpstream
+}
+
+// SetLinuxSandboxTransparentTCP records the trusted startup option that routes
+// managed Linux sandbox TCP through the transparent adapter (Rust #61372).
+func (s *Server) SetLinuxSandboxTransparentTCP(enabled bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.linuxSandboxTransparentTCP = enabled
+}
+
+func (s *Server) linuxSandboxTransparentTCPValue() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.linuxSandboxTransparentTCP
+}
+
+// SetTcpUpstreamProxy records the trusted executor-provisioned HTTP CONNECT
+// next hop for opaque SOCKS TCP (Rust #61372). The wire policy cannot set or
+// clear it.
+func (s *Server) SetTcpUpstreamProxy(proxy *network.TcpUpstreamProxy) {
+	if s == nil {
+		return
+	}
+	var cloned *network.TcpUpstreamProxy
+	if proxy != nil {
+		value := *proxy
+		cloned = &value
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tcpUpstreamProxy = cloned
+}
+
+func (s *Server) tcpUpstreamProxyValue() *network.TcpUpstreamProxy {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tcpUpstreamProxy == nil {
+		return nil
+	}
+	value := *s.tcpUpstreamProxy
+	return &value
 }
 
 // SetAllowedSymlinkedCodexHome records the host-resolved macOS Seatbelt
@@ -1175,6 +1234,8 @@ func newSessionServerWithRuntimeOptions(httpClient *http.Client, parent *Server)
 	if parent != nil {
 		server.SetPreferMXC(parent.preferMXCValue())
 		server.SetProxyPrivateIPsViaUpstream(parent.proxyPrivateIPsViaUpstreamValue())
+		server.SetLinuxSandboxTransparentTCP(parent.linuxSandboxTransparentTCPValue())
+		server.SetTcpUpstreamProxy(parent.tcpUpstreamProxyValue())
 		server.SetEnvironmentConfigReader(parent.environmentConfigReaderForRead())
 		server.SetAllowedSymlinkedCodexHome(parent.allowedSymlinkedCodexHomeValue())
 		if identity := parent.executorRegistrationIdentityValue(); identity != nil {
@@ -1196,7 +1257,7 @@ func (s *Server) prepareShellSnapshotCaptureCommand(params *ExecParams, command 
 	captureParams := *params
 	captureParams.Argv = append([]string(nil), command...)
 	captureParams.TTY = false
-	prepared, cwd, _, err := prepareExecProcess(&captureParams, s.allowedSymlinkedCodexHomeValue())
+	prepared, cwd, _, err := prepareExecProcessWithTransparentTCP(&captureParams, s.allowedSymlinkedCodexHomeValue(), s.linuxSandboxTransparentTCPValue())
 	return prepared, cwd, err
 }
 
@@ -2131,7 +2192,7 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		execServerPrepareSandboxSpan,
 		execServerProcessSpanAttributes(params.ProcessID, nil),
 	)
-	command, cwd, sandboxType, err := prepareExecProcess(params, s.allowedSymlinkedCodexHomeValue())
+	command, cwd, sandboxType, err := prepareExecProcessWithTransparentTCP(params, s.allowedSymlinkedCodexHomeValue(), s.linuxSandboxTransparentTCPValue())
 	if prepareSpan != nil {
 		prepareSpan.End()
 	}
@@ -2495,7 +2556,16 @@ func (s *Server) releaseStartingProcess(processID string, state *processState) {
 }
 
 func (s *Server) prepareExecutorNetworkProxy(ctx context.Context, params *ExecParams) (*ExecParams, *network.PreparedProxyManagedNetwork, context.CancelFunc, error) {
-	if params == nil || params.NetworkProxy == nil {
+	if params == nil {
+		return params, nil, nil, nil
+	}
+	if params.NetworkProxy == nil {
+		// Rust #61372: a mandatory TCP upstream requires an executor-local
+		// managed proxy; it cannot ride a caller-supplied managed-network
+		// context or an enforcement request with no proxy launch.
+		if (params.EnforceManagedNetwork || params.ManagedNetwork != nil) && s.tcpUpstreamProxyValue() != nil {
+			return nil, nil, nil, requestError(-32602, "a mandatory TCP upstream requires an executor-local managed proxy")
+		}
 		return params, nil, nil, nil
 	}
 	launch := params.NetworkProxy
@@ -2523,6 +2593,7 @@ func (s *Server) prepareExecutorNetworkProxy(ctx context.Context, params *ExecPa
 	// permitted private IPs may use the upstream proxy. The wire policy (and a
 	// remote controller launch) cannot enable it.
 	proxyConfig.PrivateIPsViaUpstream = s.proxyPrivateIPsViaUpstreamValue()
+	proxyConfig.TcpUpstreamProxy = s.tcpUpstreamProxyValue()
 	proxyConfig.EnvironmentID = stringValue(launch.EnvironmentID)
 	proxyConfig.CredentialBroker = s.credentialBrokers.BrokerIfEnabled(
 		proxyConfig.EnvironmentID,
@@ -2708,6 +2779,12 @@ func stringValue(value *string) string {
 }
 
 func prepareExecProcess(params *ExecParams, allowedSymlinkedCodexHome string) ([]string, string, sandbox.SandboxType, error) {
+	return prepareExecProcessWithTransparentTCP(params, allowedSymlinkedCodexHome, false)
+}
+
+// prepareExecProcessWithTransparentTCP adds the executor's trusted transparent
+// TCP switch (Rust #61372 ExecServerRuntimeOptions::linux_sandbox_transparent_tcp).
+func prepareExecProcessWithTransparentTCP(params *ExecParams, allowedSymlinkedCodexHome string, transparentTCP bool) ([]string, string, sandbox.SandboxType, error) {
 	command := append([]string(nil), params.Argv...)
 	cwd, err := nativeExecServerPath(params.CWD, "cwd")
 	if err != nil {
@@ -2777,6 +2854,7 @@ func prepareExecProcess(params *ExecParams, allowedSymlinkedCodexHome string) ([
 		UseLegacyLandlock:         sandboxContext.UseLegacyLandlock,
 		AllowNetworkForProxy:      params.EnforceManagedNetwork,
 		ManagedNetworkJSON:        managedNetworkJSON,
+		TransparentTCP:            transparentTCP,
 		AllowedSymlinkedCodexHome: allowedSymlinkedCodexHome,
 		Command:                   command,
 	})
@@ -2793,7 +2871,7 @@ func prepareExecProcess(params *ExecParams, allowedSymlinkedCodexHome string) ([
 	plan.CWD = cwd
 	_ = sandboxCWD
 	if runtime.GOOS == "linux" && sandboxCWD != cwd {
-		wrapped, wrapErr := sandbox.CreateLinuxSandboxCommandArgsForPermissionProfileJSONWithSandboxExeAndManagedNetwork(
+		wrapped, wrapErr := sandbox.CreateLinuxSandboxCommandArgsForPermissionProfileJSONWithSandboxExeManagedNetworkAndTransparentTCP(
 			"",
 			command,
 			cwd,
@@ -2802,6 +2880,7 @@ func prepareExecProcess(params *ExecParams, allowedSymlinkedCodexHome string) ([
 			sandboxContext.UseLegacyLandlock,
 			params.EnforceManagedNetwork,
 			managedNetworkJSON,
+			transparentTCP,
 		)
 		if wrapErr != nil {
 			return nil, "", sandbox.SandboxTypeNone, processSandboxPreparationFailure(wrapErr)

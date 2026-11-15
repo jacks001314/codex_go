@@ -179,6 +179,9 @@ func codexCompletionSpec() *completionNode {
 			"--chatgpt-token-stdin", "--chatgpt-account-id",
 			// Rust #48568 adds the trusted private-IP upstream routing opt-in.
 			"--proxy-private-ips-via-upstream",
+			// Rust #61372 adds transparent Linux sandbox TCP and its trusted
+			// HTTP CONNECT next hop.
+			"--linux-sandbox-transparent-tcp", "--tcp-upstream-proxy",
 			// Rust #47601 shares the WebSocket listener auth flags with the
 			// app-server listener.
 			"--ws-auth", "--ws-token-file", "--ws-token-sha256", "--ws-shared-secret-file",

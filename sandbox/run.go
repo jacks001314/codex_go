@@ -49,9 +49,13 @@ type CommandRunRequest struct {
 	// (Rust #42716). Empty keeps symlinked writable roots rejected.
 	AllowedSymlinkedCodexHome string
 	ManagedNetworkJSON        string
-	CodexLinuxSandboxExe      string
-	ConfigOverrides           []string
-	Command                   []string
+	// TransparentTCP mirrors the executor's trusted
+	// `--linux-sandbox-transparent-tcp` startup option (Rust #61372). It is
+	// applied only when the launch also has a managed network.
+	TransparentTCP       bool
+	CodexLinuxSandboxExe string
+	ConfigOverrides      []string
+	Command              []string
 }
 
 type CommandRunPlan struct {
@@ -67,6 +71,7 @@ type CommandRunPlan struct {
 	UseLegacyLandlock       bool
 	AllowNetworkForProxy    bool
 	ManagedNetworkJSON      string
+	TransparentTCP          bool
 	RequiresPlatformSandbox bool
 	UnsupportedReason       string
 }
@@ -177,6 +182,7 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 		UseLegacyLandlock:    req.UseLegacyLandlock,
 		AllowNetworkForProxy: req.AllowNetworkForProxy,
 		ManagedNetworkJSON:   strings.TrimSpace(req.ManagedNetworkJSON),
+		TransparentTCP:       req.TransparentTCP,
 		CodexLinuxSandboxExe: cleanRunPath(req.CodexLinuxSandboxExe),
 	}
 	var unsupported []string
@@ -284,7 +290,7 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 		if err != nil {
 			return nil, err
 		}
-		wrapped, err := CreateLinuxSandboxCommandArgsForPermissionProfileJSONWithSandboxExeAndManagedNetwork(
+		wrapped, err := CreateLinuxSandboxCommandArgsForPermissionProfileJSONWithSandboxExeManagedNetworkAndTransparentTCP(
 			plan.CodexLinuxSandboxExe,
 			plan.Command,
 			planCommandCWD(plan),
@@ -293,6 +299,7 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 			plan.UseLegacyLandlock,
 			plan.AllowNetworkForProxy,
 			plan.ManagedNetworkJSON,
+			plan.TransparentTCP,
 		)
 		if err != nil {
 			return nil, err
@@ -1333,6 +1340,27 @@ func CreateLinuxSandboxCommandArgsForPermissionProfileJSONWithSandboxExeAndManag
 	managedNetworkJSON string,
 ) ([]string, error) {
 	args, err := linuxsandbox.CreateCommandArgsWithSandboxExeAndManagedNetwork(sandboxExe, command, commandCWD, profileJSON, sandboxPolicyCWD, useLegacyLandlock, allowNetworkForProxy, managedNetworkJSON)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidSandboxRunRequest, err)
+	}
+	return args, nil
+}
+
+// CreateLinuxSandboxCommandArgsForPermissionProfileJSONWithSandboxExeManagedNetworkAndTransparentTCP
+// is the transparent-TCP variant of
+// CreateLinuxSandboxCommandArgsForPermissionProfileJSONWithSandboxExeAndManagedNetwork.
+func CreateLinuxSandboxCommandArgsForPermissionProfileJSONWithSandboxExeManagedNetworkAndTransparentTCP(
+	sandboxExe string,
+	command []string,
+	commandCWD string,
+	profileJSON string,
+	sandboxPolicyCWD string,
+	useLegacyLandlock bool,
+	allowNetworkForProxy bool,
+	managedNetworkJSON string,
+	transparentTCP bool,
+) ([]string, error) {
+	args, err := linuxsandbox.CreateCommandArgsWithSandboxExeAndManagedNetworkAndTransparentTCP(sandboxExe, command, commandCWD, profileJSON, sandboxPolicyCWD, useLegacyLandlock, allowNetworkForProxy, managedNetworkJSON, transparentTCP)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidSandboxRunRequest, err)
 	}

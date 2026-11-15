@@ -105,6 +105,8 @@ type linuxSandboxCommand struct {
 	ManagedNetworkJSON    string
 	ManagedNetwork        *linuxManagedNetworkContext
 	ProxyRouteSpec        string
+	TransparentTCP        bool
+	TransparentTCPFDs     []int
 	NoProc                bool
 	Command               []string
 }
@@ -123,6 +125,14 @@ func RunHelper(args []string, stdout, stderr io.Writer) int {
 	_ = stdout
 	if len(args) > 0 {
 		switch args[0] {
+		case transparentTCPNamespaceArg:
+			// The trusted namespace stage receives the payload on fd 3 and the
+			// resolver on fd 4 from execTransparentTCPBubblewrap.
+			if err := runTransparentTCPNamespaceSetup(3); err != nil {
+				fmt.Fprintln(stderr, "codex-linux-sandbox transparent TCP setup:", err)
+				return 1
+			}
+			return 0
 		case "--proxy-host-bridge":
 			if err := runProxyHostBridgeHelper(args[1:], os.Stdout); err != nil {
 				fmt.Fprintln(stderr, "codex-linux-sandbox proxy host bridge:", err)
@@ -161,6 +171,8 @@ func parseLinuxSandboxCommand(args []string, stderr io.Writer) (*linuxSandboxCom
 	flags.BoolVar(&cmd.AllowNetworkForProxy, "allow-network-for-proxy", false, "")
 	flags.StringVar(&cmd.ManagedNetworkJSON, "managed-network", "", "")
 	flags.StringVar(&cmd.ProxyRouteSpec, "proxy-route-spec", "", "")
+	flags.BoolVar(&cmd.TransparentTCP, "transparent-tcp", false, "")
+	flags.IntSliceVar(&cmd.TransparentTCPFDs, "transparent-tcp-fd", nil, "")
 	flags.BoolVar(&cmd.NoProc, "no-proc", false, "")
 	if err := flags.Parse(args); err != nil {
 		return nil, err
@@ -209,22 +221,41 @@ func runLinuxSandboxCommand(cmd *linuxSandboxCommand) error {
 		return err
 	}
 	managedNetwork := cmd.managedNetworkEnabled()
+	routing := linuxProxyRoutingNone
+	if managedNetwork {
+		routing = linuxProxyRoutingExplicit
+		if cmd.TransparentTCP {
+			routing = linuxProxyRoutingTransparentTCP
+		}
+	}
+	if cmd.TransparentTCP && (!managedNetwork || cmd.UseLegacyLandlock || cmd.NoProc) {
+		return errors.New("transparent TCP requires managed networking and private bubblewrap namespaces")
+	}
+	if (len(cmd.TransparentTCPFDs) == 0) == (cmd.TransparentTCP && cmd.ApplySeccompThenExec) {
+		return errors.New("invalid transparent TCP namespace handoff")
+	}
 	if cmd.ApplySeccompThenExec {
+		var socksBridge *net.TCPAddr
 		if managedNetwork {
 			if strings.TrimSpace(cmd.ProxyRouteSpec) == "" {
 				return errors.New("managed proxy mode requires --proxy-route-spec")
 			}
-			if err := activateProxyRoutesInNetns(cmd.ProxyRouteSpec); err != nil {
+			var err error
+			socksBridge, err = activateProxyRoutesInNetns(cmd.ProxyRouteSpec)
+			if err != nil {
 				return fmt.Errorf("error activating Linux proxy routing bridge: %w", err)
 			}
 		}
-		if err := applyLinuxPermissionProfile(cmd.PermissionProfile, cmd.SandboxPolicyCWD, false, managedNetwork, managedNetwork, cmd.ManagedNetwork); err != nil {
+		if cmd.TransparentTCP {
+			return runTransparentTCPWorkload(cmd, routing, socksBridge)
+		}
+		if err := applyLinuxPermissionProfile(cmd.PermissionProfile, cmd.SandboxPolicyCWD, false, managedNetwork, routing, cmd.ManagedNetwork); err != nil {
 			return fmt.Errorf("error applying Linux sandbox restrictions: %w", err)
 		}
 		return execvpInDir(cmd.Command, cmd.CommandCWD)
 	}
 	if cmd.PermissionProfile.Filesystem.hasFullDiskWriteAccess() && !cmd.PermissionProfile.Filesystem.hasDenyReadEntries() && !managedNetwork {
-		if err := applyLinuxPermissionProfile(cmd.PermissionProfile, cmd.SandboxPolicyCWD, false, managedNetwork, false, cmd.ManagedNetwork); err != nil {
+		if err := applyLinuxPermissionProfile(cmd.PermissionProfile, cmd.SandboxPolicyCWD, false, managedNetwork, linuxProxyRoutingNone, cmd.ManagedNetwork); err != nil {
 			return fmt.Errorf("error applying Linux sandbox restrictions: %w", err)
 		}
 		return execvpInDir(cmd.Command, cmd.CommandCWD)
@@ -243,7 +274,7 @@ func runLinuxSandboxCommand(cmd *linuxSandboxCommand) error {
 		}
 		return execBubblewrap(cmd, inner)
 	}
-	if err := applyLinuxPermissionProfile(cmd.PermissionProfile, cmd.SandboxPolicyCWD, true, managedNetwork, false, cmd.ManagedNetwork); err != nil {
+	if err := applyLinuxPermissionProfile(cmd.PermissionProfile, cmd.SandboxPolicyCWD, true, managedNetwork, linuxProxyRoutingNone, cmd.ManagedNetwork); err != nil {
 		return fmt.Errorf("error applying legacy Linux sandbox restrictions: %w", err)
 	}
 	return execvpInDir(cmd.Command, cmd.CommandCWD)
@@ -782,11 +813,11 @@ func ensureLegacyLandlockSupportsPolicy(cmd *linuxSandboxCommand) error {
 	return nil
 }
 
-func applyLinuxPermissionProfile(profile *linuxPermissionProfile, cwd string, applyLandlockFS bool, allowNetworkForProxy bool, proxyRoutedNetwork bool, managedNetwork *linuxManagedNetworkContext) error {
+func applyLinuxPermissionProfile(profile *linuxPermissionProfile, cwd string, applyLandlockFS bool, allowNetworkForProxy bool, routing linuxProxyRouting, managedNetwork *linuxManagedNetworkContext) error {
 	if profile == nil {
 		return errors.New("missing permission profile")
 	}
-	mode := linuxNetworkSeccompModeForProfile(profile, allowNetworkForProxy, proxyRoutedNetwork)
+	mode := linuxNetworkSeccompModeForProfile(profile, allowNetworkForProxy, routing)
 	if mode != linuxNetworkSeccompNone {
 		if err := installLinuxNetworkSeccompFilter(mode, managedNetwork); err != nil {
 			return err
@@ -811,14 +842,18 @@ func applyLinuxPermissionProfile(profile *linuxPermissionProfile, cwd string, ap
 	return nil
 }
 
-func linuxNetworkSeccompModeFor(networkEnabled bool, allowNetworkForProxy bool, proxyRoutedNetwork bool) linuxNetworkSeccompMode {
+func linuxNetworkSeccompModeFor(networkEnabled bool, allowNetworkForProxy bool, routing linuxProxyRouting) linuxNetworkSeccompMode {
 	if networkEnabled && !allowNetworkForProxy {
 		return linuxNetworkSeccompNone
 	}
-	if proxyRoutedNetwork {
+	switch routing {
+	case linuxProxyRoutingTransparentTCP:
+		return linuxNetworkSeccompProxyRoutedTransparentTCP
+	case linuxProxyRoutingExplicit:
 		return linuxNetworkSeccompProxyRouted
+	default:
+		return linuxNetworkSeccompRestricted
 	}
-	return linuxNetworkSeccompRestricted
 }
 
 // linuxNetworkSeccompModeForProfile selects the seccomp filter for one
@@ -831,11 +866,11 @@ func linuxNetworkSeccompModeFor(networkEnabled bool, allowNetworkForProxy bool, 
 // sandbox, and under WSL2 it aliases the Windows interop socket even when
 // `/run/WSL` is masked. A policy with full disk write access keeps unrestricted
 // networking and installs no filter.
-func linuxNetworkSeccompModeForProfile(profile *linuxPermissionProfile, allowNetworkForProxy bool, proxyRoutedNetwork bool) linuxNetworkSeccompMode {
+func linuxNetworkSeccompModeForProfile(profile *linuxPermissionProfile, allowNetworkForProxy bool, routing linuxProxyRouting) linuxNetworkSeccompMode {
 	if profile == nil {
 		return linuxNetworkSeccompNone
 	}
-	if mode := linuxNetworkSeccompModeFor(profile.NetworkEnabled, allowNetworkForProxy, proxyRoutedNetwork); mode != linuxNetworkSeccompNone {
+	if mode := linuxNetworkSeccompModeFor(profile.NetworkEnabled, allowNetworkForProxy, routing); mode != linuxNetworkSeccompNone {
 		return mode
 	}
 	if !profile.Filesystem.hasFullDiskWriteAccess() {
@@ -897,6 +932,11 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 	if !launcher.available() {
 		return bwrapUnavailableError()
 	}
+	if cmd.TransparentTCP && launcher.Bundled {
+		// Rust #61372 requires a supported distro bubblewrap on PATH because the
+		// private namespace stage execs it after dropping capabilities.
+		return errors.New("transparent TCP requires a supported distro bubblewrap on PATH")
+	}
 	var dataFDs []int
 	defer func() {
 		for _, fd := range dataFDs {
@@ -907,7 +947,7 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 	if !cmd.NoProc {
 		args = append(args, "--proc", "/proc")
 	}
-	if !cmd.PermissionProfile.NetworkEnabled || cmd.managedNetworkEnabled() {
+	if !cmd.PermissionProfile.NetworkEnabled || (cmd.managedNetworkEnabled() && !cmd.TransparentTCP) {
 		args = append(args, "--unshare-net")
 	}
 	fs := cmd.PermissionProfile.Filesystem
@@ -1061,6 +1101,18 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 		return err
 	}
 	makeFilesInheritable(dataFDs)
+	if cmd.TransparentTCP {
+		resolver, target, err := prepareTransparentTCPResolverMount(cmd)
+		if err != nil {
+			return err
+		}
+		args, err = insertTransparentTCPResolverArgs(args, target)
+		if err != nil {
+			_ = resolver.Close()
+			return err
+		}
+		return execTransparentTCPBubblewrap(launcher.Program, args, resolver)
+	}
 	if launcher.Bundled {
 		return execBundledBwrap(launcher.Program, args, os.Environ())
 	}
@@ -1232,13 +1284,13 @@ func prepareHostProxyRouteSpec() (string, error) {
 	return string(data), nil
 }
 
-func activateProxyRoutesInNetns(serializedSpec string) error {
+func activateProxyRoutesInNetns(serializedSpec string) (*net.TCPAddr, error) {
 	var spec proxyRouteSpec
 	if err := json.Unmarshal([]byte(serializedSpec), &spec); err != nil {
-		return err
+		return nil, err
 	}
 	if len(spec.Routes) == 0 {
-		return errors.New("proxy routing spec contained no routes")
+		return nil, errors.New("proxy routing spec contained no routes")
 	}
 	portByUDS := map[string]uint16{}
 	for _, route := range spec.Routes {
@@ -1247,24 +1299,35 @@ func activateProxyRoutesInNetns(serializedSpec string) error {
 		}
 		port, err := spawnProxyLocalBridge(route.UDSPath)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		portByUDS[route.UDSPath] = port
 	}
+	var socksBridge *net.TCPAddr
 	for _, route := range spec.Routes {
 		original := os.Getenv(route.EnvKey)
 		if strings.TrimSpace(original) == "" {
-			return fmt.Errorf("missing proxy env key %s", route.EnvKey)
+			return nil, fmt.Errorf("missing proxy env key %s", route.EnvKey)
 		}
 		rewritten, err := rewriteProxyEnvValue(original, portByUDS[route.UDSPath])
 		if err != nil {
-			return fmt.Errorf("could not rewrite proxy URL for env key %s: %w", route.EnvKey, err)
+			return nil, fmt.Errorf("could not rewrite proxy URL for env key %s: %w", route.EnvKey, err)
+		}
+		if route.EnvKey == "ALL_PROXY" {
+			if parsed, parseErr := url.Parse(rewritten); parseErr == nil {
+				scheme := strings.ToLower(parsed.Scheme)
+				if scheme == "socks5" || scheme == "socks5h" {
+					if parsedPort, portErr := strconv.Atoi(parsed.Port()); portErr == nil {
+						socksBridge = &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: parsedPort}
+					}
+				}
+			}
 		}
 		if err := os.Setenv(route.EnvKey, rewritten); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return socksBridge, nil
 }
 
 func planProxyRoutesFromEnv() ([]plannedProxyRoute, bool) {

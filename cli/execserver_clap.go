@@ -20,6 +20,8 @@ type execServerArgSpec struct {
 var execServerArgSpecs = map[string]execServerArgSpec{
 	"strict-config":                  {Token: "--strict-config"},
 	"linux-sandbox-pid-namespace":    {Token: "--linux-sandbox-pid-namespace <MODE>", TakesValue: true},
+	"linux-sandbox-transparent-tcp":  {Token: "--linux-sandbox-transparent-tcp"},
+	"tcp-upstream-proxy":             {Token: "--tcp-upstream-proxy <HOST:PORT>", TakesValue: true},
 	"proxy-private-ips-via-upstream": {Token: "--proxy-private-ips-via-upstream"},
 	"concurrent-requests":            {Token: "--concurrent-requests <COUNT>", TakesValue: true},
 	"listen":                         {Token: "--listen <URL>", TakesValue: true, Conflicts: []string{"remote"}},

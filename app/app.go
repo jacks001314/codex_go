@@ -1046,6 +1046,8 @@ func runExecServer(ctx context.Context, opts *cli.ExecServerOptions, root *cli.R
 	// Rust #48568: carry the trusted startup routing flag into the executor's
 	// managed network proxy launch (exec-server/src/process_sandbox.rs).
 	server.SetProxyPrivateIPsViaUpstream(opts.ProxyPrivateIPsViaUpstream)
+	server.SetLinuxSandboxTransparentTCP(opts.LinuxSandboxTransparentTCP)
+	server.SetTcpUpstreamProxy(opts.TcpUpstreamProxy)
 	server.SetEnvironmentConfigReader(environmentConfigReader)
 	// Rust #47601: listener authentication gates WebSocket upgrades; the flag
 	// combination was already validated against stdio/--remote/forward.
@@ -1192,6 +1194,8 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 			HTTPClient:                 policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
 			PreferMXC:                  preferMXC,
 			ProxyPrivateIPsViaUpstream: opts.ProxyPrivateIPsViaUpstream,
+			LinuxSandboxTransparentTCP: opts.LinuxSandboxTransparentTCP,
+			TcpUpstreamProxy:           opts.TcpUpstreamProxy,
 			EnvironmentConfigReader:    environmentConfigReader,
 			AllowedSymlinkedCodexHome:  loadedConfig.AllowedSymlinkedCodexHome(),
 		}).WithRegistryBearerRedaction()
@@ -1215,6 +1219,8 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 			HTTPClient:                 policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
 			PreferMXC:                  preferMXC,
 			ProxyPrivateIPsViaUpstream: opts.ProxyPrivateIPsViaUpstream,
+			LinuxSandboxTransparentTCP: opts.LinuxSandboxTransparentTCP,
+			TcpUpstreamProxy:           opts.TcpUpstreamProxy,
 			EnvironmentConfigReader:    environmentConfigReader,
 			AllowedSymlinkedCodexHome:  loadedConfig.AllowedSymlinkedCodexHome(),
 		}).WithExecutorCredentialAuth()
@@ -1255,6 +1261,8 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 			HTTPClient:                 policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
 			PreferMXC:                  preferMXC,
 			ProxyPrivateIPsViaUpstream: opts.ProxyPrivateIPsViaUpstream,
+			LinuxSandboxTransparentTCP: opts.LinuxSandboxTransparentTCP,
+			TcpUpstreamProxy:           opts.TcpUpstreamProxy,
 			EnvironmentConfigReader:    environmentConfigReader,
 			AllowedSymlinkedCodexHome:  loadedConfig.AllowedSymlinkedCodexHome(),
 		})
@@ -1313,6 +1321,8 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		HTTPClient:                 registryHTTPClient,
 		PreferMXC:                  preferMXC,
 		ProxyPrivateIPsViaUpstream: opts.ProxyPrivateIPsViaUpstream,
+		LinuxSandboxTransparentTCP: opts.LinuxSandboxTransparentTCP,
+		TcpUpstreamProxy:           opts.TcpUpstreamProxy,
 		EnvironmentConfigReader:    environmentConfigReader,
 		AllowedSymlinkedCodexHome:  loadedConfig.AllowedSymlinkedCodexHome(),
 	})
@@ -1345,6 +1355,8 @@ func runExecServerRemoteWithDirectTransport(
 		HTTPClient:                 policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
 		PreferMXC:                  preferMXC,
 		ProxyPrivateIPsViaUpstream: opts.ProxyPrivateIPsViaUpstream,
+		LinuxSandboxTransparentTCP: opts.LinuxSandboxTransparentTCP,
+		TcpUpstreamProxy:           opts.TcpUpstreamProxy,
 		EnvironmentConfigReader:    environmentConfigReader,
 		AllowedSymlinkedCodexHome:  loadedConfig.AllowedSymlinkedCodexHome(),
 	})
@@ -1433,6 +1445,8 @@ func runExecServerRemoteWithExecutorCredential(
 		DirectHTTPClient:           policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(false, 0)),
 		PreferMXC:                  preferMXC,
 		ProxyPrivateIPsViaUpstream: opts.ProxyPrivateIPsViaUpstream,
+		LinuxSandboxTransparentTCP: opts.LinuxSandboxTransparentTCP,
+		TcpUpstreamProxy:           opts.TcpUpstreamProxy,
 		EnvironmentConfigReader:    environmentConfigReader,
 		AllowedSymlinkedCodexHome:  loadedConfig.AllowedSymlinkedCodexHome(),
 	}

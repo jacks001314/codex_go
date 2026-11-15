@@ -1659,6 +1659,7 @@ var clapCommandLongFlags = map[string][]string{
 	},
 	"exec-server": {
 		"config", "enable", "strict-config", "disable", "linux-sandbox-pid-namespace",
+		"linux-sandbox-transparent-tcp", "tcp-upstream-proxy",
 		"proxy-private-ips-via-upstream", "concurrent-requests", "listen", "ws-auth",
 		"ws-token-file", "ws-token-sha256", "ws-shared-secret-file", "ws-issuer",
 		"ws-audience", "ws-max-clock-skew-seconds", "remote", "remote-transport",
@@ -1669,7 +1670,8 @@ var clapCommandLongFlags = map[string][]string{
 	},
 	"exec-server forward": {
 		"config", "connect", "enable", "strict-config", "disable",
-		"linux-sandbox-pid-namespace", "proxy-private-ips-via-upstream", "remote",
+		"linux-sandbox-pid-namespace", "linux-sandbox-transparent-tcp", "tcp-upstream-proxy",
+		"proxy-private-ips-via-upstream", "remote",
 		"remote-transport", "environment-id", "name", "use-agent-identity-auth",
 		"executor-credential-stdin", "aws-sigv4", "aws-profile", "aws-region", "aws-service",
 		"exit-on-stdin-close", "help",

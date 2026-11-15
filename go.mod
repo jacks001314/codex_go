@@ -1,6 +1,6 @@
 module codex_go
 
-go 1.26.2
+go 1.26.3
 
 require github.com/pelletier/go-toml/v2 v2.4.2
 
@@ -33,6 +33,7 @@ require (
 	github.com/gobwas/glob v0.2.3
 	github.com/goccy/go-json v0.10.5
 	github.com/gofrs/flock v0.13.0
+	github.com/google/flatbuffers v25.12.19+incompatible
 	github.com/google/martian/v3 v3.3.3
 	github.com/google/uuid v1.6.0
 	github.com/inconshreveable/go-vhost v1.0.0
@@ -64,6 +65,7 @@ require (
 	google.golang.org/grpc v1.83.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
+	gvisor.dev/gvisor v0.0.0-20260915211658-a6f909f08a72
 	inet.af/tcpproxy v0.0.0-20231102063150-2862066fc2a9
 	modernc.org/sqlite v1.62.0
 	mvdan.cc/sh/v3 v3.14.1
@@ -73,9 +75,12 @@ require (
 	github.com/charmbracelet/ultraviolet v0.0.0-20261008173134-6b8d4baf91b4 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
-	github.com/google/flatbuffers v25.12.19+incompatible // indirect
+	github.com/google/btree v1.1.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
+	golang.org/x/exp v0.0.0-20250711185948-6ae5c78190dc // indirect
 	golang.org/x/sync v0.24.0 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 )
 
 require (
@@ -102,7 +107,6 @@ require (
 	github.com/dlclark/regexp2/v2 v2.5.2 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
-	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/pprof v0.0.0-20261016150608-1facf8f91b50 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.1 // indirect
@@ -132,8 +136,7 @@ require (
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/xo/terminfo v1.0.0 // indirect
 	github.com/yuin/goldmark-emoji v1.0.6 // indirect
-	golang.org/x/time v0.14.0 // indirect
-	google.golang.org/genproto v0.0.0-20200526211855-cb27e3aa2013 // indirect
+	golang.org/x/time v0.15.0 // indirect
 	kernel.org/pub/linux/libs/security/libcap/psx v1.2.77 // indirect
 	modernc.org/libc v1.80.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/network"
+
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 )
@@ -65,6 +67,14 @@ type RemoteEnvironmentConfig struct {
 	// ExecServerRuntimeOptions::proxy_private_ips_via_upstream: the trusted
 	// startup routing bit carried into this executor's managed network proxy.
 	ProxyPrivateIPsViaUpstream bool
+	// LinuxSandboxTransparentTCP mirrors Rust #61372
+	// ExecServerRuntimeOptions::linux_sandbox_transparent_tcp for this remote
+	// executor's managed Linux command launches.
+	LinuxSandboxTransparentTCP bool
+	// TcpUpstreamProxy mirrors Rust #61372
+	// ExecServerRuntimeOptions::tcp_upstream_proxy: the trusted mandatory HTTP
+	// CONNECT next hop for opaque SOCKS TCP.
+	TcpUpstreamProxy *network.TcpUpstreamProxy
 	// EnvironmentConfigReader serves `environmentConfig/read` for the tunneled
 	// session; nil advertises the capability as false.
 	EnvironmentConfigReader EnvironmentConfigReader
@@ -269,6 +279,8 @@ func RunRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig) erro
 	server := NewServerWithHTTPClient(cfg.HTTPClient)
 	server.SetPreferMXC(cfg.PreferMXC)
 	server.SetProxyPrivateIPsViaUpstream(cfg.ProxyPrivateIPsViaUpstream)
+	server.SetLinuxSandboxTransparentTCP(cfg.LinuxSandboxTransparentTCP)
+	server.SetTcpUpstreamProxy(cfg.TcpUpstreamProxy)
 	server.SetEnvironmentConfigReader(cfg.EnvironmentConfigReader)
 	server.SetAllowedSymlinkedCodexHome(cfg.AllowedSymlinkedCodexHome)
 	defer server.shutdownSessions()

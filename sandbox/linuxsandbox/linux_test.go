@@ -63,14 +63,17 @@ func TestParseLinuxPermissionProfileGoShape(t *testing.T) {
 }
 
 func TestLinuxNetworkSeccompModeFor(t *testing.T) {
-	if got := linuxNetworkSeccompModeFor(true, false, false); got != linuxNetworkSeccompNone {
+	if got := linuxNetworkSeccompModeFor(true, false, linuxProxyRoutingNone); got != linuxNetworkSeccompNone {
 		t.Fatalf("full network mode = %v", got)
 	}
-	if got := linuxNetworkSeccompModeFor(false, false, false); got != linuxNetworkSeccompRestricted {
+	if got := linuxNetworkSeccompModeFor(false, false, linuxProxyRoutingNone); got != linuxNetworkSeccompRestricted {
 		t.Fatalf("restricted network mode = %v", got)
 	}
-	if got := linuxNetworkSeccompModeFor(true, true, true); got != linuxNetworkSeccompProxyRouted {
+	if got := linuxNetworkSeccompModeFor(true, true, linuxProxyRoutingExplicit); got != linuxNetworkSeccompProxyRouted {
 		t.Fatalf("proxy-routed network mode = %v", got)
+	}
+	if got := linuxNetworkSeccompModeFor(true, true, linuxProxyRoutingTransparentTCP); got != linuxNetworkSeccompProxyRoutedTransparentTCP {
+		t.Fatalf("transparent proxy-routed network mode = %v", got)
 	}
 }
 
@@ -355,7 +358,7 @@ func TestLinuxNetworkSeccompModeForProfile(t *testing.T) {
 		name        string
 		profile     *linuxPermissionProfile
 		allowProxy  bool
-		proxyRouted bool
+		routing     linuxProxyRouting
 		want        linuxNetworkSeccompMode
 	}{
 		{
@@ -377,7 +380,7 @@ func TestLinuxNetworkSeccompModeForProfile(t *testing.T) {
 			name:        "managed proxy routing keeps the proxy-routed filter",
 			profile:     &linuxPermissionProfile{Filesystem: restrictedFS, NetworkEnabled: true},
 			allowProxy:  true,
-			proxyRouted: true,
+			routing:     linuxProxyRoutingExplicit,
 			want:        linuxNetworkSeccompProxyRouted,
 		},
 		{
@@ -389,7 +392,7 @@ func TestLinuxNetworkSeccompModeForProfile(t *testing.T) {
 		{
 			name:        "filesystem restricted falls back to vm sockets without proxy opt-in",
 			profile:     &linuxPermissionProfile{Filesystem: restrictedFS, NetworkEnabled: true},
-			proxyRouted: true,
+			routing:     linuxProxyRoutingExplicit,
 			want:        linuxNetworkSeccompVmSocketRestricted,
 		},
 		{
@@ -400,7 +403,7 @@ func TestLinuxNetworkSeccompModeForProfile(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := linuxNetworkSeccompModeForProfile(tc.profile, tc.allowProxy, tc.proxyRouted)
+			got := linuxNetworkSeccompModeForProfile(tc.profile, tc.allowProxy, tc.routing)
 			if got != tc.want {
 				t.Fatalf("linuxNetworkSeccompModeForProfile() = %v, want %v", got, tc.want)
 			}
@@ -609,7 +612,7 @@ func TestLinuxSeccompProbeChildProcess(t *testing.T) {
 			Filesystem:     linuxReadOnlyFilesystemPolicy(),
 			NetworkEnabled: true,
 		}
-		if err := applyLinuxPermissionProfile(profile, os.TempDir(), false, false, false, nil); err != nil {
+		if err := applyLinuxPermissionProfile(profile, os.TempDir(), false, false, linuxProxyRoutingNone, nil); err != nil {
 			t.Fatalf("apply filesystem-restricted unrestricted-network profile: %v", err)
 		}
 	case "restricted":
