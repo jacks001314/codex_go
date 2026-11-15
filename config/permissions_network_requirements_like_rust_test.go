@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -56,7 +57,7 @@ func TestPermissionsNetworkReservedProfileSpellingsRejectedLikeRust(t *testing.T
 }
 
 // TestPermissionsNetworkConflictsWithTopLevelNetworkLikeRust mirrors Rust
-// #58182: managed network requirements must come from exactly one surface.
+// #61391: both spellings may coexist only when they describe the same policy.
 func TestPermissionsNetworkConflictsWithTopLevelNetworkLikeRust(t *testing.T) {
 	_, err := ParseRequirementsTOML([]byte(`
 [network_proxy]
@@ -67,7 +68,37 @@ managed_allowed_domains_only = true
 	if err == nil {
 		t.Fatal("permissions.network plus top-level network_proxy was accepted")
 	}
-	if !strings.Contains(err.Error(), "exactly one surface") {
-		t.Fatalf("conflict error = %v, want the single-surface guidance", err)
+	if !strings.Contains(err.Error(), "same network policy") {
+		t.Fatalf("conflict error = %v, want the shared-policy guidance", err)
+	}
+}
+
+// TestDualNetworkSpellingsShareOnePolicyLikeRust mirrors Rust #61391: a source
+// that publishes both spellings is accepted when the proxy selectors match,
+// including equivalent IPv6 spellings.
+func TestDualNetworkSpellingsShareOnePolicyLikeRust(t *testing.T) {
+	for _, alias := range []string{"network_proxy", "experimental_network"} {
+		requirements, err := ParseRequirementsTOML([]byte(fmt.Sprintf(`
+[%s]
+enabled = false
+[%s.domains]
+"2001:db8::1" = "deny"
+[permissions.network]
+enabled = false
+[permissions.network.domains]
+"2001:0db8:0:0:0:0:0:1" = "deny"
+`, alias, alias)))
+		if err != nil {
+			t.Fatalf("%s dual spelling rejected: %v", alias, err)
+		}
+		if requirements.Network == nil || requirements.Network.Enabled == nil || *requirements.Network.Enabled {
+			t.Fatalf("%s network = %#v", alias, requirements.Network)
+		}
+		if got := requirements.Network.Domains["2001:db8::1"]; got != NetworkDeny {
+			t.Fatalf("%s domains = %#v", alias, requirements.Network.Domains)
+		}
+		if _, namedProfile := requirements.Permissions["network"]; namedProfile {
+			t.Fatalf("%s kept a profile named network: %#v", alias, requirements.Permissions)
+		}
 	}
 }

@@ -3,14 +3,17 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 
 	"codex_go/apps"
+	"codex_go/network"
 	"codex_go/plugin"
 	"codex_go/sandbox"
 )
@@ -150,8 +153,20 @@ func liftPermissionsNetworkRequirement(values map[string]any) error {
 			return fmt.Errorf("%s", permissionsNetworkReservedProfileError)
 		}
 	}
-	if _, topLevel := values["network_proxy"]; topLevel {
-		return fmt.Errorf("`permissions.network` cannot be combined with top-level managed network requirements; specify managed network requirements through exactly one surface")
+	if topLevel, ok := values["network_proxy"].(map[string]any); ok {
+		// Rust #61391: a source may publish both spellings only when they
+		// describe the same policy. Older executors still read the legacy
+		// field, so both tables stay published.
+		if !networkRequirementsDescribeSamePolicy(topLevel, table) {
+			return fmt.Errorf("legacy and permissions.network requirements must describe the same network policy")
+		}
+		// Go publishes the legacy table as the managed network requirement and
+		// never treats `permissions.network` as a profile.
+		delete(permissions, "network")
+		if len(permissions) == 0 {
+			delete(values, "permissions")
+		}
+		return nil
 	}
 	values["network_proxy"] = table
 	delete(permissions, "network")
@@ -159,6 +174,93 @@ func liftPermissionsNetworkRequirement(values map[string]any) error {
 		delete(values, "permissions")
 	}
 	return nil
+}
+
+// networkRequirementsDescribeSamePolicy compares two managed network tables by
+// the selector identities the proxy uses, keeping allow and deny contributions
+// distinct (Rust #61391 NetworkRequirementsToml::describes_same_policy).
+func networkRequirementsDescribeSamePolicy(left, right map[string]any) bool {
+	if !equalManagedNetworkStringSets(managedNetworkDomainRules(left), managedNetworkDomainRules(right)) {
+		return false
+	}
+	if !equalManagedNetworkStringSets(managedNetworkReviewPatterns(left), managedNetworkReviewPatterns(right)) {
+		return false
+	}
+	leftRest := cloneMap(left)
+	rightRest := cloneMap(right)
+	delete(leftRest, "domains")
+	delete(rightRest, "domains")
+	delete(leftRest, "review_domains")
+	delete(rightRest, "review_domains")
+	return reflect.DeepEqual(leftRest, rightRest)
+}
+
+func managedNetworkDomainRules(values map[string]any) map[string]struct{} {
+	rules := map[string]struct{}{}
+	domains, _ := values["domains"].(map[string]any)
+	for pattern, raw := range domains {
+		permission := strings.ToLower(strings.TrimSpace(fmt.Sprint(raw)))
+		rules[permission+"\\x00"+managedNetworkPatternIdentity(pattern)] = struct{}{}
+	}
+	return rules
+}
+
+func managedNetworkReviewPatterns(values map[string]any) map[string]struct{} {
+	patterns := map[string]struct{}{}
+	for _, pattern := range managedNetworkStringList(values["review_domains"]) {
+		patterns[managedNetworkPatternIdentity(pattern)] = struct{}{}
+	}
+	return patterns
+}
+
+func managedNetworkStringList(raw any) []string {
+	switch value := raw.(type) {
+	case []string:
+		return value
+	case []any:
+		out := make([]string, 0, len(value))
+		for _, entry := range value {
+			out = append(out, fmt.Sprint(entry))
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func equalManagedNetworkStringSets(left, right map[string]struct{}) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key := range left {
+		if _, ok := right[key]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// managedNetworkPatternIdentity canonicalizes one selector the way the proxy
+// compares it, retaining the original spelling when it cannot be parsed.
+func managedNetworkPatternIdentity(pattern string) string {
+	pattern = strings.TrimSpace(pattern)
+	prefix := ""
+	remainder := pattern
+	for _, candidate := range []string{"**.", "*."} {
+		if strings.HasPrefix(remainder, candidate) {
+			prefix = candidate
+			remainder = strings.TrimPrefix(remainder, candidate)
+			break
+		}
+	}
+	host := network.NormalizeProxyHost(remainder)
+	if host == "" {
+		return pattern
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		host = ip.String()
+	}
+	return prefix + host
 }
 
 // validatePermissionProfileRequirements mirrors Rust's

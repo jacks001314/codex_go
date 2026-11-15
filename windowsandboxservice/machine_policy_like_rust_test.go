@@ -222,9 +222,14 @@ func TestMalformedMachinePolicyFailsClosed(t *testing.T) {
 		}
 	}
 	for _, table := range []string{"network_proxy", "experimental_network"} {
-		policy := "[" + table + "]\nenabled = true\n[permissions.network]\nenabled = true"
+		policy := "[" + table + "]\nenabled = true\n[permissions.network]\nenabled = false"
 		if err := validateRequirementsFromTOML(t, provisionservice.Settings{}, provisionservice.Listeners{}, policy); err == nil {
 			t.Fatalf("%s: conflicting network tables were accepted", table)
+		}
+		// Rust #61391: matching spellings are one policy and stay admissible.
+		matching := "[" + table + "]\nenabled = true\n[permissions.network]\nenabled = true"
+		if err := validateRequirementsFromTOML(t, provisionservice.Settings{}, provisionservice.Listeners{}, matching); err != nil {
+			t.Fatalf("%s: matching network tables were rejected: %v", table, err)
 		}
 	}
 	if err := validateRequirementsFromTOML(t, provisionservice.Settings{}, provisionservice.Listeners{},

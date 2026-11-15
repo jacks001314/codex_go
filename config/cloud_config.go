@@ -610,6 +610,8 @@ func applyCloudConfigBundleWithFilesystemSource(values map[string]any, requireme
 
 	managedRequirementValues := map[string]any{}
 	cloudFilesystem := false
+	networkFragments := []string{}
+	networkFragmentSeen := map[string]bool{}
 	for _, layer := range layers.EnterpriseManagedRequirements {
 		parsed, err := parseRequirementsTOMLValues([]byte(layer.RawTOML))
 		if err != nil {
@@ -618,6 +620,25 @@ func applyCloudConfigBundleWithFilesystemSource(values map[string]any, requireme
 		normalizeFeatureRequirementAliases(parsed)
 		if err := normalizeNetworkRequirementAliases(parsed); err != nil {
 			return nil, false, fmt.Errorf("%w: invalid cloud requirements: %s", ErrInvalidCloudConfig, err)
+		}
+		// Rust #61391: the two managed-network spellings are normalized per
+		// fragment, and a fragment that publishes both must describe one
+		// policy.
+		if topLevel, ok := parsed["network_proxy"].(map[string]any); ok {
+			if permissions, ok := parsed["permissions"].(map[string]any); ok {
+				if nested, ok := permissions["network"].(map[string]any); ok && !networkRequirementsDescribeSamePolicy(topLevel, nested) {
+					return nil, false, fmt.Errorf("%w: invalid cloud requirements: legacy and permissions.network requirements must describe the same network policy (%s)", ErrInvalidCloudConfig, layer.Source.Name)
+				}
+			}
+			if !networkFragmentSeen[layer.Source.Name] {
+				networkFragmentSeen[layer.Source.Name] = true
+				networkFragments = append(networkFragments, layer.Source.Name)
+			}
+		} else if permissions, ok := parsed["permissions"].(map[string]any); ok {
+			if _, ok := permissions["network"].(map[string]any); ok && !networkFragmentSeen[layer.Source.Name] {
+				networkFragmentSeen[layer.Source.Name] = true
+				networkFragments = append(networkFragments, layer.Source.Name)
+			}
 		}
 		// Rust #56055: config_server selects which server the local machine
 		// trusts, so a fetched policy may never supply it.
@@ -643,6 +664,9 @@ func applyCloudConfigBundleWithFilesystemSource(values map[string]any, requireme
 	}
 	managedRequirements, err := configRequirementsFromValidatedMap(managedRequirementValues)
 	if err != nil {
+		if strings.Contains(err.Error(), "same network policy") && len(networkFragments) > 0 {
+			return nil, false, fmt.Errorf("%w: invalid cloud requirements: %s (%s)", ErrInvalidCloudConfig, err, strings.Join(networkFragments, ", "))
+		}
 		return nil, false, fmt.Errorf("%w: invalid cloud requirements: %s", ErrInvalidCloudConfig, err)
 	}
 	// Rust 0f21cb3413 (#39043): cli_auth_credentials_store and chatgpt_base_url

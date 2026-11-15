@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -204,5 +206,73 @@ func TestCloudConfigLoaderRetriesTimeoutOnNextLoadLikeRust(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatalf("loader calls = %d, want 2", calls)
+	}
+}
+
+// TestCloudValidationChecksNetworkSpellingsPerFragmentLikeRust mirrors Rust
+// #61391: fragments are normalized one at a time, so a fragment may publish
+// both spellings when they describe the same policy, while differing policies
+// are rejected with the participating fragment names and no policy contents.
+func TestCloudValidationChecksNetworkSpellingsPerFragmentLikeRust(t *testing.T) {
+	for _, alias := range []string{"experimental_network", "network_proxy"} {
+		nested := "[permissions.network]\nenabled = false"
+		topLevel := fmt.Sprintf("[%s]\nenabled = false", alias)
+		conflicting := fmt.Sprintf("[%s]\nenabled = true", alias)
+		cases := []struct {
+			name     string
+			contents []string
+			wantErr  bool
+		}{
+			{name: "same fragment matching", contents: []string{nested + "\n" + topLevel}},
+			{name: "across fragments matching", contents: []string{nested, topLevel}},
+			{name: "across fragments conflicting", contents: []string{nested, conflicting}, wantErr: true},
+			{name: "reversed conflicting", contents: []string{conflicting, nested}, wantErr: true},
+			{
+				name: "different selector kinds",
+				contents: []string{
+					"[permissions.network]\ndenied_domains = ['shared.test']",
+					fmt.Sprintf("[%s]\nallowed_domains = ['shared.test']", alias),
+				},
+				wantErr: true,
+			},
+			{
+				name:     "embedded conflicting selectors",
+				contents: []string{nested + "\n" + conflicting + "\nreview_domains = ['private-policy.example']"},
+				wantErr:  true,
+			},
+		}
+		for _, tc := range cases {
+			t.Run(alias+"_"+tc.name, func(t *testing.T) {
+				fragments := make([]CloudConfigFragment, 0, len(tc.contents))
+				for index, contents := range tc.contents {
+					fragments = append(fragments, CloudConfigFragment{
+						ID:       fmt.Sprintf("fragment-%d", index),
+						Name:     fmt.Sprintf("fragment-%d", index),
+						Contents: contents,
+					})
+				}
+				_, err := applyCloudConfigBundle(map[string]any{}, nil, CloudConfigBundle{
+					RequirementsTOML: CloudConfigRequirementsTOMLBundle{EnterpriseManaged: fragments},
+				}, t.TempDir())
+				if tc.wantErr {
+					if err == nil {
+						t.Fatalf("%s accepted conflicting network spellings", tc.name)
+					}
+					message := err.Error()
+					for _, fragment := range fragments {
+						if !strings.Contains(message, fragment.ID) {
+							t.Fatalf("error %q does not name %s", message, fragment.ID)
+						}
+					}
+					if strings.Contains(message, "private-policy.example") {
+						t.Fatalf("error leaked policy contents: %q", message)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("%s rejected matching network spellings: %v", tc.name, err)
+				}
+			})
+		}
 	}
 }
