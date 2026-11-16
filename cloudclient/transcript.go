@@ -134,7 +134,21 @@ type AgentMessageSummary struct {
 	Text         string
 	Questions    []AgentQuestion
 	HasQuestions bool
+	// Phase is the phase the server recorded for a native agent message. Rust
+	// #61737 keeps it unset for missing or unrecognized wire values.
+	Phase AgentMessagePhase
 }
+
+// AgentMessagePhase mirrors Rust cloud_client::AgentMessagePhase: the phase a
+// native agent message declares (commentary, final answer, partial answer).
+type AgentMessagePhase int
+
+const (
+	AgentMessagePhaseUnset AgentMessagePhase = iota
+	AgentMessagePhaseCommentary
+	AgentMessagePhaseFinalAnswer
+	AgentMessagePhasePartialAnswer
+)
 
 type AgentQuestion struct {
 	Title   string
@@ -715,7 +729,34 @@ func decodeAgentMessageSummary(data []byte) (ItemSummary, bool, error) {
 			questions = append(questions, entry)
 		}
 	}
-	return ItemSummary{Kind: ItemAgentMessage, Agent: AgentMessageSummary{ID: id, Text: text, Questions: questions, HasQuestions: hasQuestions}}, true, nil
+	return ItemSummary{Kind: ItemAgentMessage, Agent: AgentMessageSummary{ID: id, Text: text, Questions: questions, HasQuestions: hasQuestions, Phase: decodeAgentMessagePhase(data)}}, true, nil
+}
+
+// decodeAgentMessagePhase reads the optional phase message (field 4) and maps
+// its oneof alternative whose int32 value is 1 (Rust items::summary, #61737).
+// Missing, zero-valued, or unknown alternatives leave the phase unset.
+func decodeAgentMessagePhase(data []byte) AgentMessagePhase {
+	encoded, ok := bytesField(data, 4)
+	if !ok {
+		return AgentMessagePhaseUnset
+	}
+	tag, value, err := selectOneof(encoded, 1, 3)
+	if err != nil || tag == 0 {
+		return AgentMessagePhaseUnset
+	}
+	if marker, ok := int64Field(value, 1); !ok || marker != 1 {
+		return AgentMessagePhaseUnset
+	}
+	switch tag {
+	case 1:
+		return AgentMessagePhaseCommentary
+	case 2:
+		return AgentMessagePhaseFinalAnswer
+	case 3:
+		return AgentMessagePhasePartialAnswer
+	default:
+		return AgentMessagePhaseUnset
+	}
 }
 
 func decodeReasoningSummary(data []byte) (ItemSummary, bool, error) {

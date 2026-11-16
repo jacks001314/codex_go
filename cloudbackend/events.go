@@ -184,11 +184,32 @@ func threadItemFromSummary(item cloudclient.ItemSummary) (appserver.ThreadItem, 
 			}
 			data["questions"] = questions
 		}
+		// Rust #61737 keeps the phase the cloud message declares; the app-server
+		// payload publishes it next to the text.
+		if phase := cloudAgentMessagePhase(item.Agent.Phase); phase != "" {
+			data["phase"] = phase
+		}
 		threadItem = appserver.ThreadItem{ID: item.Agent.ID, Type: "agentMessage", Text: item.Agent.Text, Data: data}
 	default:
 		return appserver.ThreadItem{}, false
 	}
 	return threadItem, true
+}
+
+// cloudAgentMessagePhase maps the decoded cloud phase onto the app-server value
+// (Rust cloud_backend::events item_summary, #61737). An unset phase stays empty
+// so the payload keeps `null` like Rust's None.
+func cloudAgentMessagePhase(phase cloudclient.AgentMessagePhase) appserver.MessagePhase {
+	switch phase {
+	case cloudclient.AgentMessagePhaseCommentary:
+		return appserver.MessagePhaseCommentary
+	case cloudclient.AgentMessagePhaseFinalAnswer:
+		return appserver.MessagePhaseFinalAnswer
+	case cloudclient.AgentMessagePhasePartialAnswer:
+		return appserver.MessagePhasePartialAnswer
+	default:
+		return ""
+	}
 }
 
 // cloudUserContent renders the announced parts in order. A typed image part
