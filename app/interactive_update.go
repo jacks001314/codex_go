@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -81,13 +82,33 @@ func runInteractiveUpdateFlow(
 	if info, err := codextui.ReadVersionInfo(codextui.VersionFilePath(request.Config.CodexHome)); err == nil {
 		cached = &info
 	}
-	if codextui.ShouldCheckForUpgrade(request.Config, cached) && dependencies.fetchLatest != nil && dependencies.schedule != nil {
+	refreshedForThisVersion := false
+	refreshesNow := codextui.VersionInfoNeedsVersionRefresh(cached, request.Config.CurrentVersion) &&
+		codextui.VersionInfoBehindCurrent(cached, request.Config.CurrentVersion)
+	if refreshesNow && dependencies.fetchLatest != nil {
+		// The cache was filled by another CLI build and reports a release older
+		// than this binary, so it may predate what this binary can see. Re-check
+		// now instead of hiding the startup prompt until UpdateCacheTTL elapses.
+		refreshedForThisVersion = true
+		latest, err := dependencies.fetchLatest(ctx, &install.UpdateCheckOptions{
+			Context:    request.InstallContext,
+			HTTPClient: &http.Client{Timeout: 5 * time.Second},
+		})
+		if err != nil {
+			// Remember the attempt so an offline start does not repeat the wait
+			// on every launch; the cached latest version stays as it was.
+			_ = markInteractiveVersionCheck(request.Config.CodexHome, request.Config.CurrentVersion)
+		} else if info, err := refreshInteractiveVersionCache(request.Config.CodexHome, latest, request.Config.CurrentVersion, time.Now().UTC()); err == nil {
+			cached = &info
+		}
+	}
+	if !refreshedForThisVersion && codextui.ShouldCheckForUpgrade(request.Config, cached) && dependencies.fetchLatest != nil && dependencies.schedule != nil {
 		dependencies.schedule(func() {
 			latest, err := dependencies.fetchLatest(ctx, &install.UpdateCheckOptions{Context: request.InstallContext})
 			if err != nil {
 				return
 			}
-			_ = refreshInteractiveVersionCache(request.Config.CodexHome, latest, time.Now().UTC())
+			_, _ = refreshInteractiveVersionCache(request.Config.CodexHome, latest, request.Config.CurrentVersion, time.Now().UTC())
 		})
 	}
 
@@ -154,12 +175,26 @@ func interactiveUpdateHistoryCells(root *cli.RootOptions) []historycell.HistoryC
 	}
 }
 
-func refreshInteractiveVersionCache(codexHome string, latestVersion string, checkedAt time.Time) error {
+func refreshInteractiveVersionCache(codexHome string, latestVersion string, currentVersion string, checkedAt time.Time) (codextui.VersionInfo, error) {
 	versionFile := codextui.VersionFilePath(codexHome)
 	previous, _ := codextui.ReadVersionInfo(versionFile)
-	return codextui.WriteVersionInfo(versionFile, codextui.VersionInfo{
+	info := codextui.VersionInfo{
 		LatestVersion:    strings.TrimSpace(latestVersion),
 		LastCheckedAt:    checkedAt.UTC(),
 		DismissedVersion: previous.DismissedVersion,
-	})
+		CheckedByVersion: strings.TrimSpace(currentVersion),
+	}
+	return info, codextui.WriteVersionInfo(versionFile, info)
+}
+
+// markInteractiveVersionCheck records that currentVersion attempted a check
+// without touching the cached latest version or its timestamp.
+func markInteractiveVersionCheck(codexHome string, currentVersion string) error {
+	versionFile := codextui.VersionFilePath(codexHome)
+	info, err := codextui.ReadVersionInfo(versionFile)
+	if err != nil {
+		return err
+	}
+	info.CheckedByVersion = strings.TrimSpace(currentVersion)
+	return codextui.WriteVersionInfo(versionFile, info)
 }

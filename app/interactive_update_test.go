@@ -14,8 +14,9 @@ func TestInteractiveUpdateFlowUsesCachedVersionAndRefreshesInBackground(t *testi
 	home := t.TempDir()
 	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 	if err := codextui.WriteVersionInfo(codextui.VersionFilePath(home), codextui.VersionInfo{
-		LatestVersion: "2.0.0",
-		LastCheckedAt: now.Add(-21 * time.Hour),
+		LatestVersion:    "2.0.0",
+		LastCheckedAt:    now.Add(-21 * time.Hour),
+		CheckedByVersion: "1.0.0",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -128,11 +129,104 @@ func testInteractiveUpdateRequest(home string, now time.Time) interactiveUpdateR
 	}
 }
 
+func TestInteractiveUpdateFlowPromptsForStandaloneInstall(t *testing.T) {
+	home := t.TempDir()
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	writeFreshUpdateCache(t, home, now)
+	platform := install.StandaloneWindows
+	request := testInteractiveUpdateRequest(home, now)
+	request.InstallContext = &install.InstallContext{
+		Method: install.InstallMethod{Kind: install.InstallStandalone, Platform: &platform},
+	}
+	promptedCommand := ""
+	exited, err := runInteractiveUpdateFlow(context.Background(), request, interactiveUpdateDependencies{
+		runPrompt: func(_ context.Context, screen *codextui.UpdatePromptScreen, _ io.Reader, _ io.Writer, _ bool) (codextui.UpdateSelection, error) {
+			promptedCommand = screen.UpdateAction.CommandString()
+			return codextui.UpdateSelectionNotNow, nil
+		},
+	}, nil, io.Discard, io.Discard)
+	if err != nil || exited {
+		t.Fatalf("exited=%v err=%v", exited, err)
+	}
+	if promptedCommand != "npm install -g @jacks001314/codex-go@latest" {
+		t.Fatalf("standalone prompt command = %q", promptedCommand)
+	}
+}
+
+func TestInteractiveUpdateFlowRechecksCacheWrittenByAnotherVersion(t *testing.T) {
+	home := t.TempDir()
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	if err := codextui.WriteVersionInfo(codextui.VersionFilePath(home), codextui.VersionInfo{
+		LatestVersion:    "0.9.0",
+		LastCheckedAt:    now.Add(-time.Minute),
+		CheckedByVersion: "0.9.0",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fetched := false
+	promptedVersion := ""
+	exited, err := runInteractiveUpdateFlow(context.Background(), testInteractiveUpdateRequest(home, now), interactiveUpdateDependencies{
+		fetchLatest: func(context.Context, *install.UpdateCheckOptions) (string, error) {
+			fetched = true
+			return "1.1.0", nil
+		},
+		runPrompt: func(_ context.Context, screen *codextui.UpdatePromptScreen, _ io.Reader, _ io.Writer, _ bool) (codextui.UpdateSelection, error) {
+			promptedVersion = screen.LatestVersion
+			return codextui.UpdateSelectionNotNow, nil
+		},
+		schedule: func(work func()) { work() },
+	}, nil, io.Discard, io.Discard)
+	if err != nil || exited {
+		t.Fatalf("exited=%v err=%v", exited, err)
+	}
+	if !fetched || promptedVersion != "1.1.0" {
+		t.Fatalf("fetched=%v promptedVersion=%q", fetched, promptedVersion)
+	}
+	info, err := codextui.ReadVersionInfo(codextui.VersionFilePath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.LatestVersion != "1.1.0" || info.CheckedByVersion != "1.0.0" {
+		t.Fatalf("refreshed cache = %#v", info)
+	}
+}
+
+func TestInteractiveUpdateFlowKeepsFreshCacheOthersFilled(t *testing.T) {
+	home := t.TempDir()
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	if err := codextui.WriteVersionInfo(codextui.VersionFilePath(home), codextui.VersionInfo{
+		LatestVersion: "999.0.0",
+		LastCheckedAt: now.Add(-time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fetched := false
+	promptedVersion := ""
+	exited, err := runInteractiveUpdateFlow(context.Background(), testInteractiveUpdateRequest(home, now), interactiveUpdateDependencies{
+		fetchLatest: func(context.Context, *install.UpdateCheckOptions) (string, error) {
+			fetched = true
+			return "1.1.0", nil
+		},
+		runPrompt: func(_ context.Context, screen *codextui.UpdatePromptScreen, _ io.Reader, _ io.Writer, _ bool) (codextui.UpdateSelection, error) {
+			promptedVersion = screen.LatestVersion
+			return codextui.UpdateSelectionNotNow, nil
+		},
+		schedule: func(work func()) { work() },
+	}, nil, io.Discard, io.Discard)
+	if err != nil || exited {
+		t.Fatalf("exited=%v err=%v", exited, err)
+	}
+	if fetched || promptedVersion != "999.0.0" {
+		t.Fatalf("fetched=%v promptedVersion=%q", fetched, promptedVersion)
+	}
+}
+
 func writeFreshUpdateCache(t *testing.T, home string, now time.Time) {
 	t.Helper()
 	if err := codextui.WriteVersionInfo(codextui.VersionFilePath(home), codextui.VersionInfo{
-		LatestVersion: "2.0.0",
-		LastCheckedAt: now,
+		LatestVersion:    "2.0.0",
+		LastCheckedAt:    now,
+		CheckedByVersion: "1.0.0",
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"codex_go/install"
 )
 
 func TestUpdateVersionsMatchRust(t *testing.T) {
@@ -53,13 +55,16 @@ func TestUpdateAvailableUsesRustSemverRules(t *testing.T) {
 	}
 }
 
-func TestUpdateActionCommandStringsMatchRust(t *testing.T) {
+func TestUpdateActionCommandStringsUseCodexGoChannel(t *testing.T) {
 	command, args := UpdateActionStandaloneUnix.CommandArgs()
-	if command != "sh" || len(args) != 2 || args[1] != `s=$(curl -fsSL https://chatgpt.com/codex/install.sh) && CODEX_NON_INTERACTIVE=1 eval "$s"` {
+	// codex_go publishes no installer script for unpacked archives, so the npm
+	// package is the automated update channel (the upstream chatgpt.com
+	// installer would replace this CLI with openai/codex).
+	if command != "npm" || len(args) != 3 || args[2] != "@jacks001314/codex-go@latest" {
 		t.Fatalf("StandaloneUnix CommandArgs = %q %#v", command, args)
 	}
 	command, args = UpdateActionStandaloneWin.CommandArgs()
-	if command != "powershell" || len(args) != 4 || args[3] != "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex" {
+	if command != "npm" || len(args) != 3 || args[2] != "@jacks001314/codex-go@latest" {
 		t.Fatalf("StandaloneWin CommandArgs = %q %#v", command, args)
 	}
 	if got := UpdateActionNPMGlobalLatest.CommandString(); got != "npm install -g @jacks001314/codex-go@latest" {
@@ -220,5 +225,50 @@ func assertBoolPtrTUI(t *testing.T, got *bool, want bool) {
 	t.Helper()
 	if got == nil || *got != want {
 		t.Fatalf("bool pointer = %v, want %v", got, want)
+	}
+}
+
+func TestUpdateActionFromInstallMapsInstallActions(t *testing.T) {
+	tests := []struct {
+		name   string
+		action *install.UpdateAction
+		want   UpdateAction
+	}{
+		{name: "nil", action: nil, want: ""},
+		{name: "npm", action: &install.UpdateAction{Kind: install.UpdateActionNPMGlobalLatest}, want: UpdateActionNPMGlobalLatest},
+		{name: "bun", action: &install.UpdateAction{Kind: install.UpdateActionBunGlobalLatest}, want: UpdateActionBunGlobalLatest},
+		{name: "brew", action: &install.UpdateAction{Kind: install.UpdateActionBrewUpgrade}, want: UpdateActionBrewUpgrade},
+		{name: "standalone unix", action: &install.UpdateAction{Kind: install.UpdateActionStandaloneUnix}, want: UpdateActionStandaloneUnix},
+		{name: "standalone windows", action: &install.UpdateAction{Kind: install.UpdateActionStandaloneWin}, want: UpdateActionStandaloneWin},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := UpdateActionFromInstall(test.action); got != test.want {
+				t.Fatalf("UpdateActionFromInstall() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestVersionInfoBehindCurrentVersion(t *testing.T) {
+	tests := []struct {
+		name    string
+		info    *VersionInfo
+		current string
+		want    bool
+	}{
+		{name: "nil cache", info: nil, current: "1.0.9"},
+		{name: "cache predates this build", info: &VersionInfo{LatestVersion: "1.0.8"}, current: "1.0.9", want: true},
+		{name: "cache reports a newer release", info: &VersionInfo{LatestVersion: "1.1.0"}, current: "1.0.9"},
+		{name: "cache reports a far newer release", info: &VersionInfo{LatestVersion: "999.0.0"}, current: "1.0.9"},
+		{name: "same version", info: &VersionInfo{LatestVersion: "1.0.9"}, current: "1.0.9"},
+		{name: "unparsable cache", info: &VersionInfo{LatestVersion: "latest"}, current: "1.0.9"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := VersionInfoBehindCurrent(test.info, test.current); got != test.want {
+				t.Fatalf("VersionInfoBehindCurrent() = %v, want %v", got, test.want)
+			}
+		})
 	}
 }

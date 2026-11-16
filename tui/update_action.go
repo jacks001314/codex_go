@@ -84,10 +84,11 @@ func (a UpdateAction) CommandArgs() (string, []string) {
 		return "pnpm", []string{"add", "-g", install.NPMPackageName + "@latest"}
 	case UpdateActionBrewUpgrade:
 		return "brew", []string{"upgrade", "--cask", "codex"}
-	case UpdateActionStandaloneUnix:
-		return "sh", []string{"-c", `s=$(curl -fsSL https://chatgpt.com/codex/install.sh) && CODEX_NON_INTERACTIVE=1 eval "$s"`}
-	case UpdateActionStandaloneWin:
-		return "powershell", []string{"-ExecutionPolicy", "Bypass", "-c", "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex"}
+	case UpdateActionStandaloneUnix, UpdateActionStandaloneWin:
+		// codex_go ships no scripted installer for unpacked release archives, and
+		// the upstream chatgpt.com installer would replace this CLI with
+		// openai/codex, so the npm package is the automated update channel.
+		return "npm", []string{"install", "-g", install.NPMPackageName + "@latest"}
 	case UpdateActionDaemonPublicStable:
 		return "codex", DaemonUpdateSourcePublicStable.CommandArgs()
 	case UpdateActionDaemonThisCli:

@@ -21,6 +21,11 @@ type VersionInfo struct {
 	LatestVersion    string    `json:"latest_version"`
 	LastCheckedAt    time.Time `json:"last_checked_at"`
 	DismissedVersion *string   `json:"dismissed_version,omitempty"`
+	// CheckedByVersion records which CLI version refreshed the cache. Rust has
+	// no such field (serde ignores unknown keys), and it lets a binary that was
+	// installed after the last check refresh once instead of hiding the startup
+	// update prompt for the whole cache TTL.
+	CheckedByVersion string `json:"checked_by_version,omitempty"`
 }
 
 func VersionFilePath(codexHome string) string {

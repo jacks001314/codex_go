@@ -4755,7 +4755,7 @@ func stateCheck(codexHome string, opts *Options) *DoctorCheck {
 		status = worseCheckStatus(status, dbStatus)
 	}
 	rolloutStatsDetailsForDoctor(&details, codexHome)
-	standaloneReleaseCacheDetailsForDoctor(&details)
+	standaloneReleaseCacheDetailsForDoctor(&details, codexHome)
 
 	summary := "state paths and databases are inspectable"
 	switch status {
@@ -4991,12 +4991,19 @@ func isRolloutFileForDoctor(path string) bool {
 	return filepath.Ext(path) == ".jsonl" && strings.HasPrefix(filepath.Base(path), "rollout-")
 }
 
-func standaloneReleaseCacheDetailsForDoctor(details *[]string) {
+func standaloneReleaseCacheDetailsForDoctor(details *[]string, codexHome string) {
 	context := install.Current()
-	if context == nil || context.Method.Kind != install.InstallStandalone || strings.TrimSpace(context.Method.ReleaseDir) == "" {
+	if context == nil || context.Method.Kind != install.InstallStandalone {
 		return
 	}
-	releasesDir := filepath.Dir(context.Method.ReleaseDir)
+	// Only managed releases keep a cache; an unpacked release archive is
+	// standalone too, but its installation directory is not a release cache.
+	releasesDir := filepath.Join(codexHome, "packages", "standalone", "releases")
+	releaseDir := strings.TrimSpace(context.Method.ReleaseDir)
+	rel, err := filepath.Rel(releasesDir, releaseDir)
+	if releaseDir == "" || err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return
+	}
 	entries, err := os.ReadDir(releasesDir)
 	if err != nil {
 		return

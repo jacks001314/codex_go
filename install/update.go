@@ -121,9 +121,34 @@ func ActionFromContext(context *InstallContext) *UpdateAction {
 		return &UpdateAction{Kind: UpdateActionVitePlusGlobalLatest}
 	case InstallPnpm:
 		return &UpdateAction{Kind: UpdateActionPnpmGlobalLatest}
+	case InstallStandalone:
+		// Rust UpdateAction::from_install_context maps Standalone{platform} onto
+		// the matching installer action, so archive installs keep the startup
+		// update prompt instead of falling back to a manual download.
+		return &UpdateAction{Kind: standaloneUpdateActionKind(context.Method.Platform)}
+	case InstallBrew:
+		// The "codex" cask packages openai/codex, so upgrading it would replace
+		// this CLI instead of updating it.
+		return nil
 	default:
 		return nil
 	}
+}
+
+// standaloneUpdateActionKind selects the standalone update action for a
+// platform, defaulting to the running platform when the install method does not
+// record one (Rust `standalone_platform()`).
+func standaloneUpdateActionKind(platform *StandalonePlatform) UpdateActionKind {
+	if platform != nil {
+		if *platform == StandaloneUnix {
+			return UpdateActionStandaloneUnix
+		}
+		return UpdateActionStandaloneWin
+	}
+	if runtime.GOOS == "windows" {
+		return UpdateActionStandaloneWin
+	}
+	return UpdateActionStandaloneUnix
 }
 
 func (a *UpdateAction) CommandArgs() (string, []string) {
@@ -141,10 +166,11 @@ func (a *UpdateAction) CommandArgs() (string, []string) {
 		return "pnpm", []string{"add", "-g", NPMPackageName + "@latest"}
 	case UpdateActionBrewUpgrade:
 		return "brew", []string{"upgrade", "--cask", "codex"}
-	case UpdateActionStandaloneUnix:
-		return "sh", []string{"-c", `s=$(curl -fsSL https://chatgpt.com/codex/install.sh) && CODEX_NON_INTERACTIVE=1 eval "$s"`}
-	case UpdateActionStandaloneWin:
-		return "powershell", []string{"-ExecutionPolicy", "Bypass", "-c", "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex"}
+	case UpdateActionStandaloneUnix, UpdateActionStandaloneWin:
+		// codex_go ships no scripted installer for unpacked release archives, and
+		// the upstream chatgpt.com installer would replace this CLI with
+		// openai/codex, so the npm package is the automated update channel.
+		return "npm", []string{"install", "-g", NPMPackageName + "@latest"}
 	default:
 		return "", nil
 	}

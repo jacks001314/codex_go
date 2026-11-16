@@ -27,6 +27,12 @@ func (r *recordingRunner) Run(ctx context.Context, command string, args []string
 }
 
 func TestActionFromContext(t *testing.T) {
+	unixPlatform := StandaloneUnix
+	windowsPlatform := StandaloneWindows
+	defaultStandaloneAction := UpdateActionStandaloneUnix
+	if runtime.GOOS == "windows" {
+		defaultStandaloneAction = UpdateActionStandaloneWin
+	}
 	tests := []struct {
 		name    string
 		context *InstallContext
@@ -37,8 +43,27 @@ func TestActionFromContext(t *testing.T) {
 		{name: "bun", context: &InstallContext{Method: InstallMethod{Kind: InstallBun}}, want: UpdateActionBunGlobalLatest, has: true},
 		{name: "vite-plus", context: &InstallContext{Method: InstallMethod{Kind: InstallVitePlus}}, want: UpdateActionVitePlusGlobalLatest, has: true},
 		{name: "pnpm", context: &InstallContext{Method: InstallMethod{Kind: InstallPnpm}}, want: UpdateActionPnpmGlobalLatest, has: true},
+		// The "codex" Homebrew cask packages openai/codex, so a brew-classified
+		// codex_go install has no update of its own to run.
 		{name: "brew", context: &InstallContext{Method: InstallMethod{Kind: InstallBrew}}, has: false},
-		{name: "standalone", context: &InstallContext{Method: InstallMethod{Kind: InstallStandalone}}, has: false},
+		{
+			name:    "standalone unix",
+			context: &InstallContext{Method: InstallMethod{Kind: InstallStandalone, Platform: &unixPlatform}},
+			want:    UpdateActionStandaloneUnix,
+			has:     true,
+		},
+		{
+			name:    "standalone windows",
+			context: &InstallContext{Method: InstallMethod{Kind: InstallStandalone, Platform: &windowsPlatform}},
+			want:    UpdateActionStandaloneWin,
+			has:     true,
+		},
+		{
+			name:    "standalone without platform",
+			context: &InstallContext{Method: InstallMethod{Kind: InstallStandalone}},
+			want:    defaultStandaloneAction,
+			has:     true,
+		},
 		{name: "other", context: &InstallContext{Method: InstallMethod{Kind: InstallOther}}, has: false},
 	}
 	for _, test := range tests {

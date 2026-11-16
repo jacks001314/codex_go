@@ -55,6 +55,50 @@ func TestBundledResourceDirFindsDirectory(t *testing.T) {
 	}
 }
 
+// An unpacked codex_go release archive carries codex-resources/ beside the
+// executable; it must resolve to a standalone install so the startup update
+// prompt has an update action (Rust keeps such trees on InstallMethod::Other,
+// which has none).
+func TestDetectsUnpackedReleaseArchiveAsStandalone(t *testing.T) {
+	releaseDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(releaseDir, resourcesDirname), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	exePath := filepath.Join(releaseDir, managedCodexFileName())
+	if err := os.WriteFile(exePath, []byte(""), 0o600); err != nil {
+		t.Fatalf("WriteFile(exe) error = %v", err)
+	}
+	context := FromExe(false, exePath, false, false, false, false, t.TempDir())
+	if context.Method.Kind != InstallStandalone {
+		t.Fatalf("method = %+v, want standalone", context.Method)
+	}
+	if context.Method.ReleaseDir != releaseDir {
+		t.Fatalf("release dir = %q, want %q", context.Method.ReleaseDir, releaseDir)
+	}
+	if context.Method.Platform == nil || *context.Method.Platform != standalonePlatform() {
+		t.Fatalf("platform = %#v", context.Method.Platform)
+	}
+	wantResources := filepath.Join(releaseDir, resourcesDirname)
+	if context.Method.ResourcesDir == nil || *context.Method.ResourcesDir != wantResources {
+		t.Fatalf("resources dir = %#v, want %q", context.Method.ResourcesDir, wantResources)
+	}
+}
+
+func TestPlainBuildWithoutResourcesStaysOther(t *testing.T) {
+	dir := t.TempDir()
+	exePath := filepath.Join(dir, managedCodexFileName())
+	if err := os.WriteFile(exePath, []byte(""), 0o600); err != nil {
+		t.Fatalf("WriteFile(exe) error = %v", err)
+	}
+	context := FromExe(false, exePath, false, false, false, false, t.TempDir())
+	if context.Method.Kind != InstallOther {
+		t.Fatalf("method = %+v, want other", context.Method)
+	}
+	if action := ActionFromContext(context); action != nil {
+		t.Fatalf("ActionFromContext() = %#v, want nil", action)
+	}
+}
+
 func TestDetectsPackageLayout(t *testing.T) {
 	packageDir := t.TempDir()
 	binDir := filepath.Join(packageDir, binDirname)

@@ -501,6 +501,9 @@ func installMethodFromExe(exePath string, codexHome string, layout *CodexPackage
 	if method, ok := standaloneInstallMethod(exePath, codexHome, layout); ok {
 		return method
 	}
+	if method, ok := unpackedStandaloneInstallMethod(exePath, layout); ok {
+		return method
+	}
 	if isMacOS && (strings.HasPrefix(exePath, "/opt/homebrew") || strings.HasPrefix(exePath, "/usr/local")) {
 		return InstallMethod{Kind: InstallBrew}
 	}
@@ -538,12 +541,53 @@ func standaloneInstallMethod(exePath string, codexHome string, layout *CodexPack
 	}
 	resourcesDir := filepath.Join(releaseDir, resourcesDirname)
 	method := InstallMethod{Kind: InstallStandalone, ReleaseDir: releaseDir, ResourcesDir: existingDir(resourcesDir)}
-	platform := StandaloneUnix
-	if runtime.GOOS == "windows" {
-		platform = StandaloneWindows
-	}
+	platform := standalonePlatform()
 	method.Platform = &platform
 	return method, true
+}
+
+// unpackedStandaloneInstallMethod recognizes a self-contained codex_go release
+// that lives outside the managed release directory: an unpacked archive ships
+// codex-resources/ beside the executable, and a package layout ships
+// codex-package.json above bin/. Without this classification such installs stay
+// InstallMethod::Other, which has no update action, so released archive users
+// never saw the startup update prompt.
+func unpackedStandaloneInstallMethod(exePath string, layout *CodexPackageLayout) (InstallMethod, bool) {
+	releaseDir := ""
+	if layout != nil {
+		releaseDir = layout.PackageDir
+	} else {
+		if strings.TrimSpace(exePath) == "" {
+			return InstallMethod{}, false
+		}
+		canonicalExe, err := filepath.Abs(exePath)
+		if err != nil {
+			return InstallMethod{}, false
+		}
+		if resolved, err := filepath.EvalSymlinks(canonicalExe); err == nil {
+			canonicalExe = resolved
+		}
+		releaseDir = filepath.Dir(canonicalExe)
+		if existingDir(filepath.Join(releaseDir, resourcesDirname)) == nil {
+			return InstallMethod{}, false
+		}
+	}
+	resourcesDir := filepath.Join(releaseDir, resourcesDirname)
+	platform := standalonePlatform()
+	return InstallMethod{
+		Kind:         InstallStandalone,
+		ReleaseDir:   releaseDir,
+		ResourcesDir: existingDir(resourcesDir),
+		Platform:     &platform,
+	}, true
+}
+
+// standalonePlatform mirrors Rust install-context's standalone_platform().
+func standalonePlatform() StandalonePlatform {
+	if runtime.GOOS == "windows" {
+		return StandaloneWindows
+	}
+	return StandaloneUnix
 }
 
 func managedCodexFileName() string {
