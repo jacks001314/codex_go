@@ -218,6 +218,13 @@ func listMCPStdioInventoryWithClient(client *stdioClient) (*stdioInventory, erro
 // skipResourceTemplates is set the template listing is not requested and the
 // reported template list stays empty (Rust #57861).
 func listMCPStdioInventoryWithOptions(client *stdioClient, serverName string, threadID string, roots []MCPRoot, skipResourceTemplates bool) (*stdioInventory, error) {
+	return listMCPStdioInventoryWithDetail(client, serverName, threadID, roots, true, skipResourceTemplates)
+}
+
+// listMCPStdioInventoryWithDetail lists one local server's catalog, optionally
+// skipping the resource listings a ToolsAndAuthOnly status read does not need
+// (Rust McpSnapshotDetail).
+func listMCPStdioInventoryWithDetail(client *stdioClient, serverName string, threadID string, roots []MCPRoot, includeInventory bool, skipResourceTemplates bool) (*stdioInventory, error) {
 	result := &stdioInventory{}
 	options := &stdioCallOptions{ServerName: serverName, ThreadID: threadID, Roots: roots}
 	tools, toolListMeta, err := listMCPStdioTools(client, options)
@@ -233,6 +240,9 @@ func listMCPStdioInventoryWithOptions(client *stdioClient, serverName string, th
 	result.Tools = tools
 	// Only a successful listing carries catalog metadata (Rust #54686).
 	result.ToolListMeta = toolListMeta
+	if !includeInventory {
+		return result, nil
+	}
 	if resources, err := listMCPStdioResources(client, options); err == nil {
 		result.Resources = resources
 	}

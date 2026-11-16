@@ -2170,13 +2170,75 @@ func retainedToolCatalogInventory(status MCPServerStatus) *stdioInventory {
 	}
 }
 
+// mcpServerHasFixedStatusCredentials mirrors Rust #61738's
+// McpServerConnectionIdentity::has_fixed_status_credentials: a status read may
+// answer from a connection's published catalog only when no credential source
+// can change between reads. Runtime auth (Go's ApplyHTTPRequest), EMA, stored
+// OAuth, and environment-driven transport credentials all disqualify reuse.
+func mcpServerHasFixedStatusCredentials(config *ServerConfig) bool {
+	if config == nil || config.Auth == ServerAuthEMAAuth || config.ApplyHTTPRequest != nil {
+		return false
+	}
+	if config.URL != "" {
+		if config.BearerTokenEnvVar != "" || len(config.EnvHTTPHeaders) > 0 || config.HTTPHeadersHelper != "" {
+			return false
+		}
+		// Without a static Authorization header the connection resolves stored
+		// OAuth credentials, which Rust excludes from status reuse.
+		return mcpHasStaticAuthorizationHeader(config.HTTPHeaders)
+	}
+	return len(config.EnvVars) == 0
+}
+
+// mcpHasStaticAuthorizationHeader reports whether the headers carry an
+// Authorization value usable as fixed credentials (Rust
+// McpServerConnectionIdentity::new accepts printable header values only).
+func mcpHasStaticAuthorizationHeader(headers map[string]string) bool {
+	for name, value := range headers {
+		if !strings.EqualFold(strings.TrimSpace(name), "authorization") {
+			continue
+		}
+		for index := 0; index < len(value); index++ {
+			byteAt := value[index]
+			if byteAt == '\t' || (byteAt >= ' ' && byteAt != 0x7f) {
+				continue
+			}
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+// reusableThreadStatusCatalog reports whether a paginated lightweight status
+// read can answer from this server's live connection and already materialized
+// catalog instead of repeating initialize/tools/list (Rust #61738
+// McpConnectionSet::has_reusable_status_catalog).
+func (s *MCPService) reusableThreadStatusCatalog(key string, config *ServerConfig, status MCPServerStatus) bool {
+	if !mcpServerHasFixedStatusCredentials(config) || status.State != MCPServerReady || len(status.Tools) == 0 {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.starting[key] > 0 {
+		return false
+	}
+	if cached := s.httpClients[key]; cached != nil && cached.client != nil && !cached.client.isClosed() {
+		return true
+	}
+	if cached := s.stdioClients[key]; cached != nil && cached.client != nil && !cached.client.isClosed() {
+		return true
+	}
+	return false
+}
+
 // listCatalogIfStable lists one server and reports the catalog together with the
 // revision it was listed at and whether that listing stayed stable across its
 // own pages. A listing that raced a notification is reported as not stable, so
 // it is never published as the current catalog (Rust #54656).
-func (s *MCPService) listCatalogIfStable(name string, config *ServerConfig, threadID string, skipResourceTemplates bool) (*stdioInventory, uint64, bool, error) {
+func (s *MCPService) listCatalogIfStable(name string, config *ServerConfig, threadID string, includeInventory bool, skipResourceTemplates bool) (*stdioInventory, uint64, bool, error) {
 	revision := s.cachedToolListRevision(name)
-	inventory, err := s.listInventoryForConfig(name, config, threadID, skipResourceTemplates)
+	inventory, err := s.listStatusInventory(name, config, threadID, includeInventory, skipResourceTemplates)
 	if err != nil {
 		return nil, revision, false, err
 	}
@@ -2191,7 +2253,7 @@ func (s *MCPService) listCatalogIfStable(name string, config *ServerConfig, thre
 // that fails (or keeps churning) keeps the previously published catalog and
 // starts a short retry cooldown, so a flapping server neither drops its catalog
 // nor hammers the connection.
-func (s *MCPService) discoverToolCatalogForStatus(name string, config *ServerConfig, threadID string, retained MCPServerStatus) (*stdioInventory, error) {
+func (s *MCPService) discoverToolCatalogForStatus(name string, config *ServerConfig, threadID string, retained MCPServerStatus, includeInventory bool) (*stdioInventory, error) {
 	skipResourceTemplates := retained.hostOwnedApps
 	if retained.hostOwnedApps && config != nil && config.URL != "" {
 		client := s.httpClientForServer(name, config)
@@ -2205,12 +2267,12 @@ func (s *MCPService) discoverToolCatalogForStatus(name string, config *ServerCon
 			roots := s.rootsForThread(threadID)
 			scope := s.appsStartupDiscoveryScope(name, config, roots)
 			if scope != "" {
-				return listMCPHTTPInventoryWithOptions(client, name, threadID, roots, skipResourceTemplates, scope)
+				return listMCPHTTPInventoryWithDetail(client, name, threadID, roots, includeInventory, skipResourceTemplates, scope)
 			}
 		}
 	}
 	if !s.mcpToolListRefreshApplies(name) {
-		return s.listInventoryForConfig(name, config, threadID, skipResourceTemplates)
+		return s.listStatusInventory(name, config, threadID, includeInventory, skipResourceTemplates)
 	}
 	state := s.toolListRefreshStateFor(name)
 	state.mu.Lock()
@@ -2226,7 +2288,7 @@ func (s *MCPService) discoverToolCatalogForStatus(name string, config *ServerCon
 	case mcpToolListNoChange:
 		// Nothing was invalidated on this connection, so the read lists the
 		// server exactly as a read without the feature does.
-		inventory, revision, stable, err := s.listCatalogIfStable(name, config, threadID, skipResourceTemplates)
+		inventory, revision, stable, err := s.listCatalogIfStable(name, config, threadID, includeInventory, skipResourceTemplates)
 		if err != nil {
 			return nil, err
 		}
@@ -2240,7 +2302,7 @@ func (s *MCPService) discoverToolCatalogForStatus(name string, config *ServerCon
 	// own pages is published.
 	var lastErr error
 	for attempt := 0; attempt < mcpToolListNotificationRefreshAttempts; attempt++ {
-		inventory, revision, stable, err := s.listCatalogIfStable(name, config, threadID, skipResourceTemplates)
+		inventory, revision, stable, err := s.listCatalogIfStable(name, config, threadID, includeInventory, skipResourceTemplates)
 		if err != nil {
 			lastErr = err
 			break
@@ -2302,6 +2364,15 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 			continue
 		}
 		if dynamicConfigs[key] && (params == nil || params.Detail == nil) {
+			notifyMCPStartupObserver(observer, name, servers[i].State, servers[i].FailureReason, nil)
+			continue
+		}
+		// Rust #61738: a paginated ToolsAndAuthOnly read on a thread answers from
+		// connections whose fixed credentials let the published catalog stay
+		// authoritative; the remaining servers on the page are still discovered
+		// separately. Full detail always re-lists so resources stay current.
+		if threadID != "" && !detail.includesInventory() && s.reusableThreadStatusCatalog(key, &config, servers[i]) {
+			servers[i].catalogSource = BindingCatalogSourceCached
 			notifyMCPStartupObserver(observer, name, servers[i].State, servers[i].FailureReason, nil)
 			continue
 		}
@@ -2462,7 +2533,7 @@ func (s *MCPService) inventoryStatusForConfig(index int, name string, config *Se
 	// change is listed again before its catalog is published, and the previous
 	// catalog is retained when that refresh fails.
 	catalogGeneration := s.beginToolCatalogFetch(name, config)
-	inventory, err := s.discoverToolCatalogForStatus(name, config, threadID, status)
+	inventory, err := s.discoverToolCatalogForStatus(name, config, threadID, status, includeInventory)
 	status.ServerCapabilities = nil
 	// A failed discovery reports no catalog metadata either, so the wire field
 	// stays null (Rust #54686).
@@ -3801,6 +3872,13 @@ func mcpEnvironmentSelectorRegistrationError(server string, selector *string) er
 }
 
 func (s *MCPService) listInventoryForConfig(name string, config *ServerConfig, threadID string, skipResourceTemplates bool) (*stdioInventory, error) {
+	return s.listStatusInventory(name, config, threadID, true, skipResourceTemplates)
+}
+
+// listStatusInventory lists one server for a status read, skipping the resource
+// and template listings a ToolsAndAuthOnly read does not publish (Rust
+// McpSnapshotDetail).
+func (s *MCPService) listStatusInventory(name string, config *ServerConfig, threadID string, includeInventory bool, skipResourceTemplates bool) (*stdioInventory, error) {
 	// Rust #48143: an executor-discovered declaration may only reach a remote
 	// HTTP transport that needs no host environment headers, helpers or bearer
 	// tokens, and the rejection happens before any host value is read.
@@ -3812,10 +3890,10 @@ func (s *MCPService) listInventoryForConfig(name string, config *ServerConfig, t
 		if err := ValidateServerAuth(name, config); err != nil {
 			return nil, err
 		}
-		return listMCPHTTPInventoryWithOptions(s.httpClientForServer(name, config), name, threadID, roots, skipResourceTemplates)
+		return listMCPHTTPInventoryWithDetail(s.httpClientForServer(name, config), name, threadID, roots, includeInventory, skipResourceTemplates)
 	}
 	if config != nil && strings.TrimSpace(config.Command) != "" {
-		return listMCPStdioInventoryWithOptions(s.stdioClientForServer(name, config), name, threadID, roots, skipResourceTemplates)
+		return listMCPStdioInventoryWithDetail(s.stdioClientForServer(name, config), name, threadID, roots, includeInventory, skipResourceTemplates)
 	}
 	return listMCPInventory(config)
 }

@@ -328,7 +328,7 @@ func TestAppsStartupServicesHonorInitializeOptOut(t *testing.T) {
 			ownerConfig := config
 			ownerConfig.StartupTimeout = 2 * time.Second
 			go func() {
-				_, err := first.discoverToolCatalogForStatus(CodexAppsServerName, &ownerConfig, "", status)
+				_, err := first.discoverToolCatalogForStatus(CodexAppsServerName, &ownerConfig, "", status, true)
 				ownerDone <- err
 			}()
 			select {
@@ -336,7 +336,7 @@ func TestAppsStartupServicesHonorInitializeOptOut(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("owner did not list")
 			}
-			inventory, err := second.discoverToolCatalogForStatus(CodexAppsServerName, &config, "", status)
+			inventory, err := second.discoverToolCatalogForStatus(CodexAppsServerName, &config, "", status, true)
 			if optOut {
 				if err != nil || len(inventory.Tools) != 1 {
 					t.Fatalf("opt-out inventory=%v error=%v", inventory, err)
@@ -375,7 +375,7 @@ func TestAppsStartupServicesShareSuccessfulOverlap(t *testing.T) {
 	ownerInventory := make(chan *stdioInventory, 1)
 	ownerDone := make(chan error, 1)
 	go func() {
-		inventory, err := first.discoverToolCatalogForStatus(CodexAppsServerName, &config, "", status)
+		inventory, err := first.discoverToolCatalogForStatus(CodexAppsServerName, &config, "", status, true)
 		ownerInventory <- inventory
 		ownerDone <- err
 	}()
@@ -387,7 +387,7 @@ func TestAppsStartupServicesShareSuccessfulOverlap(t *testing.T) {
 	waiterDone := make(chan *stdioInventory, 1)
 	waiterErr := make(chan error, 1)
 	go func() {
-		inventory, err := second.discoverToolCatalogForStatus(CodexAppsServerName, &config, "", status)
+		inventory, err := second.discoverToolCatalogForStatus(CodexAppsServerName, &config, "", status, true)
 		waiterDone <- inventory
 		waiterErr <- err
 	}()

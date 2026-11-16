@@ -555,7 +555,7 @@ func TestMCPToolListRefreshChurnWithoutAPublishedCatalogReportsAnError(t *testin
 		t.Fatalf("docs config = %#v, want a registered server", config)
 	}
 	before := ts.listCount()
-	inventory, err := service.discoverToolCatalogForStatus("docs", &config, "", MCPServerStatus{})
+	inventory, err := service.discoverToolCatalogForStatus("docs", &config, "", MCPServerStatus{}, true)
 	if err == nil {
 		t.Fatalf("churning refresh error = nil, want the churn reported")
 	}
