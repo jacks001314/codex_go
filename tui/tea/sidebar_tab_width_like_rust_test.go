@@ -30,7 +30,7 @@ func TestSidebarTabStripUsesFixedRustTabWidthLikeRust(t *testing.T) {
 
 	// Rust #60319: count == (available + gap) / (tab_width + gap), so the
 	// separating columns are part of the strip budget.
-	labels := sidebarTabLabels(len(tabs))
+	labels := sidebarTabLabels(len(tabs), false)
 	stride := sidebarTabWidth + sidebarTabGap
 	for _, width := range []int{23, 60, 120, 124} {
 		available := width - 1 - min(width-1, len(sidebarAddLabel))

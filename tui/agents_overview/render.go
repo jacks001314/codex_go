@@ -7,6 +7,7 @@ import (
 
 	"github.com/mattn/go-runewidth"
 
+	codextui "codex_go/tui"
 	"codex_go/tui/footerhint"
 )
 
@@ -649,32 +650,31 @@ func (v *View) renderRowSpans(index int, projectGrouping bool, width int) []span
 	if v.Selected == index {
 		marker = span{text: "›", style: spanCyanBold}
 	}
-	title := row.Title()
+	prefix := ""
 	// Rust #58714: under status grouping a pinned task stays in its status
 	// group and advertises the pin in its title.
 	if v.State.Grouping == GroupingStatus && v.IsPinned(row.ThreadID) {
-		title = "📌 " + title
+		prefix += "📌 "
 	}
 	// On narrow rows the result dot shares the only slot for the working or
 	// alert icon, so an unread status moves into the title.
 	statusInTitle := width < 56 && row.Unread && !idle
 	if statusInTitle {
-		title = row.Group.StatusLabelForRow(row) + ": " + title
+		prefix += row.Group.StatusLabelForRow(row) + ": "
 	}
 	spans := []span{
 		marker,
 		{text: " ", style: spanPlain},
 		dot,
 		{text: " ", style: spanPlain},
-		v.titleSpan(row.ThreadID, title, spanPlain),
 	}
-	if row.HasVoice {
-		voiceStyle := spanPlain
-		if v.Selected == index {
-			voiceStyle = spanCyanBold
-		}
-		spans = append(spans, span{text: "  voice", style: voiceStyle})
+	if prefix != "" {
+		spans = append(spans, span{text: prefix, style: spanPlain})
 	}
+	if row.Cloud {
+		spans = append(spans, span{text: codextui.ThreadLabelPrefix(true), style: spanDim})
+	}
+	titleSpans := []span{v.titleSpan(row.ThreadID, row.Title(), spanPlain)}
 	if width >= 56 {
 		const (
 			updatedWidth = 9
@@ -684,11 +684,29 @@ func (v *View) renderRowSpans(index int, projectGrouping bool, width int) []span
 		if titleWidth < 1 {
 			titleWidth = 1
 		}
-		if spansWidth(spans) > titleWidth {
-			spans = truncateSpans(spans, titleWidth)
+		textWidth := titleWidth
+		voiceReserve := 0
+		if row.HasVoice && textWidth >= 8 {
+			voiceReserve = 8
+			textWidth -= voiceReserve
 		}
-		if used := spansWidth(spans); used < titleWidth {
-			spans = append(spans, span{text: strings.Repeat(" ", titleWidth-used), style: spanPlain})
+		titleSpans = fitThreadTitleSpans(titleSpans, textWidth-spansWidth(spans), row.Cloud)
+		spans = append(spans, titleSpans...)
+		if spansWidth(spans) > textWidth {
+			spans = truncateSpans(spans, textWidth)
+		}
+		if used := spansWidth(spans); used < textWidth {
+			spans = append(spans, span{text: strings.Repeat(" ", textWidth-used), style: spanPlain})
+		}
+		if voiceReserve > 0 {
+			voiceStyle := spanPlain
+			if v.Selected == index {
+				voiceStyle = spanCyanBold
+			}
+			spans = append(spans, span{text: "  voice", style: voiceStyle})
+			if used := spansWidth(spans); used < titleWidth {
+				spans = append(spans, span{text: strings.Repeat(" ", titleWidth-used), style: spanPlain})
+			}
 		}
 		status := truncateToWidth(row.Group.StatusLabelForRow(row), statusWidth)
 		spans = append(spans,
@@ -702,10 +720,40 @@ func (v *View) renderRowSpans(index int, projectGrouping bool, width int) []span
 		spans = append(spans, span{text: rightPadLeft(updated, updatedWidth), style: spanDim})
 		return spans
 	}
+	if row.Cloud {
+		titleMax := width - spansWidth(spans)
+		if row.HasVoice && titleMax >= 8 {
+			titleMax -= 8
+		}
+		titleSpans = fitThreadTitleSpans(titleSpans, titleMax, true)
+	}
+	spans = append(spans, titleSpans...)
+	if row.HasVoice {
+		voiceStyle := spanPlain
+		if v.Selected == index {
+			voiceStyle = spanCyanBold
+		}
+		spans = append(spans, span{text: "  voice", style: voiceStyle})
+	}
 	if projectGrouping && !statusInTitle {
 		spans = append(spans, span{text: "  " + row.Group.StatusLabelForRow(row), style: spanDim})
 	}
 	return spans
+}
+
+// fitThreadTitleSpans bounds a title to its column. Cloud labels use the same
+// ellipsis truncation as Rust's ThreadLabelStyle::render (#61742).
+func fitThreadTitleSpans(spans []span, width int, ellipsis bool) []span {
+	if width < 1 {
+		width = 1
+	}
+	if spansWidth(spans) <= width {
+		return spans
+	}
+	if ellipsis {
+		return truncateSpansWithEllipsis(spans, width)
+	}
+	return truncateSpans(spans, width)
 }
 
 func relativeUpdateTime(updatedAt int64) string {
@@ -748,7 +796,12 @@ func (v *View) renderDetails(width, height int, styled bool) []string {
 	var lines [][]span
 	lines = append(lines, []span{{text: "Task details", style: spanBold}})
 	lines = append(lines, nil)
-	lines = append(lines, []span{v.titleSpan(row.ThreadID, row.Title(), spanBold)})
+	titleSpans := []span{v.titleSpan(row.ThreadID, row.Title(), spanBold)}
+	if row.Cloud {
+		titleSpans = append([]span{{text: codextui.ThreadLabelPrefix(true), style: spanDim}}, titleSpans...)
+		titleSpans = truncateSpansWithEllipsis(titleSpans, width)
+	}
+	lines = append(lines, titleSpans)
 	lines = append(lines, []span{
 		{text: row.Group.Dot(), style: groupDotStyle(row.Group)},
 		{text: " ", style: spanPlain},

@@ -143,8 +143,12 @@ type StatusControlsRuntime struct {
 	RawOutput              bool
 	// ThreadName is the current thread's name; the thread-title item falls
 	// back to ThreadID when the thread is unnamed (Rust ThreadTitle).
-	ThreadName          string
-	ThreadTitle         string
+	ThreadName  string
+	ThreadTitle string
+	// ThreadCloud marks a native hosted conversation. The display marker is
+	// applied after name/ID fallback and before terminal-title truncation
+	// (Rust #61742 status_surface_thread_label).
+	ThreadCloud         bool
 	WorkspaceHeadline   string
 	TaskProgress        string
 	CodexVersion        string
@@ -864,15 +868,23 @@ func (s *StatusControlsState) StatusLineValueForItem(item bottompane.StatusLineI
 		}
 		return "", false
 	case bottompane.StatusLineThreadName:
-		return nonEmptyTrimmed(s.Runtime.ThreadName)
+		value, ok := nonEmptyTrimmed(s.Runtime.ThreadName)
+		if !ok {
+			return "", false
+		}
+		return codextui.DecorateThreadLabel(value, s.Runtime.ThreadCloud), true
 	case bottompane.StatusLineThreadTitle:
 		if value, ok := nonEmptyTrimmed(s.Runtime.ThreadTitle); ok {
-			return value, true
+			return codextui.DecorateThreadLabel(value, s.Runtime.ThreadCloud), true
 		}
 		if value, ok := nonEmptyTrimmed(s.Runtime.ThreadName); ok {
-			return value, true
+			return codextui.DecorateThreadLabel(value, s.Runtime.ThreadCloud), true
 		}
-		return nonEmptyTrimmed(s.Runtime.ThreadID)
+		value, ok := nonEmptyTrimmed(s.Runtime.ThreadID)
+		if !ok {
+			return "", false
+		}
+		return codextui.DecorateThreadLabel(value, s.Runtime.ThreadCloud), true
 	case bottompane.StatusLineWorkspaceHeadline:
 		return nonEmptyTrimmed(s.Runtime.WorkspaceHeadline)
 	case bottompane.StatusLineTaskProgress:

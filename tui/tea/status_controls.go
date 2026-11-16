@@ -802,6 +802,7 @@ func (m *Model) statusControlsRuntime() chatwidget.StatusControlsRuntime {
 		ProcessingTier:                m.processingTierDisplayName(),
 		ThreadName:                    strings.TrimSpace(m.State.ThreadName),
 		ThreadTitle:                   strings.TrimSpace(m.State.ThreadName),
+		ThreadCloud:                   m.threadLabelCloud(m.currentThreadID(), m.backendID),
 		TaskProgress:                  m.goalTaskProgress(),
 		CodexVersion:                  "codex_go",
 		RateLimitSnapshots:            cloneRateLimitSnapshots(m.rateLimitSnapshots),

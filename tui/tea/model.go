@@ -1857,6 +1857,10 @@ type Model struct {
 	// with (Rust #54681). It survives connection replacement: picker targets
 	// from another backend are rejected before resume/fork/unarchive.
 	backendID codextui.BackendID
+	// cloudBackends records which logical backends host Cloud conversations.
+	// Connection loss must not clear it: labels keep their marker after a
+	// disconnect (Rust #61742 BackendRegistry::cloud_backends).
+	cloudBackends map[codextui.BackendID]bool
 	// serverOwnedSettings is true for native Cloud conversations whose speed is
 	// conversation-scoped rather than persisted as a user default (Rust #61178).
 	serverOwnedSettings bool
@@ -3518,6 +3522,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 	model := &Model{
 		State:                        state,
 		backendID:                    options.BackendID,
+		cloudBackends:                initialCloudBackends(options),
 		terminalSizeContext:          cloneStringMapTea(options.TerminalSizeContext),
 		terminalSizeExporter:         options.TerminalSizeExporter,
 		terminalSizeAnalyticsEnabled: cloneBoolPtrTea(options.TerminalSizeAnalyticsEnabled),

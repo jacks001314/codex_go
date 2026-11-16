@@ -264,7 +264,11 @@ func (m *Model) applyTaskMentionSearchResult(message TaskMentionSearchResultMsg)
 	if message.Err != nil {
 		m.mentionTasks = nil
 	} else {
-		m.mentionTasks = append([]codextui.TaskMention(nil), message.Matches...)
+		matches := append([]codextui.TaskMention(nil), message.Matches...)
+		for index := range matches {
+			matches[index].Cloud = m.threadLabelCloud(matches[index].ThreadID, m.backendID)
+		}
+		m.mentionTasks = matches
 	}
 	m.mentionPopup.SetCandidates(m.mentionCandidates())
 }

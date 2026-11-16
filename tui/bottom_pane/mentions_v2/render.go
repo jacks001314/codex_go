@@ -233,7 +233,7 @@ func BuildLine(row SearchResult, selected bool, width int, primaryColumnWidth in
 }
 
 func plainContentText(row SearchResult, primaryColumnWidth int) string {
-	primary := truncateRunes(primaryText(row), primaryColumnWidth)
+	primary := renderPrimaryLabel(primaryText(row), row.Cloud, primaryColumnWidth)
 	secondary := secondaryText(row)
 	if secondary == "" {
 		return primary
@@ -246,7 +246,7 @@ func plainContentText(row SearchResult, primaryColumnWidth int) string {
 }
 
 func styledContentText(row SearchResult, primaryColumnWidth int) string {
-	primary := codextui.TruncateWithEllipsis(styledPrimaryText(row), primaryColumnWidth)
+	primary := renderStyledPrimaryLabel(row, primaryColumnWidth)
 	secondary := styledSecondaryText(row)
 	if secondary == "" {
 		return primary
@@ -430,7 +430,34 @@ func secondaryText(row SearchResult) string {
 }
 
 func primaryTextWidth(row SearchResult) int {
-	return codextui.DisplayWidth(primaryText(row))
+	return codextui.DisplayWidth(primaryText(row)) + codextui.ThreadLabelPrefixWidth(row.Cloud)
+}
+
+// renderPrimaryLabel prefixes the Cloud marker without changing the mention's
+// title, search terms, or inserted text (Rust #61742 label_style.render).
+func renderPrimaryLabel(text string, cloud bool, width int) string {
+	prefix := codextui.ThreadLabelPrefix(cloud)
+	if prefix == "" {
+		return truncateRunes(text, width)
+	}
+	remaining := width - codextui.DisplayWidth(prefix)
+	if remaining <= 0 {
+		return codextui.TruncateWithEllipsis(prefix, width)
+	}
+	return prefix + truncateRunes(text, remaining)
+}
+
+func renderStyledPrimaryLabel(row SearchResult, width int) string {
+	styled := styledPrimaryText(row)
+	prefix := codextui.ThreadLabelPrefix(row.Cloud)
+	if prefix == "" {
+		return codextui.TruncateWithEllipsis(styled, width)
+	}
+	remaining := width - codextui.DisplayWidth(prefix)
+	if remaining <= 0 {
+		return codextui.TruncateWithEllipsis(prefix, width)
+	}
+	return prefix + codextui.TruncateWithEllipsis(styled, remaining)
 }
 
 func fileName(row SearchResult) (string, bool) {

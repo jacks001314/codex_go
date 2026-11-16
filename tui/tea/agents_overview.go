@@ -371,6 +371,7 @@ func (m *Model) applyAgentsOverviewSearch(message agentsOverviewSearchMsg) {
 	}
 	// Record the discovered threads as known rows before appending the ones the
 	// dashboard is not showing yet.
+	message.rows = m.markAgentsOverviewCloudLabels(message.rows, m.backendID)
 	m.mergeAgentsOverviewRows(message.rows)
 	existing := make(map[string]bool, len(m.agentsOverview.Rows))
 	for _, row := range m.agentsOverview.Rows {
@@ -418,6 +419,7 @@ func (m *Model) applyAgentsOverviewList(message agentsOverviewListMsg) bubbletea
 		m.syncAgentsOverviewBackendView()
 		return m.drainAgentsOverviewRefreshQueue()
 	}
+	message.rows = m.markAgentsOverviewCloudLabels(message.rows, owner)
 	if backendState != nil {
 		backendState.failed = false
 		backendState.disconnected = false
@@ -485,6 +487,19 @@ func (m *Model) applyAgentsOverviewList(message agentsOverviewListMsg) bubbletea
 		return usageCmd
 	}
 	return bubbletea.Batch(drainCmd, usageCmd)
+}
+
+// markAgentsOverviewCloudLabels resolves each task's display marker from its
+// owning backend. The rows keep the marker after a disconnect because cloud
+// backend identity is tracked separately from live connections (Rust #61742).
+func (m *Model) markAgentsOverviewCloudLabels(rows []agentsoverview.Row, owner codextui.BackendID) []agentsoverview.Row {
+	if m == nil || len(rows) == 0 {
+		return rows
+	}
+	for index := range rows {
+		rows[index].Cloud = m.threadLabelCloud(rows[index].ThreadID, owner)
+	}
+	return rows
 }
 
 // mergeAgentsOverviewRows keeps the command center's session membership for

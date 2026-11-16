@@ -329,6 +329,10 @@ type Row struct {
 	// UnreadRevision is the receipt revision behind Unread. The host sends it
 	// as expectedRevision when the focused conversation is viewed.
 	UnreadRevision string
+	// Cloud marks a task served by the hosted Cloud backend. The marker is
+	// display-only and stays with the row after a disconnect (Rust #61742
+	// ThreadLabelStyle).
+	Cloud bool
 }
 
 // Title mirrors Rust: thread name, else preview, else "Untitled task".

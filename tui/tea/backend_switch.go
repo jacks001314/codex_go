@@ -92,6 +92,41 @@ type pendingBackendRequest struct {
 	Modal     *ModalRequestMsg
 }
 
+// initialCloudBackends seeds the Cloud identity of the launch backend. Rust
+// #61742 collects cloud backends from every app-server session at startup and
+// keeps that set separate from the live connections.
+func initialCloudBackends(options Options) map[codextui.BackendID]bool {
+	backends := map[codextui.BackendID]bool{}
+	if options.ServerOwnedSettings && !options.BackendID.IsZero() {
+		backends[options.BackendID] = true
+	}
+	return backends
+}
+
+// isCloudBackend reports whether a logical backend hosts Cloud conversations.
+func (m *Model) isCloudBackend(backendID codextui.BackendID) bool {
+	if m == nil || backendID.IsZero() {
+		return false
+	}
+	return m.cloudBackends[backendID]
+}
+
+// threadLabelCloud resolves a thread's backend identity for its display
+// marker. Recorded ownership wins over the current backend, and the marker
+// remains available after the connection disappears (Rust #61742).
+func (m *Model) threadLabelCloud(threadID string, fallback codextui.BackendID) bool {
+	if m == nil {
+		return false
+	}
+	if owner, ok := m.threadBackendOwner(threadID); ok {
+		return m.isCloudBackend(owner)
+	}
+	if fallback.IsZero() {
+		fallback = m.backendID
+	}
+	return m.isCloudBackend(fallback)
+}
+
 // noteThreadBackend records the backend that serves a displayed thread (Rust
 // #58457 thread ownership tracking). Ownership outlives the picker row that
 // listed the thread, so a later selection keeps the backend that adopted it.

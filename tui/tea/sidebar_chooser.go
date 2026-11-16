@@ -397,8 +397,8 @@ type sidebarTabStripWindow struct {
 
 // sidebarTabStripWindowFor builds the window for a strip of the given width,
 // keeping the selected tab in view (Rust #59784).
-func sidebarTabStripWindowFor(tabs []*activeSideConversation, selected string, width int) sidebarTabStripWindow {
-	labels := sidebarTabLabels(len(tabs))
+func sidebarTabStripWindowFor(tabs []*activeSideConversation, selected string, width int, cloud bool) sidebarTabStripWindow {
+	labels := sidebarTabLabels(len(tabs), cloud)
 	tabWidth, count := sidebarTabLayout(labels, width)
 	first := 0
 	selected = strings.TrimSpace(selected)
@@ -457,7 +457,8 @@ func (m *Model) sidebarTabStripWindowWidth(width int) sidebarTabStripWindow {
 	if m.activeSide != nil {
 		selected = strings.TrimSpace(m.activeSide.SideThreadID)
 	}
-	return sidebarTabStripWindowFor(m.sidebarTabsFor(m.sidebarParentThreadID()), selected, width)
+	cloud := m.threadLabelCloud(m.sidebarParentThreadID(), m.backendID)
+	return sidebarTabStripWindowFor(m.sidebarTabsFor(m.sidebarParentThreadID()), selected, width, cloud)
 }
 
 // sidebarTabStripWidth is the width of the sidebar pane the strip paints in,
@@ -499,17 +500,18 @@ func (m *Model) hoverSidebarTab(column int) bool {
 // sidebarTabHoverIndex maps a bare strip column back to the tab painted there,
 // or -1 when the column is the "+" button or past the last tab.
 func sidebarTabHoverIndex(tabs []*activeSideConversation, column int, width int) int {
-	return sidebarTabStripWindowFor(tabs, "", width).tabAt(column)
+	return sidebarTabStripWindowFor(tabs, "", width, false).tabAt(column)
 }
 
-func sidebarTabLabels(tabCount int) []string {
+func sidebarTabLabels(tabCount int, cloud bool) []string {
 	labels := make([]string, 0, tabCount)
+	prefix := codextui.ThreadLabelPrefix(cloud)
 	for index := 0; index < tabCount; index++ {
 		if tabCount == 1 {
-			labels = append(labels, sidebarSingleTabLabel)
+			labels = append(labels, prefix+sidebarSingleTabLabel)
 			continue
 		}
-		labels = append(labels, " Side "+strconv.Itoa(index+1)+" ")
+		labels = append(labels, prefix+" Side "+strconv.Itoa(index+1)+" ")
 	}
 	return labels
 }
@@ -658,10 +660,10 @@ func padSidebarCell(label string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	if len(label) >= width {
-		return label[:width]
+	if codextui.DisplayWidth(label) >= width {
+		return codextui.TruncateToWidth(label, width)
 	}
-	return label + strings.Repeat(" ", width-len(label))
+	return label + strings.Repeat(" ", width-codextui.DisplayWidth(label))
 }
 
 // renderSidebarChooser paints the chooser panel: the tab strip, discovery
@@ -733,7 +735,11 @@ func (m *Model) renderSidebarChooser(width int, height int) string {
 			if groupHeader && index == 1 {
 				body = append(body, sidebarSideChatsGroupTitle+"  "+strconv.Itoa(len(choices)))
 			}
-			body = append(body, marker+"○ "+sideChatChoiceLabel(choice, index, len(choices)))
+			label := sideChatChoiceLabel(choice, index, len(choices))
+			if m.threadLabelCloud(m.sidebarParentThreadID(), m.backendID) {
+				label = codextui.ThreadLabelPrefix(true) + label
+			}
+			body = append(body, marker+"○ "+label)
 			if prompt := m.sidebarChooserPrompt(choice); prompt != "" {
 				body = append(body, "    "+prompt)
 			}

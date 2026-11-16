@@ -149,6 +149,7 @@ func (m *Model) openSessionPicker(action codextui.SessionPickerAction) bubbletea
 	// Rust #56308: Repo only appears for local sessions whose directory has
 	// more than one canonical linked-worktree directory.
 	picker.RepoFilterAvailable = m.worktreesEnabled && codextui.SessionPickerRepoFilterAvailable(m.sessionCWD)
+	picker.CloudBackends = m.cloudBackends
 	picker.ThemeID = m.tuiTheme
 	picker.Density = m.sessionPickerDensity
 	picker.UseThemeColors = m.statusLineUseColors

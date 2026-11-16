@@ -30,6 +30,10 @@ type TaskMention struct {
 	Title    string
 	CWD      string
 	Snippet  string
+	// Cloud marks a task served by the hosted Cloud backend. The marker is
+	// display-only and never enters the mention title or selection (Rust
+	// #61742 TaskMention::label_style).
+	Cloud bool
 }
 
 // ValidThreadPath mirrors Rust valid_thread_path: a `thread://` link carrying a

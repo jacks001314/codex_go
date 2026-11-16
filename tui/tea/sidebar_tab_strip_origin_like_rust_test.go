@@ -42,7 +42,7 @@ func TestSidebarTabStripMouseHitFollowsRenderedOriginLikeRust(t *testing.T) {
 		t.Fatalf("split layout unavailable: right=%d ok=%t", right, ok)
 	}
 	base := left + ansi.StringWidth(sideWorkspaceDivider)
-	tabWidth, count := sidebarTabLayout(sidebarTabLabels(2), right)
+	tabWidth, count := sidebarTabLayout(sidebarTabLabels(2, false), right)
 	if count < 2 || tabWidth <= 0 {
 		t.Fatalf("strip fits %d tabs of %d columns, want 2", count, tabWidth)
 	}

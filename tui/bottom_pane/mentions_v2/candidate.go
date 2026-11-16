@@ -71,6 +71,7 @@ type Candidate struct {
 	Description string
 	SearchTerms []string
 	MentionType MentionType
+	Cloud       bool
 	Selection   Selection
 }
 
@@ -78,6 +79,7 @@ type SearchResult struct {
 	DisplayName  string
 	Description  string
 	MentionType  MentionType
+	Cloud        bool
 	Selection    Selection
 	MatchIndices []int
 	Score        int
@@ -88,6 +90,7 @@ func (c Candidate) ToResult(matchIndices []int, score int) SearchResult {
 		DisplayName:  c.DisplayName,
 		Description:  c.Description,
 		MentionType:  c.MentionType,
+		Cloud:        c.Cloud,
 		Selection:    c.Selection,
 		MatchIndices: append([]int(nil), matchIndices...),
 		Score:        score,

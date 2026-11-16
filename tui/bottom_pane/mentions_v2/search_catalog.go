@@ -72,6 +72,7 @@ func TaskCandidate(task tui.TaskMention) Candidate {
 			truncateCatalogRunes(task.Snippet, tui.MaxTaskTitleChars),
 		},
 		MentionType: MentionTypeTask,
+		Cloud:       task.Cloud,
 		Selection:   ToolSelection("@"+title, "thread://"+task.ThreadID),
 	}
 }

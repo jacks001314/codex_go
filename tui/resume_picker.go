@@ -267,13 +267,17 @@ func (s SessionSummary) Unread() bool {
 type SessionPickerState struct {
 	// BackendID stamps every selection this picker produces so a target can be
 	// traced back to the backend that listed it (Rust #54681).
-	BackendID  BackendID
-	Action     SessionPickerAction
-	Items      []SessionSummary
-	Selected   int
-	Query      string
-	FilterMode SessionFilterMode
-	FilterCWD  string
+	BackendID BackendID
+	// CloudBackends marks the logical backends that host Cloud conversations.
+	// The marker is display-only and survives connection replacement (Rust
+	// #61742 thread_label::ThreadLabelStyle).
+	CloudBackends map[BackendID]bool
+	Action        SessionPickerAction
+	Items         []SessionSummary
+	Selected      int
+	Query         string
+	FilterMode    SessionFilterMode
+	FilterCWD     string
 	// FilterCWDs is the expanded directory filter (the requested directory plus
 	// linked worktrees' corresponding directories). It backs the Repo filter;
 	// the Cwd filter always uses FilterCWD alone (Rust #56308).
@@ -315,6 +319,7 @@ func NewSessionPickerState(action SessionPickerAction, items []SessionSummary, f
 func NewSessionPickerStateForBackend(backendID BackendID, action SessionPickerAction, items []SessionSummary, filterCWD string, filterCWDs ...string) *SessionPickerState {
 	state := &SessionPickerState{
 		BackendID:      backendID,
+		CloudBackends:  map[BackendID]bool{},
 		Action:         action,
 		Items:          append([]SessionSummary(nil), items...),
 		UseThemeColors: true,
@@ -731,7 +736,7 @@ func (s *SessionPickerState) RenderRows(width int, now time.Time) []string {
 			rows = append(rows, s.renderComfortableSessionRow(item, selected, width, now)...)
 		}
 		if s.Expanded[item.ThreadID] {
-			rows = append(rows, renderExpandedSessionRows(item, width, now)...)
+			rows = append(rows, renderExpandedSessionRows(item, s.itemCloud(item), width, now)...)
 			rows = append(rows, s.renderTranscriptPreviewLines(item.ThreadID, width)...)
 		}
 	}
@@ -998,6 +1003,30 @@ func (s *SessionPickerState) sessionTitleColor(item SessionSummary) string {
 	return ThreadColorSGR(ThreadColorForTheme(item.ThreadID, s.ThemeID))
 }
 
+// itemCloud reports whether the row belongs to a Cloud backend. The marker is
+// separate from the row's backend identity (Rust #61742 PickerState::label_style).
+func (s *SessionPickerState) itemCloud(item SessionSummary) bool {
+	if s == nil || len(s.CloudBackends) == 0 {
+		return false
+	}
+	backendID := item.BackendID
+	if backendID.IsZero() {
+		backendID = s.BackendID
+	}
+	return s.CloudBackends[backendID]
+}
+
+func sessionPickerThreadLabel(text string, cloud bool, width int) string {
+	prefix := ThreadLabelPrefix(cloud)
+	if prefix == "" {
+		return TruncateWithEllipsis(text, width)
+	}
+	if width <= DisplayWidth(prefix) {
+		return TruncateWithEllipsis(prefix, width)
+	}
+	return prefix + TruncateWithEllipsis(text, width-DisplayWidth(prefix))
+}
+
 func (s *SessionPickerState) renderDenseSessionRow(item SessionSummary, selected bool, width int, now time.Time) string {
 	prefix := SelectionPrefix(selected)
 	updated := item.UpdatedAt
@@ -1006,6 +1035,7 @@ func (s *SessionPickerState) renderDenseSessionRow(item SessionSummary, selected
 	}
 	date := padDisplayRight(relativeTime(updated, now), sessionPickerDateWidth)
 	title := item.DisplayPreview()
+	cloud := s.itemCloud(item)
 	unread := item.Unread()
 	markerWidth := 0
 	if unread {
@@ -1017,7 +1047,9 @@ func (s *SessionPickerState) renderDenseSessionRow(item SessionSummary, selected
 		if available < 0 {
 			available = 0
 		}
-		title = TruncateWithEllipsis(title, available)
+		title = sessionPickerThreadLabel(title, cloud, available)
+	} else if cloud {
+		title = ThreadLabelPrefix(true) + title
 	}
 	row := prefix + date
 	if unread {
@@ -1048,6 +1080,7 @@ func (s *SessionPickerState) renderComfortableSessionRow(item SessionSummary, se
 	if unread {
 		title += taskMarkerUnreadGlyph + " "
 	}
+	title += ThreadLabelPrefix(s.itemCloud(item))
 	title += item.DisplayPreview()
 	lines := AdaptiveWrapLine(title, WrapOptions{
 		Width:            wrapWidth,
@@ -1121,7 +1154,7 @@ const sessionMetaBranchIcon = "\ue0a0"
 // renderExpandedSessionRows mirrors Rust render_expanded_session_details: the
 // labeled Session/Created/Updated/Directory/Branch block followed by the
 // conversation header the preview lines hang off.
-func renderExpandedSessionRows(item SessionSummary, width int, now time.Time) []string {
+func renderExpandedSessionRows(item SessionSummary, cloud bool, width int, now time.Time) []string {
 	threadID := strings.TrimSpace(item.ThreadID)
 	title := strings.TrimSpace(item.Title)
 	session := "-"
@@ -1137,8 +1170,12 @@ func renderExpandedSessionRows(item SessionSummary, width int, now time.Time) []
 	if branch == "" {
 		branch = "no branch"
 	}
+	sessionLine := expandedDetailLine("Session:", session, width)
+	if cloud && title != "" {
+		sessionLine = expandedDetailLabelLine("Session:", session, cloud, width)
+	}
 	details := []string{
-		expandedDetailLine("Session:", session, width),
+		sessionLine,
 		expandedTimeDetailLine("Created:", item.CreatedAt, now, width),
 		expandedTimeDetailLine("Updated:", item.UpdatedAt, now, width),
 		expandedDetailLine("Directory:", displaySessionDirectory(item.CWD), width),
@@ -1147,6 +1184,21 @@ func renderExpandedSessionRows(item SessionSummary, width int, now time.Time) []
 		"  \u2502 Conversation:",
 	}
 	return details
+}
+
+// expandedDetailLabelLine is expanded_detail_line with a decorated label that
+// keeps Rust's ellipsis truncation (Rust #61742 label_style.render).
+func expandedDetailLabelLine(label string, value string, cloud bool, width int) string {
+	const labelWidth = 10
+	valueWidth := width - 4 - labelWidth - 2
+	if valueWidth < 1 {
+		valueWidth = 1
+	}
+	padded := label
+	if pad := labelWidth - DisplayWidth(label); pad > 0 {
+		padded += strings.Repeat(" ", pad)
+	}
+	return "  \u2502 " + padded + "  " + sessionPickerThreadLabel(value, cloud, valueWidth)
 }
 
 // expandedDetailLine mirrors Rust expanded_detail_line: a fixed-width dim label

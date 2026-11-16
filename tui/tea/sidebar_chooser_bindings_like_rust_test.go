@@ -50,7 +50,7 @@ func TestSidebarChooserUsesListBindingsAndHoverLikeRust(t *testing.T) {
 
 	// Hover: the strip maps columns back to tabs and paints the hovered one.
 	tabs := model.sidebarTabsFor(model.sidebarChooserParent)
-	tabWidth, count := sidebarTabLayout(sidebarTabLabels(len(tabs)), 120)
+	tabWidth, count := sidebarTabLayout(sidebarTabLabels(len(tabs), false), 120)
 	if count != 2 {
 		t.Fatalf("strip fits %d tabs in 120 columns, want 2", count)
 	}
