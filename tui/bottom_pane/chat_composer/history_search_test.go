@@ -166,3 +166,34 @@ func TestHistorySearchFooterCursorCompatibilityAndCaseInsensitiveRangesMatchRust
 		t.Fatalf("pending status = %s", session.Status)
 	}
 }
+
+// Rust #61725: matches cover whole grapheme clusters, repeated combining marks
+// stay intact, and the separately rendered bash prompt cannot highlight the body.
+func TestHistorySearchHighlightRangesPreserveGraphemesLikeRust(t *testing.T) {
+	for _, tc := range []struct {
+		text  string
+		query string
+		want  []TextRange
+	}{
+		{text: "a\u0301\u0301b\u0301\u0301", query: "\u0301", want: []TextRange{{Start: 0, End: 5}, {Start: 5, End: 10}}},
+		{text: "İİ", query: "\u0307", want: []TextRange{{Start: 0, End: 2}, {Start: 2, End: 4}}},
+		{text: "İİİ", query: "\u0307i", want: []TextRange{{Start: 0, End: 4}, {Start: 2, End: 6}}},
+		{text: "éÉ é", query: "É", want: []TextRange{{Start: 0, End: 2}, {Start: 2, End: 4}, {Start: 5, End: 7}}},
+		{text: "aaaaa", query: "aa", want: []TextRange{{Start: 0, End: 2}, {Start: 2, End: 4}}},
+	} {
+		if got := CaseInsensitiveMatchRanges(tc.text, tc.query); !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("ranges(%q, %q) = %#v, want %#v", tc.text, tc.query, got, tc.want)
+		}
+	}
+
+	promptOnly := BeginHistorySearch(DraftState{Text: "draft", IsBashMode: true}, []string{"!🏽echo"})
+	promptOnly.UpdateQuery("!")
+	if got := promptOnly.HighlightRanges(); len(got) != 0 {
+		t.Fatalf("prompt-only highlight ranges = %#v, want none", got)
+	}
+	bodyMatch := BeginHistorySearch(DraftState{Text: "draft", IsBashMode: true}, []string{"!git status"})
+	bodyMatch.UpdateQuery("git")
+	if got := bodyMatch.HighlightRanges(); !reflect.DeepEqual(got, []TextRange{{Start: 0, End: 3}}) {
+		t.Fatalf("bash body highlight ranges = %#v", got)
+	}
+}

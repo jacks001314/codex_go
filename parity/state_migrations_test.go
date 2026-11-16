@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -26,6 +27,10 @@ func TestStateMigrationsMatchRustTarget(t *testing.T) {
 	for _, mapping := range mappings {
 		rustFiles := rustMigrationFilesAtTarget(t, rustRepo, mapping.rustDir)
 		goFiles := localSQLFilenames(t, mapping.goDir)
+		// Go may carry migrations that landed after the frozen Rust target. Those
+		// stay ordered after the target's highest version, so the shared inventory
+		// still has to match byte-for-byte.
+		goFiles = goMigrationsUpToTarget(t, mapping.rustDir, goFiles, rustFiles)
 		if strings.Join(goFiles, "\n") != strings.Join(rustFiles, "\n") {
 			t.Fatalf("migration inventory differs for %s: Go=%v Rust=%v", mapping.rustDir, goFiles, rustFiles)
 		}
@@ -42,6 +47,43 @@ func TestStateMigrationsMatchRustTarget(t *testing.T) {
 			}
 		}
 	}
+}
+
+func goMigrationsUpToTarget(t *testing.T, rustDir string, goFiles []string, rustFiles []string) []string {
+	t.Helper()
+	if len(goFiles) == len(rustFiles) {
+		return goFiles
+	}
+	known := make(map[string]bool, len(rustFiles))
+	var maxVersion int64
+	for _, name := range rustFiles {
+		known[name] = true
+		maxVersion = max(maxVersion, migrationFileVersion(t, rustDir, name))
+	}
+	filtered := make([]string, 0, len(rustFiles))
+	for _, name := range goFiles {
+		if known[name] {
+			filtered = append(filtered, name)
+			continue
+		}
+		if version := migrationFileVersion(t, rustDir, name); version <= maxVersion {
+			t.Fatalf("Go migration %s/%s is not present in the Rust target and does not sort after its highest version %d", rustDir, name, maxVersion)
+		}
+	}
+	return filtered
+}
+
+func migrationFileVersion(t *testing.T, directory string, name string) int64 {
+	t.Helper()
+	prefix, _, ok := strings.Cut(name, "_")
+	if !ok {
+		t.Fatalf("migration %s/%s has no version prefix", directory, name)
+	}
+	version, err := strconv.ParseInt(prefix, 10, 64)
+	if err != nil {
+		t.Fatalf("migration %s/%s version: %v", directory, name, err)
+	}
+	return version
 }
 
 func rustMigrationFilesAtTarget(t *testing.T, rustRepo string, directory string) []string {

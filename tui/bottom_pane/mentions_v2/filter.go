@@ -130,7 +130,7 @@ func FileMatchToRow(fileMatch filesearch.FileMatch) SearchResult {
 		DisplayName:  fileMatch.Path,
 		MentionType:  mentionType,
 		Selection:    FileSelection(fileMatch.Path),
-		MatchIndices: append([]int(nil), fileMatch.Indices...),
+		MatchIndices: runeIndicesToGraphemeIndices(fileMatch.Path, fileMatch.Indices),
 		Score:        fileMatch.Score,
 	}
 }

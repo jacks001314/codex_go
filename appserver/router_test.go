@@ -370,6 +370,7 @@ func TestRouterThreadListEmptySourceKindsDefaultsToInteractiveSources(t *testing
 	create("thread-cli", string(SessionSourceCli), now)
 	create("thread-exec", string(SessionSourceExec), now.Add(time.Minute))
 	create("thread-atlas", "atlas", now.Add(2*time.Minute))
+	create("thread-desktop", "chatgpt", now.Add(3*time.Minute))
 
 	limit := 10
 	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadList, ThreadListParams{
@@ -380,10 +381,10 @@ func TestRouterThreadListEmptySourceKindsDefaultsToInteractiveSources(t *testing
 		t.Fatalf("thread/list error: %+v", response.Error)
 	}
 	list := response.Result.(*ThreadListResponse)
-	if len(list.Data) != 2 || list.Data[0].ID != "thread-atlas" || list.Data[1].ID != "thread-cli" {
+	if len(list.Data) != 3 || list.Data[0].ID != "thread-desktop" || list.Data[1].ID != "thread-atlas" || list.Data[2].ID != "thread-cli" {
 		t.Fatalf("thread/list data = %+v", list.Data)
 	}
-	if list.Data[0].Source != "atlas" || list.Data[1].Source != SessionSourceCli {
+	if list.Data[0].Source != "chatgpt" || list.Data[1].Source != "atlas" || list.Data[2].Source != SessionSourceCli {
 		t.Fatalf("thread/list sources = %+v", list.Data)
 	}
 }

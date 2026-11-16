@@ -299,6 +299,50 @@ func TestMentionRenderStylesNamesTagsAndMatchesLikeRust(t *testing.T) {
 	}
 }
 
+// Rust #61726: truncated fuzzy matches keep multi-codepoint emoji intact and
+// bold the whole grapheme when any of its scalars matches.
+func TestMentionRenderPreservesGraphemesWhenTruncatedLikeRust(t *testing.T) {
+	plugin := SearchResult{
+		DisplayName:  "👩‍💻abcdef",
+		MentionType:  MentionTypePlugin,
+		Selection:    ToolSelection("@plugin", "plugin://plugin"),
+		MatchIndices: []int{2, 3},
+	}
+	path := "👩‍💻abcdef/f"
+	file := SearchResult{
+		DisplayName:  path,
+		MentionType:  MentionTypeFile,
+		Selection:    FileSelection(path),
+		MatchIndices: []int{0, 1},
+	}
+	pluginLine := styledPrimaryText(plugin)
+	if !strings.Contains(pluginLine, "👩‍💻") || !strings.Contains(pluginLine, ansiBold) {
+		t.Fatalf("plugin grapheme emphasis = %q", pluginLine)
+	}
+	fileLine := styledSecondaryText(file)
+	if !strings.Contains(fileLine, ansiBold+"👩‍💻a") {
+		t.Fatalf("file path grapheme emphasis = %q", fileLine)
+	}
+	for _, line := range []string{pluginLine, fileLine} {
+		for _, split := range []string{"👩\x1b", "\u200d\x1b", "\x1b[1m\u200d"} {
+			if strings.Contains(line, split) {
+				t.Fatalf("grapheme split by styling: %q", line)
+			}
+		}
+	}
+	if got := utils.StripANSI(codextui.TruncateWithEllipsis(fileLine, 12)); !strings.Contains(got, "👩‍💻a") {
+		t.Fatalf("truncated path = %q", got)
+	}
+}
+
+func TestFileMatchIndicesConvertRunesToGraphemesLikeRust(t *testing.T) {
+	path := "👩‍💻abcdef/f"
+	row := FileMatchToRow(filesearch.FileMatch{Path: path, MatchType: filesearch.MatchFile, Indices: []int{0, 1, 3}})
+	if !reflect.DeepEqual(row.MatchIndices, []int{0, 1}) {
+		t.Fatalf("grapheme match indices = %#v", row.MatchIndices)
+	}
+}
+
 // TestMentionRenderBoundedPrimaryColumnKeepsFileIdentityLikeRust mirrors
 // #46694's long_mentions_leave_room_for_distinguishing_parent_paths: a long
 // off-screen name may size the primary column, but build_line caps it at half

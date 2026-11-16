@@ -5,6 +5,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/rivo/uniseg"
+
 	codextui "codex_go/tui"
 	historycell "codex_go/tui/history_cell"
 )
@@ -307,7 +309,23 @@ func (s *HistorySearchSession) HighlightRanges() []TextRange {
 	if s == nil || s.Status != HistorySearchMatch || s.Query == "" {
 		return nil
 	}
-	return CaseInsensitiveMatchRanges(s.PreviewDraft.Text, s.Query)
+	// Rust #61725: the bash prompt renders separately from the textarea, so a
+	// prompt-only match must not highlight the command body and body ranges are
+	// reported relative to the textarea text.
+	prefixLen := 0
+	if s.PreviewDraft.IsBashMode {
+		prefixLen = 1
+	}
+	ranges := CaseInsensitiveMatchRangesWithPrefix(s.PreviewDraft.Text, s.Query, prefixLen)
+	out := make([]TextRange, 0, len(ranges))
+	for _, textRange := range ranges {
+		start := max(textRange.Start-prefixLen, 0)
+		end := max(textRange.End-prefixLen, 0)
+		if start < end {
+			out = append(out, TextRange{Start: start, End: end})
+		}
+	}
+	return out
 }
 
 func (s *HistorySearchSession) search(query string, direction HistorySearchDirection, restart bool) HistorySearchResult {
@@ -372,12 +390,22 @@ func uniqueHistoryMatchesNewestFirst(entries []string, query string) []string {
 }
 
 func CaseInsensitiveMatchRanges(text string, query string) []TextRange {
+	return CaseInsensitiveMatchRangesWithPrefix(text, query, 0)
+}
+
+// CaseInsensitiveMatchRangesWithPrefix maps case-insensitive matches onto whole
+// grapheme clusters (Rust #61725). A nonzero prefix length segments the prompt
+// independently so it cannot share a grapheme with the textarea body.
+func CaseInsensitiveMatchRangesWithPrefix(text string, query string, prefixLen int) []TextRange {
 	if query == "" {
 		return nil
 	}
-	queryLower := strings.ToLower(query)
+	queryLower := lowerExpandedString(query)
 	if queryLower == "" {
 		return nil
+	}
+	if prefixLen < 0 || prefixLen > len(text) || !utf8.ValidString(text[:prefixLen]) {
+		prefixLen = 0
 	}
 	folded := strings.Builder{}
 	foldedSpans := []struct {
@@ -385,21 +413,32 @@ func CaseInsensitiveMatchRanges(text string, query string) []TextRange {
 		FoldedEnd   int
 		Original    TextRange
 	}{}
-	for originalStart, r := range text {
-		originalRange := TextRange{Start: originalStart, End: originalStart + utf8.RuneLen(r)}
-		lower := unicode.ToLower(r)
-		foldedStart := folded.Len()
-		folded.WriteRune(lower)
-		foldedSpans = append(foldedSpans, struct {
-			FoldedStart int
-			FoldedEnd   int
-			Original    TextRange
-		}{
-			FoldedStart: foldedStart,
-			FoldedEnd:   folded.Len(),
-			Original:    originalRange,
-		})
+	appendGraphemes := func(segment string, offset int) {
+		iterator := uniseg.NewGraphemes(segment)
+		for iterator.Next() {
+			grapheme := iterator.Str()
+			start, _ := iterator.Positions()
+			originalStart := offset + start
+			originalRange := TextRange{Start: originalStart, End: originalStart + len(grapheme)}
+			for _, r := range grapheme {
+				for _, lower := range lowerRuneExpanded(r) {
+					foldedStart := folded.Len()
+					folded.WriteRune(lower)
+					foldedSpans = append(foldedSpans, struct {
+						FoldedStart int
+						FoldedEnd   int
+						Original    TextRange
+					}{
+						FoldedStart: foldedStart,
+						FoldedEnd:   folded.Len(),
+						Original:    originalRange,
+					})
+				}
+			}
+		}
 	}
+	appendGraphemes(text[:prefixLen], 0)
+	appendGraphemes(text[prefixLen:], prefixLen)
 	foldedText := folded.String()
 	ranges := []TextRange{}
 	searchFrom := 0
@@ -423,11 +462,33 @@ func CaseInsensitiveMatchRanges(text string, query string) []TextRange {
 			originalEnd = span.Original.End
 		}
 		if originalStart != nil {
-			ranges = append(ranges, TextRange{Start: *originalStart, End: originalEnd})
+			textRange := TextRange{Start: *originalStart, End: originalEnd}
+			if len(ranges) == 0 || ranges[len(ranges)-1] != textRange {
+				ranges = append(ranges, textRange)
+			}
 		}
 		searchFrom = foldedEnd
 	}
 	return ranges
+}
+
+// lowerExpandedString applies the full lowercase mapping Rust's
+// `char::to_lowercase` yields, including expansions such as U+0130.
+func lowerExpandedString(value string) string {
+	var out strings.Builder
+	for _, r := range value {
+		for _, lower := range lowerRuneExpanded(r) {
+			out.WriteRune(lower)
+		}
+	}
+	return out.String()
+}
+
+func lowerRuneExpanded(r rune) []rune {
+	if r == '\u0130' {
+		return []rune{'i', '\u0307'}
+	}
+	return []rune{unicode.ToLower(r)}
 }
 
 func draftFromHistoryText(original DraftState, text string) DraftState {

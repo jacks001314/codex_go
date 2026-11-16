@@ -1,9 +1,12 @@
 package mentionsv2
 
 import (
+	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/rivo/uniseg"
 
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
@@ -257,11 +260,15 @@ func styledContentText(row SearchResult, primaryColumnWidth int) string {
 
 func styledPrimaryText(row SearchResult) string {
 	text := primaryText(row)
-	offset := 0
 	if _, ok := fileName(row); ok {
-		offset = fileNameStart(row.DisplayName)
+		// Rust #61726: file rows keep the filename unstyled; only the parent
+		// path carries fuzzy-match emphasis.
+		if style := mentionNameSGR(row); style != "" {
+			return style + text + ansiReset
+		}
+		return text
 	}
-	return applyMatchEmphasis(text, row.MatchIndices, offset, mentionNameSGR(row))
+	return applyMatchEmphasis(text, row.MatchIndices, matchIndexScalar, mentionNameSGR(row))
 }
 
 func styledSecondaryText(row SearchResult) string {
@@ -270,7 +277,7 @@ func styledSecondaryText(row SearchResult) string {
 		if path == "" {
 			return ""
 		}
-		styled := applyMatchEmphasis(path, row.MatchIndices, 0, ansiDim)
+		styled := applyMatchEmphasis(path, row.MatchIndices, matchIndexGrapheme, ansiDim)
 		if row.Description != "" {
 			return styled + "  " + ansiDim + row.Description + ansiReset
 		}
@@ -311,19 +318,21 @@ func styledTag(mentionType MentionType, tag string) string {
 	return style + tag + ansiReset
 }
 
-func applyMatchEmphasis(text string, indices []int, offset int, baseSGR string) string {
+type matchIndexUnit int
+
+const (
+	matchIndexScalar matchIndexUnit = iota
+	matchIndexGrapheme
+)
+
+// applyMatchEmphasis styles whole grapheme clusters (Rust #61726). Names carry
+// scalar match indices while parent paths carry grapheme match indices, so a
+// multi-codepoint emoji is never split when only part of it matches.
+func applyMatchEmphasis(text string, indices []int, unit matchIndexUnit, baseSGR string) string {
 	if text == "" {
 		return ""
 	}
-	runes := []rune(text)
-	matched := make(map[int]bool, len(indices))
-	for _, index := range indices {
-		relative := index - offset
-		if relative >= 0 && relative < len(runes) {
-			matched[relative] = true
-		}
-	}
-	if len(matched) == 0 && baseSGR == "" {
+	if len(indices) == 0 && baseSGR == "" {
 		return text
 	}
 	var out strings.Builder
@@ -334,9 +343,25 @@ func applyMatchEmphasis(text string, indices []int, offset int, baseSGR string) 
 			current = ""
 		}
 	}
-	for index, r := range runes {
+	indexEnd := 0
+	nextIndex := 0
+	iterator := uniseg.NewGraphemes(text)
+	for iterator.Next() {
+		grapheme := iterator.Str()
+		switch unit {
+		case matchIndexGrapheme:
+			indexEnd++
+		default:
+			// A grapheme may hold several scalars; scalar indices count each rune.
+			indexEnd += utf8.RuneCountInString(grapheme)
+		}
+		matched := false
+		for nextIndex < len(indices) && indices[nextIndex] < indexEnd {
+			matched = true
+			nextIndex++
+		}
 		style := baseSGR
-		if matched[index] {
+		if matched {
 			style += ansiBold
 		}
 		if style != current {
@@ -346,10 +371,41 @@ func applyMatchEmphasis(text string, indices []int, offset int, baseSGR string) 
 				current = style
 			}
 		}
-		out.WriteRune(r)
+		out.WriteString(grapheme)
 	}
 	closeStyle()
 	return out.String()
+}
+
+// runeIndicesToGraphemeIndices converts the rune offsets produced by Go's fuzzy
+// file search into the grapheme offsets Rust's path renderer expects.
+func runeIndicesToGraphemeIndices(text string, indices []int) []int {
+	if len(indices) == 0 {
+		return nil
+	}
+	runeToGrapheme := make(map[int]int)
+	graphemeIndex := 0
+	runeIndex := 0
+	iterator := uniseg.NewGraphemes(text)
+	for iterator.Next() {
+		for range iterator.Runes() {
+			runeToGrapheme[runeIndex] = graphemeIndex
+			runeIndex++
+		}
+		graphemeIndex++
+	}
+	converted := make([]int, 0, len(indices))
+	seen := make(map[int]bool, len(indices))
+	for _, index := range indices {
+		grapheme, ok := runeToGrapheme[index]
+		if !ok || seen[grapheme] {
+			continue
+		}
+		seen[grapheme] = true
+		converted = append(converted, grapheme)
+	}
+	sort.Ints(converted)
+	return converted
 }
 
 func primaryText(row SearchResult) string {
