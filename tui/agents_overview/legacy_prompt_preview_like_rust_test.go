@@ -68,6 +68,39 @@ func TestPaginatedUserMessageKeepsSavedPromptLikeRust(t *testing.T) {
 	}
 }
 
+// TestAgentMessagePreviewSurvivesThreadCloseLikeRust covers Rust #61709: the
+// latest observed reply preview is retained after the thread closes instead of
+// disappearing with the live status.
+func TestAgentMessagePreviewSurvivesThreadCloseLikeRust(t *testing.T) {
+	view := New([]Row{{
+		ThreadID:     "t-live",
+		CWD:          "/work/alpha",
+		HistoryMode:  "paginated",
+		Group:        GroupWorking,
+		StatusType:   "active",
+		StatusActive: true,
+	}}, "", false)
+	view.TrackAgentsOverviewActivity("t-live", AgentsOverviewEvent{
+		Kind: AgentsOverviewEventAgentMessage,
+		Text: "final reply",
+	})
+	// The thread closes: the dashboard now reports it as finished and idle.
+	view.ApplyRefresh([]Row{{
+		ThreadID:    "t-live",
+		CWD:         "/work/alpha",
+		HistoryMode: "paginated",
+		Group:       GroupFinished,
+		StatusType:  "idle",
+	}}, "t-live")
+	if got := view.AgentsOverviewActivityFor("t-live").LastMessage; got != "final reply" {
+		t.Fatalf("last message after close = %q", got)
+	}
+	section := detailsSection(t, view.Render(140, 40), "Last message")
+	if len(section) == 0 || !strings.Contains(section[0], "final reply") {
+		t.Fatalf("last message section after close = %#v", section)
+	}
+}
+
 // TestPromptPreviewPrecedenceKeepsListFallback covers the empty cases: a task
 // with neither a saved nor a live prompt still shows the list preview.
 func TestPromptPreviewPrecedenceKeepsListFallback(t *testing.T) {
