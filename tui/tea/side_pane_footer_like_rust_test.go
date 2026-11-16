@@ -8,8 +8,8 @@ import (
 )
 
 // Rust #61141 lays the inactive pane out as a fixed frame: the windowed
-// transcript, the dimmed retained status, the inactive draft preview, and a
-// blank hint row. The frame always fills the pane height.
+// transcript, a blank row, the inactive draft preview, the dimmed retained
+// status, and a blank hint row. The frame always fills the pane height.
 func TestSidePaneDraftPreviewFrameLikeRust(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 40})
 	model.paneStatusText = map[string]string{"thread-side": "model gpt-5"}
@@ -44,8 +44,8 @@ func TestSidePaneDraftPreviewFrameLikeRust(t *testing.T) {
 	if statusRow < 0 || draftRow < 0 {
 		t.Fatalf("missing status (%d) or draft (%d): %#v", statusRow, draftRow, rows)
 	}
-	if statusRow > draftRow {
-		t.Fatalf("status row %d sits below draft row %d", statusRow, draftRow)
+	if statusRow < draftRow {
+		t.Fatalf("status row %d sits above draft row %d", statusRow, draftRow)
 	}
 	if draftRow >= len(rows)-1 {
 		t.Fatalf("draft row %d leaves no hint row: %#v", draftRow, rows)
@@ -57,13 +57,10 @@ func TestSidePaneDraftPreviewFrameLikeRust(t *testing.T) {
 	}
 }
 
-// Only the conversation that lost focus previews its saved draft; the focused
-// pane keeps the live composer.
+// Only the conversation that lost focus previews its saved draft; the pane
+// that owns the composer keeps the live one.
 func TestSidePaneDraftPreviewsOnlyUnfocusedSideLikeRust(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 40})
-	if parent, side := model.sidePaneDraftPreviews(true); parent != "" || side != "" {
-		t.Fatalf("drafts without sidebar = %q / %q", parent, side)
-	}
 	model.activeSide = &activeSideConversation{
 		ParentThreadID: "thread-parent",
 		SideThreadID:   "thread-side",
@@ -71,12 +68,14 @@ func TestSidePaneDraftPreviewsOnlyUnfocusedSideLikeRust(t *testing.T) {
 		SideDraft:      "side draft",
 	}
 
-	parent, side := model.sidePaneDraftPreviews(false)
-	if parent != "" || side != "side draft" {
-		t.Fatalf("sideFocused=false drafts = %q / %q", parent, side)
+	parentRows, _, _ := model.renderPassiveSidePane(model.activeSide, false, 40, 12)
+	parentPane := strings.Join(parentRows, "\n")
+	if !strings.Contains(parentPane, "parent draft") || strings.Contains(parentPane, "side draft") {
+		t.Fatalf("passive parent pane drafts = %q", parentPane)
 	}
-	parent, side = model.sidePaneDraftPreviews(true)
-	if parent != "parent draft" || side != "" {
-		t.Fatalf("sideFocused=true drafts = %q / %q", parent, side)
+	sideRows, _, _ := model.renderPassiveSidePane(model.activeSide, true, 40, 12)
+	sidePane := strings.Join(sideRows, "\n")
+	if !strings.Contains(sidePane, "side draft") || strings.Contains(sidePane, "parent draft") {
+		t.Fatalf("passive side pane drafts = %q", sidePane)
 	}
 }

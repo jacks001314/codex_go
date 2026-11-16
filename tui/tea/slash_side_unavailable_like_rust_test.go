@@ -70,9 +70,15 @@ func TestSlashSideUnavailableShownDisabledWhenSearchedLikeRust(t *testing.T) {
 	if _, ok := model.currentSlashPopupItem(); ok {
 		t.Fatal("disabled archive must not be completable or dispatchable")
 	}
+	// The popup paints inside the focused pane, so a narrow side column clips
+	// the reason like Rust's command popup; the row label still marks the
+	// command disabled.
 	view := utils.StripANSI(model.viewString())
-	if !strings.Contains(view, "/archive (disabled)") || !strings.Contains(view, "not available in a side conversation") {
+	if !strings.Contains(view, "/archive (disabled)") {
 		t.Fatalf("disabled row missing from side view:\n%s", view)
+	}
+	if description := slashPopupDisplayDescription(item); !strings.Contains(description, "not available in a side conversation") {
+		t.Fatalf("disabled row reason = %q", description)
 	}
 
 	// Tab with only a disabled match visible must swallow instead of completing

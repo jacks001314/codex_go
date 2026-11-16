@@ -367,8 +367,9 @@ func (m *Model) moveSidebarChooserChoice(delta int) {
 }
 
 // sidebarTabStripVisible reports whether a tab strip is on screen: the chooser
-// paints one as its first row, and a showing side chat paints one above the
-// transcript (Rust #59784/#59928).
+// paints one as its first row, and a paired side chat keeps one above the
+// transcript whether or not it currently owns the composer (Rust
+// #59784/#59928 paint the Inactive state too).
 func (m *Model) sidebarTabStripVisible() bool {
 	if m == nil || !m.sideWorkspaceEnabled() {
 		return false
@@ -376,7 +377,7 @@ func (m *Model) sidebarTabStripVisible() bool {
 	if m.sidebarChooserVisible() {
 		return true
 	}
-	return m.activeSide != nil && m.activeSide.ShowingSide
+	return m.activeSide != nil
 }
 
 // sidebarTabStripWindow is the strip's painted window: the cells

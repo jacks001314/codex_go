@@ -3080,6 +3080,10 @@ type Model struct {
 	sideExactWidth sideExactWidth
 	// sideResize is the active keyboard resize preview, if any.
 	sideResize *sidePaneResize
+	// sidePaneRendering guards the focused-column render: while the focused
+	// conversation is drawn at its pane size, viewString must stay on the
+	// single-conversation path instead of splitting itself again.
+	sidePaneRendering bool
 	// sideDrag is the active mouse divider drag (Rust #59527).
 	sideDrag *sidePaneDrag
 	// sideConversations retains every side conversation, keyed by its parent
@@ -5650,12 +5654,15 @@ func (m *Model) viewString() string {
 	// Rust's bottom pane owns no header rows: the transcript starts at the top
 	// of the viewport and the status line sits below the composer.
 	m.transcriptContentTopRow = 0
-	transcript := m.transcript.View()
 	// Rust #58992: with `tui_workspace`, the parent conversation stays visible
-	// beside its side conversation; only the focused composer accepts input.
-	if panes, ok := m.renderSideWorkspace(m.width, m.transcript.Height); ok {
-		transcript = panes
+	// beside its side conversation. Each column paints its own bottom pane, so
+	// the split frame is complete on its own and nothing may be appended below
+	// it.
+	if panes, ok := m.renderSideWorkspace(m.width, m.sideWorkspaceHeight()); ok {
+		m.transcriptImageFrameRows = strings.Count(panes, "\n") + 1
+		return panes
 	}
+	transcript := m.transcript.View()
 	transcript = m.applyPinnedPromptHeader(transcript, 0)
 	sections := []string{}
 	transcriptIndex := -1

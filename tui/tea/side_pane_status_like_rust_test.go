@@ -19,12 +19,6 @@ func TestSidePaneStatusContentLikeRust(t *testing.T) {
 	if got := model.paneStatusForThread("thread-parent"); got != "model gpt-5 readonly cwd /repo" {
 		t.Fatalf("cached status = %q", got)
 	}
-	if got := model.paneStatusWhenUnfocused(false, "thread-parent"); got != "" {
-		t.Fatalf("focused pane status = %q, want empty", got)
-	}
-	if got := model.paneStatusWhenUnfocused(true, "thread-side"); got != "side status" {
-		t.Fatalf("unfocused pane status = %q", got)
-	}
 
 	rendered := model.renderDimmedPaneStatus("thread-parent", "alpha beta gamma delta epsilon zeta", 12, 3)
 	rows := strings.Split(rendered, "\n")
@@ -40,12 +34,16 @@ func TestSidePaneStatusContentLikeRust(t *testing.T) {
 		}
 	}
 
-	content := model.renderSidePaneTranscript(&transcriptMessageCache{}, "thread-side", nil, 20, "side status", 3)
-	if !strings.Contains(content, "side status") {
-		t.Fatalf("pane transcript missing status: %q", content)
+	// The passive pane frame paints the cached status below its transcript;
+	// the focused column paints the live status line through its own bottom
+	// pane instead.
+	paneRows, _, _ := model.composeSidePane("thread-side", "", "side status", "", 20, 12, sidePaneTail)
+	if content := strings.Join(paneRows, "\n"); !strings.Contains(content, "side status") {
+		t.Fatalf("passive pane missing status: %q", content)
 	}
-	if content := model.renderSidePaneTranscript(&transcriptMessageCache{}, "thread-side", nil, 20, "", 3); strings.Contains(content, "side status") {
-		t.Fatalf("focused pane rendered status: %q", content)
+	paneRows, _, _ = model.composeSidePane("thread-side", "", "", "", 20, 12, sidePaneTail)
+	if content := strings.Join(paneRows, "\n"); strings.Contains(content, "side status") {
+		t.Fatalf("pane without a cached status rendered one: %q", content)
 	}
 }
 
