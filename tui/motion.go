@@ -101,15 +101,16 @@ func AnimatedActivityIndicator(startTime *time.Time, trueColor bool, now time.Ti
 }
 
 func ShimmerText(text string, mode MotionMode) []ShimmerSpan {
-	switch mode {
-	case MotionReduced:
-		if text == "" {
-			return nil
-		}
-		return []ShimmerSpan{{Text: text, Intensity: 0}}
-	default:
-		return ShimmerSpans(text)
+	if text == "" {
+		return nil
 	}
+	if mode == MotionReduced || ContainsRTLOrArabicNumber(text) {
+		// Rust #61731 keeps bidi-sensitive headers as one static dim span so
+		// native right-to-left ordering survives; intensity 0 is that static
+		// rendering here.
+		return []ShimmerSpan{{Text: text, Intensity: 0}}
+	}
+	return ShimmerSpans(text)
 }
 
 // Rust parity: codex-rs/tui/src/motion.rs::loading_glyph /

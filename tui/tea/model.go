@@ -17,7 +17,6 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	bubbletea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	sysclipboard "github.com/atotto/clipboard"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
 	"github.com/google/uuid"
@@ -3492,7 +3491,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 	transcript.MouseWheelEnabled = false
 	clipboardWrite := options.OnClipboardWrite
 	if clipboardWrite == nil {
-		clipboardWrite = sysclipboard.WriteAll
+		clipboardWrite = defaultClipboardWrite()
 	}
 	clipboardWriteRich := options.OnClipboardWriteRich
 	if clipboardWriteRich == nil && options.OnClipboardWrite == nil {

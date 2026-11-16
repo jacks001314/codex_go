@@ -12,14 +12,25 @@ import (
 // #42324). Only OS and conventional package-manager locations are trusted;
 // custom installations fall back to no helper. The returned path is resolved.
 func TrustedExecutable(name string) (string, bool) {
-	return trustedExecutableIn(name, trustedExecutableDirectories(), trustedInstallationRoots())
+	return trustedExecutableIn(name, trustedExecutableDirectories(executableScopeAll), trustedInstallationRoots())
+}
+
+// LinuxTrustedExecutable finds a helper installed on the Linux side only. It
+// deliberately skips WSL's Windows executable directories so a distro-provided
+// adapter wins over Windows interop (Rust #61724
+// codex-utils-path::linux_system_executable). It returns false off Linux.
+func LinuxTrustedExecutable(name string) (string, bool) {
+	if runtime.GOOS != "linux" {
+		return "", false
+	}
+	return trustedExecutableIn(name, trustedExecutableDirectories(executableScopeLinux), trustedInstallationRoots())
 }
 
 // TrustedSystemPath returns a PATH value built only from trusted installation
 // directories for automatic child processes, or "" when none are trusted.
 // It must not be used for user-requested tools.
 func TrustedSystemPath() (string, bool) {
-	directories := canonicalDirectories(trustedExecutableDirectories(), trustedInstallationRoots())
+	directories := canonicalDirectories(trustedExecutableDirectories(executableScopeAll), trustedInstallationRoots())
 	if len(directories) == 0 {
 		return "", false
 	}
@@ -103,7 +114,17 @@ func trustedInstallationRoots() []string {
 	}
 }
 
-func trustedExecutableDirectories() []string {
+type executableScope int
+
+const (
+	// executableScopeAll searches every trusted directory, including WSL's
+	// Windows interop locations.
+	executableScopeAll executableScope = iota
+	// executableScopeLinux searches only Linux installation directories.
+	executableScopeLinux
+)
+
+func trustedExecutableDirectories(scope executableScope) []string {
 	switch runtime.GOOS {
 	case "windows":
 		directories := make([]string, 0, 12)
@@ -131,7 +152,7 @@ func trustedExecutableDirectories() []string {
 			"/usr/sbin",
 			"/sbin",
 		}
-		if runtime.GOOS == "linux" && isWSL() {
+		if runtime.GOOS == "linux" && scope == executableScopeAll && isWSL() {
 			// Rust #45457: PowerShell lives in its own directory under System32.
 			directories = append(directories,
 				"/mnt/c/Windows/System32",

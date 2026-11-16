@@ -2,7 +2,10 @@
 
 package tui
 
-import "strings"
+import (
+	"strings"
+	"testing"
+)
 
 func TestStartupProbeQueriesAlternateScrollBeforeDA1LikeRust(t *testing.T) {
 	query := terminalStartupProbeQuery(false)

@@ -156,6 +156,28 @@ func CopyToClipboardWith(
 	return nil, ClipboardError(fmt.Sprintf("%v; terminal clipboard: %v", nativeErr, terminalErr))
 }
 
+// ComposeWSLClipboardWrite mirrors Rust clipboard_copy.rs' WSL ordering: the
+// Windows clipboard writer runs first and the native WSLg clipboard is its
+// fallback, because WSLg setup can block forever (Rust #53453). Both failing
+// keeps Rust's combined error text.
+func ComposeWSLClipboardWrite(wslCopy ClipboardCopyFunc, nativeCopy ClipboardCopyFunc) ClipboardCopyFunc {
+	if wslCopy == nil {
+		return nativeCopy
+	}
+	if nativeCopy == nil {
+		return wslCopy
+	}
+	return func(text string) error {
+		wslErr := wslCopy(text)
+		if wslErr == nil {
+			return nil
+		}
+		if nativeErr := nativeCopy(text); nativeErr != nil {
+			return ClipboardError(fmt.Sprintf("Windows clipboard: %v; native clipboard: %v", wslErr, nativeErr))
+		}
+		return nil
+	}
+}
 // WriteTerminalClipboard sends text to the attached terminal's clipboard.
 //
 // In a tmux session it forwards through tmux's own clipboard integration so

@@ -51,8 +51,13 @@ func (m *Model) statusRowFrameInterval() time.Duration {
 	if m == nil {
 		return statusRowStaticFrame
 	}
-	if m.statusRowVisible() && m.animationsEnabled && (m.effects.Progress || m.effects.Shimmer) {
-		return statusRowAnimatedFrame
+	if m.statusRowVisible() && m.animationsEnabled {
+		// Rust #61731: bidi-sensitive headers skip the shimmer sweep, so the
+		// row only needs the one-second clock tick unless progress animates.
+		header := strings.TrimSpace(m.statusIndicatorState().Header)
+		if m.effects.Progress || (m.effects.Shimmer && !codextui.ContainsRTLOrArabicNumber(header)) {
+			return statusRowAnimatedFrame
+		}
 	}
 	return statusRowStaticFrame
 }

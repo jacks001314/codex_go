@@ -83,7 +83,7 @@ func TestTrustedExecutableDirectoriesIncludeNixAndWSLPowerShellLikeRust(t *testi
 	if runtime.GOOS == "windows" {
 		t.Skip("unix system directories only")
 	}
-	directories := trustedExecutableDirectories()
+	directories := trustedExecutableDirectories(executableScopeAll)
 	for _, want := range []string{"/run/current-system/sw/bin", "/nix/var/nix/profiles/default/bin"} {
 		if !slices.Contains(directories, want) {
 			t.Fatalf("trusted directories %v missing %q", directories, want)
@@ -93,7 +93,11 @@ func TestTrustedExecutableDirectoriesIncludeNixAndWSLPowerShellLikeRust(t *testi
 		return
 	}
 	t.Setenv("WSL_DISTRO_NAME", "Ubuntu")
-	if directories := trustedExecutableDirectories(); !slices.Contains(directories, "/mnt/c/Windows/System32/WindowsPowerShell/v1.0") {
+	if directories := trustedExecutableDirectories(executableScopeAll); !slices.Contains(directories, "/mnt/c/Windows/System32/WindowsPowerShell/v1.0") {
 		t.Fatalf("WSL trusted directories %v missing PowerShell", directories)
+	}
+	// Rust #61724: the Linux-only scope must not probe Windows executables.
+	if directories := trustedExecutableDirectories(executableScopeLinux); slices.Contains(directories, "/mnt/c/Windows/System32/WindowsPowerShell/v1.0") || slices.Contains(directories, "/mnt/c/Windows/System32") {
+		t.Fatalf("Linux trusted directories %v must exclude WSL Windows locations", directories)
 	}
 }

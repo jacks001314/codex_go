@@ -49,6 +49,11 @@ func SummaryShimmer(text string, elapsed time.Duration, motion MotionMode) []Sum
 	if motion == MotionReduced {
 		return []SummaryShimmerSpan{{Text: text, Style: SummaryShimmerPlain}}
 	}
+	// Rust #61731: per-grapheme colors redraw individual cells and break native
+	// bidi rendering, so bidi-sensitive headers stay one static dim span.
+	if ContainsRTLOrArabicNumber(text) {
+		return []SummaryShimmerSpan{{Text: text, Style: SummaryShimmerDim}}
+	}
 	fg, bg, ok := defaultTerminalColorsRGB()
 	if !ok || DetectStdoutColorLevel() != ColorTrue {
 		return []SummaryShimmerSpan{{Text: text, Style: SummaryShimmerDim}}
@@ -61,6 +66,9 @@ func SummaryShimmer(text string, elapsed time.Duration, motion MotionMode) []Sum
 func SummaryShimmerSpansAt(text string, elapsed time.Duration, motion MotionMode, fg RGB, bg RGB, trueColor bool) []SummaryShimmerSpan {
 	if motion == MotionReduced {
 		return []SummaryShimmerSpan{{Text: text, Style: SummaryShimmerPlain}}
+	}
+	if ContainsRTLOrArabicNumber(text) {
+		return []SummaryShimmerSpan{{Text: text, Style: SummaryShimmerDim}}
 	}
 	if !trueColor {
 		return []SummaryShimmerSpan{{Text: text, Style: SummaryShimmerDim}}
