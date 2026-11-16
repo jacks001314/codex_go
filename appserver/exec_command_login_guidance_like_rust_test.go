@@ -3,6 +3,7 @@ package appserver
 import (
 	"testing"
 
+	"codex_go/tool"
 	"codex_go/turn"
 )
 
@@ -10,18 +11,17 @@ import (
 // guidance follows any ready turn environment that reports PowerShell,
 // including the implicit local environment.
 func TestTurnEnvironmentHasPowerShellLikeRust(t *testing.T) {
-	localPowerShell := NewEnvironmentManager(EnvironmentShellInfo{Name: "pwsh", Path: "pwsh.exe"}, "/workspace")
-	localRouter := NewRuntimeRouter(RuntimeServices{Environment: localPowerShell})
+	// The implicit local environment launches under the session shell.
+	wantLocal := tool.NewDefaultShell().Type == tool.ShellPowerShell
+	localRouter := NewRuntimeRouter(RuntimeServices{Environment: NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "sh"}, "/workspace")})
 	defer localRouter.Close()
-	if !localRouter.turnEnvironmentHasPowerShell(&turn.TurnStartParams{}) {
-		t.Fatal("implicit PowerShell local environment was not detected")
+	if got := localRouter.turnEnvironmentHasPowerShell(&turn.TurnStartParams{}); got != wantLocal {
+		t.Fatalf("implicit local has_powershell = %t, want %t", got, wantLocal)
 	}
-
-	localBash := NewEnvironmentManager(EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}, "/workspace")
-	bashRouter := NewRuntimeRouter(RuntimeServices{Environment: localBash})
-	defer bashRouter.Close()
-	if bashRouter.turnEnvironmentHasPowerShell(&turn.TurnStartParams{}) {
-		t.Fatal("implicit bash local environment reported PowerShell")
+	if got := localRouter.turnEnvironmentHasPowerShell(&turn.TurnStartParams{
+		Environments: []map[string]any{{"environmentId": "local"}},
+	}); got != wantLocal {
+		t.Fatalf("explicit local has_powershell = %t, want %t", got, wantLocal)
 	}
 
 	remoteManager := NewEnvironmentManager(EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}, "/workspace")

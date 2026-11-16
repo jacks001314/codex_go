@@ -19993,7 +19993,7 @@ func (r *RuntimeRouter) turnEnvironmentHasPowerShell(params *turn.TurnStartParam
 	if len(selections) == 0 {
 		defaultID, ok := r.services.Environment.DefaultEnvironmentID()
 		if !ok {
-			return environmentShellIsPowerShell(r.services.Environment.LocalShell())
+			return tool.NewDefaultShell().Type == tool.ShellPowerShell
 		}
 		selections = []map[string]any{{"environmentId": defaultID}}
 	}
@@ -20005,7 +20005,9 @@ func (r *RuntimeRouter) turnEnvironmentHasPowerShell(params *turn.TurnStartParam
 			continue
 		}
 		if environmentID == execserver.LocalEnvironmentID {
-			if environmentShellIsPowerShell(r.services.Environment.LocalShell()) {
+			// The local environment launches under the session shell
+			// (Rust `default_user_shell`), not the manager's placeholder entry.
+			if tool.NewDefaultShell().Type == tool.ShellPowerShell {
 				return true
 			}
 			continue
