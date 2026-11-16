@@ -144,6 +144,57 @@ func (u *TokenUsage) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// UnmarshalJSON accepts the app-server's `{total,last,modelContextWindow}`
+// shape as well as the flat counters older records used. Total is synthesized
+// from the flat counters when the breakdown is absent so remote clients see the
+// same totals Rust reports (TurnTokenUsage::total).
+func (u *TokenUsage) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Total                 *TokenUsageBreakdown `json:"total"`
+		Last                  *TokenUsageBreakdown `json:"last"`
+		ModelContextWindow    *int64               `json:"modelContextWindow"`
+		InputTokens           *int64               `json:"inputTokens"`
+		CachedInputTokens     *int64               `json:"cachedInputTokens"`
+		CacheWriteInputTokens *int64               `json:"cacheWriteInputTokens"`
+		OutputTokens          *int64               `json:"outputTokens"`
+		ReasoningOutputTokens *int64               `json:"reasoningOutputTokens"`
+		TotalTokens           *int64               `json:"totalTokens"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	u.Total = wire.Total
+	u.Last = wire.Last
+	u.ModelContextWindow = wire.ModelContextWindow
+	flat := wire.InputTokens != nil || wire.CachedInputTokens != nil || wire.CacheWriteInputTokens != nil ||
+		wire.OutputTokens != nil || wire.ReasoningOutputTokens != nil || wire.TotalTokens != nil
+	if !flat {
+		return nil
+	}
+	if wire.InputTokens != nil {
+		u.InputTokens = *wire.InputTokens
+	}
+	if wire.CachedInputTokens != nil {
+		u.CachedInputTokens = *wire.CachedInputTokens
+	}
+	if wire.CacheWriteInputTokens != nil {
+		u.CacheWriteInputTokens = *wire.CacheWriteInputTokens
+	}
+	if wire.OutputTokens != nil {
+		u.OutputTokens = *wire.OutputTokens
+	}
+	if wire.ReasoningOutputTokens != nil {
+		u.ReasoningOutputTokens = *wire.ReasoningOutputTokens
+	}
+	if wire.TotalTokens != nil {
+		u.TotalTokens = *wire.TotalTokens
+	}
+	if u.Total == nil {
+		u.Total = tokenUsageBreakdownFromUsage(u)
+	}
+	return nil
+}
+
 func tokenUsageBreakdownFromUsage(u *TokenUsage) *TokenUsageBreakdown {
 	if u == nil {
 		return &TokenUsageBreakdown{}

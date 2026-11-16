@@ -20,14 +20,14 @@ func TestExecHelpPagesLikeRust(t *testing.T) {
 		first  string
 		absent string
 	}{
-		{name: "exec long", kind: ExecHelpExec, lines: 121, usage: "Usage: codex exec [OPTIONS] [PROMPT]", first: "Run Codex non-interactively", absent: "Usage: codex exec resume"},
-		{name: "exec short", kind: ExecHelpExec, short: true, lines: 86, usage: "Usage: codex exec [OPTIONS] [PROMPT]", first: "Run Codex non-interactively"},
-		{name: "resume long", kind: ExecHelpResume, lines: 89, usage: "Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]", absent: "Usage: codex exec fork"},
-		{name: "resume short", kind: ExecHelpResume, short: true, lines: 62, usage: "Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]"},
-		{name: "fork long", kind: ExecHelpFork, lines: 82, usage: "Usage: codex exec fork [OPTIONS] <SESSION_ID> [PROMPT]"},
-		{name: "fork short", kind: ExecHelpFork, short: true, lines: 57, usage: "Usage: codex exec fork [OPTIONS] <SESSION_ID> [PROMPT]"},
-		{name: "review long", kind: ExecHelpReview, lines: 88, usage: "Usage: codex exec review [OPTIONS] [PROMPT]"},
-		{name: "review short", kind: ExecHelpReview, short: true, lines: 62, usage: "Usage: codex exec review [OPTIONS] [PROMPT]"},
+		{name: "exec long", kind: ExecHelpExec, lines: 127, usage: "Usage: codex exec [OPTIONS] [PROMPT]", first: "Run Codex non-interactively", absent: "Usage: codex exec resume"},
+		{name: "exec short", kind: ExecHelpExec, short: true, lines: 90, usage: "Usage: codex exec [OPTIONS] [PROMPT]", first: "Run Codex non-interactively"},
+		{name: "resume long", kind: ExecHelpResume, lines: 95, usage: "Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]", absent: "Usage: codex exec fork"},
+		{name: "resume short", kind: ExecHelpResume, short: true, lines: 66, usage: "Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]"},
+		{name: "fork long", kind: ExecHelpFork, lines: 88, usage: "Usage: codex exec fork [OPTIONS] <SESSION_ID> [PROMPT]"},
+		{name: "fork short", kind: ExecHelpFork, short: true, lines: 61, usage: "Usage: codex exec fork [OPTIONS] <SESSION_ID> [PROMPT]"},
+		{name: "review long", kind: ExecHelpReview, lines: 94, usage: "Usage: codex exec review [OPTIONS] [PROMPT]"},
+		{name: "review short", kind: ExecHelpReview, short: true, lines: 66, usage: "Usage: codex exec review [OPTIONS] [PROMPT]"},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -51,6 +51,19 @@ func TestExecHelpPagesLikeRust(t *testing.T) {
 				t.Fatal("clap help pages must not contain tabs")
 			}
 		})
+	}
+}
+
+// TestExecHelpDocumentsRemoteLikeRust mirrors Rust's #61707 snapshot: the
+// exec page documents the app-server endpoint options.
+func TestExecHelpDocumentsRemoteLikeRust(t *testing.T) {
+	text := ExecHelpText(ExecHelpExec, false)
+	want := "--remote <ADDR>\n          Connect to an existing app server\n"
+	if !strings.Contains(text, want) {
+		t.Fatalf("exec help missing remote block %q", want)
+	}
+	if !strings.Contains(text, "--remote-auth-token-env <ENV_VAR>\n          Environment variable containing the remote WebSocket bearer token.\n") {
+		t.Fatal("exec help missing remote auth token block")
 	}
 }
 

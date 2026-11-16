@@ -298,18 +298,17 @@ func TestBuildProtocolSchemaIndexesRPCSurface(t *testing.T) {
 // optional gatewayOAuth login/read params, so no entry is forward-ported.
 var forwardPortedOptionalTypeScriptParams = map[string]string{}
 
-// modelProvider/default/set (#61397) is Go ahead of the frozen anchor.
-var forwardPortedStableMethods = map[string]string{
-	"modelProvider/default/set": "c5ef97aa89 (#61397)",
-}
+// Re-anchored to a394ff9cf6: the anchor fixtures now carry
+// modelProvider/default/set (#61397), so no stable method is forward-ported.
+var forwardPortedStableMethods = map[string]string{}
 
 // retiredAheadOfAnchorMethods lists Rust methods Go removed after porting a
 // newer upstream commit. The frozen fixture tree still contains them, so the
 // coverage guard skips them; the guard fails once the anchor drops a method so
 // the entry is removed at the next re-anchor.
-var retiredAheadOfAnchorMethods = map[string]string{
-	"currentTime/read": "4aac2eacc5 (#61382)",
-}
+// Re-anchored to a394ff9cf6: the anchor tree no longer contains
+// currentTime/read (#61382), so no retired method needs a guard entry.
+var retiredAheadOfAnchorMethods = map[string]string{}
 
 func TestBuildProtocolSchemaMatchesRustStableFixtures(t *testing.T) {
 	root := rustAppServerProtocolSchemaRoot(t)

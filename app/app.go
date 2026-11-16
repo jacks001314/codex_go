@@ -141,6 +141,9 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 		if handled, err := runExecMeta(parsed, stdout); handled || err != nil {
 			return err
 		}
+		if handled, err := runRemoteExecRequest(ctx, parsed, stdin, stdout, stderr); handled || err != nil {
+			return err
+		}
 		return runLocalRunnerRequest(ctx, parsed, stdin, stdout, stderr)
 	case cli.CommandReview:
 		return runLocalRunnerRequest(ctx, parsed, stdin, stdout, stderr)

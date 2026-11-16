@@ -5391,6 +5391,16 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			// Rust #46566: restricted input keeps drafts editable while only
 			// recovery and local commands may be submitted.
 			m.clearComposerPasteWindow()
+			// Rust #61710: a highlighted completion (including one selected with
+			// a custom submit key) dispatches instead of the raw draft. A blocked
+			// row and its draft stay untouched.
+			if m.slashPopup.Active {
+				if !m.unavailableThreadPopupCommandAllowed() {
+					return m, nil
+				}
+				cmd, _ := m.dispatchSelectedSlashCommand()
+				return m, cmd
+			}
 			return m, m.submitComposer()
 		}
 		if m.keyMatches("composer", "submit", keySpec) {
@@ -7071,11 +7081,12 @@ func (m *Model) submitComposerWithSource(source SubmitSource) bubbletea.Cmd {
 		return nil
 	}
 	m.clearPromptSuggestion()
-	input := strings.TrimSpace(m.composerText())
+	rawInput := m.composerText()
+	input := strings.TrimSpace(rawInput)
 	// Rust #58412: capture the draft's shell mode before the composer resets so a
 	// leading `!` that a deletion exposed stays literal.
 	shellMode := m.composerPrefix == composerPrefixShell
-	if m.threadUnavailable && !unavailableThreadCommand(input) {
+	if m.threadUnavailable && !unavailableThreadCommand(rawInput) {
 		m.notice = "This conversation is unavailable. Use /new, /resume, /clear, /status, /warnings, /config, /copy, or /quit."
 		m.refreshTranscript()
 		return nil

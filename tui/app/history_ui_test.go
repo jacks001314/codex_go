@@ -44,20 +44,26 @@ func TestWindowsDesktopAppLaunchScriptMatchesRustShape(t *testing.T) {
 		"$ErrorActionPreference = 'Stop'",
 		"$url = 'codex://threads/it''s'",
 		"Get-AppxPackage -Name OpenAI.Codex",
-		"Get-AppxPackageManifest -Package $package.PackageFullName",
-		"$_.Category -eq 'windows.protocol'",
-		"$_.Protocol.Name -eq 'codex'",
-		"Join-Path $package.InstallLocation $application.Executable",
-		"Split-Path -Parent $exe",
-		"resources\\app.asar",
-		"Start-Process",
+		// Rust #61711: only the two supported publishers may satisfy the
+		// installed-package check, and the first match is used.
+		"$_.PublisherId -in @('2p2nqsd0c76g0', '3k8sg7r9htsxt')",
+		"Select-Object -First 1",
+		// The registered URL handler, not a direct internal executable, opens
+		// the session.
+		"Start-Process -FilePath $url",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("WindowsDesktopAppLaunchScript missing %q:\n%s", want, script)
 		}
 	}
-	if strings.Contains(script, "Join-Path $appDir 'Codex.exe'") {
-		t.Fatalf("WindowsDesktopAppLaunchScript still hardcodes the internal Codex.exe shim:\n%s", script)
+	for _, unwanted := range []string{
+		"Get-AppxPackageManifest",
+		"resources\\app.asar",
+		"Codex.exe",
+	} {
+		if strings.Contains(script, unwanted) {
+			t.Fatalf("WindowsDesktopAppLaunchScript still contains %q:\n%s", unwanted, script)
+		}
 	}
 }
 

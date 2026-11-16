@@ -36,12 +36,18 @@ func (m *Model) setThreadUnavailable(unavailable bool) {
 // connection is restricted, so the offline allowlist is the union of the
 // recovery commands and those local commands.
 func unavailableThreadCommand(input string) bool {
+	raw := input
 	input = strings.TrimSpace(input)
-	if input == "" || strings.Contains(input, "\n") {
+	// Rust parses the exact draft: surrounding whitespace means neither
+	// bare_command nor inline_command matches, so "/status " stays a draft.
+	if input == "" || raw != input || strings.Contains(input, "\n") {
 		return false
 	}
 	invocation, ok := codextui.ParseCommand(input)
-	if !ok {
+	// Rust #61710 keeps rejecting commands with arguments they do not support:
+	// an allowlisted name is not enough when the invocation would otherwise be
+	// submitted as an ordinary prompt.
+	if !ok || !slashInvocationDispatchable(invocation) {
 		return false
 	}
 	switch invocation.Command {

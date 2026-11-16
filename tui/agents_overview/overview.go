@@ -290,7 +290,15 @@ type Row struct {
 	// previewed for the details pane (Rust agents_overview_details
 	// last_message via thread/turns/list).
 	LastMessage string
-	Group       Group
+	// HistoryMode is the app-server history mode for the task. Rust #61709 only
+	// reads saved prompt and reply previews for paginated threads because
+	// listing a single legacy turn replays the entire rollout.
+	HistoryMode string
+	// PromptPreview is the latest prompt read from a paginated thread's newest
+	// turn (Rust latest_prompt). Live user-message notifications supply the
+	// equivalent preview for legacy threads.
+	PromptPreview string
+	Group         Group
 	// StatusType is the app-server thread status type. The command center uses
 	// it to distinguish a system error from a needs-input prompt (#46837).
 	StatusType   string

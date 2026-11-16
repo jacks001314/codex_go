@@ -69,7 +69,10 @@ type remoteAppServerTransport interface {
 }
 
 type remoteAppServerTUIClient struct {
-	endpoint        *appserverdaemon.RemoteAppServerEndpoint
+	endpoint *appserverdaemon.RemoteAppServerEndpoint
+	// execClient marks the one-shot `codex exec --remote` connection: Rust
+	// connects as "codex_exec" with required_human_approval = false.
+	execClient      bool
 	root            *cli.RootOptions
 	state           *codextui.State
 	messages        chan<- bubbletea.Msg
@@ -4036,12 +4039,20 @@ func remoteDialUnixSocketWebSocket(ctx context.Context, socketPath string, peerC
 }
 
 func (c *remoteAppServerTUIClient) initialize(ctx context.Context) error {
+	clientName := "codex-tui"
+	requiredHumanApproval := true
+	mcpElicitation := true
+	if c.execClient {
+		clientName = "codex_exec"
+		requiredHumanApproval = false
+		mcpElicitation = false
+	}
 	params := appserver.InitializeParams{
 		ClientInfo: appserver.ClientInfo{
 			// Same client identity the local TUI uses (Rust
 			// codex-rs/tui/src/app_server_connection.rs connects as
 			// "codex-tui").
-			Name:    "codex-tui",
+			Name:    clientName,
 			Version: doctor.Version(),
 		},
 		Capabilities: &appserver.InitializeCapabilities{
@@ -4050,8 +4061,8 @@ func (c *remoteAppServerTUIClient) initialize(ctx context.Context) error {
 			// required_human_approval = true: managed human-command approvals
 			// are only delivered (and replayed after a reconnect) to a
 			// connection that advertises it.
-			RequiredHumanApproval:          true,
-			MCPServerOpenAIFormElicitation: true,
+			RequiredHumanApproval:          requiredHumanApproval,
+			MCPServerOpenAIFormElicitation: mcpElicitation,
 		},
 	}
 	id, err := c.sendRequest(ctx, appserver.MethodInitialize, params)

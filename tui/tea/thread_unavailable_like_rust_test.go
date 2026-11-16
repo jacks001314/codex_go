@@ -97,6 +97,102 @@ func TestUnavailableThreadUsesConfiguredSubmitKeyLikeRust(t *testing.T) {
 	}
 }
 
+// TestUnavailableThreadAcceptsHighlightedRecoveryCompletionLikeRust mirrors
+// Rust #61710: `/sub` opens recovery completion and Enter dispatches the
+// highlighted `/subagents`, while a blocked command and an invalid argument
+// stay in the draft.
+func TestUnavailableThreadAcceptsHighlightedRecoveryCompletionLikeRust(t *testing.T) {
+	model, submitted := unavailableThreadModel()
+	typeText(t, model, "/sub")
+	if !model.slashPopup.Active {
+		t.Fatal("slash completion did not open for an unavailable thread")
+	}
+	item, ok := model.currentSlashPopupItem()
+	if !ok || item.Name != "subagents" {
+		t.Fatalf("selected completion = %#v ok=%v, want subagents", item, ok)
+	}
+	model.Update(key(keymsg.KeyEnter))
+	if len(*submitted) != 0 {
+		t.Fatalf("/subagents was submitted as a prompt: %#v", *submitted)
+	}
+	if got := model.composerText(); got != "" {
+		t.Fatalf("composer after /subagents = %q, want empty", got)
+	}
+
+	blocked, _ := unavailableThreadModel()
+	typeText(t, blocked, "/comp")
+	blocked.Update(key(keymsg.KeyEnter))
+	if got := blocked.composerText(); got != "/comp" {
+		t.Fatalf("blocked completion changed the draft to %q", got)
+	}
+	if !blocked.slashPopup.Active {
+		t.Fatal("blocked completion closed the popup")
+	}
+
+	withArgs, _ := unavailableThreadModel()
+	typeText(t, withArgs, "/status ")
+	withArgs.Update(key(keymsg.KeyLeft))
+	withArgs.Update(key(keymsg.KeyDown))
+	withArgs.Update(key(keymsg.KeyEnter))
+	if got := withArgs.composerText(); got != "/status " {
+		t.Fatalf("/status with arguments changed the draft to %q", got)
+	}
+}
+
+// TestUnavailableThreadCompletesWithCustomSubmitKeyLikeRust covers Rust
+// #61710's custom submit bindings: a highlighted recovery row dispatches from
+// its submit key, not only from Enter.
+func TestUnavailableThreadCompletesWithCustomSubmitKeyLikeRust(t *testing.T) {
+	keymapConfig := codextui.NewKeymapConfig()
+	if err := keymapConfig.Set("composer", "submit", []string{"ctrl-s"}); err != nil {
+		t.Fatalf("configure submit: %v", err)
+	}
+	model, submitted := unavailableThreadModel()
+	model.keymapConfig = keymapConfig
+	typeText(t, model, "/sub")
+	if !model.slashPopup.Active {
+		t.Fatal("slash completion did not open for an unavailable thread")
+	}
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlS})
+	if len(*submitted) != 0 {
+		t.Fatalf("/subagents was submitted as a prompt: %#v", *submitted)
+	}
+	if got := model.composerText(); got != "" {
+		t.Fatalf("composer after custom submit = %q, want empty", got)
+	}
+}
+
+// TestUnavailableThreadVimEscapeAndSearchKeepPopupClosedLikeRust covers Rust
+// #61710: the popup still resolves Vim insert Escape, and a Vim search query
+// does not reopen completion.
+func TestUnavailableThreadVimEscapeAndSearchKeepPopupClosedLikeRust(t *testing.T) {
+	model, _ := unavailableThreadModel()
+	model.vimMode = true
+	model.vimInsert = true
+	typeText(t, model, "/sub")
+	if !model.slashPopup.Active {
+		t.Fatal("slash completion did not open for an unavailable thread")
+	}
+	model.Update(key(keymsg.KeyEsc))
+	if model.slashPopup.Active {
+		t.Fatal("Escape left the completion popup open")
+	}
+	if model.vimInsert {
+		t.Fatal("Escape did not leave Vim Insert mode")
+	}
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'/'}})
+	if !model.vimSearchMode {
+		t.Fatal("slash did not start a Vim search on a nonempty draft")
+	}
+	if model.slashPopup.Active {
+		t.Fatal("Vim search reopened the completion popup")
+	}
+	typeText(t, model, "sub")
+	if model.slashPopup.Active {
+		t.Fatal("typing a Vim search query reopened the completion popup")
+	}
+}
+
 // TestUnavailableThreadClearsStaleActivityLikeRust covers review and MCP
 // startup state that would otherwise keep recovery commands blocked.
 func TestUnavailableThreadClearsStaleActivityLikeRust(t *testing.T) {

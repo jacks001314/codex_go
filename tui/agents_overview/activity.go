@@ -43,6 +43,7 @@ type AgentsOverviewEventKind int
 const (
 	AgentsOverviewEventReasoningDelta AgentsOverviewEventKind = iota
 	AgentsOverviewEventAgentMessage
+	AgentsOverviewEventUserMessage
 	AgentsOverviewEventTurnStarted
 	AgentsOverviewEventTurnCompleted
 	AgentsOverviewEventReasoningPartAdded
@@ -74,6 +75,9 @@ type AgentsOverviewActivity struct {
 	ReasoningHeading string
 	// LastMessage is the latest delivered agent message.
 	LastMessage string
+	// LatestPrompt is the newest prompt observed for a legacy thread. It takes
+	// precedence over the task list's preview (Rust #61709 latest_prompt).
+	LatestPrompt string
 	// RequestPreview is the pending approval or user-input request text.
 	RequestPreview string
 
@@ -167,6 +171,14 @@ func (v *View) TrackAgentsOverviewActivity(threadID string, event AgentsOverview
 		activity.ReasoningHeading = ""
 		activity.reasoningBuffer = ""
 		changed = true
+	case AgentsOverviewEventUserMessage:
+		// Rust #61709: a legacy thread cannot cheaply re-read its saved prompt,
+		// so the completed user-message notification becomes the prompt
+		// preview and survives later refreshes.
+		if v.agentsOverviewRowIsLegacy(threadID) {
+			activity.LatestPrompt = PreviewMarkdown(event.Text)
+			changed = true
+		}
 	case AgentsOverviewEventTurnStarted,
 		AgentsOverviewEventTurnCompleted,
 		AgentsOverviewEventReasoningPartAdded,
@@ -182,6 +194,23 @@ func (v *View) TrackAgentsOverviewActivity(threadID string, event AgentsOverview
 		}
 	}
 	return changed
+}
+
+// agentsOverviewRowIsLegacy reports whether a listed task uses legacy history.
+// An absent history mode is treated as legacy, matching Rust's
+// ThreadHistoryMode default for older servers.
+func (v *View) agentsOverviewRowIsLegacy(threadID string) bool {
+	if v == nil {
+		return false
+	}
+	for _, row := range v.Rows {
+		if !strings.EqualFold(strings.TrimSpace(row.ThreadID), threadID) {
+			continue
+		}
+		mode := strings.TrimSpace(row.HistoryMode)
+		return mode == "" || strings.EqualFold(mode, "legacy")
+	}
+	return false
 }
 
 // SetAgentsOverviewRequestPreview records the pending approval or user-input
@@ -242,7 +271,8 @@ func (v *View) pruneActivity() {
 		return
 	}
 	for threadID, activity := range v.activity {
-		if activity == nil || (activity.ReasoningHeading == "" && activity.LastMessage == "" && activity.RequestPreview == "") {
+		if activity == nil || (activity.ReasoningHeading == "" && activity.LastMessage == "" &&
+			activity.LatestPrompt == "" && activity.RequestPreview == "") {
 			delete(v.activity, threadID)
 		}
 	}

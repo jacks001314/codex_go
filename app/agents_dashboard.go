@@ -112,6 +112,9 @@ func agentsOverviewRowsFromThreadsWithReadReceipts(threads []*appserver.Thread, 
 			Preview:   strings.TrimSpace(thread.Preview),
 			CWD:       strings.TrimSpace(thread.CWD),
 			UpdatedAt: thread.UpdatedAt,
+			// Rust #61709: the dashboard reads saved prompt/reply previews
+			// only for paginated threads.
+			HistoryMode: strings.TrimSpace(string(thread.HistoryMode)),
 			// Rust #51500: the command center decides whether a task can be
 			// pinned in the shared section from its thread source
 			// (agents_overview_discovery::supports_shared_pinning).
@@ -202,6 +205,10 @@ func agentsOverviewRowsFromRecords(records []session.Record, currentThreadID str
 			CWD:       strings.TrimSpace(record.Metadata.CWD),
 			Model:     strings.TrimSpace(record.Metadata.Model),
 			UpdatedAt: record.UpdatedAt.Unix(),
+			// Local records carry the persisted history mode; the no-daemon
+			// fallback already reads stored items, so it never issues a
+			// turns/list request.
+			HistoryMode: strings.TrimSpace(record.Metadata.HistoryMode),
 			// Rust #51500: even the no-daemon fallback reports the persisted
 			// thread source (session.Metadata.Source), which is the same field
 			// the app server maps with SessionSourceFromString, so the pin
@@ -611,10 +618,11 @@ func recencySortUnsupportedError(err error) bool {
 	return strings.Contains(rpc.Message, "recency_at")
 }
 
-// attachLastMessages fills each task's details-pane "Last message" from the
-// latest turn's final agent message (Rust agents_overview_threads reads
+// attachLastMessages fills each task's details-pane "Last message" and prompt
+// preview from the latest turn (Rust agents_overview_threads reads
 // thread/turns/list with limit 1; Rust fans the reads out, Go issues them on the
-// dashboard's existing sequential read path).
+// dashboard's existing sequential read path). Rust #61709 restricts that read to
+// paginated threads: listing even one legacy turn replays its rollout.
 func (s *remoteAgentsDashboardSource) attachLastMessages(ctx context.Context, rows []agentsoverview.Row) {
 	if s == nil || s.client == nil {
 		return
@@ -622,7 +630,7 @@ func (s *remoteAgentsDashboardSource) attachLastMessages(ctx context.Context, ro
 	limit := 1
 	for i := range rows {
 		threadID := strings.TrimSpace(rows[i].ThreadID)
-		if threadID == "" {
+		if threadID == "" || !strings.EqualFold(strings.TrimSpace(rows[i].HistoryMode), string(appserver.ThreadHistoryPaginated)) {
 			continue
 		}
 		var page appserver.TurnsPage
@@ -635,8 +643,33 @@ func (s *remoteAgentsDashboardSource) attachLastMessages(ctx context.Context, ro
 		if len(page.Data) == 0 {
 			continue
 		}
+		rows[i].PromptPreview = userMessagePreview(page.Data[0].Items)
 		rows[i].LastMessage = lastAgentMessagePreview(page.Data[0].Items)
 	}
+}
+
+// userMessagePreview previews the latest turn's user message for the details
+// pane's Prompt section (Rust #61709 latest_prompt).
+func userMessagePreview(items []appserver.ThreadItem) string {
+	for _, item := range items {
+		if !strings.EqualFold(strings.TrimSpace(item.Type), "userMessage") {
+			continue
+		}
+		text := strings.TrimSpace(item.Text)
+		if text == "" {
+			parts := make([]string, 0, len(item.Content))
+			for _, content := range item.Content {
+				if part := strings.TrimSpace(content.Text); part != "" {
+					parts = append(parts, part)
+				}
+			}
+			text = strings.Join(parts, "\n")
+		}
+		if text != "" {
+			return agentsoverview.PreviewMarkdown(text)
+		}
+	}
+	return ""
 }
 
 // lastAgentMessagePreview previews the latest agent message in a turn, matching

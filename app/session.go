@@ -707,6 +707,25 @@ func openRemoteSessionClient(ctx context.Context, endpoint *appserverdaemon.Remo
 	return client, nil
 }
 
+// openRemoteExecClient connects the one-shot `codex exec --remote` client
+// (Rust #61707): it identifies as codex_exec and never asks for human
+// approval, so the server auto-declines anything the turn requests.
+func openRemoteExecClient(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) (*remoteAppServerTUIClient, error) {
+	client := &remoteAppServerTUIClient{
+		endpoint:         endpoint,
+		threadParamsMode: threadParamsModeForEndpoint(endpoint),
+		execClient:       true,
+	}
+	if err := client.connect(ctx); err != nil {
+		return nil, err
+	}
+	if err := client.initialize(ctx); err != nil {
+		client.close()
+		return nil, err
+	}
+	return client, nil
+}
+
 func remoteSessionRequest(ctx context.Context, client *remoteAppServerTUIClient, method appserver.Method, params any, target any) error {
 	id, err := client.sendRequest(ctx, method, params)
 	if err != nil {

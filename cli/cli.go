@@ -131,8 +131,14 @@ type RootOptions struct {
 }
 
 type ExecOptions struct {
-	StrictConfig       bool
-	Shared             SharedOptions
+	StrictConfig bool
+	Shared       SharedOptions
+	// Remote mirrors Rust's exec-level `--remote <ADDR>` (#61707): run one
+	// noninteractive turn on an existing app server instead of starting a local
+	// runner. RemoteAuthEnv names the environment variable holding the
+	// WebSocket bearer token.
+	Remote             string
+	RemoteAuthEnv      string
 	ThreadSource       string
 	CyberAccessProgram string
 	SkipGitRepoCheck   bool
@@ -951,6 +957,9 @@ func Parse(args []string) (*Parsed, error) {
 		}
 		p.applyExecAutoReviewOverrides()
 		p.mergeRootConfigOverrides()
+		if err := p.mergeExecRemoteOptions(); err != nil {
+			return nil, err
+		}
 		return p, p.Validate()
 	}
 	p.Root.Prompt = strings.Join(rest, " ")
@@ -1021,6 +1030,27 @@ func prependConfigOverrides(parent, child []string) []string {
 	merged = append(merged, parent...)
 	merged = append(merged, child...)
 	return merged
+}
+
+// mergeExecRemoteOptions mirrors Rust's exec dispatch (#61707): the exec-level
+// remote options win, root-level values fill in the gaps, and two different
+// endpoints are rejected before the runner starts.
+func (p *Parsed) mergeExecRemoteOptions() error {
+	if p == nil || p.Command != CommandExec {
+		return nil
+	}
+	rootRemote := p.Root.Remote
+	execRemote := p.Exec.Remote
+	if strings.TrimSpace(rootRemote) != "" && strings.TrimSpace(execRemote) != "" && rootRemote != execRemote {
+		return errors.New("`codex exec` received conflicting remote server endpoints")
+	}
+	if strings.TrimSpace(execRemote) == "" {
+		p.Exec.Remote = rootRemote
+	}
+	if strings.TrimSpace(p.Exec.RemoteAuthEnv) == "" {
+		p.Exec.RemoteAuthEnv = p.Root.RemoteAuthEnv
+	}
+	return nil
 }
 
 // clapPostParseValidationError reports whether the diagnostic is one clap's
@@ -1269,7 +1299,7 @@ func (p *Parsed) remoteControlSubcommandName() string {
 
 func (p *Parsed) remoteUnsupportedSubcommandName() string {
 	switch p.Command {
-	case CommandInteractive, CommandResume, CommandArchive, CommandDelete, CommandUnarchive, CommandFork, CommandQueue, CommandAgents:
+	case CommandInteractive, CommandExec, CommandResume, CommandArchive, CommandDelete, CommandUnarchive, CommandFork, CommandQueue, CommandAgents:
 		return ""
 	case CommandAppServer:
 		if len(p.AppServer.Subcommand) == 0 {
@@ -1526,6 +1556,24 @@ func parseExec(args []string, exec *ExecOptions) error {
 			return parseReview(args[i+1:], &exec.Review, exec, &exec.ConfigOverrides)
 		case arg == "--strict-config":
 			exec.StrictConfig = true
+		case arg == "--remote":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			exec.Remote = value
+			i = next
+		case strings.HasPrefix(arg, "--remote="):
+			exec.Remote = strings.TrimPrefix(arg, "--remote=")
+		case arg == "--remote-auth-token-env":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			exec.RemoteAuthEnv = value
+			i = next
+		case strings.HasPrefix(arg, "--remote-auth-token-env="):
+			exec.RemoteAuthEnv = strings.TrimPrefix(arg, "--remote-auth-token-env=")
 		case arg == "--thread-source":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -2081,6 +2129,24 @@ func parseExecGlobalOption(args []string, i *int, exec *ExecOptions, deferred *e
 	switch {
 	case arg == "--strict-config":
 		exec.StrictConfig = true
+	case arg == "--remote":
+		value, next, err := requireValue(args, *i, arg)
+		if err != nil {
+			return true, err
+		}
+		exec.Remote = value
+		*i = next
+	case strings.HasPrefix(arg, "--remote="):
+		exec.Remote = strings.TrimPrefix(arg, "--remote=")
+	case arg == "--remote-auth-token-env":
+		value, next, err := requireValue(args, *i, arg)
+		if err != nil {
+			return true, err
+		}
+		exec.RemoteAuthEnv = value
+		*i = next
+	case strings.HasPrefix(arg, "--remote-auth-token-env="):
+		exec.RemoteAuthEnv = strings.TrimPrefix(arg, "--remote-auth-token-env=")
 	case arg == "--thread-source":
 		value, next, err := requireValue(args, *i, arg)
 		if err != nil {

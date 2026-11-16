@@ -831,7 +831,16 @@ func (v *View) renderDetails(width, height int, styled bool) []string {
 	// Rust #44752: the bounded prompt preview keeps its explicit line breaks and
 	// is limited to two rendered lines with an ellipsis marker.
 	lines = append(lines, []span{{text: "Prompt", style: spanDim}})
-	preview := PreviewMarkdown(row.Preview)
+	// Rust #61709: a live or freshly read prompt preview wins over the task
+	// list's preview, which legacy threads cannot refresh from turns/list.
+	promptText := strings.TrimSpace(activity.LatestPrompt)
+	if promptText == "" {
+		promptText = strings.TrimSpace(row.PromptPreview)
+	}
+	if promptText == "" {
+		promptText = row.Preview
+	}
+	preview := PreviewMarkdown(promptText)
 	if preview == "" {
 		preview = "No prompt available."
 	}

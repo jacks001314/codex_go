@@ -747,13 +747,54 @@ func TestAllowRootStrictConfigForSupportedSubcommands(t *testing.T) {
 	}
 }
 
-func TestRejectRemoteForExec(t *testing.T) {
-	_, err := Parse([]string{"--remote", "ws://127.0.0.1:4500", "exec", "hello"})
-	if err == nil {
-		t.Fatal("Parse returned nil error, want failure")
+// TestParseRemoteForExecLikeRust covers Rust #61707: remote options are accepted
+// before or after `exec` and `exec resume`, root values fill in for exec, and
+// two different endpoints are rejected.
+func TestParseRemoteForExecLikeRust(t *testing.T) {
+	const endpoint = "ws://127.0.0.1:4500"
+	parsed, err := Parse([]string{"--remote", endpoint, "exec", "hello"})
+	if err != nil {
+		t.Fatalf("Parse(--remote exec) error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "only supported for interactive TUI commands") {
-		t.Fatalf("error = %q", err.Error())
+	if parsed.Command != CommandExec || parsed.Exec.Remote != endpoint || parsed.Exec.Prompt != "hello" {
+		t.Fatalf("root remote exec = %#v", parsed.Exec)
+	}
+
+	parsed, err = Parse([]string{"exec", "--remote", endpoint, "hello"})
+	if err != nil {
+		t.Fatalf("Parse(exec --remote) error = %v", err)
+	}
+	if parsed.Exec.Remote != endpoint || parsed.Exec.Prompt != "hello" {
+		t.Fatalf("exec remote = %#v", parsed.Exec)
+	}
+
+	parsed, err = Parse([]string{"exec", "resume", "--remote", endpoint, "9b2c3d4e-5f60-4718-9a0b-1c2d3e4f5a6b", "again"})
+	if err != nil {
+		t.Fatalf("Parse(exec resume --remote) error = %v", err)
+	}
+	if parsed.Exec.Subcommand != "resume" || parsed.Exec.Remote != endpoint || parsed.Exec.Resume.Prompt != "again" {
+		t.Fatalf("resume remote = %#v", parsed.Exec)
+	}
+
+	_, err = Parse([]string{"--remote", endpoint, "exec", "--remote", "ws://127.0.0.1:4600", "hello"})
+	if err == nil || err.Error() != "`codex exec` received conflicting remote server endpoints" {
+		t.Fatalf("conflicting endpoints error = %v", err)
+	}
+
+	parsed, err = Parse([]string{"--remote", endpoint, "--remote-auth-token-env", "ROOT_TOKEN", "exec", "hello"})
+	if err != nil {
+		t.Fatalf("Parse(root auth env) error = %v", err)
+	}
+	if parsed.Exec.RemoteAuthEnv != "ROOT_TOKEN" {
+		t.Fatalf("remote auth env = %q", parsed.Exec.RemoteAuthEnv)
+	}
+
+	parsed, err = Parse([]string{"--remote", endpoint, "--remote-auth-token-env", "ROOT_TOKEN", "exec", "--remote-auth-token-env", "EXEC_TOKEN", "hello"})
+	if err != nil {
+		t.Fatalf("Parse(exec auth env) error = %v", err)
+	}
+	if parsed.Exec.RemoteAuthEnv != "EXEC_TOKEN" {
+		t.Fatalf("exec auth env did not win: %q", parsed.Exec.RemoteAuthEnv)
 	}
 }
 

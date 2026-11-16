@@ -1515,7 +1515,7 @@ var clapCommandLongFlags = map[string][]string{
 		"search", "no-alt-screen", "no-daemon", "help", "version",
 	},
 	"exec": {
-		"config", "enable", "disable", "strict-config", "image", "model", "oss",
+		"config", "enable", "disable", "remote", "remote-auth-token-env", "strict-config", "image", "model", "oss",
 		"local-provider", "profile", "sandbox", "approve-for-me", "not-so-yolo",
 		"dangerously-bypass-approvals-and-sandbox", "yolo", "dangerously-bypass-hook-trust",
 		"cd", "worktree", "add-dir", "thread-source", "cyber-access-program",
@@ -1524,21 +1524,21 @@ var clapCommandLongFlags = map[string][]string{
 		"help", "version",
 	},
 	"exec resume": {
-		"config", "last", "all", "enable", "disable", "image", "strict-config", "model",
+		"config", "last", "all", "enable", "disable", "remote", "remote-auth-token-env", "image", "strict-config", "model",
 		"dangerously-bypass-approvals-and-sandbox", "yolo", "dangerously-bypass-hook-trust",
 		"worktree", "thread-source", "cyber-access-program", "skip-git-repo-check", "trust",
 		"ephemeral", "ignore-user-config", "ignore-rules", "output-schema", "json",
 		"experimental-json", "output-last-message", "help",
 	},
 	"exec fork": {
-		"config", "image", "enable", "disable", "strict-config", "model",
+		"config", "image", "enable", "disable", "remote", "remote-auth-token-env", "strict-config", "model",
 		"dangerously-bypass-approvals-and-sandbox", "yolo", "dangerously-bypass-hook-trust",
 		"worktree", "thread-source", "cyber-access-program", "skip-git-repo-check", "trust",
 		"ephemeral", "ignore-user-config", "ignore-rules", "output-schema", "json",
 		"experimental-json", "output-last-message", "help",
 	},
 	"exec review": {
-		"config", "uncommitted", "base", "enable", "commit", "disable", "strict-config",
+		"config", "uncommitted", "base", "enable", "commit", "disable", "remote", "remote-auth-token-env", "strict-config",
 		"title", "model", "dangerously-bypass-approvals-and-sandbox", "yolo",
 		"dangerously-bypass-hook-trust", "worktree", "thread-source",
 		"cyber-access-program", "skip-git-repo-check", "trust", "ephemeral", "ignore-user-config",

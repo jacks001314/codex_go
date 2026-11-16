@@ -38,7 +38,11 @@ func (m *Model) refreshSlashPopup() {
 	if m == nil {
 		return
 	}
-	if m.threadUnavailable {
+	// Rust #61710: an unavailable thread keeps command completion available so
+	// partial input can select an eligible recovery command. The popup stays
+	// closed while a Vim search query owns the composer (Rust sync_command_popup
+	// checks vim_query()).
+	if m.vimSearchMode {
 		m.slashPopup = slashCommandPopup{}
 		return
 	}
@@ -242,6 +246,9 @@ func (m *Model) updateSlashPopupKey(msg keymsg.KeyMsg) (bubbletea.Cmd, bool) {
 	if m == nil || !m.slashPopup.Active {
 		return nil, false
 	}
+	if m.threadUnavailable {
+		return m.updateUnavailableThreadSlashPopupKey(msg)
+	}
 	switch msg.Type {
 	case keymsg.KeyUp, keymsg.KeyCtrlP:
 		m.moveSlashPopupSelection(-1)
@@ -260,6 +267,62 @@ func (m *Model) updateSlashPopupKey(msg keymsg.KeyMsg) (bubbletea.Cmd, bool) {
 		}
 	}
 	return nil, false
+}
+
+// updateUnavailableThreadSlashPopupKey mirrors Rust #61710's restricted
+// composer: navigation, Tab completion, and submission stay available, but a
+// command that cannot run while the thread is unavailable is neither completed
+// nor dispatched, and the draft stays intact.
+func (m *Model) updateUnavailableThreadSlashPopupKey(msg keymsg.KeyMsg) (bubbletea.Cmd, bool) {
+	switch msg.Type {
+	case keymsg.KeyUp, keymsg.KeyCtrlP:
+		m.moveSlashPopupSelection(-1)
+		return nil, true
+	case keymsg.KeyDown, keymsg.KeyCtrlN:
+		m.moveSlashPopupSelection(1)
+		return nil, true
+	case keymsg.KeyEsc:
+		m.slashPopup = slashCommandPopup{}
+		// Rust #61710 preserves Vim escape behavior even though the popup
+		// consumes the key.
+		if m.shouldHandleVimInsertEscape() {
+			m.applyVimInsertEscape()
+		}
+		return nil, true
+	case keymsg.KeyTab:
+		if !m.unavailableThreadPopupCommandAllowed() {
+			return nil, true
+		}
+		return m.completeSelectedSlashCommand(), true
+	case keymsg.KeyEnter:
+		// Rust #61710 only accepts the highlighted row through the configured
+		// submit binding or Tab; a remapped submit key leaves Enter inert.
+		if !m.keyMatches("composer", "submit", keySpecFromKeyMsg(msg)) {
+			return nil, true
+		}
+		if !m.unavailableThreadPopupCommandAllowed() {
+			return nil, true
+		}
+		return m.dispatchSelectedSlashCommand()
+	}
+	return nil, false
+}
+
+// unavailableThreadPopupCommandAllowed reports whether the highlighted popup
+// row may complete or dispatch in restricted input.
+func (m *Model) unavailableThreadPopupCommandAllowed() bool {
+	if m == nil || !m.slashPopup.Active {
+		return false
+	}
+	item, ok := m.currentSlashPopupItem()
+	if !ok {
+		return false
+	}
+	name := strings.TrimSpace(item.Name)
+	if name == "" {
+		return false
+	}
+	return strings.EqualFold(name, "config") || unavailableThreadCommand("/"+name)
 }
 
 func (m *Model) moveSlashPopupSelection(delta int) {

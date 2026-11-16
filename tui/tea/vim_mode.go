@@ -267,11 +267,7 @@ func (m *Model) applyVimModeKey(msg keymsg.KeyMsg, keySpec string) bool {
 	}
 	if m.vimInsert {
 		if keySpec == "esc" {
-			m.vimCommitEdit()
-			m.vimInsert = false
-			m.vimPendingOp = ""
-			m.vimPendingObject = ""
-			m.vimFindChangeRecording = false
+			m.applyVimInsertEscape()
 			return true
 		}
 		if m.vimFindChangeRecording {
@@ -462,6 +458,21 @@ func (m *Model) applyVimModeKey(msg keymsg.KeyMsg, keySpec string) bool {
 	default:
 		return false
 	}
+	return true
+}
+
+// applyVimInsertEscape performs the Insert-mode Esc transition. Callers that
+// consume Esc before Vim sees it (Rust #61710 restricted input) still restore
+// normal mode through this helper.
+func (m *Model) applyVimInsertEscape() bool {
+	if m == nil || !m.vimMode || !m.vimInsert {
+		return false
+	}
+	m.vimCommitEdit()
+	m.vimInsert = false
+	m.vimPendingOp = ""
+	m.vimPendingObject = ""
+	m.vimFindChangeRecording = false
 	return true
 }
 

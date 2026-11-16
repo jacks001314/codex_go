@@ -36,7 +36,19 @@ func (m *Model) trackAgentsOverviewActivity(event protocol.ThreadEvent) bool {
 			Delta:  delta,
 		})
 	case "item.completed":
-		if event.Item == nil || event.Item.Type != "agent_message" {
+		if event.Item == nil {
+			return false
+		}
+		switch event.Item.Type {
+		case "user_message":
+			// Rust #61709: a legacy thread's prompt preview comes from the
+			// completed user-message notification instead of a rollout replay.
+			return m.agentsOverview.TrackAgentsOverviewActivity(threadID, agentsoverview.AgentsOverviewEvent{
+				Kind: agentsoverview.AgentsOverviewEventUserMessage,
+				Text: event.Item.Text,
+			})
+		case "agent_message":
+		default:
 			return false
 		}
 		return m.agentsOverview.TrackAgentsOverviewActivity(threadID, agentsoverview.AgentsOverviewEvent{

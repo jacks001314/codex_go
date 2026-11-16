@@ -98,6 +98,9 @@ func TestRemoteAgentsDashboardReadsLastMessage(t *testing.T) {
 				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"data": []any{}, "nextCursor": nil}})
 			case string(appserver.MethodThreadRead):
 				thread := remoteAgentTestThread("thread-1", "alpha", "", "", "idle", nil, nil)
+				// Rust #61709: saved prompt and reply previews are read only for
+				// paginated history.
+				thread["historyMode"] = string(appserver.ThreadHistoryPaginated)
 				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"thread": thread}})
 			case string(appserver.MethodThreadTurnsList):
 				var params appserver.ThreadTurnsListParams
@@ -142,6 +145,9 @@ func TestRemoteAgentsDashboardReadsLastMessage(t *testing.T) {
 	}
 	if rows[0].LastMessage != "final answer" {
 		t.Fatalf("last message = %q, want the latest agent message", rows[0].LastMessage)
+	}
+	if rows[0].PromptPreview != "do the thing" {
+		t.Fatalf("prompt preview = %q, want the latest user message", rows[0].PromptPreview)
 	}
 	select {
 	case err := <-serverErrs:
@@ -291,6 +297,77 @@ func TestRemoteAgentsDashboardSeedsRecentSessionsLikeRust(t *testing.T) {
 	}
 	if !recencyRejected[true] || !recencyRejected[false] {
 		t.Fatal("the recency_at fallback was not exercised")
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	default:
+	}
+}
+
+// TestRemoteAgentsDashboardSkipsLegacyTurnListLikeRust covers Rust #61709:
+// listing even one legacy turn replays the whole rollout, so the dashboard must
+// not request turns/list for a legacy thread.
+func TestRemoteAgentsDashboardSkipsLegacyTurnListLikeRust(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	serverErrs := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodThreadLoadedList):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"data": []string{"thread-legacy"}, "nextCursor": nil}})
+			case string(appserver.MethodThreadList):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"data": []any{}, "nextCursor": nil}})
+			case string(appserver.MethodThreadRead):
+				thread := remoteAgentTestThread("thread-legacy", "legacy", "", "", "idle", nil, nil)
+				thread["historyMode"] = string(appserver.ThreadHistoryLegacy)
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"thread": thread}})
+			case string(appserver.MethodThreadTurnsList):
+				remoteTUITestSendErr(serverErrs, errors.New("legacy thread unexpectedly listed turns"))
+				return
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	client, err := openRemoteSessionClient(ctx, endpoint)
+	if err != nil {
+		t.Fatalf("open remote client: %v", err)
+	}
+	defer client.close()
+	rows, err := newRemoteAgentsDashboardSource(client, "").List(ctx)
+	if err != nil {
+		t.Fatalf("dashboard list: %v", err)
+	}
+	if len(rows) != 1 || rows[0].HistoryMode != string(appserver.ThreadHistoryLegacy) {
+		t.Fatalf("rows = %#v, want the legacy thread with its history mode", rows)
+	}
+	if rows[0].LastMessage != "" || rows[0].PromptPreview != "" {
+		t.Fatalf("legacy previews = %q/%q, want the task list preview only", rows[0].PromptPreview, rows[0].LastMessage)
+	}
+	if rows[0].Preview != "thread-legacy" {
+		t.Fatalf("legacy task preview = %q, want the thread preview", rows[0].Preview)
 	}
 	select {
 	case err := <-serverErrs:
