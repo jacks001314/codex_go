@@ -77,6 +77,11 @@ type ShellExecutorOptions struct {
 	// inherited or client-provided values.
 	CodexVersion            string
 	UnifiedExecEnvironments []UnifiedExecEnvironment
+	// HasPowerShell reports whether any ready turn environment runs PowerShell,
+	// which selects the PowerShell-specific `login` guidance (Rust #61744). Nil
+	// derives the answer from UnifiedExecEnvironments and falls back to the
+	// session shell when the turn selects no explicit environment.
+	HasPowerShell *bool
 	// EnvironmentCheck carries the turn's environment readiness so the executor
 	// reports the same unusable-environment error as Rust's
 	// `resolve_tool_environment` (Rust #50741/#50962). Nil keeps the
@@ -146,6 +151,7 @@ type ShellExecutor struct {
 	sessionID                string
 	codexVersion             string
 	unifiedExecEnvironments  []UnifiedExecEnvironment
+	hasPowerShell            *bool
 	environmentCheck         *UnifiedExecEnvironmentCheck
 	shellParameterOverride   *bool
 	loginParameterOverride   *bool
@@ -228,6 +234,7 @@ func NewShellExecutor(options *ShellExecutorOptions) *ShellExecutor {
 	executor.sessionID = options.SessionID
 	executor.codexVersion = strings.TrimSpace(options.CodexVersion)
 	executor.unifiedExecEnvironments = cloneUnifiedExecEnvironments(options.UnifiedExecEnvironments)
+	executor.hasPowerShell = cloneBoolPtr(options.HasPowerShell)
 	executor.environmentCheck = cloneUnifiedExecEnvironmentCheck(options.EnvironmentCheck)
 	executor.shellParameterOverride = cloneBoolPtr(options.IncludeShellParameter)
 	executor.loginParameterOverride = cloneBoolPtr(options.IncludeLoginParameter)
@@ -297,7 +304,7 @@ func (e *ShellExecutor) Spec() Spec {
 					"minimum": 0,
 				},
 				"shell":               map[string]any{"type": "string"},
-				"login":               map[string]any{"type": "boolean"},
+				"login":               map[string]any{"type": "boolean", "description": e.loginDescription()},
 				"tty":                 map[string]any{"type": "boolean"},
 				"sandbox_permissions": map[string]any{"type": "string"},
 				"additional_permissions": map[string]any{
@@ -333,7 +340,7 @@ func (e *ShellExecutor) oneShotExecSpec() Spec {
 				"timeout_ms":             map[string]any{"type": "integer", "minimum": 0, "description": "Maximum command runtime. Defaults to 10000 ms."},
 				"max_output_tokens":      map[string]any{"type": "integer", "minimum": 0, "description": "Output token budget."},
 				"shell":                  map[string]any{"type": "string"},
-				"login":                  map[string]any{"type": "boolean"},
+				"login":                  map[string]any{"type": "boolean", "description": e.loginDescription()},
 				"sandbox_permissions":    map[string]any{"type": "string"},
 				"additional_permissions": map[string]any{"type": "object"},
 				"justification":          map[string]any{"type": "string"},
@@ -364,7 +371,7 @@ func (e *ShellExecutor) shellCommandSpec() Spec {
 	if e.validation.AllowLoginShell {
 		properties["login"] = map[string]any{
 			"type":        "boolean",
-			"description": "True runs with login shell semantics; false disables them. Defaults to true.",
+			"description": e.loginDescription(),
 		}
 	}
 	for key, schema := range unifiedExecApprovalProperties(e.validation.AdditionalPermissionsAllowed) {
@@ -448,7 +455,7 @@ func (e *ShellExecutor) unifiedExecSpec() Spec {
 	if e.includeLoginParameter(e.validation.AllowLoginShell) {
 		properties["login"] = map[string]any{
 			"type":        "boolean",
-			"description": "True runs the shell with -l/-i semantics; false disables them. Defaults to true.",
+			"description": e.loginDescription(),
 		}
 	}
 	if e.includeEnvironmentID() {
@@ -502,6 +509,38 @@ func (e *ShellExecutor) modelVisibleShell() *Shell {
 		return e.unifiedExecEnvironments[0].Shell
 	}
 	return e.sessionShell()
+}
+
+// loginDescription mirrors Rust #61744: PowerShell turns explain that
+// `login: false` skips profiles, while every other shell inherits the setting.
+func (e *ShellExecutor) loginDescription() string {
+	if e.hasPowerShellEnvironment() {
+		return "Login-shell startup. In PowerShell, false skips profiles. Keep them enabled for profile-defined commands, even unattended. Omit to inherit."
+	}
+	return "Request login-shell startup. Omit to inherit."
+}
+
+// hasPowerShellEnvironment reports whether any ready turn environment runs
+// PowerShell (Rust spec_plan's `has_powershell`). A turn that selects no
+// explicit environment runs under the session shell, which stands in for the
+// implicit local environment Rust always reports.
+func (e *ShellExecutor) hasPowerShellEnvironment() bool {
+	if e == nil {
+		return false
+	}
+	if e.hasPowerShell != nil {
+		return *e.hasPowerShell
+	}
+	if len(e.unifiedExecEnvironments) > 0 {
+		for _, environment := range e.unifiedExecEnvironments {
+			if environment.Shell != nil && environment.Shell.Type == ShellPowerShell {
+				return true
+			}
+		}
+		return false
+	}
+	shell := e.sessionShell()
+	return shell != nil && shell.Type == ShellPowerShell
 }
 
 // modelVisiblePlatformOS returns the executor OS reported by the selected

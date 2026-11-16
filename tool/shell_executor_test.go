@@ -945,6 +945,63 @@ func TestUnifiedExecSpecWarnsAboutPOSIXHeredocForSelectedPowerShellEnvironment(t
 	}
 }
 
+func TestExecCommandLoginDescriptionFollowsPowerShellEnvironmentLikeRust(t *testing.T) {
+	const (
+		unixLogin       = "Request login-shell startup. Omit to inherit."
+		powerShellLogin = "Login-shell startup. In PowerShell, false skips profiles. Keep them enabled for profile-defined commands, even unattended. Omit to inherit."
+	)
+	loginDescription := func(executor *ShellExecutor) any {
+		login, ok := inputSchemaProperties(executor.Spec())["login"].(map[string]any)
+		if !ok {
+			t.Fatalf("login property = %#v", inputSchemaProperties(executor.Spec())["login"])
+		}
+		return login["description"]
+	}
+	newExecutor := func(shell *Shell, environments ...UnifiedExecEnvironment) *ShellExecutor {
+		return NewShellExecutor(&ShellExecutorOptions{
+			ToolName:                PlainName(DefaultExecCommandToolName),
+			UnifiedExec:             NewUnifiedExecManager(),
+			Shell:                   shell,
+			Validation:              ShellValidationOptions{AllowLoginShell: true},
+			UnifiedExecEnvironments: environments,
+		})
+	}
+
+	if got := loginDescription(newExecutor(&Shell{Type: ShellBash, Path: "/bin/bash"})); got != unixLogin {
+		t.Fatalf("unix login description = %#v", got)
+	}
+	if got := loginDescription(newExecutor(&Shell{Type: ShellPowerShell, Path: "powershell.exe"})); got != powerShellLogin {
+		t.Fatalf("local PowerShell login description = %#v", got)
+	}
+	if got := loginDescription(newExecutor(
+		&Shell{Type: ShellBash, Path: "/bin/bash"},
+		UnifiedExecEnvironment{ID: "windows", Shell: &Shell{Type: ShellPowerShell, Path: "pwsh"}},
+	)); got != powerShellLogin {
+		t.Fatalf("remote PowerShell login description = %#v", got)
+	}
+	if got := loginDescription(newExecutor(
+		&Shell{Type: ShellPowerShell, Path: "powershell.exe"},
+		UnifiedExecEnvironment{ID: "linux", Shell: &Shell{Type: ShellBash, Path: "/bin/bash"}},
+	)); got != unixLogin {
+		t.Fatalf("reported non-PowerShell environment login description = %#v", got)
+	}
+	hasPowerShell := true
+	overridden := newExecutor(&Shell{Type: ShellBash, Path: "/bin/bash"})
+	overridden.hasPowerShell = &hasPowerShell
+	if got := loginDescription(overridden); got != powerShellLogin {
+		t.Fatalf("explicit has_powershell login description = %#v", got)
+	}
+
+	oneShot := NewShellExecutor(&ShellExecutorOptions{
+		ToolName: PlainName(DefaultExecCommandToolName),
+		Shell:    &Shell{Type: ShellPowerShell, Path: "powershell.exe"},
+		OneShot:  true,
+	})
+	if got := loginDescription(oneShot); got != powerShellLogin {
+		t.Fatalf("one-shot login description = %#v", got)
+	}
+}
+
 func TestShellExecutorHonorsPerEnvironmentConfigLikeRust(t *testing.T) {
 	allowLoginShell := false
 	readOnly := sandbox.ReadOnlyPermissionProfile()

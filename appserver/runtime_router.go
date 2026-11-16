@@ -19022,6 +19022,8 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			return context.ModelSlug, context.ReasoningEffort
 		}
 		options.Shell.UnifiedExecEnvironments = r.unifiedExecEnvironmentsForTurn(params)
+		hasPowerShell := r.turnEnvironmentHasPowerShell(params)
+		options.Shell.HasPowerShell = &hasPowerShell
 		// Rust #20647: apply_patch and request_permissions execute on the
 		// selected turn environment's filesystem, so the same host-resolved
 		// environments the shell family dials back that filesystem for them.
@@ -19976,6 +19978,57 @@ func (r *RuntimeRouter) unifiedExecEnvironmentsForTurn(params *turn.TurnStartPar
 		out = append(out, environment)
 	}
 	return out
+}
+
+// turnEnvironmentHasPowerShell mirrors Rust spec_plan's `has_powershell`
+// (#61744): the exec_command `login` guidance follows any ready turn
+// environment that reports PowerShell. The implicit local environment reports
+// the manager's detected shell; an environment without a reported shell (a
+// legacy executor) does not count.
+func (r *RuntimeRouter) turnEnvironmentHasPowerShell(params *turn.TurnStartParams) bool {
+	if r == nil || params == nil || r.services.Environment == nil {
+		return false
+	}
+	selections := params.Environments
+	if len(selections) == 0 {
+		defaultID, ok := r.services.Environment.DefaultEnvironmentID()
+		if !ok {
+			return environmentShellIsPowerShell(r.services.Environment.LocalShell())
+		}
+		selections = []map[string]any{{"environmentId": defaultID}}
+	}
+	threadConfig := r.threadEnvironmentConfigForTurn(params)
+	for _, selected := range selections {
+		environmentID := selectionEnvironmentID(selected)
+		state, _ := resolveEnvironmentConfig(selected, threadConfig)
+		if state.Kind == EnvironmentConfigPending || state.Kind == EnvironmentConfigFailed {
+			continue
+		}
+		if environmentID == execserver.LocalEnvironmentID {
+			if environmentShellIsPowerShell(r.services.Environment.LocalShell()) {
+				return true
+			}
+			continue
+		}
+		record, ok := r.services.Environment.Record(environmentID)
+		if !ok || record == nil {
+			continue
+		}
+		shellInfo := record.Shell
+		if info, err := r.services.Environment.InfoContext(context.Background(), &EnvironmentInfoParams{EnvironmentID: environmentID}); err == nil && info != nil {
+			shellInfo = info.Shell
+		} else if !record.InfoOverride {
+			continue
+		}
+		if environmentShellIsPowerShell(shellInfo) {
+			return true
+		}
+	}
+	return false
+}
+
+func environmentShellIsPowerShell(info EnvironmentShellInfo) bool {
+	return tool.DetectShellType(info.Path) == tool.ShellPowerShell
 }
 
 // threadEnvironmentConfigForTurn builds the thread-derived EnvironmentConfig
