@@ -389,6 +389,11 @@ func TestSeatbeltProtectedAncestorsFollowResolvedTargetsLikeRust(t *testing.T) {
 	root := t.TempDir()
 	logical := filepath.Join(root, ".git")
 	resolved := filepath.Join(root, "real", "nested", ".git")
+	// Only existing metadata is a read-only carveout, so the fixture creates the
+	// logical `.git` before swapping in the resolved target.
+	if err := os.MkdirAll(logical, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", logical, err)
+	}
 	previous := seatbeltSymlinkResolver
 	seatbeltSymlinkResolver = func(path string) string {
 		if cleanSeatbeltPath(path) == cleanSeatbeltPath(logical) {

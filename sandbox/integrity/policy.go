@@ -235,7 +235,7 @@ func writableRoots(entries []sandbox.FileSystemSandboxEntry, cwd string) []sandb
 	}
 	explicitPaths := resolvedEntryPaths(entries, cwd)
 	carveouts := explicitCarveouts(entries, cwd)
-	roots := sandboxpath.WritableRootsWithProtectedSubpaths(writablePaths)
+	roots := sandboxpath.WritableRootsWithProtectedSubpathsForCwd(writablePaths, cwd)
 	for index := range roots {
 		root := &roots[index]
 		root.ProtectedMetadataNames = protectedMetadataNames(entries, root.Root, cwd)

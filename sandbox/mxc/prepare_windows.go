@@ -223,7 +223,7 @@ func PrepareEntriesPolicy(
 			read.add(root)
 		}
 	}
-	for _, root := range sandboxpath.WritableRootsWithProtectedSubpaths(write.values()) {
+	for _, root := range sandboxpath.WritableRootsWithProtectedSubpathsForCwd(write.values(), policyCWD) {
 		for _, carveout := range root.ReadOnlySubpaths {
 			read.add(carveout)
 		}

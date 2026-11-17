@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -76,6 +77,12 @@ func TestWorkspaceWritableRootsIncludeCWDAndProtectMetadata(t *testing.T) {
 // names and the default read-only subpaths of a writable root.
 func TestWorkspaceWritableRootsListAWSMetadata(t *testing.T) {
 	cwd := t.TempDir()
+	// Only existing metadata directories are carved out (Rust
+	// default_read_only_subpaths_for_writable_root); the metadata *name* stays
+	// protected either way.
+	if err := os.MkdirAll(filepath.Join(cwd, ".aws"), 0o755); err != nil {
+		t.Fatalf("create .aws directory: %v", err)
+	}
 	policy := NewWorkspaceWritePolicy()
 	roots := policy.GetWritableRootsWithCWD(cwd)
 	var workspace *WritableRoot

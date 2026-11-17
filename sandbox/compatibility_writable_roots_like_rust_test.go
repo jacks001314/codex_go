@@ -36,13 +36,30 @@ func TestCompatibilityWritableRootsPreserveOutputOnlyFallbackLikeRust(t *testing
 	if got := cleanAbs(roots[1].Root); got != cleanAbs(cwd) {
 		t.Fatalf("second writable root = %q, want %q", got, cleanAbs(cwd))
 	}
-	for _, protected := range []string{
-		filepath.Join(output, ".git"),
-		filepath.Join(output, ".codex"),
-		filepath.Join(cwd, ".codex"),
-	} {
-		if !containsCleanPath(roots, protected) {
-			t.Fatalf("read-only subpaths = %#v, want %q", roots, protected)
+	// Rust's default_read_only_subpaths_for_writable_root only carves out
+	// metadata that exists, except for the session cwd root, whose missing
+	// `.codex` stays protected so first-time creation needs approval.
+	wantCarveouts := map[string][]string{
+		cleanAbs(output): {cleanAbs(filepath.Join(output, ".git"))},
+		cleanAbs(cwd): {
+			cleanAbs(filepath.Join(cwd, ".codex")),
+			// This port's own project metadata directory follows `.codex`.
+			cleanAbs(filepath.Join(cwd, ".gcode")),
+		},
+	}
+	for _, root := range roots {
+		want := wantCarveouts[cleanAbs(root.Root)]
+		got := make([]string, 0, len(root.ReadOnlySubpaths))
+		for _, subpath := range root.ReadOnlySubpaths {
+			got = append(got, cleanAbs(subpath))
+		}
+		if len(got) != len(want) {
+			t.Fatalf("read-only subpaths for %q = %#v, want %#v", root.Root, got, want)
+		}
+		for index := range want {
+			if got[index] != want[index] {
+				t.Fatalf("read-only subpaths for %q = %#v, want %#v", root.Root, got, want)
+			}
 		}
 	}
 }
@@ -63,16 +80,4 @@ func TestProtectedMetadataNamesMatchRustConstant(t *testing.T) {
 			t.Fatalf("protected metadata names = %#v, want %q", names, want)
 		}
 	}
-}
-
-func containsCleanPath(roots []WritableRoot, target string) bool {
-	cleanTarget := cleanAbs(target)
-	for _, root := range roots {
-		for _, subpath := range root.ReadOnlySubpaths {
-			if cleanAbs(subpath) == cleanTarget {
-				return true
-			}
-		}
-	}
-	return false
 }

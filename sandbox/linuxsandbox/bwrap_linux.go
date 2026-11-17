@@ -37,7 +37,7 @@ func preSandboxFilesystemPolicy(profile *linuxPermissionProfile, sandboxPolicyCW
 		// Full-disk policies intentionally enumerate no writable roots.
 		return sandboxpath.FilesystemPolicy{FullDiskWriteAccess: true}
 	}
-	roots := sandboxpath.WritableRootsWithProtectedSubpaths(filesystem.writableRoots(sandboxPolicyCWD))
+	roots := sandboxpath.WritableRootsWithProtectedSubpathsForCwd(filesystem.writableRoots(sandboxPolicyCWD), sandboxPolicyCWD)
 	// An explicit read entry inside a writable root is a read-only carveout too
 	// (Rust `WritableRoot::read_only_subpaths`), and it still cannot hide a
 	// replaceable parent from the ancestor walk.

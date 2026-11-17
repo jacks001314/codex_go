@@ -37,7 +37,7 @@ func ResolveFileSystemPermissionsForEnforcement(profile *PermissionProfile, cwd 
 			return wire.canReadPathWithCWD(path, cwd)
 		},
 		DecorateWritableRoots: func(roots []string) []sandboxpath.WritableRoot {
-			out := sandboxpath.WritableRootsWithProtectedSubpaths(roots)
+			out := sandboxpath.WritableRootsWithProtectedSubpathsForCwd(roots, cwd)
 			if profile.runtimeJSON == "" {
 				return out
 			}

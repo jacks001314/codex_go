@@ -2695,6 +2695,23 @@
    "verifier": "TestCompatibilityWritableRootsPreserveOutputOnlyFallbackLikeRust;TestProtectedMetadataNamesMatchRustConstant"
   },
   {
+   "id": "writable-root-default-read-only-subpaths",
+   "kind": "source-surface",
+   "rustPaths": [
+    "protocol/src/permissions.rs",
+    "protocol/src/protocol.rs"
+   ],
+   "goPaths": [
+    "sandbox/sandboxpath/sandboxpath.go",
+    "sandbox/policy.go",
+    "sandbox/compatibility_writable_roots_like_rust_test.go",
+    "sandbox/sandboxpath/metadata_case_variant_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestCompatibilityWritableRootsPreserveOutputOnlyFallbackLikeRust;TestWorkspaceWritableRootsListAWSMetadata;TestWritableRootCaseVariantMetadataLikeRust;TestProtectedMetadataNameGateCaseRules"
+  },
+  {
    "id": "network-proxy-tool-call-attribution",
    "kind": "source-surface",
    "rustPaths": [

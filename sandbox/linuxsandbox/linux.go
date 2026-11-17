@@ -546,7 +546,7 @@ func (p *linuxFilesystemPolicy) resolveForEnforcement(cwd string, expandGlobs bo
 		GlobScanMaxDepth:         p.GlobScanMaxDepth,
 		Projection:               sandboxpath.ProjectionLinuxMounts,
 		DecorateWritableRoots: func(roots []string) []sandboxpath.WritableRoot {
-			return sandboxpath.WritableRootsWithProtectedSubpaths(roots)
+			return sandboxpath.WritableRootsWithProtectedSubpathsForCwd(roots, cwd)
 		},
 	}
 	if expandGlobs {

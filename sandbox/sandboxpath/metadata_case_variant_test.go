@@ -3,6 +3,7 @@ package sandboxpath
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -77,15 +78,14 @@ func TestWritableRootCaseVariantMetadataLikeRust(t *testing.T) {
 	}
 }
 
-// TestProtectedMetadataNameGateStaysCaseSensitiveLikeRust pins the other half of
-// the same rule: Rust compares the first path component with `==`
+// TestProtectedMetadataNameGateCaseRules pins the gate itself: Rust compares
+// the first path component with `==`
 // (`protocol::WritableRoot::path_contains_protected_metadata_name`,
-// permissions.rs PROTECTED_METADATA_PATH_NAMES) and the Go port does the same,
-// so the name gate alone does not cover `.GIT`. On a case-insensitive
-// filesystem it is the read-only carveout that must, which is why the policy
-// always builds the two together (WritableRootsWithProtectedSubpaths) and why
-// this pair is asserted here instead of relying on the name gate.
-func TestProtectedMetadataNameGateStaysCaseSensitiveLikeRust(t *testing.T) {
+// permissions.rs PROTECTED_METADATA_PATH_NAMES) because Seatbelt resolves the
+// alias in the kernel. On Windows path identity is case-insensitive (Rust
+// #41209), so the Go port compares case-insensitively there; otherwise a
+// missing `.git` would let `.GIT` create the real metadata directory.
+func TestProtectedMetadataNameGateCaseRules(t *testing.T) {
 	temp := t.TempDir()
 	workspace := filepath.Join(temp, "workspace")
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
@@ -97,6 +97,12 @@ func TestProtectedMetadataNameGateStaysCaseSensitiveLikeRust(t *testing.T) {
 	bare := WritableRoot{Root: workspace, ProtectedMetadataNames: DefaultProtectedMetadataNames()}
 	if bare.IsPathWritable(filepath.Join(workspace, ".git", "config")) {
 		t.Fatalf("IsPathWritable(%q) = true, want the exact metadata name refused by the name gate", filepath.Join(workspace, ".git", "config"))
+	}
+	if runtime.GOOS == "windows" {
+		if bare.IsPathWritable(filepath.Join(workspace, ".GIT", "config")) {
+			t.Fatal("Windows path identity is case-insensitive, so the name gate refuses case variants too")
+		}
+		return
 	}
 	if !bare.IsPathWritable(filepath.Join(workspace, ".GIT", "config")) {
 		t.Fatal("the name gate mirrors Rust's case-sensitive comparison, so without a carveout the case variant is writable")

@@ -331,12 +331,12 @@ func (p *SandboxPolicy) GetWritableRootsWithCWD(cwd string) []WritableRoot {
 			roots = append(roots, tmpdir)
 		}
 	}
-	return buildWritableRoots(roots)
+	return buildWritableRoots(roots, cwd)
 }
 
 // buildWritableRoots mirrors the writable-root set the sandbox mounts.
-func buildWritableRoots(paths []string) []WritableRoot {
-	return sandboxpath.WritableRootsWithProtectedSubpaths(paths)
+func buildWritableRoots(paths []string, cwd string) []WritableRoot {
+	return sandboxpath.WritableRootsWithProtectedSubpathsForCwd(paths, cwd)
 }
 
 func cleanAbs(path string) string {

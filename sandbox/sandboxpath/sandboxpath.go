@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -73,7 +74,10 @@ func (r *WritableRoot) PathContainsProtectedMetadataName(path string) bool {
 		first = relative[:index]
 	}
 	for _, name := range r.ProtectedMetadataNames {
-		if first == name {
+		// Rust compares with `==` because Seatbelt resolves the case alias in
+		// the kernel; Windows path identity is case-insensitive (Rust #41209),
+		// so a missing `.git` must still refuse `.GIT` there.
+		if first == name || (runtime.GOOS == "windows" && strings.EqualFold(first, name)) {
 			return true
 		}
 	}
@@ -88,18 +92,75 @@ func DefaultProtectedMetadataNames() []string {
 	return []string{".git", ".agents", ".codex", ".gcode", ".aws"}
 }
 
-// ProtectedSubpaths mirrors the read-only carveouts a writable root carries by
-// default.
+// ProtectedSubpaths mirrors Rust
+// `default_read_only_subpaths_for_writable_root(root, false)`: a writable root
+// only carves out metadata that exists, because protected metadata names
+// already keep missing paths read-only through PathContainsProtectedMetadataName.
 func ProtectedSubpaths(root string) []string {
-	return []string{
-		filepath.Join(root, ".git"),
-		filepath.Join(root, ".agents"),
-		filepath.Join(root, ".codex"),
-		filepath.Join(root, ".gcode"),
-		// AWS profiles can select credential helpers the application executes,
-		// so a writable root keeps `.aws` protected by default (Rust #48176).
-		filepath.Join(root, ".aws"),
+	return protectedSubpathsForWritableRoot(root, false)
+}
+
+// protectedSubpathsForWritableRoot mirrors Rust
+// `default_read_only_subpaths_for_writable_root`: `.git` (plus the Git
+// directory a `.git` pointer file names) is carved out when it exists at all,
+// `.agents`/`.aws` when they are directories, and `.codex` when it is a
+// directory or when protectMissingDotCodex marks the writable root as the
+// session cwd. `.gcode` is this port's own project metadata directory, so it
+// follows the `.codex` rule.
+func protectedSubpathsForWritableRoot(root string, protectMissingDotCodex bool) []string {
+	root = cleanAbsolute(root)
+	if root == "" {
+		return nil
 	}
+	var subpaths []string
+	seen := map[string]bool{}
+	add := func(path string) {
+		path = cleanAbsolute(path)
+		if path == "" || seen[path] {
+			return
+		}
+		seen[path] = true
+		subpaths = append(subpaths, path)
+	}
+	topLevelGit := filepath.Join(root, ".git")
+	if info, err := os.Stat(topLevelGit); err == nil && (info.IsDir() || info.Mode().IsRegular()) {
+		// Worktrees and submodules point at a Git directory that may live under
+		// another writable root, so the target is protected before the pointer
+		// file itself (Rust #47974).
+		if !info.IsDir() {
+			if target, ok := GitDirPointerTarget(topLevelGit); ok {
+				add(target)
+			}
+		}
+		add(topLevelGit)
+	}
+	// Order mirrors Rust's default_read_only_subpaths_for_writable_root:
+	// `.git`, `.agents`, `.codex`, `.aws`; the port's `.gcode` follows.
+	if path := filepath.Join(root, ".agents"); directoryExists(path) {
+		add(path)
+	}
+	for _, name := range []string{".codex", ".gcode"} {
+		path := filepath.Join(root, name)
+		if directoryExists(path) {
+			add(path)
+			continue
+		}
+		// Keep the workspace root's project metadata read-only even before the
+		// directory exists, so first-time creation goes through the
+		// protected-path approval flow.
+		if protectMissingDotCodex {
+			add(path)
+		}
+	}
+	if path := filepath.Join(root, ".aws"); directoryExists(path) {
+		add(path)
+	}
+	return subpaths
+}
+
+func directoryExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // WritableRootsWithProtectedSubpaths builds the writable-root set for a list of
@@ -112,6 +173,15 @@ func ProtectedSubpaths(root string) []string {
 // directory is appended as a read-only carveout of whichever writable root
 // contains it.
 func WritableRootsWithProtectedSubpaths(paths []string) []WritableRoot {
+	return WritableRootsWithProtectedSubpathsForCwd(paths, "")
+}
+
+// WritableRootsWithProtectedSubpathsForCwd builds the writable-root set the
+// sandbox mounts, treating cwd as the session workspace root: Rust keeps a
+// missing `<cwd>/.codex` protected (`protect_missing_dot_codex`) while other
+// roots only protect metadata that exists.
+func WritableRootsWithProtectedSubpathsForCwd(paths []string, cwd string) []WritableRoot {
+	cwd = cleanAbsolute(cwd)
 	seen := map[string]bool{}
 	var out []WritableRoot
 	for _, path := range paths {
@@ -122,7 +192,7 @@ func WritableRootsWithProtectedSubpaths(paths []string) []WritableRoot {
 		seen[path] = true
 		out = append(out, WritableRoot{
 			Root:                   path,
-			ReadOnlySubpaths:       ProtectedSubpaths(path),
+			ReadOnlySubpaths:       protectedSubpathsForWritableRoot(path, cwd != "" && path == cwd),
 			ProtectedMetadataNames: DefaultProtectedMetadataNames(),
 		})
 	}
