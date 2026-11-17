@@ -1,6 +1,7 @@
 package chatwidget
 
 import (
+	"strconv"
 	"strings"
 
 	"codex_go/tui/history_cell"
@@ -13,6 +14,10 @@ const (
 
 type WarningDisplayState struct {
 	fallbackModelMetadataSlugs map[string]bool
+	// discovery is the virtual warning for an incomplete statusline provider
+	// discovery scan (Rust #61993 warning_display_state.discovery). It is not a
+	// history cell, so it is chained into the visible entries explicitly.
+	discovery *historycell.WarningEntry
 	// startupConfigWarnings mirrors Rust's startup_config_warnings: a config
 	// warning that already reached the startup warnings cell must not be
 	// displayed again when it arrives later as an ordinary thread warning.
@@ -29,7 +34,13 @@ type WarningDisplayState struct {
 // diagnostics with the dismissed versions removed.
 func (s *WarningDisplayState) VisibleEntries(cells []historycell.WarningCell) []historycell.WarningEntry {
 	entries := historycell.WarningEntries(cells)
-	if s == nil || len(s.dismissed) == 0 {
+	if s == nil {
+		return entries
+	}
+	if s.discovery != nil {
+		entries = append(entries, *s.discovery)
+	}
+	if len(s.dismissed) == 0 {
 		return entries
 	}
 	visible := make([]historycell.WarningEntry, 0, len(entries))
@@ -69,11 +80,48 @@ func (s *WarningDisplayState) SyncWarnings(cells []historycell.WarningCell) {
 	if s == nil {
 		return
 	}
+	s.retainCurrentDiscoveryDismissal()
 	if len(s.dismissed) == 0 {
 		s.count = historycell.WarningCount(cells)
+		if s.discovery != nil {
+			s.count++
+		}
 		return
 	}
 	s.count = len(s.VisibleEntries(cells))
+}
+
+// SetStatuslineDiscoveryWarning installs or clears the incomplete-discovery
+// warning for one picker scan. Rust drops every dismissed discovery revision
+// that no longer matches the current entry.
+func (s *WarningDisplayState) SetStatuslineDiscoveryWarning(scan uint64, details string) {
+	if s == nil {
+		return
+	}
+	if strings.TrimSpace(details) == "" {
+		s.discovery = nil
+	} else {
+		s.discovery = &historycell.WarningEntry{
+			ID:      historycell.WarningId{Kind: historycell.WarningIdStatuslineDiscovery, Value: strconv.FormatUint(scan, 10)},
+			Source:  "Status line provider discovery",
+			Details: details,
+		}
+	}
+	s.retainCurrentDiscoveryDismissal()
+}
+
+func (s *WarningDisplayState) retainCurrentDiscoveryDismissal() {
+	if s == nil || len(s.dismissed) == 0 {
+		return
+	}
+	for id := range s.dismissed {
+		if id.Kind != historycell.WarningIdStatuslineDiscovery {
+			continue
+		}
+		if s.discovery == nil || id != s.discovery.ID {
+			delete(s.dismissed, id)
+		}
+	}
 }
 
 // WarningCount reports the last synchronized diagnostic count.

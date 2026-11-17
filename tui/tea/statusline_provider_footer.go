@@ -23,8 +23,7 @@ import (
 )
 
 const (
-	statuslineProviderLookupTimeout = 5 * time.Second
-	statuslineProviderInitializing  = "Initializing…"
+	statuslineProviderInitializing = "Initializing…"
 	// Rust #61990 replaces the generic failure copy with short status line
 	// messages that point at /statusline.
 	statuslineProviderUnavailableCopy = "Status line unavailable · /statusline"
@@ -36,11 +35,20 @@ const (
 // bounds a read with a one-second deadline. Both are variables only so tests can
 // compress them the way Rust's tests pause the tokio clock.
 var (
-	statuslineProviderPollInterval = 1 * time.Second
-	statuslineProviderReadDeadline = 1 * time.Second
+	// statuslineProviderLookupTimeout is Rust's shared five-second startup
+	// deadline. It is a variable only so tests can compress the clock.
+	statuslineProviderLookupTimeout = 5 * time.Second
+	statuslineProviderPollInterval  = 1 * time.Second
+	statuslineProviderReadDeadline  = 1 * time.Second
 )
 
 var errStatuslineProviderReadTimeout = errors.New("resource read timed out")
+
+// errStatuslineProviderLookupUnavailable marks a lookup that ran out of its
+// shared five-second budget while waiting for the selected MCP server to report
+// ready. Rust #61993 reports that case as `Status line unavailable`; only a
+// lookup call itself exhausting the deadline reports `Status line timed out`.
+var errStatuslineProviderLookupUnavailable = errors.New("statusline provider unavailable before the lookup deadline")
 
 // StatuslineProviderReadRequest identifies the saved provider a host resolves
 // for one displayed thread and working directory.
@@ -143,8 +151,10 @@ type statuslineProviderPollMsg struct {
 // selected server finishes starting, and each readiness notification wakes the
 // pending lookup.
 type statuslineReadyGate struct {
-	mu sync.Mutex
-	ch chan struct{}
+	mu      sync.Mutex
+	version uint64
+	seen    uint64
+	ch      chan struct{}
 }
 
 func newStatuslineReadyGate() *statuslineReadyGate {
@@ -154,14 +164,34 @@ func newStatuslineReadyGate() *statuslineReadyGate {
 func (g *statuslineReadyGate) wait() <-chan struct{} {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.version != g.seen {
+		// Rust's watch receiver still reports a readiness notification that
+		// arrived before the lookup asked for one, so the retry must not miss it.
+		g.seen = g.version
+		ready := make(chan struct{})
+		close(ready)
+		return ready
+	}
 	return g.ch
 }
 
 func (g *statuslineReadyGate) signal() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.version++
 	close(g.ch)
 	g.ch = make(chan struct{})
+}
+
+// consume marks every readiness notification as observed, matching the watch
+// receiver after it wakes: a signal that arrives before a retry still wakes it
+// exactly once.
+func (g *statuslineReadyGate) consume() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.version > g.seen {
+		g.seen = g.version
+	}
 }
 
 // selectedStatuslineProvider returns the saved MCP provider that owns the
@@ -316,20 +346,33 @@ func (m *Model) statuslineProviderResolveCmd(read *activeStatuslineProviderRead)
 	}
 	return func() bubbletea.Msg {
 		ctx, cancel := context.WithTimeout(parent, statuslineProviderLookupTimeout)
+		deadline, _ := ctx.Deadline()
 		defer cancel()
 		for {
 			provider, err := resolve(ctx, request)
-			if err != nil || provider.Found {
+			if !time.Now().Before(deadline) {
+				// Rust #61993 ResolvedStatuslineProvider::lookup reports a timeout
+				// whenever resolve finishes at or after the shared deadline, even
+				// for an empty catalog or a request error.
+				return statuslineProviderResolveMsg{
+					token:    token,
+					threadID: request.ThreadID,
+					server:   request.Server,
+					tool:     request.Tool,
+					err:      context.DeadlineExceeded,
+				}
+			}
+			if err == nil && provider.Found {
 				return statuslineProviderResolveMsg{
 					token:    token,
 					threadID: request.ThreadID,
 					server:   request.Server,
 					tool:     request.Tool,
 					provider: provider,
-					err:      err,
 				}
 			}
-			ready := gate.wait()
+			// Rust #61993 retries an empty catalog and request errors after the
+			// selected server reports ready, still inside the same deadline.
 			select {
 			case <-ctx.Done():
 				return statuslineProviderResolveMsg{
@@ -337,9 +380,19 @@ func (m *Model) statuslineProviderResolveCmd(read *activeStatuslineProviderRead)
 					threadID: request.ThreadID,
 					server:   request.Server,
 					tool:     request.Tool,
-					err:      ctx.Err(),
+					err:      errStatuslineProviderLookupUnavailable,
 				}
-			case <-ready:
+			case <-gate.wait():
+				gate.consume()
+				if !time.Now().Before(deadline) {
+					return statuslineProviderResolveMsg{
+						token:    token,
+						threadID: request.ThreadID,
+						server:   request.Server,
+						tool:     request.Tool,
+						err:      errStatuslineProviderLookupUnavailable,
+					}
+				}
 			}
 		}
 	}
@@ -435,7 +488,7 @@ func (m *Model) applyStatuslineProviderResolve(msg statuslineProviderResolveMsg)
 	}
 	if msg.err != nil || !msg.provider.Found {
 		read.failed = true
-		m.setProviderFooterFailure(statuslineProviderUnavailableCopy)
+		m.setProviderFooterFailure(statuslineProviderLookupFailureCopy(msg.err))
 		return nil
 	}
 	if title := strings.TrimSpace(msg.provider.Title); title != "" {
@@ -521,6 +574,16 @@ func statuslineProviderReadFailureCopy(err error) string {
 		return statuslineProviderTimedOutCopy
 	}
 	return statuslineProviderFailedCopy
+}
+
+// statuslineProviderLookupFailureCopy mirrors Rust #61993: the shared five-second
+// startup deadline reports a timeout, everything else means the provider could
+// not be resolved.
+func statuslineProviderLookupFailureCopy(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return statuslineProviderTimedOutCopy
+	}
+	return statuslineProviderUnavailableCopy
 }
 
 func (m *Model) setProviderFooterFailure(message string) {

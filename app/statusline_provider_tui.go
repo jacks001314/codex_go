@@ -268,6 +268,10 @@ func statuslineProviderDiscovery(connect func(context.Context) (statuslineprovid
 			defer closeClient()
 			for update := range statuslineprovider.Refresh(ctx, client, request.Known) {
 				converted := codextea.StatuslineProviderDiscoveryUpdate{Server: update.Server, Err: update.Err}
+				var lookupErr *statuslineprovider.LookupError
+				if errors.As(update.Err, &lookupErr) && lookupErr.Kind == statuslineprovider.LookupTimedOut {
+					converted.TimedOut = true
+				}
 				for _, provider := range update.Providers {
 					converted.Providers = append(converted.Providers, codextea.StatuslineProviderCandidate{
 						Server:      provider.ID.Server,

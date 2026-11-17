@@ -33,6 +33,15 @@ func compressStatuslineProviderClock(t *testing.T, poll, deadline time.Duration)
 	})
 }
 
+// compressStatuslineProviderLookupClock shortens the shared five-second startup
+// deadline the same way Rust's paused clock does.
+func compressStatuslineProviderLookupClock(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	before := statuslineProviderLookupTimeout
+	statuslineProviderLookupTimeout = timeout
+	t.Cleanup(func() { statuslineProviderLookupTimeout = before })
+}
+
 func statuslineProviderPollingModel(
 	t *testing.T,
 	read func(context.Context, StatuslineProviderResourceRequest) ([]StatuslineProviderContent, error),
@@ -156,21 +165,60 @@ func TestStatuslineProviderRPCErrorStopsPollingLikeRust(t *testing.T) {
 	}
 }
 
-// Rust #61990: a provider that never resolves shows the short unavailable copy
-// that points at /statusline.
+// Rust #61990/#61993: the shared startup deadline reports a timeout, other
+// lookup failures report an unavailable provider, and both point at /statusline.
 func TestStatuslineProviderLookupFailureCopyLikeRust(t *testing.T) {
 	compressStatuslineProviderClock(t, 5*time.Millisecond, time.Second)
-	model := statuslineProviderFooterModel(t,
-		func(context.Context, StatuslineProviderReadRequest) (StatuslineProvider, error) {
-			return StatuslineProvider{}, context.DeadlineExceeded
+	compressStatuslineProviderLookupClock(t, 30*time.Millisecond)
+	timedOut := statuslineProviderFooterModel(t,
+		func(ctx context.Context, _ StatuslineProviderReadRequest) (StatuslineProvider, error) {
+			// Rust statusline_startup_timeout_stops_before_the_first_read: a lookup
+			// that spends the shared deadline reports a timeout.
+			<-ctx.Done()
+			return StatuslineProvider{}, ctx.Err()
 		},
 		func(context.Context, StatuslineProviderResourceRequest) ([]StatuslineProviderContent, error) {
 			return nil, errors.New("read before resolve")
 		})
+	timedOut.refreshStatusControls()
+	runProviderCmd(timedOut, runProviderCmd(timedOut, timedOut.ensureProviderFooterCmd()))
+	if got := timedOut.statusLineContent(); got != statuslineProviderTimedOutCopy {
+		t.Fatalf("lookup failure copy = %q", got)
+	}
+
+	// Rust #61993 retries a request error until the shared deadline and then
+	// reports an unavailable provider.
+	unavailable := statuslineProviderFooterModel(t,
+		func(context.Context, StatuslineProviderReadRequest) (StatuslineProvider, error) {
+			return StatuslineProvider{}, errors.New("fixture is not running")
+		},
+		func(context.Context, StatuslineProviderResourceRequest) ([]StatuslineProviderContent, error) {
+			return nil, errors.New("read before resolve")
+		})
+	unavailable.refreshStatusControls()
+	runProviderCmd(unavailable, runProviderCmd(unavailable, unavailable.ensureProviderFooterCmd()))
+	if got := unavailable.statusLineContent(); got != statuslineProviderUnavailableCopy {
+		t.Fatalf("unavailable copy = %q", got)
+	}
+}
+
+// Rust #61993: a lookup that answers after the shared startup deadline is a
+// timeout, not a usable provider.
+func TestStatuslineProviderLateLookupAfterDeadlineTimesOutLikeRust(t *testing.T) {
+	compressStatuslineProviderClock(t, 5*time.Millisecond, time.Second)
+	compressStatuslineProviderLookupClock(t, 10*time.Millisecond)
+	model := statuslineProviderFooterModel(t,
+		func(context.Context, StatuslineProviderReadRequest) (StatuslineProvider, error) {
+			time.Sleep(40 * time.Millisecond)
+			return StatuslineProvider{Found: true, Title: "Fixture Line", URI: statuslinePollTestURI}, nil
+		},
+		func(context.Context, StatuslineProviderResourceRequest) ([]StatuslineProviderContent, error) {
+			return statuslineProviderContents(`"late"`), nil
+		})
 	model.refreshStatusControls()
 	runProviderCmd(model, runProviderCmd(model, model.ensureProviderFooterCmd()))
-	if got := model.statusLineContent(); got != statuslineProviderUnavailableCopy {
-		t.Fatalf("lookup failure copy = %q", got)
+	if got := model.statusLineContent(); got != statuslineProviderTimedOutCopy {
+		t.Fatalf("late lookup copy = %q", got)
 	}
 }
 
@@ -298,5 +346,111 @@ func TestStatuslineProviderLookupDeadlineAndCancelLikeRust(t *testing.T) {
 	}
 	if got := model.statusLineContent(); strings.Contains(got, "Status line") {
 		t.Fatalf("retired lookup painted the footer: %q", got)
+	}
+}
+
+// Rust #61993: an empty catalog is retried once the selected server reports
+// ready instead of failing the footer on the first answer.
+func TestStatuslineProviderEmptyCatalogRetriesAfterServerReadyLikeRust(t *testing.T) {
+	resolves, reads := 0, 0
+	var model *Model
+	model = statuslineProviderFooterModel(t,
+		func(context.Context, StatuslineProviderReadRequest) (StatuslineProvider, error) {
+			resolves++
+			if resolves == 1 {
+				// Rust reports `server_ready` before the retry waits, so the wake
+				// is already pending when the loop blocks.
+				model.statuslineProviderServerReady("fixture")
+				return StatuslineProvider{}, nil
+			}
+			return StatuslineProvider{Found: true, Title: "Fixture Line", URI: statuslinePollTestURI}, nil
+		},
+		func(context.Context, StatuslineProviderResourceRequest) ([]StatuslineProviderContent, error) {
+			reads++
+			return statuslineProviderContents(`"ready"`), nil
+		})
+	model.refreshStatusControls()
+	readCmd := runProviderCmd(model, model.ensureProviderFooterCmd())
+	if readCmd == nil {
+		t.Fatal("the readiness retry did not start a read")
+	}
+	runProviderCmd(model, readCmd)
+	if resolves != 2 {
+		t.Fatalf("resolves = %d, want 2 after the readiness retry", resolves)
+	}
+	if reads != 1 {
+		t.Fatalf("reads = %d, want 1", reads)
+	}
+	if got := model.statusLineContent(); got != "ready" {
+		t.Fatalf("provider footer = %q", got)
+	}
+}
+
+// Rust #61993 statusline_hung_retry_reports_the_remaining_startup_deadline: a
+// request error is retried after the selected server reports ready, and the
+// retry is bounded by the original shared deadline rather than a fresh one.
+func TestStatuslineProviderRetrySharesLookupDeadlineLikeRust(t *testing.T) {
+	compressStatuslineProviderLookupClock(t, 150*time.Millisecond)
+	compressStatuslineProviderClock(t, 5*time.Millisecond, time.Second)
+
+	firstAttempt := make(chan struct{})
+	allowRetry := make(chan struct{})
+	resolves := 0
+	model := statuslineProviderFooterModel(t,
+		func(ctx context.Context, _ StatuslineProviderReadRequest) (StatuslineProvider, error) {
+			resolves++
+			if resolves == 1 {
+				close(firstAttempt)
+				<-allowRetry
+				return StatuslineProvider{}, errors.New("private config error")
+			}
+			<-ctx.Done()
+			return StatuslineProvider{}, ctx.Err()
+		},
+		func(context.Context, StatuslineProviderResourceRequest) ([]StatuslineProviderContent, error) {
+			return nil, errors.New("read before resolve")
+		})
+	model.refreshStatusControls()
+	cmd := model.ensureProviderFooterCmd()
+	if cmd == nil {
+		t.Fatal("startup lookup was not started")
+	}
+	done := make(chan bubbletea.Msg, 1)
+	go func() { done <- cmd() }()
+	<-firstAttempt
+	model.statuslineProviderServerReady("fixture")
+	close(allowRetry)
+	var msg bubbletea.Msg
+	select {
+	case msg = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("retried lookup did not stop at the shared deadline")
+	}
+	model.Update(msg)
+	if got := model.statusLineContent(); got != statuslineProviderTimedOutCopy {
+		t.Fatalf("retried hung lookup copy = %q", got)
+	}
+}
+
+// Rust #61993: waiting out the shared deadline for a server that never reports
+// ready means the provider is unavailable, not that the read timed out.
+func TestStatuslineProviderReadyWaitReportsUnavailableLikeRust(t *testing.T) {
+	compressStatuslineProviderLookupClock(t, 40*time.Millisecond)
+
+	model := statuslineProviderFooterModel(t,
+		func(context.Context, StatuslineProviderReadRequest) (StatuslineProvider, error) {
+			return StatuslineProvider{}, nil
+		},
+		func(context.Context, StatuslineProviderResourceRequest) ([]StatuslineProviderContent, error) {
+			return nil, errors.New("read before resolve")
+		})
+	model.refreshStatusControls()
+	started := time.Now()
+	runProviderCmd(model, model.ensureProviderFooterCmd())
+	if elapsed := time.Since(started); elapsed < 40*time.Millisecond {
+		t.Fatalf("readiness wait returned after %v, before the shared deadline", elapsed)
+	}
+	if got := model.statusLineContent(); got != statuslineProviderUnavailableCopy {
+		t.Fatalf("readiness deadline copy = %q", got)
 	}
 }

@@ -50,6 +50,9 @@ type StatuslineProviderDiscoveryUpdate struct {
 	Server    string
 	Providers []StatuslineProviderCandidate
 	Err       error
+	// TimedOut marks a lookup that missed the shared discovery deadline, so the
+	// warning can explain the cause without exposing the raw error (Rust #61993).
+	TimedOut bool
 }
 
 // StatuslineProviderDiscoveryFunc streams discovery updates until the channel
@@ -292,8 +295,10 @@ func (m *Model) applyStatuslinePickerDiscovery(msg statuslinePickerDiscoveryMsg)
 	if !state.discovering {
 		return
 	}
+	failures := &statuslineProviderDiscoveryFailures{}
 	for _, update := range msg.updates {
 		if update.Err != nil {
+			failures.record(update)
 			continue
 		}
 		state.providers = append(state.providers, update.Providers...)
@@ -309,7 +314,57 @@ func (m *Model) applyStatuslinePickerDiscovery(msg statuslinePickerDiscoveryMsg)
 		return left.Tool < right.Tool
 	})
 	state.discovering = false
+	m.warningDisplay.SetStatuslineDiscoveryWarning(msg.scan, failures.details())
 	m.renderStatuslineProviderPicker()
+}
+
+// statuslineProviderDiscoveryFailures mirrors Rust's DiscoveryFailures: at most
+// four named servers, a bounded inventory entry, and an omitted count. Raw RPC
+// errors never reach the warning text.
+type statuslineProviderDiscoveryFailures struct {
+	servers   []string
+	omitted   int
+	inventory string
+}
+
+func (f *statuslineProviderDiscoveryFailures) record(update StatuslineProviderDiscoveryUpdate) {
+	reason := statuslineDiscoveryFailureReason(update)
+	server := strings.TrimSpace(update.Server)
+	if server == "" {
+		f.inventory = reason
+		return
+	}
+	if len(f.servers) >= 4 {
+		f.omitted++
+		return
+	}
+	name := statuslinePickerLabel(server)
+	if runes := []rune(name); len(runes) > 80 {
+		name = string(runes[:80])
+	}
+	f.servers = append(f.servers, name+": "+reason+".")
+}
+
+func statuslineDiscoveryFailureReason(update StatuslineProviderDiscoveryUpdate) string {
+	if update.TimedOut {
+		return "no result by the 5-second discovery deadline"
+	}
+	return "request failed"
+}
+
+func (f *statuslineProviderDiscoveryFailures) details() string {
+	if f == nil || (len(f.servers) == 0 && f.inventory == "") {
+		return ""
+	}
+	lines := []string{}
+	if f.inventory != "" {
+		lines = append(lines, "Global provider inventory: "+f.inventory+".")
+	}
+	lines = append(lines, f.servers...)
+	if f.omitted > 0 {
+		lines = append(lines, "Additional affected servers: "+strconv.Itoa(f.omitted)+".")
+	}
+	return strings.Join(lines, "\n")
 }
 
 // cancelStatuslineProviderPicker restores the staged item editor, mirroring

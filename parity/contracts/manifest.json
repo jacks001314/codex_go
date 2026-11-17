@@ -3365,6 +3365,29 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestStatuslineProviderLookupFailureCopyLikeRust;TestStatuslineProviderInvalidContentStopsPollingLikeRust;TestStatuslineProviderRPCErrorStopsPollingLikeRust;TestStatuslineProviderLateReplyAfterDeadlineFailsLikeRust;TestStatuslineProviderHungReadStopsAtDeadlineLikeRust"
+  },
+  {
+   "id": "tui-statusline-discovery-warning",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/statusline_provider.rs",
+    "tui/src/statusline_provider/discovery.rs",
+    "tui/src/chatwidget/warnings.rs",
+    "tui/src/history_cell/warnings.rs",
+    "tui/src/app/status_line_settings.rs"
+   ],
+   "goPaths": [
+    "tui/tea/statusline_provider_picker.go",
+    "tui/tea/statusline_provider_footer.go",
+    "tui/chatwidget/warnings.go",
+    "tui/history_cell/warnings.go",
+    "app/statusline_provider_tui.go",
+    "tui/tea/statusline_provider_discovery_warning_like_rust_test.go",
+    "tui/chatwidget/warnings_discovery_like_rust_test.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestStatuslineProviderDiscoveryWarningsLikeRust;TestWarningDisplayStatuslineDiscoveryLikeRust;TestStatuslineProviderEmptyCatalogRetriesAfterServerReadyLikeRust;TestStatuslineProviderRetrySharesLookupDeadlineLikeRust;TestStatuslineProviderReadyWaitReportsUnavailableLikeRust;TestStatuslineProviderLateLookupAfterDeadlineTimesOutLikeRust;TestStatuslineProviderLookupFailureCopyLikeRust"
   }
 
 

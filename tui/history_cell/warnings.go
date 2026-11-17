@@ -19,6 +19,9 @@ const (
 	WarningIdMessage WarningIdKind = "message"
 	// WarningIdMCPServer identifies a diagnostic by the MCP server it concerns.
 	WarningIdMCPServer WarningIdKind = "mcp_server"
+	// WarningIdStatuslineDiscovery identifies the incomplete /statusline provider
+	// discovery warning for one picker scan (Rust #61993).
+	WarningIdStatuslineDiscovery WarningIdKind = "statusline_discovery"
 )
 
 // WarningId is a retained diagnostic's stable identity, independent of wrapping
