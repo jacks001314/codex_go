@@ -2930,6 +2930,23 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestStatusLineProviderPackagedDefaultsAreIgnoredLikeRust;TestStatusLineProviderProjectValueIsIgnoredLikeRust;TestStatusLineProviderInvalidUserSelectionFallsBackLikeRust;TestStatusLineProviderIncompleteProfileSelectionFallsBackLikeRust;TestStatusLineProviderSessionFlagFallsBackOrFailsLikeRust;TestFormatConfigLayerSourceLikeRust;TestSessionRuntimeLoadsConfigOverrides"
+  },
+  {
+   "id": "thread-list-sqlite-row-metadata",
+   "kind": "source-surface",
+   "rustPaths": [
+    "thread-store/src/local/list_threads.rs",
+    "thread-store/src/local/helpers.rs",
+    "thread-store/src/local/search_threads.rs",
+    "rollout/src/recorder.rs"
+   ],
+   "goPaths": [
+    "appserver/router.go",
+    "appserver/thread_list_sqlite_metadata_like_rust_test.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestThreadListLegacyRowsUseListedThreadNameLikeRust;TestThreadListRolloutLegacyNamesUseSessionIndexLikeRust;TestRepeatedLegacyRowsKeepTheirOwnMetadataLikeRust"
   }
   ]
 }

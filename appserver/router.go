@@ -4205,6 +4205,10 @@ func (r *Router) listRecordsFromState(options session.ListOptions) (*session.Pag
 	if err != nil {
 		return nil, err
 	}
+	// Rust #61866: a direct SQLite listing keeps each row's own title and
+	// section metadata. Legacy rows still fall back to the session index with
+	// the existing title precedence, resolved in one batch.
+	indexedNames := r.legacyIndexedThreadNames(rows)
 	records := make([]session.Record, 0, len(rows))
 	for i := range rows {
 		row := &rows[i]
@@ -4224,7 +4228,7 @@ func (r *Router) listRecordsFromState(options session.ListOptions) (*session.Pag
 			SessionID:              row.ID,
 			ParentThreadID:         session.ThreadID(nullString(row.ParentThreadID)),
 			AttachedThreadParentID: session.ThreadID(nullString(row.AttachedThreadParentID)),
-			Title:                  nullString(row.Name),
+			Title:                  listedThreadNameFromRow(row, indexedNames[row.ID]),
 			Preview:                nullString(row.Preview),
 			Archived:               row.Archived,
 			CreatedAt:              time.UnixMilli(row.CreatedAtMS).UTC(),
@@ -4288,6 +4292,75 @@ func nullString(value sql.NullString) string {
 	return ""
 }
 
+// listedThreadNameFromRow mirrors Rust's listed_thread_name
+// (thread-store/src/local/helpers.rs, #61866). A paginated row only uses its
+// stored SQLite name. A legacy row prefers its distinct rollout title, unless
+// that title is the derived Guardian label, in which case the session-index name
+// wins; otherwise the index name is the fallback.
+func listedThreadNameFromRow(row *state.ThreadListRow, indexedName string) string {
+	if row == nil {
+		return ""
+	}
+	sqliteName := strings.TrimSpace(nullString(row.Name))
+	if strings.EqualFold(strings.TrimSpace(row.HistoryMode), string(ThreadHistoryPaginated)) {
+		return sqliteName
+	}
+	title := strings.TrimSpace(nullString(row.Title))
+	// has_guardian_default_title: only a Guardian review source may treat the
+	// label as derived rather than a user title.
+	guardianDefault := title == session.GuardianThreadTitle &&
+		session.IsGuardianReviewSource(row.Source)
+	indexedName = strings.TrimSpace(indexedName)
+	distinct := distinctThreadMetadataTitle(title, nullString(row.FirstUserMessage))
+	if guardianDefault {
+		if indexedName != "" {
+			return indexedName
+		}
+		return distinct
+	}
+	if distinct != "" {
+		return distinct
+	}
+	return indexedName
+}
+
+// distinctThreadMetadataTitle mirrors Rust's distinct_thread_metadata_title: a
+// derived title is only distinct when it is nonempty and does not just repeat
+// the first user message.
+func distinctThreadMetadataTitle(title string, firstUserMessage string) string {
+	title = strings.TrimSpace(title)
+	if title == "" || title == strings.TrimSpace(firstUserMessage) {
+		return ""
+	}
+	return title
+}
+
+// legacyIndexedThreadNames reads the session index once for the legacy rows of
+// a SQLite listing (Rust #61866 resolve_thread_names). Failures stay best
+// effort so a broken index cannot fail the listing.
+func (r *Router) legacyIndexedThreadNames(rows []state.ThreadListRow) map[string]string {
+	if r == nil || len(rows) == 0 {
+		return nil
+	}
+	ids := map[string]struct{}{}
+	for i := range rows {
+		if strings.EqualFold(strings.TrimSpace(rows[i].HistoryMode), string(ThreadHistoryPaginated)) {
+			continue
+		}
+		if id := strings.TrimSpace(rows[i].ID); id != "" {
+			ids[id] = struct{}{}
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	names, err := rollout.FindThreadNamesByIDs(codexHomeFromSessionStore(r.store), ids)
+	if err != nil {
+		return nil
+	}
+	return names
+}
+
 func (r *Router) handleThreadSectionList(request *Request) (*ThreadSectionListResponse, error) {
 	var params ThreadSectionListParams
 	if err := request.DecodeParams(&params); err != nil {
@@ -4337,6 +4410,7 @@ func (r *Router) listRecordsIncludingRollouts(records []session.Record, options 
 	for i := range records {
 		seen[records[i].ID] = true
 	}
+	stateCount := len(records)
 	codexHome := codexHomeFromSessionStore(r.store)
 	for _, archived := range []bool{false, true} {
 		rolloutPage, err := rollout.ListThreads(codexHome, rollout.ListOptions{
@@ -4362,7 +4436,49 @@ func (r *Router) listRecordsIncludingRollouts(records []session.Record, options 
 			seen[record.ID] = true
 		}
 	}
+	r.enrichRolloutListingNames(records[stateCount:])
 	return session.ListRecords(records, options)
+}
+
+// enrichRolloutListingNames mirrors Rust's best-effort rollout-listing name
+// enrichment (thread-store/src/local/helpers.rs resolve_thread_names, #61866):
+// legacy threads without a derived title take their latest session-index name.
+// A broken index leaves the listing unchanged.
+func (r *Router) enrichRolloutListingNames(records []session.Record) {
+	if r == nil || len(records) == 0 {
+		return
+	}
+	ids := map[string]struct{}{}
+	for i := range records {
+		if !records[i].FromRollout || strings.TrimSpace(records[i].Title) != "" {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(records[i].Metadata.HistoryMode), string(ThreadHistoryPaginated)) {
+			continue
+		}
+		if id := strings.TrimSpace(string(records[i].ID)); id != "" {
+			ids[id] = struct{}{}
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	names, err := rollout.FindThreadNamesByIDs(codexHomeFromSessionStore(r.store), ids)
+	if err != nil {
+		return
+	}
+	for i := range records {
+		if strings.TrimSpace(records[i].Title) != "" {
+			continue
+		}
+		name := strings.TrimSpace(names[string(records[i].ID)])
+		if name == "" {
+			continue
+		}
+		records[i].Title = name
+		records[i].Metadata.Extra = ensureRecordExtra(records[i].Metadata.Extra)
+		records[i].Metadata.Extra[explicitThreadNameExtraKey] = true
+	}
 }
 
 func rolloutIncludedThreadIDs(ids *[]session.ThreadID) []string {
