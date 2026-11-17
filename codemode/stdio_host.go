@@ -136,7 +136,7 @@ func (h *stdioHostServer) negotiate() error {
 	// Rust #48123: the host advertises the supported optional capabilities the
 	// client asked for, and rejects a required capability it cannot provide.
 	supported := CapabilitySet{}
-	for _, name := range []string{SessionCellExecutionResourceLimitsCapability, YieldObservationCapability, LargeDelegateCapacityCapability} {
+	for _, name := range []string{SessionCellExecutionResourceLimitsCapability, YieldObservationCapability, LargeDelegateCapacityCapability, ToolCatalogCapability} {
 		if capability, err := NewCapability(name); err == nil {
 			supported = append(supported, capability)
 		}
@@ -236,6 +236,11 @@ func (h *stdioHostServer) handleRequest(ctx context.Context, id RequestID, reque
 			_ = h.write(HostOperationResponse(id, ResultErr[HostResponse]("invalid code-mode execute request: "+err.Error())))
 			return
 		}
+		definitions, err := session.resolveHostCatalog(request.Request)
+		if err != nil {
+			_ = h.write(HostOperationResponse(id, ResultErr[HostResponse](err.Error())))
+			return
+		}
 		cellID := session.nextCellID()
 		if !h.reserveActiveCell(request.SessionID, cellID) {
 			_ = h.write(HostOperationResponse(id, ResultErr[HostResponse]("code-mode host has too many active cells")))
@@ -245,7 +250,7 @@ func (h *stdioHostServer) handleRequest(ctx context.Context, id RequestID, reque
 			h.releaseActiveCell(request.SessionID, cellID)
 			return
 		}
-		response := session.execute(ctx, cellID, request.Request, yield)
+		response := session.execute(ctx, cellID, request.Request, definitions, yield)
 		_ = h.write(InitialResponse(id, ResultOK(response)))
 		if response.Variant != "Yielded" {
 			h.releaseActiveCell(request.SessionID, cellID)
@@ -469,6 +474,10 @@ type stdioHostSession struct {
 	// session/open. Server mode bounds every observation with its own budget;
 	// client mode returns raw output for the caller to truncate (Rust #57272).
 	outputTruncation OutputTruncation
+	// catalogMu guards the session-local tool-catalog revision (Rust #61846).
+	catalogMu       sync.Mutex
+	catalogRevision uint64
+	catalogTools    []ProtocolToolDefinition
 }
 
 func newStdioHostSession(host *stdioHostServer, id SessionID) *stdioHostSession {
@@ -481,8 +490,8 @@ func (s *stdioHostSession) nextCellID() CellID {
 	return NewCellID(fmt.Sprintf("cell-%d", s.nextCell.Add(1)))
 }
 
-func (s *stdioHostSession) execute(ctx context.Context, cellID CellID, request *ExecuteRequest, yield *tool.YieldSignal) RuntimeResponse {
-	allowed, err := s.registerDefinitions(request.EnabledTools)
+func (s *stdioHostSession) execute(ctx context.Context, cellID CellID, request *ExecuteRequest, definitions []ProtocolToolDefinition, yield *tool.YieldSignal) RuntimeResponse {
+	allowed, err := s.registerDefinitions(definitions)
 	if err != nil {
 		message := err.Error()
 		return Result(cellID, nil, &message)

@@ -75,6 +75,11 @@ const YieldObservationCapability = "yield-observation"
 // host can apply observation output budgets itself (Rust #57272).
 const BoundedOutputCapability = "bounded-output-v1"
 
+// ToolCatalogCapability is the optional host capability advertising
+// session-local tool-catalog revisions (Rust #61846). Clients that negotiate it
+// may reference an installed catalog instead of resending every definition.
+const ToolCatalogCapability = "tool-catalog-revision-v1"
+
 // BoundedOutputMaxBytes is the maximum aggregate text bytes retained per
 // server-truncated observation (Rust #57848).
 const BoundedOutputMaxBytes = 1024 * 1024

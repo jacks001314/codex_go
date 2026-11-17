@@ -2710,6 +2710,47 @@
    "phase": "P1",
    "status": "complete",
    "verifier": "TestToolCallAttributionEndpointMatchingLikeRust;TestProxyHTTPAttributionLikeRust;TestProxyConnectAttributionLikeRust"
+  },
+  {
+   "id": "code-mode-catalog-lazy-globals",
+   "kind": "source-surface",
+   "rustPaths": [
+    "code-mode-runtime/src/runtime/globals.rs",
+    "code-mode-runtime/src/service.rs"
+   ],
+   "goPaths": [
+    "tool/code_mode_exec.go",
+    "tool/code_mode_catalog_lazy_like_rust_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestCodeModeCatalogLazyGlobalsLikeRust"
+  },
+  {
+   "id": "code-mode-catalog-revisions",
+   "kind": "source-surface",
+   "rustPaths": [
+    "code-mode-protocol/src/grpc/codex.code_mode.v1.proto",
+    "code-mode-protocol/src/host/mod.rs",
+    "code-mode-protocol/src/host/payload.rs",
+    "code-mode/src/remote_session.rs",
+    "code-mode-runtime/src/service.rs",
+    "code-mode-host/src/lib.rs",
+    "code-mode-host/src/grpc/mod.rs",
+    "code-mode-host/src/grpc/session.rs"
+   ],
+   "goPaths": [
+    "codemode/tool_catalog_revision.go",
+    "codemode/stdio_host.go",
+    "codemode/remote_provider.go",
+    "codemode/protocol_types.go",
+    "codemode/protocol_host.go",
+    "codemode/grpc/codex.code_mode.v1.proto",
+    "codemode/catalog_revision_like_rust_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestCodeModeCatalogRevisionEndToEndLikeRust;TestCodeModeCatalogRevisionHostValidationLikeRust;TestCodeModeCatalogAdmissionCacheLikeRust"
   }
   ]
 }

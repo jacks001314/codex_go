@@ -1717,62 +1717,86 @@ func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *In
 		return nil, err
 	}
 	nestedTools := e.nestedToolsForInvocation(invocation)
-	toolsObject := runtime.NewObject()
-	for _, nested := range nestedTools {
-		name := nested.name
-		spec := nested.spec
-		globalName := nested.globalName
-		toolName := name
-		toolSpec := spec
-		if err := toolsObject.Set(globalName, func(call sobek.FunctionCall) sobek.Value {
-			payload, err := nestedPayload(runtime, toolSpec, call)
-			if err != nil {
-				panic(runtime.ToValue(err.Error()))
+	// Rust #61845: `tools` and `ALL_TOOLS` are lazy data properties. Each cell
+	// builds its catalog on first read, keeps any mutations in that cell, and
+	// defines tool names as own data properties so inherited setters never run.
+	buildTools := func() (sobek.Value, error) {
+		toolsObject := runtime.NewObject()
+		for _, nested := range nestedTools {
+			name := nested.name
+			spec := nested.spec
+			globalName := nested.globalName
+			toolName := name
+			toolSpec := spec
+			function := func(call sobek.FunctionCall) sobek.Value {
+				payload, err := nestedPayload(runtime, toolSpec, call)
+				if err != nil {
+					panic(runtime.ToValue(err.Error()))
+				}
+				callID := fmt.Sprintf("%s-nested-%d", invocation.CallID, e.nextID.Add(1))
+				if pending >= codeModeMaxPendingCallbacks {
+					panic(runtime.ToValue(fmt.Sprintf("code-mode host exceeded the limit of %d pending delegate calls", codeModeMaxPendingCallbacks)))
+				}
+				promise, resolve, reject := runtime.NewPromise()
+				pending++
+				go func() {
+					nestedInvocation := &Invocation{CallID: callID, ToolName: toolName, Payload: payload, Context: cloneInvocationContext(invocation.Context), Source: "code_mode"}
+					// Rust #45535: the in-process dispatcher reports the child call
+					// with the cell it belongs to, when the invocation knows one.
+					cellID, _ := invocation.Context[CodeModeCellIDContextKey].(string)
+					e.observeCall(CodeModeCallObservation{
+						Kind:   CodeModeCallChildStarted,
+						CellID: strings.TrimSpace(cellID),
+						CallID: strings.TrimSpace(callID),
+					})
+					applySpecInvocationContext(nestedInvocation, toolSpec)
+					startedAt := time.Now().UTC()
+					if started, ok := invocation.Context["code_mode_nested_tool_started"].(CodeModeNestedToolStartedFunc); ok {
+						started(ctx, nestedInvocation, startedAt)
+					}
+					out, callErr := nestedRouter.Dispatch(ctx, nestedInvocation)
+					finishedAt := time.Now().UTC()
+					if completed, ok := invocation.Context["code_mode_nested_tool_completed"].(CodeModeNestedToolCompletedFunc); ok {
+						completed(ctx, nestedInvocation, out, callErr, startedAt, finishedAt)
+					}
+					select {
+					case completion <- codeModeToolCompletion{resolve: resolve, reject: reject, output: out, err: callErr, payload: payload, name: toolName}:
+					case <-ctx.Done():
+					}
+				}()
+				return runtime.ToValue(promise)
 			}
-			callID := fmt.Sprintf("%s-nested-%d", invocation.CallID, e.nextID.Add(1))
-			if pending >= codeModeMaxPendingCallbacks {
-				panic(runtime.ToValue(fmt.Sprintf("code-mode host exceeded the limit of %d pending delegate calls", codeModeMaxPendingCallbacks)))
+			// Rust builds the catalog with Object::with_prototype_and_properties,
+			// which installs own data properties without consulting setters on
+			// Object.prototype.
+			if err := toolsObject.DefineDataProperty(globalName, runtime.ToValue(function), sobek.FLAG_TRUE, sobek.FLAG_TRUE, sobek.FLAG_TRUE); err != nil {
+				return nil, err
 			}
-			promise, resolve, reject := runtime.NewPromise()
-			pending++
-			go func() {
-				nestedInvocation := &Invocation{CallID: callID, ToolName: toolName, Payload: payload, Context: cloneInvocationContext(invocation.Context), Source: "code_mode"}
-				// Rust #45535: the in-process dispatcher reports the child call
-				// with the cell it belongs to, when the invocation knows one.
-				cellID, _ := invocation.Context[CodeModeCellIDContextKey].(string)
-				e.observeCall(CodeModeCallObservation{
-					Kind:   CodeModeCallChildStarted,
-					CellID: strings.TrimSpace(cellID),
-					CallID: strings.TrimSpace(callID),
-				})
-				applySpecInvocationContext(nestedInvocation, toolSpec)
-				startedAt := time.Now().UTC()
-				if started, ok := invocation.Context["code_mode_nested_tool_started"].(CodeModeNestedToolStartedFunc); ok {
-					started(ctx, nestedInvocation, startedAt)
-				}
-				out, callErr := nestedRouter.Dispatch(ctx, nestedInvocation)
-				finishedAt := time.Now().UTC()
-				if completed, ok := invocation.Context["code_mode_nested_tool_completed"].(CodeModeNestedToolCompletedFunc); ok {
-					completed(ctx, nestedInvocation, out, callErr, startedAt, finishedAt)
-				}
-				select {
-				case completion <- codeModeToolCompletion{resolve: resolve, reject: reject, output: out, err: callErr, payload: payload, name: toolName}:
-				case <-ctx.Done():
-				}
-			}()
-			return runtime.ToValue(promise)
-		}); err != nil {
-			return nil, err
 		}
+		return toolsObject, nil
 	}
-	if err := runtime.Set("tools", toolsObject); err != nil {
+	buildAllTools := func() (sobek.Value, error) {
+		// Rust's Array::new_with_elements and create_data_property keep the
+		// metadata entries free of inherited setters as well.
+		array := runtime.NewArray()
+		for index, nested := range nestedTools {
+			item := runtime.NewObject()
+			if err := item.DefineDataProperty("name", runtime.ToValue(nested.globalName), sobek.FLAG_TRUE, sobek.FLAG_TRUE, sobek.FLAG_TRUE); err != nil {
+				return nil, err
+			}
+			if err := item.DefineDataProperty("description", runtime.ToValue(nested.spec.Description), sobek.FLAG_TRUE, sobek.FLAG_TRUE, sobek.FLAG_TRUE); err != nil {
+				return nil, err
+			}
+			if err := array.DefineDataProperty(strconv.Itoa(index), item, sobek.FLAG_TRUE, sobek.FLAG_TRUE, sobek.FLAG_TRUE); err != nil {
+				return nil, err
+			}
+		}
+		return array, nil
+	}
+	if err := installLazyCodeModeCatalogGlobal(runtime, "tools", buildTools); err != nil {
 		return nil, err
 	}
-	metadata := make([]map[string]string, 0)
-	for _, nested := range nestedTools {
-		metadata = append(metadata, map[string]string{"name": nested.globalName, "description": nested.spec.Description})
-	}
-	if err := runtime.Set("ALL_TOOLS", metadata); err != nil {
+	if err := installLazyCodeModeCatalogGlobal(runtime, "ALL_TOOLS", buildAllTools); err != nil {
 		return nil, err
 	}
 
@@ -2779,4 +2803,36 @@ func normalizeNestedExecOutput(value string) string {
 		value = value[marker+len("Output:\n"):]
 	}
 	return strings.TrimRight(value, "\n")
+}
+
+// installLazyCodeModeCatalogGlobal mirrors Rust #61845's
+// `set_lazy_data_property` for one catalog global: the first read builds the
+// value and replaces the accessor with a writable data property, so later
+// reads and writes behave like an ordinary global. A missing or failed build
+// surfaces as the same TypeError the Rust getter throws.
+func installLazyCodeModeCatalogGlobal(runtime *sobek.Runtime, name string, build func() (sobek.Value, error)) error {
+	if runtime == nil {
+		return fmt.Errorf("code mode runtime is nil")
+	}
+	global := runtime.GlobalObject()
+	replace := func(value sobek.Value) {
+		_ = global.DefineDataProperty(name, value, sobek.FLAG_TRUE, sobek.FLAG_TRUE, sobek.FLAG_TRUE)
+	}
+	getter := runtime.ToValue(func(sobek.FunctionCall) sobek.Value {
+		value, err := build()
+		if err != nil {
+			panic(runtime.NewTypeError(err.Error()))
+		}
+		replace(value)
+		return value
+	})
+	setter := runtime.ToValue(func(call sobek.FunctionCall) sobek.Value {
+		value := sobek.Undefined()
+		if len(call.Arguments) > 0 {
+			value = call.Argument(0)
+		}
+		replace(value)
+		return sobek.Undefined()
+	})
+	return global.DefineAccessorProperty(name, getter, setter, sobek.FLAG_TRUE, sobek.FLAG_TRUE)
 }

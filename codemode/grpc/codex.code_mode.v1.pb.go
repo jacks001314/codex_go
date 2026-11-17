@@ -575,8 +575,10 @@ type SessionOpened struct {
 	SessionId string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	// Absent (including from an older host) means the client owns truncation.
 	OutputTruncation *OutputTruncation `protobuf:"varint,2,opt,name=output_truncation,json=outputTruncation,proto3,enum=codex.code_mode.v1.OutputTruncation,oneof" json:"output_truncation,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Clients may send ExecuteRequest.catalog_revision when advertised.
+	SupportsCatalogRevision bool `protobuf:"varint,3,opt,name=supports_catalog_revision,json=supportsCatalogRevision,proto3" json:"supports_catalog_revision,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *SessionOpened) Reset() {
@@ -621,6 +623,13 @@ func (x *SessionOpened) GetOutputTruncation() OutputTruncation {
 		return *x.OutputTruncation
 	}
 	return OutputTruncation_OUTPUT_TRUNCATION_UNSPECIFIED
+}
+
+func (x *SessionOpened) GetSupportsCatalogRevision() bool {
+	if x != nil {
+		return x.SupportsCatalogRevision
+	}
+	return false
 }
 
 type CloseSessionRequest struct {
@@ -1422,6 +1431,8 @@ type ExecuteRequest struct {
 	EnabledTools    []*ToolDefinition `protobuf:"bytes,5,rep,name=enabled_tools,json=enabledTools,proto3" json:"enabled_tools,omitempty"`
 	YieldTimeMs     *uint64           `protobuf:"varint,6,opt,name=yield_time_ms,json=yieldTimeMs,proto3,oneof" json:"yield_time_ms,omitempty"`
 	MaxOutputTokens *uint64           `protobuf:"varint,7,opt,name=max_output_tokens,json=maxOutputTokens,proto3,oneof" json:"max_output_tokens,omitempty"`
+	// Nonempty enabled_tools installs a session-local revision. Empty references it.
+	CatalogRevision *uint64 `protobuf:"varint,8,opt,name=catalog_revision,json=catalogRevision,proto3,oneof" json:"catalog_revision,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -1501,6 +1512,13 @@ func (x *ExecuteRequest) GetYieldTimeMs() uint64 {
 func (x *ExecuteRequest) GetMaxOutputTokens() uint64 {
 	if x != nil && x.MaxOutputTokens != nil {
 		return *x.MaxOutputTokens
+	}
+	return 0
+}
+
+func (x *ExecuteRequest) GetCatalogRevision() uint64 {
+	if x != nil && x.CatalogRevision != nil {
+		return *x.CatalogRevision
 	}
 	return 0
 }
@@ -2722,11 +2740,12 @@ const file_codex_code_mode_v1_proto_rawDesc = "" +
 	"\x16notification_cancelled\x18\x04 \x01(\v2).codex.code_mode.v1.NotificationCancelledH\x00R\x15notificationCancelled\x12A\n" +
 	"\vcell_closed\x18\x05 \x01(\v2\x1e.codex.code_mode.v1.CellClosedH\x00R\n" +
 	"cellClosedB\a\n" +
-	"\x05event\"\x9c\x01\n" +
+	"\x05event\"\xd8\x01\n" +
 	"\rSessionOpened\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12V\n" +
-	"\x11output_truncation\x18\x02 \x01(\x0e2$.codex.code_mode.v1.OutputTruncationH\x00R\x10outputTruncation\x88\x01\x01B\x14\n" +
+	"\x11output_truncation\x18\x02 \x01(\x0e2$.codex.code_mode.v1.OutputTruncationH\x00R\x10outputTruncation\x88\x01\x01\x12:\n" +
+	"\x19supports_catalog_revision\x18\x03 \x01(\bR\x17supportsCatalogRevisionB\x14\n" +
 	"\x12_output_truncation\"4\n" +
 	"\x13CloseSessionRequest\x12\x1d\n" +
 	"\n" +
@@ -2785,7 +2804,7 @@ const file_codex_code_mode_v1_proto_rawDesc = "" +
 	"CellClosed\x12!\n" +
 	"\fexecution_id\x18\x01 \x01(\tR\vexecutionId\x12\x17\n" +
 	"\acell_id\x18\x02 \x01(\tR\x06cellId\x127\n" +
-	"\x18final_tool_call_sequence\x18\x03 \x01(\x04R\x15finalToolCallSequence\"\xd7\x02\n" +
+	"\x18final_tool_call_sequence\x18\x03 \x01(\x04R\x15finalToolCallSequence\"\x9c\x03\n" +
 	"\x0eExecuteRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12!\n" +
@@ -2795,9 +2814,11 @@ const file_codex_code_mode_v1_proto_rawDesc = "" +
 	"\x06source\x18\x04 \x01(\tR\x06source\x12G\n" +
 	"\renabled_tools\x18\x05 \x03(\v2\".codex.code_mode.v1.ToolDefinitionR\fenabledTools\x12'\n" +
 	"\ryield_time_ms\x18\x06 \x01(\x04H\x00R\vyieldTimeMs\x88\x01\x01\x12/\n" +
-	"\x11max_output_tokens\x18\a \x01(\x04H\x01R\x0fmaxOutputTokens\x88\x01\x01B\x10\n" +
+	"\x11max_output_tokens\x18\a \x01(\x04H\x01R\x0fmaxOutputTokens\x88\x01\x01\x12.\n" +
+	"\x10catalog_revision\x18\b \x01(\x04H\x02R\x0fcatalogRevision\x88\x01\x01B\x10\n" +
 	"\x0e_yield_time_msB\x14\n" +
-	"\x12_max_output_tokens\"\x9b\x01\n" +
+	"\x12_max_output_tokensB\x13\n" +
+	"\x11_catalog_revision\"\x9b\x01\n" +
 	"\fExecuteEvent\x12@\n" +
 	"\astarted\x18\x01 \x01(\v2$.codex.code_mode.v1.ExecutionStartedH\x00R\astarted\x12@\n" +
 	"\aoutcome\x18\x02 \x01(\v2$.codex.code_mode.v1.ExecutionOutcomeH\x00R\aoutcomeB\a\n" +

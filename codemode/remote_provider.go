@@ -178,7 +178,8 @@ func connectRemoteTransportWithHandshake(ctx context.Context, transport remoteTr
 	// server-side truncation with hosts that support it.
 	bounded, _ := NewCapability(BoundedOutputCapability)
 	largeDelegateCapacity, _ := NewCapability(LargeDelegateCapacityCapability)
-	requested := []Capability{limits, yield, bounded, largeDelegateCapacity}
+	toolCatalog, _ := NewCapability(ToolCatalogCapability)
+	requested := []Capability{limits, yield, bounded, largeDelegateCapacity, toolCatalog}
 	if options != nil && strings.TrimSpace(options.websocketURL) != "" {
 		requested = append(requested, dual)
 	}
@@ -273,7 +274,10 @@ type remoteSession struct {
 	// outputTruncation is pinned by the first successful open and preserved
 	// across reconnects (Rust #58125).
 	outputTruncation OutputTruncation
-	closed           bool
+	// catalog is the session binding's tool-catalog revision cache (Rust
+	// #61846); a reconnect starts a fresh binding and resets it.
+	catalog *codeModeCatalogCache
+	closed  bool
 }
 
 // NewSessionWithOptions mirrors Rust's create_session_with_options: the
@@ -303,6 +307,20 @@ func (s *remoteSession) serverOutputBudget(budget *int) *int {
 		return &clamped
 	}
 	return budget
+}
+
+// catalogCache returns the binding's catalog cache, creating it lazily for
+// sessions constructed without the provider constructor (Rust #61846).
+func (s *remoteSession) catalogCache() *codeModeCatalogCache {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.catalog == nil {
+		s.catalog = &codeModeCatalogCache{}
+	}
+	return s.catalog
 }
 
 const execRuntimeResetError = "The exec runtime was replaced. Stored values and running cells were lost. Prior external tool operations may have completed; inspect their results before retrying. You may continue with a fresh exec call."
@@ -380,11 +398,31 @@ func (s *remoteSession) Execute(ctx context.Context, request tool.CodeModeRemote
 		})
 	}
 	delegate := s.delegateForGeneration(actualGeneration)
-	response, err := connection.Execute(ctx, s.id, delegate, ExecuteRequest{
+	wireRequest := ExecuteRequest{
 		ToolCallID: request.ToolCallID, EnabledTools: definitions, Source: request.Source,
 		YieldTimeMS: request.YieldTimeMS, MaxOutputTokens: s.serverOutputBudget(request.MaxOutputTokens),
 		TraceContext: codeModeTraceContextFromContext(ctx),
-	}, preempt)
+	}
+	var admission *codeModeCatalogAdmission
+	if connection.capabilities.Contains(Capability(ToolCatalogCapability)) {
+		admission = s.catalogCache().prepare(definitions)
+	}
+	if admission != nil {
+		if admission.reusesCatalog() {
+			wireRequest.EnabledTools = nil
+		}
+		revision := admission.revision
+		wireRequest.CatalogRevision = &revision
+	}
+	response, err := connection.Execute(ctx, s.id, delegate, wireRequest, preempt)
+	if admission != nil {
+		if err == nil {
+			// Rust commits the client catalog only after admission succeeds.
+			admission.accept()
+		} else {
+			admission.abandon()
+		}
+	}
 	s.invalidateSessionOnNotFound(connection, err)
 	return publicRemoteResponseForGeneration(response, actualGeneration), err
 }
@@ -615,6 +653,7 @@ func (s *remoteSession) admit(ctx context.Context) (*remoteConnection, error) {
 		return nil, fmt.Errorf("code mode session is shutting down")
 	}
 	s.openedOn = connection
+	s.catalog = &codeModeCatalogCache{}
 	s.outputTruncation = options.OutputTruncation
 	if s.outputTruncation == "" {
 		s.outputTruncation = OutputTruncationClient

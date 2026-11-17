@@ -104,6 +104,10 @@ type ExecuteRequest struct {
 	Source          string                   `json:"source"`
 	YieldTimeMS     *uint64                  `json:"yield_time_ms"`
 	MaxOutputTokens *int                     `json:"max_output_tokens"`
+	// CatalogRevision references a session-local catalog installed by an
+	// earlier execute request (Rust #61846). A nonempty EnabledTools installs
+	// the revision; an empty list reuses it.
+	CatalogRevision *uint64 `json:"catalog_revision,omitempty"`
 	// TraceContext carries the W3C traceparent for this execution across the
 	// code-mode gRPC boundary (Rust #41017), so nested tool callback spans stay
 	// connected.
