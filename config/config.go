@@ -80,6 +80,11 @@ type Config struct {
 	// managed [permissions.filesystem] policy (Rust RequirementSource). Doctor
 	// reports it without exposing the denied paths.
 	filesystemRequirementsSource string
+	// startupWarnings records the load-time diagnostics Rust exposes as
+	// Config::startup_warnings: layer diagnostics first, then requirement
+	// overrides and fallbacks, then the `otel.*` warnings. It is never
+	// serialized.
+	startupWarnings []string
 }
 
 // ConfigLayers returns the precedence-bearing configuration sources used to
@@ -89,6 +94,31 @@ func (c *Config) ConfigLayers() []Layer {
 		return nil
 	}
 	return cloneLayers(c.featureLayers)
+}
+
+// StartupWarnings returns the startup diagnostics collected while loading this
+// configuration (Rust Config::startup_warnings). The order matches Rust: layer
+// diagnostics, then requirement-driven overrides and fallbacks, then the
+// `otel.*` warnings.
+func (c *Config) StartupWarnings() []string {
+	if c == nil {
+		return nil
+	}
+	return append([]string(nil), c.startupWarnings...)
+}
+
+// refreshStartupWarnings records the startup diagnostics for the effective
+// configuration. The statusline-provider warning is computed from the raw layer
+// stack (Rust #61915) and precedes the requirement and otel warnings.
+func (c *Config) refreshStartupWarnings() {
+	if c == nil {
+		return
+	}
+	warnings := StartupWarnings(c.Values, c.Requirements)
+	if warning, err := statusLineProviderWarning(c.featureLayers, false); err == nil && warning != "" {
+		warnings = append([]string{warning}, warnings...)
+	}
+	c.startupWarnings = warnings
 }
 
 // ActiveProfileMCPLayer returns the selected profile's user layer when that
@@ -422,6 +452,7 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 	if opts != nil {
 		packagedDefaultsPath = strings.TrimSpace(opts.PackagedDefaultsPath)
 	}
+	var packagedLayer Layer
 	if packagedDefaultsPath != "" {
 		packagedDefaults, exists, err := loadConfigFileIfExists(packagedDefaultsPath)
 		if err != nil {
@@ -430,13 +461,13 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 		if !exists {
 			return nil, fmt.Errorf("packaged defaults config file %s not found", packagedDefaultsPath)
 		}
-		// Packaged defaults are strictly validated even though this local-only
-		// selection is ignored from that layer (#61211).
-		if err := validateIgnoredStatusLineProvider(packagedDefaults); err != nil {
-			return nil, err
+		// Rust #61211 keeps the packaged layer's choice for diagnostics and
+		// ignores it in effective values; --strict-config rejects it (#61915).
+		packagedLayer = Layer{
+			Name:   LayerSource{Type: LayerSourcePackagedDefaults, File: packagedDefaultsPath},
+			Config: cloneMap(packagedDefaults),
 		}
-		stripIgnoredStatusLineProvider(packagedDefaults)
-		values = packagedDefaults
+		values = effectiveStatusLineLayerValues(packagedLayer.Name, packagedDefaults)
 	} else {
 		// Rust #38179: when no packaged-defaults path is supplied, always
 		// install the embedded defaults as the lowest-precedence layer.
@@ -444,16 +475,13 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := validateIgnoredStatusLineProvider(embedded); err != nil {
-			return nil, err
+		packagedLayer = Layer{
+			Name:   LayerSource{Type: LayerSourcePackagedDefaults, File: packagedDefaultsPath},
+			Config: cloneMap(embedded),
 		}
-		stripIgnoredStatusLineProvider(embedded)
-		values = embedded
+		values = effectiveStatusLineLayerValues(packagedLayer.Name, embedded)
 	}
-	featureLayers := []Layer{{
-		Name:   LayerSource{Type: LayerSourcePackagedDefaults, File: packagedDefaultsPath},
-		Config: cloneMap(values),
-	}}
+	featureLayers := []Layer{packagedLayer}
 	ignoreUserConfig := opts != nil && opts.IgnoreUserConfig
 	// Rust's load_user_config_layer (codex-rs/config/src/loader/mod.rs)
 	// returns an empty User layer when ignore_user_config is set instead of
@@ -475,9 +503,10 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 	// Packaged defaults always supply a URL, so explicitness needs the layers
 	// above them rather than the merged value (Rust #57178).
 	chatgptBaseURLExplicit := configValuePresent(userValues, "chatgpt_base_url")
-	mergeConfigMaps(values, userValues)
+	userSource := LayerSource{Type: LayerSourceUser, File: ConfigPath(codexHome)}
+	mergeConfigMaps(values, effectiveStatusLineLayerValues(userSource, userValues))
 	featureLayers = append(featureLayers, Layer{
-		Name:   LayerSource{Type: LayerSourceUser, File: ConfigPath(codexHome)},
+		Name:   userSource,
 		Config: cloneMap(userValues),
 	})
 	profile := ""
@@ -511,18 +540,18 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 			}
 			if exists {
 				resolveProjectRelativeConfigValues(projectValues, filepath.Dir(path))
-				if err := validateIgnoredStatusLineProvider(projectValues); err != nil {
-					return nil, err
-				}
 				sanitizeProjectConfigValues(projectValues, brokerState, trustedProviderEnvKeys)
 				chatgptBaseURLExplicit = chatgptBaseURLExplicit || configValuePresent(projectValues, "chatgpt_base_url")
-				mergeConfigMaps(values, projectValues)
+				projectSource := LayerSource{
+					Type:           LayerSourceProject,
+					File:           path,
+					DotCodexFolder: filepath.Dir(path),
+				}
+				// The project layer keeps the configured choice for diagnostics
+				// (Rust #61211) while effective values ignore it.
+				mergeConfigMaps(values, effectiveStatusLineLayerValues(projectSource, projectValues))
 				featureLayers = append(featureLayers, Layer{
-					Name: LayerSource{
-						Type:           LayerSourceProject,
-						File:           path,
-						DotCodexFolder: filepath.Dir(path),
-					},
+					Name:   projectSource,
 					Config: cloneMap(projectValues),
 				})
 			}
@@ -565,9 +594,10 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 			}
 			if exists {
 				chatgptBaseURLExplicit = chatgptBaseURLExplicit || configValuePresent(managedValues, "chatgpt_base_url")
-				mergeConfigMaps(values, managedValues)
+				managedSource := LayerSource{Type: LayerSourceLegacyManagedConfigFromFile, File: managedConfigPath(codexHome, opts.ManagedConfigPath)}
+				mergeConfigMaps(values, effectiveStatusLineLayerValues(managedSource, managedValues))
 				featureLayers = append(featureLayers, Layer{
-					Name:   LayerSource{Type: LayerSourceLegacyManagedConfigFromFile, File: managedConfigPath(codexHome, opts.ManagedConfigPath)},
+					Name:   managedSource,
 					Config: cloneMap(managedValues),
 				})
 			}
@@ -656,6 +686,7 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 	if err := cfg.ValidateGuardianAsyncElasticBudget(); err != nil {
 		return nil, err
 	}
+	cfg.refreshStartupWarnings()
 	return cfg, nil
 }
 
@@ -960,6 +991,16 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 		})
 	}
 	cfg.ApplyOverrides(overrides)
+	// Rust #61915: session flags are the layer this loader applies itself. An
+	// invalid selection falls back to the built-in status line in normal mode,
+	// while --strict-config rejects it in every configuration source.
+	if opts != nil && opts.StrictConfig {
+		if _, err := statusLineProviderWarning(cfg.ConfigLayers(), true); err != nil {
+			return nil, err
+		}
+	} else {
+		applyEffectiveStatusLineProvider(cfg.Values)
+	}
 	if err := cfg.ValidateGuardianSyncElasticBudget(); err != nil {
 		return nil, err
 	}
@@ -1054,9 +1095,6 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 	if err := ValidateTUIPresets(cfg.Values); err != nil {
 		return nil, err
 	}
-	if err := validateIgnoredStatusLineProvider(cfg.Values); err != nil {
-		return nil, err
-	}
 	if opts != nil && opts.StrictConfig {
 		if err := validateKnownTopLevelConfigFields(cfg.Values); err != nil {
 			return nil, err
@@ -1069,6 +1107,7 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 		}
 	}
 	cfg.resolveFreshMemoryVersion(codexHome)
+	cfg.refreshStartupWarnings()
 	return cfg, nil
 }
 
@@ -3956,12 +3995,9 @@ func sanitizeProjectConfigValues(values map[string]any, broker CredentialBrokerP
 	// increase (#39873): permission-mode cycling shortcuts are session-only and
 	// are stripped from project config.
 	if tui, ok := values["tui"].(map[string]any); ok {
-		// Rust #61211: the statusline provider is a local-only preference, so a
-		// repository may not select an MCP server for the client.
-		if _, ok := tui["status_line_provider"]; ok {
-			delete(tui, "status_line_provider")
-			ignored = append(ignored, "tui.status_line_provider")
-		}
+		// Rust #61211 strips `tui.status_line_provider` from the project layer's
+		// effective values only; the layer keeps the configured choice, so it is
+		// not reported as an unsupported project-local key here.
 		if keymap, ok := tui["keymap"].(map[string]any); ok {
 			if chat, ok := keymap["chat"].(map[string]any); ok {
 				for _, key := range []string{"previous_permission_mode", "next_permission_mode"} {
@@ -4068,9 +4104,12 @@ func applyProfileLayer(codexHome string, values map[string]any, profile string) 
 	if err != nil {
 		return false, nil, err
 	}
+	profileSource := LayerSource{Type: LayerSourceUser, File: profilePath, Profile: stringPtrIfNotEmpty(profile)}
 	if exists {
 		setsBaseURL := configValuePresent(profileValues, "chatgpt_base_url")
-		mergeConfigMaps(values, profileValues)
+		// Rust #61915: an invalid profile selection falls back to the built-in
+		// status line while the layer keeps the configured choice.
+		mergeConfigMaps(values, effectiveStatusLineLayerValues(profileSource, profileValues))
 		return setsBaseURL, profileValues, nil
 	}
 	if legacyProfile, ok, err := legacyProfileValues(values, profile); ok || err != nil {
@@ -4078,7 +4117,7 @@ func applyProfileLayer(codexHome string, values map[string]any, profile string) 
 			return false, nil, err
 		}
 		setsBaseURL := configValuePresent(legacyProfile, "chatgpt_base_url")
-		mergeConfigMaps(values, legacyProfile)
+		mergeConfigMaps(values, effectiveStatusLineLayerValues(LayerSource{Type: LayerSourceUser, File: ConfigPath(codexHome)}, legacyProfile))
 		return setsBaseURL, legacyProfile, nil
 	}
 	return false, nil, fmt.Errorf("profile %q not found", profile)

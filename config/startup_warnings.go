@@ -39,7 +39,13 @@ func (s *ConfigService) StartupWarningsForCWD(cwd string) []string {
 	s.mu.Lock()
 	requirements := cloneRequirements(s.requirements)
 	s.mu.Unlock()
-	return StartupWarnings(values, requirements)
+	warnings := StartupWarnings(values, requirements)
+	// Rust #61915: an invalid statusline provider is reported from the winning
+	// provider-capable layer before the requirement and otel warnings.
+	if warning, err := statusLineProviderWarning(layers, false); err == nil && warning != "" {
+		warnings = append([]string{warning}, warnings...)
+	}
+	return warnings
 }
 
 // ConfigWarningsForCWD reports every app-server config warning for the layers

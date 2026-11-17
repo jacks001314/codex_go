@@ -2314,10 +2314,8 @@ func (s *ConfigService) SetPackagedDefaultsLayer(path string) error {
 	if !exists {
 		return fmt.Errorf("packaged defaults config file %s not found", path)
 	}
-	if err := validateIgnoredStatusLineProvider(values); err != nil {
-		return err
-	}
-	stripIgnoredStatusLineProvider(values)
+	// Rust #61211 keeps the packaged layer's choice for diagnostics and ignores
+	// it in effective values; --strict-config rejects it (#61915).
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.packagedDefaultsLayer = &Layer{
@@ -2407,7 +2405,7 @@ func (s *ConfigService) readResponseForLayers(layers []Layer, params *ConfigRead
 	if err := s.validateMCPEMAAuthConfig(layers, values); err != nil {
 		return nil, err
 	}
-	s.recordStartupWarnings(values)
+	s.recordStartupWarnings(layers, values)
 	response := &ConfigReadResponse{
 		Config:        values,
 		Origins:       origins,
@@ -2424,13 +2422,16 @@ func (s *ConfigService) readResponseForLayers(layers []Layer, params *ConfigRead
 // app-server, which pushes `config.startup_warnings` into its
 // ConfigWarningNotification list. Duplicates are ignored, matching Rust's
 // initial-warning dedup.
-func (s *ConfigService) recordStartupWarnings(values map[string]any) {
+func (s *ConfigService) recordStartupWarnings(layers []Layer, values map[string]any) {
 	if s == nil || values == nil {
 		return
 	}
 	s.mu.Lock()
 	requirements := cloneRequirements(s.requirements)
 	s.mu.Unlock()
+	if warning, err := statusLineProviderWarning(layers, false); err == nil && warning != "" {
+		s.appendConfigWarningOnce(ConfigWarningNotification{Summary: warning})
+	}
 	for _, warning := range StartupWarnings(values, requirements) {
 		s.appendConfigWarningOnce(ConfigWarningNotification{Summary: warning})
 	}
@@ -3153,9 +3154,6 @@ func (s *ConfigService) readLayersForCWDOptions(cwd string, profile string, igno
 			}
 			if exists {
 				resolveProjectRelativeConfigValues(projectValues, dotCodexFolder)
-				if err := validateIgnoredStatusLineProvider(projectValues); err != nil {
-					return nil, err
-				}
 				sanitizeProjectConfigValues(projectValues, brokerState, trustedProviderEnvKeys)
 			}
 			layers = append(layers, Layer{
@@ -3202,7 +3200,6 @@ func (s *ConfigService) packagedDefaultsLayerForRead() *Layer {
 	if exe, err := os.Executable(); err == nil {
 		file = exe
 	}
-	stripIgnoredStatusLineProvider(values)
 	return &Layer{
 		Name:    LayerSource{Type: LayerSourcePackagedDefaults, File: file},
 		Version: configVersion(values),
@@ -3273,6 +3270,11 @@ func mergeConfigLayers(layers []Layer) (map[string]any, map[string]LayerMetadata
 			continue
 		}
 		layerValues = cloneMap(layerValues)
+		// Rust #61211/#61915: project settings and packaged defaults never
+		// contribute a statusline provider, and an invalid selection from a
+		// provider-capable layer becomes "default" in effective values while the
+		// stored layer keeps the configured choice.
+		layerValues = effectiveStatusLineLayerValues(layers[i].Name, layerValues)
 		// Mirrors Rust merge_toml_values (config/src/merge.rs): the RPC-visible
 		// effective config uses the same normalization/structured-feature merge
 		// as the loader, including credential-provider source displacement

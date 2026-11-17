@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 
 	featureflags "codex_go/features"
 )
@@ -90,7 +91,7 @@ func IgnoredConfigWarning(layers []Layer, rawRequirements map[string]any) string
 		key := strings.Join(path, ".")
 		for _, layer := range layersHighToLow(layers) {
 			if configPathExists(layerConfigMap(layer), path) {
-				add(configLayerSourceLabel(layer.Name), key)
+				add(formatConfigLayerSource(layer.Name), key)
 			}
 		}
 	}
@@ -262,65 +263,32 @@ func ignoredSettingHint(key string) string {
 }
 
 // boundedConfigLabel mirrors Rust bounded_label: control characters are escaped
-// and the result is capped at 200 bytes with a trailing ellipsis.
+// (`char::escape_default`: tab, carriage return and newline keep their short
+// escapes, any other control character becomes `\u{..}`) and the result is
+// capped at 200 bytes with a trailing ellipsis.
 func boundedConfigLabel(value string) string {
 	var builder strings.Builder
 	for _, character := range value {
 		if builder.Len() >= ignoredConfigLabelLimit {
-			builder.WriteString("…")
+			builder.WriteString("\u2026")
 			break
 		}
-		if character < 0x20 || character == 0x7f {
-			fmt.Fprintf(&builder, "\\u{%x}", character)
+		if !unicode.IsControl(character) {
+			builder.WriteRune(character)
 			continue
 		}
-		builder.WriteRune(character)
+		switch character {
+		case '\t':
+			builder.WriteString(`\t`)
+		case '\r':
+			builder.WriteString(`\r`)
+		case '\n':
+			builder.WriteString(`\n`)
+		default:
+			fmt.Fprintf(&builder, "\\u{%x}", character)
+		}
 	}
 	return builder.String()
-}
-
-// configLayerSourceLabel renders a human-readable source label for a layer.
-func configLayerSourceLabel(source LayerSource) string {
-	switch source.Type {
-	case LayerSourcePackagedDefaults:
-		if file := strings.TrimSpace(source.File); file != "" {
-			return "packaged defaults (" + file + ")"
-		}
-		return "packaged defaults"
-	case LayerSourceMDM:
-		return "managed configuration (MDM)"
-	case LayerSourceSystem:
-		if file := strings.TrimSpace(source.File); file != "" {
-			return "system (" + file + ")"
-		}
-		return "system"
-	case LayerSourceEnterpriseManaged:
-		if name := strings.TrimSpace(source.Name); name != "" {
-			return "enterprise managed (" + name + ")"
-		}
-		return "enterprise managed"
-	case LayerSourceUser:
-		if file := strings.TrimSpace(source.File); file != "" {
-			return "user (" + file + ")"
-		}
-		return "user"
-	case LayerSourceProject:
-		if folder := strings.TrimSpace(source.DotCodexFolder); folder != "" {
-			return "project (" + folder + "/config.toml)"
-		}
-		if file := strings.TrimSpace(source.File); file != "" {
-			return "project (" + file + ")"
-		}
-		return "project"
-	case LayerSourceSessionFlags:
-		return "session flags"
-	case LayerSourceLegacyManagedConfigFromFile:
-		return "managed configuration (file)"
-	case LayerSourceLegacyManagedConfigFromMDM:
-		return "managed configuration (MDM)"
-	default:
-		return string(source.Type)
-	}
 }
 
 // IgnoredSettingsWarning returns the ignored-configuration warning for the

@@ -1156,10 +1156,17 @@ func TestSessionRuntimeLoadsConfigOverrides(t *testing.T) {
 	for _, args := range [][]string{
 		{"--strict-config", "-c", "foo=bar", "resume", "--last"},
 		{"resume", "--strict-config", "-c", "foo=bar", "--last"},
+		// Rust #61915: --strict-config rejects an invalid statusline provider
+		// from session flags before any session lookup.
+		{"--strict-config", "-c", "tui.status_line_provider=42", "resume", "--last"},
 	} {
 		err := Run(context.Background(), args, newTerminalReader(""), terminalOut(&bytes.Buffer{}), &bytes.Buffer{})
-		if err == nil || !strings.Contains(err.Error(), "unknown configuration field `foo`") {
-			t.Fatalf("Run(%v) error = %v, want strict override error", args, err)
+		want := "unknown configuration field `foo`"
+		if strings.Contains(strings.Join(args, " "), "tui.status_line_provider=42") {
+			want = "Invalid `tui.status_line_provider` in session-flags."
+		}
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("Run(%v) error = %v, want %q", args, err, want)
 		}
 	}
 }

@@ -2908,6 +2908,28 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestResolveOTLPHTTPCompressionLikeRust;TestMetricsClientCompressesStatsigExportsLikeRust;TestMetricsClientHonorsCompressionEnvLikeRust;TestCompressMetricsPayloadRoundTripLikeRust"
+  },
+  {
+   "id": "status-line-provider-fallback",
+   "kind": "source-surface",
+   "rustPaths": [
+    "config/src/config_layer_source.rs",
+    "config/src/strict_config.rs",
+    "config/src/loader/mod.rs",
+    "config/src/types.rs"
+   ],
+   "goPaths": [
+    "config/status_line_provider.go",
+    "config/config.go",
+    "config/api.go",
+    "config/startup_warnings.go",
+    "config/ignored_settings.go",
+    "config/status_line_provider_test.go",
+    "app/session_test.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestStatusLineProviderPackagedDefaultsAreIgnoredLikeRust;TestStatusLineProviderProjectValueIsIgnoredLikeRust;TestStatusLineProviderInvalidUserSelectionFallsBackLikeRust;TestStatusLineProviderIncompleteProfileSelectionFallsBackLikeRust;TestStatusLineProviderSessionFlagFallsBackOrFailsLikeRust;TestFormatConfigLayerSourceLikeRust;TestSessionRuntimeLoadsConfigOverrides"
   }
   ]
 }
