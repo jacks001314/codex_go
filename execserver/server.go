@@ -2715,13 +2715,19 @@ func (s *Server) prepareExecutorNetworkProxy(ctx context.Context, params *ExecPa
 	}
 	preparedParams.Env = prepared.EnvSnapshot()
 	if launch.Proxy.CredentialMasking {
-		if credentialMaskingSupportedShell(params, preparedParams.Env) {
+		// Rust #62050 ShellStartupCredentials::apply: only a plain `bash -c`
+		// startup masks here; a protected zsh snapshot and every unsupported
+		// startup keep the child's real credentials.
+		switch shellStartupCredentialsForCommand(params, preparedParams.Env) {
+		case shellStartupMaskedCommand:
 			if err := prepared.HandleUnmaskedCredentials(preparedParams.Env, network.CredentialMaskingFailureWarn); err != nil {
 				_ = prepared.Close()
 				policyCancel()
 				return nil, nil, nil, requestError(-32602, err.Error())
 			}
-		} else {
+		case shellStartupProtectedSnapshot:
+			prepared.RestoreUnbrokeredEnvironment(preparedParams.Env)
+		default:
 			slog.Warn("credential masking is unavailable for this shell startup; preserving shell profiles and snapshots and running with unmasked credentials")
 			prepared.RestoreUnbrokeredEnvironment(preparedParams.Env)
 		}
@@ -2737,24 +2743,77 @@ func (s *Server) prepareExecutorNetworkProxy(ctx context.Context, params *ExecPa
 	return &preparedParams, prepared, policyCancel, nil
 }
 
-func credentialMaskingSupportedShell(params *ExecParams, env map[string]string) bool {
-	if params == nil || params.Arg0 != nil || len(params.Argv) != 3 {
+// shellStartupCredentials mirrors Rust #62050's ShellStartupCredentials: how the
+// proxy handles brokered credentials while an executor shell starts.
+type shellStartupCredentials int
+
+const (
+	// shellStartupProtectedSnapshot replays a trusted zsh login snapshot whose
+	// captured state masks credentials after it is built.
+	shellStartupProtectedSnapshot shellStartupCredentials = iota
+	// shellStartupMaskedCommand masks the credentials of a plain `bash -c`
+	// whose startup files the executor controls.
+	shellStartupMaskedCommand
+	// shellStartupUnmaskedCommand keeps the child's real credentials.
+	shellStartupUnmaskedCommand
+)
+
+// shellStartupCredentialsForCommand classifies the original shell environment
+// before proxy preparation rewrites it (Rust
+// ShellStartupCredentials::for_command).
+func shellStartupCredentialsForCommand(params *ExecParams, env map[string]string) shellStartupCredentials {
+	if params == nil {
+		return shellStartupUnmaskedCommand
+	}
+	var snapshot *ShellInfo
+	if params.ShellSnapshot != nil {
+		snapshot = &params.ShellSnapshot.Shell
+	}
+	return classifyShellStartup(params.Argv, params.Arg0, snapshot, env, shellStartupPlatformSupportsCredentials())
+}
+
+// shellStartupPlatformSupportsCredentials matches Rust's
+// `cfg!(any(target_os = "linux", target_os = "macos"))` guard.
+func shellStartupPlatformSupportsCredentials() bool {
+	return runtime.GOOS == "linux" || runtime.GOOS == "darwin"
+}
+
+// classifyShellStartup implements Rust's classification with the platform guard
+// passed in so the unix semantics stay testable on every host.
+func classifyShellStartup(argv []string, arg0 *string, snapshot *ShellInfo, env map[string]string, unix bool) shellStartupCredentials {
+	if arg0 != nil || !unix {
+		return shellStartupUnmaskedCommand
+	}
+	if snapshot != nil {
+		// Only this exact login invocation can be replayed from a protected
+		// snapshot; any other snapshot startup stays unmasked.
+		if supportsCredentialSnapshot(argv, snapshot.Name, snapshot.Path) {
+			return shellStartupProtectedSnapshot
+		}
+		return shellStartupUnmaskedCommand
+	}
+	if supportsMaskedBashCommand(argv, env) {
+		return shellStartupMaskedCommand
+	}
+	return shellStartupUnmaskedCommand
+}
+
+// supportsCredentialSnapshot reports whether the launch replays the exact zsh
+// login command a protected snapshot was captured for.
+func supportsCredentialSnapshot(argv []string, shellName string, shellPath string) bool {
+	if shellName != "zsh" || len(argv) != 3 || argv[1] != "-lc" || argv[0] != shellPath {
 		return false
 	}
-	shellName := filepath.Base(strings.TrimSpace(params.Argv[0]))
-	switch {
-	case shellName == "bash":
-		if params.ShellSnapshot != nil || params.Argv[1] != "-c" {
-			return false
-		}
-	case shellName == "zsh":
-		// Rust #54432: Zsh login commands can mask credentials when the
-		// executor replays a trusted shell snapshot. A bare Zsh launch is left
-		// unmasked because its startup files are not controlled here.
-		if params.ShellSnapshot == nil || params.Argv[1] != "-lc" {
-			return false
-		}
-	default:
+	return filepath.Base(strings.TrimSpace(argv[0])) == "zsh"
+}
+
+// supportsMaskedBashCommand reports a plain `bash -c` whose startup files come
+// from the executor rather than an inherited profile.
+func supportsMaskedBashCommand(argv []string, env map[string]string) bool {
+	if len(argv) != 3 || argv[1] != "-c" {
+		return false
+	}
+	if filepath.Base(strings.TrimSpace(argv[0])) != "bash" {
 		return false
 	}
 	for _, key := range []string{"BASH_ENV", "ENV", "SSH_CLIENT", "SSH2_CLIENT"} {

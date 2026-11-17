@@ -204,6 +204,22 @@ type ManagedNetworkResolution struct {
 
 type ManagedNetworkResolver func(environmentID string, remote bool) (*ManagedNetworkResolution, error)
 
+// managedNetworkEnforcement mirrors Rust #62050's SandboxNetwork: an executor
+// proxy that is explicitly disabled suppresses both its launch config and
+// managed-network enforcement. A missing launch config is different — a
+// controller-only proxy still requires the sandboxed attempt to enforce
+// managed networking.
+func managedNetworkEnforcement(resolution *ManagedNetworkResolution) (bool, *execserver.RemoteNetworkProxyLaunchConfig) {
+	if resolution == nil {
+		return false, nil
+	}
+	remoteNetworkProxy := resolution.RemoteNetworkProxy
+	if remoteNetworkProxy != nil && !remoteNetworkProxy.Proxy.Enabled {
+		remoteNetworkProxy = nil
+	}
+	return resolution.ManagedNetwork != nil || remoteNetworkProxy != nil, remoteNetworkProxy
+}
+
 func NewShellExecutor(options *ShellExecutorOptions) *ShellExecutor {
 	executor := &ShellExecutor{
 		runner:     NewLocalShellRunner(),
@@ -767,10 +783,11 @@ func (e *ShellExecutor) prepareExecCommand(invocation *Invocation) (*execCommand
 			// launches keep the proxy so denied reads stay enforced.
 			attemptPermissions := sandbox.SandboxPermissionsPreservingDeniedReads(args.SandboxPermissions, validation.PermissionProfile)
 			if attemptPermissions != sandbox.SandboxPermissionsRequireEscalated {
+				enforceManagedNetwork, remoteNetworkProxy := managedNetworkEnforcement(resolvedNetwork)
 				validation.Env = resolvedNetwork.Env
-				validation.EnforceManagedNetwork = resolvedNetwork.ManagedNetwork != nil || resolvedNetwork.RemoteNetworkProxy != nil
+				validation.EnforceManagedNetwork = enforceManagedNetwork
 				validation.ManagedNetwork = resolvedNetwork.ManagedNetwork
-				validation.RemoteNetworkProxy = resolvedNetwork.RemoteNetworkProxy
+				validation.RemoteNetworkProxy = remoteNetworkProxy
 				validation.NetworkPolicyDecider = resolvedNetwork.NetworkPolicyDecider
 				validation.NetworkPolicyDecisionTimeout = resolvedNetwork.NetworkPolicyDecisionTimeout
 				if validation.Env[network.CredentialBrokerActiveEnvKey] == "1" {

@@ -135,37 +135,58 @@ func TestPrepareExecutorNetworkProxyWindowsNativeLaunchStripsControllerProxyLike
 
 func uint64PtrForExecServerTest(value uint64) *uint64 { return &value }
 
-func TestCredentialMaskingSupportedShellLikeRust(t *testing.T) {
-	argv := []string{"/bin/bash", "-c", "echo hi"}
-	if !credentialMaskingSupportedShell(&ExecParams{Argv: argv, Env: map[string]string{}}, map[string]string{}) {
-		t.Fatal("plain non-login bash command should support masking")
-	}
-	zshSnapshot := &ShellSnapshotRequest{ScopeID: "scope", Shell: ShellInfo{Name: "zsh", Path: "/bin/zsh"}}
-	if !credentialMaskingSupportedShell(&ExecParams{
-		Argv:          []string{"/bin/zsh", "-lc", "echo hi"},
-		ShellSnapshot: zshSnapshot,
-	}, map[string]string{}) {
-		t.Fatal("zsh login command with a trusted snapshot should support masking")
-	}
+// Rust #62050 ShellStartupCredentials::for_command: only a plain `bash -c`
+// masks, only the exact captured zsh login command replays a protected
+// snapshot, and everything else keeps the child's real credentials.
+func TestShellStartupCredentialsClassificationLikeRust(t *testing.T) {
+	bashCommand := []string{"/bin/bash", "-c", "echo hi"}
+	zshSnapshot := &ShellInfo{Name: "zsh", Path: "/bin/zsh"}
 	for _, testCase := range []struct {
 		name   string
 		params *ExecParams
 		env    map[string]string
+		unix   bool
+		want   shellStartupCredentials
 	}{
-		{name: "non bash", params: &ExecParams{Argv: []string{"/bin/zsh", "-c", "echo hi"}}},
-		{name: "login", params: &ExecParams{Argv: []string{"/bin/bash", "-lc", "echo hi"}}},
-		{name: "arg0", params: &ExecParams{Argv: argv, Arg0: stringPtrForExecServerTest("codex")}},
-		{name: "snapshot", params: &ExecParams{Argv: argv, ShellSnapshot: &ShellSnapshotRequest{ScopeID: "scope"}}},
-		{name: "zsh without snapshot", params: &ExecParams{Argv: []string{"/bin/zsh", "-lc", "echo hi"}}},
-		{name: "zsh non-login snapshot", params: &ExecParams{Argv: []string{"/bin/zsh", "-c", "echo hi"}, ShellSnapshot: zshSnapshot}},
-		{name: "startup profile", params: &ExecParams{Argv: argv}, env: map[string]string{"BASH_ENV": "profile"}},
-		{name: "ssh startup", params: &ExecParams{Argv: argv}, env: map[string]string{"SSH_CLIENT": "remote"}},
+		{name: "plain bash command", params: &ExecParams{Argv: bashCommand}, unix: true, want: shellStartupMaskedCommand},
+		{name: "zsh login snapshot", params: &ExecParams{Argv: []string{"/bin/zsh", "-lc", "echo hi"}, ShellSnapshot: &ShellSnapshotRequest{ScopeID: "scope", Shell: *zshSnapshot}}, unix: true, want: shellStartupProtectedSnapshot},
+		{name: "snapshot program mismatch", params: &ExecParams{Argv: []string{"/opt/bin/zsh", "-lc", "echo hi"}, ShellSnapshot: &ShellSnapshotRequest{ScopeID: "scope", Shell: *zshSnapshot}}, unix: true, want: shellStartupUnmaskedCommand},
+		{name: "snapshot non-login", params: &ExecParams{Argv: []string{"/bin/zsh", "-c", "echo hi"}, ShellSnapshot: &ShellSnapshotRequest{ScopeID: "scope", Shell: *zshSnapshot}}, unix: true, want: shellStartupUnmaskedCommand},
+		{name: "snapshot with arg0", params: &ExecParams{Argv: []string{"/bin/zsh", "-lc", "echo hi"}, Arg0: stringPtrForExecServerTest("codex"), ShellSnapshot: &ShellSnapshotRequest{ScopeID: "scope", Shell: *zshSnapshot}}, unix: true, want: shellStartupUnmaskedCommand},
+		{name: "bash snapshot", params: &ExecParams{Argv: bashCommand, ShellSnapshot: &ShellSnapshotRequest{ScopeID: "scope", Shell: ShellInfo{Name: "bash", Path: "/bin/bash"}}}, unix: true, want: shellStartupUnmaskedCommand},
+		{name: "login bash", params: &ExecParams{Argv: []string{"/bin/bash", "-lc", "echo hi"}}, unix: true, want: shellStartupUnmaskedCommand},
+		{name: "zsh command", params: &ExecParams{Argv: []string{"/bin/zsh", "-c", "echo hi"}}, unix: true, want: shellStartupUnmaskedCommand},
+		{name: "arg0", params: &ExecParams{Argv: bashCommand, Arg0: stringPtrForExecServerTest("codex")}, unix: true, want: shellStartupUnmaskedCommand},
+		{name: "startup profile", params: &ExecParams{Argv: bashCommand}, env: map[string]string{"BASH_ENV": "profile"}, unix: true, want: shellStartupUnmaskedCommand},
+		{name: "ssh startup", params: &ExecParams{Argv: bashCommand}, env: map[string]string{"SSH2_CLIENT": "remote"}, unix: true, want: shellStartupUnmaskedCommand},
+		{name: "non unix host", params: &ExecParams{Argv: bashCommand}, unix: false, want: shellStartupUnmaskedCommand},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			if credentialMaskingSupportedShell(testCase.params, testCase.env) {
-				t.Fatal("unsupported shell startup accepted")
+			var snapshot *ShellInfo
+			if testCase.params.ShellSnapshot != nil {
+				snapshot = &testCase.params.ShellSnapshot.Shell
+			}
+			got := classifyShellStartup(testCase.params.Argv, testCase.params.Arg0, snapshot, testCase.env, testCase.unix)
+			if got != testCase.want {
+				t.Fatalf("classify = %d, want %d", got, testCase.want)
 			}
 		})
+	}
+}
+
+// A shell snapshot that is not a captured zsh login replays nothing protected,
+// so the child keeps its real credentials instead of masking them.
+func TestShellStartupCredentialsForCommandMatchesUnclassifiedStartups(t *testing.T) {
+	if got := shellStartupCredentialsForCommand(nil, nil); got != shellStartupUnmaskedCommand {
+		t.Fatalf("nil params = %d, want unmasked", got)
+	}
+	params := &ExecParams{Argv: []string{"/bin/zsh", "-lc", "echo hi"}, ShellSnapshot: &ShellSnapshotRequest{ScopeID: "scope", Shell: ShellInfo{Name: "zsh", Path: "/bin/zsh"}}}
+	want := shellStartupUnmaskedCommand
+	if shellStartupPlatformSupportsCredentials() {
+		want = shellStartupProtectedSnapshot
+	}
+	if got := shellStartupCredentialsForCommand(params, map[string]string{}); got != want {
+		t.Fatalf("classified = %d, want %d", got, want)
 	}
 }
 

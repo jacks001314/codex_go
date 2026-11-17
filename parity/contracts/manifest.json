@@ -3465,6 +3465,25 @@
    "phase": "P3",
    "status": "partial",
    "verifier": "TestSidebarChooserOpensDocumentTabLikeRust;TestSidebarDocumentCodeGutterLikeRust;TestSidebarDocumentTabTitlesLikeRust;TestSidebarDocumentEscReturnsToChooserLikeRust;TestSidebarDocumentTabPaintsInStripLikeRust;TestSidebarChooserPreviewUnavailableIgnoresAcceptLikeRust;TestSidebarDocumentPaintsInWorkspaceLikeRust;TestSidebarDocumentTabStepLikeRust;TestEmbeddedSidebarDocumentHostReadsWorkspaceLikeRust;TestEmbeddedSidebarDocumentHostLimitsLikeRust;TestEmbeddedSidebarDocumentHostRejectsNonTextLikeRust;TestSidebarDocumentViewOfLocationLikeRust;TestSidebarDocumentLinkCycleAndFollowLikeRust;TestSidebarDocumentEscClearsHighlightLikeRust;TestSidebarDocumentLinkPathResolutionLikeRust;TestSidebarDocumentHoverAndClickOpenLinkLikeRust;TestSidebarDocumentRecordsOpenedFilesLikeRust;TestSidebarDocumentFindScansAndNavigatesLikeRust;TestSidebarDocumentDragSelectionCopiesLikeRust"
+  },
+  {
+   "id": "sandbox-network-credential-startup",
+   "kind": "source-surface",
+   "rustPaths": [
+    "core/src/tools/sandboxing.rs",
+    "sandboxing/src/manager.rs",
+    "network-proxy/src/credential_broker.rs",
+    "exec-server/src/process_sandbox.rs"
+   ],
+   "goPaths": [
+    "tool/shell_executor.go",
+    "execserver/server.go",
+    "tool/shell_executor_test.go",
+    "execserver/server_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestManagedNetworkEnforcementDropsDisabledExecutorProxyLikeRust;TestShellExecutorDropsExplicitlyDisabledExecutorProxyLikeRust;TestShellStartupCredentialsClassificationLikeRust;TestShellStartupCredentialsForCommandMatchesUnclassifiedStartups"
   }
   ]
 }

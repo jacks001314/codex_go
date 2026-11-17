@@ -410,6 +410,68 @@ func TestShellExecutorResolvesManagedNetworkForSelectedEnvironmentLikeRust(t *te
 	}
 }
 
+// managedNetworkEnforcement mirrors Rust #62050: an explicitly disabled
+// executor proxy drops both its launch config and managed-network enforcement.
+func TestManagedNetworkEnforcementDropsDisabledExecutorProxyLikeRust(t *testing.T) {
+	enabled := &execserver.RemoteNetworkProxyLaunchConfig{Proxy: execserver.RemoteNetworkProxyConfig{Enabled: true}}
+	disabled := &execserver.RemoteNetworkProxyLaunchConfig{Proxy: execserver.RemoteNetworkProxyConfig{Enabled: false}}
+	managed := &network.ProxyManagedNetworkSandboxContext{LoopbackPorts: []uint16{40123}}
+	for _, testCase := range []struct {
+		name         string
+		resolution   *ManagedNetworkResolution
+		wantEnforced bool
+		wantProxy    *execserver.RemoteNetworkProxyLaunchConfig
+	}{
+		{name: "no resolution"},
+		{name: "managed network", resolution: &ManagedNetworkResolution{ManagedNetwork: managed}, wantEnforced: true},
+		{name: "enabled launch", resolution: &ManagedNetworkResolution{RemoteNetworkProxy: enabled}, wantEnforced: true, wantProxy: enabled},
+		{name: "disabled launch", resolution: &ManagedNetworkResolution{RemoteNetworkProxy: disabled}},
+		{name: "disabled launch with managed network", resolution: &ManagedNetworkResolution{RemoteNetworkProxy: disabled, ManagedNetwork: managed}, wantEnforced: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			enforced, proxy := managedNetworkEnforcement(testCase.resolution)
+			if enforced != testCase.wantEnforced || proxy != testCase.wantProxy {
+				t.Fatalf("enforcement = %v proxy=%#v, want %v %#v", enforced, proxy, testCase.wantEnforced, testCase.wantProxy)
+			}
+		})
+	}
+}
+
+// An executor whose launch config is explicitly disabled keeps the sandboxed
+// command unmanaged even though the controller resolved a proxy (Rust #62050).
+func TestShellExecutorDropsExplicitlyDisabledExecutorProxyLikeRust(t *testing.T) {
+	runner := &fakeShellRunner{result: &ShellResult{ExitCode: 0}}
+	cwd := t.TempDir()
+	executor := NewShellExecutor(&ShellExecutorOptions{
+		Runner: runner,
+		Shell:  &Shell{Type: ShellBash, Path: "/bin/sh"},
+		Validation: ShellValidationOptions{
+			ApprovalPolicy: sandbox.ApprovalOnRequest,
+			CWD:            cwd,
+		},
+		UnifiedExecEnvironments: []UnifiedExecEnvironment{{ID: "remote", CWD: cwd, ExecServerURL: "ws://remote.invalid"}},
+		ManagedNetworkResolver: func(environmentID string, remote bool) (*ManagedNetworkResolution, error) {
+			if !remote {
+				t.Fatalf("expected a remote environment, got %q", environmentID)
+			}
+			return &ManagedNetworkResolution{
+				RemoteNetworkProxy: &execserver.RemoteNetworkProxyLaunchConfig{
+					Proxy: execserver.RemoteNetworkProxyConfig{Enabled: false, Mode: string(network.ProxyModeFull)},
+				},
+			}, nil
+		},
+	})
+	if _, err := executor.Execute(context.Background(), &Invocation{CallID: "call-disabled-network", ToolName: PlainName(DefaultExecCommandToolName), Payload: Payload{Kind: PayloadFunction, Arguments: `{"cmd":"echo remote","environment_id":"remote"}`}}); err != nil {
+		t.Fatal(err)
+	}
+	if runner.request == nil {
+		t.Fatal("shell runner did not see the request")
+	}
+	if runner.request.EnforceManagedNetwork || runner.request.RemoteNetworkProxy != nil || runner.request.ManagedNetwork != nil {
+		t.Fatalf("disabled executor proxy request = %#v", runner.request)
+	}
+}
+
 // TestShellExecutorEscalationBypassesManagedNetworkLikeRust covers Rust #46499
 // (tools/runtimes/unified_exec.rs): an explicit full escalation attaches no
 // controller- or attachment-owned network proxy, while denied-read restrictions
