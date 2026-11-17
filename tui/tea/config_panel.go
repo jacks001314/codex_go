@@ -275,6 +275,7 @@ func (m *Model) openConfigPanel() {
 	if m == nil {
 		return
 	}
+	m.suppressCurrentViewKeyUntilRelease()
 	m.replaceModal(&modalState{
 		id:          "config",
 		kind:        ModalKindConfig,

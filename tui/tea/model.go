@@ -2105,6 +2105,16 @@ type Model struct {
 	windowsKeySequence           []keymsg.KeyMsg
 	windowsKeySequenceGeneration uint64
 	windowsTerminalMappedInput   bool
+	// activationKeyGuard mirrors Rust's view-transition key guard: the key that
+	// caused a view transition is swallowed until release or a bounded window
+	// lapses. activationKey is the most recent key event the guard can arm with.
+	activationKeyGuard     *activationKeyGuard
+	activationKey          keymsg.KeyMsg
+	activationKeyAt        time.Time
+	activationKeyAvailable bool
+	// keyUpdate is true while the message being handled is a key press, so view
+	// transitions can tell key activations from mouse or async ones.
+	keyUpdate bool
 	// mouseScroll is the live `tui.mouse_scroll_speed` accumulator for the main
 	// transcript viewport (Rust #50209 `TranscriptView::pending_mouse_scroll`).
 	mouseScroll codextui.MouseScrollAccumulator
@@ -4254,11 +4264,32 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	} else if mouse, ok := mousemsg.FromTea(message); ok {
 		message = mouse
 	}
+	if key, ok := message.(keymsg.KeyMsg); ok {
+		// Rust route_key_chord_event: the view-transition guard sees the physical
+		// key before any shortcut or modal handler can act on it.
+		if m.activationKeyGuard.consume(key, false, m.currentTime()) {
+			return m, nil
+		}
+		m.activationKey = key
+		m.activationKeyAt = m.currentTime()
+		m.activationKeyAvailable = true
+	} else if release, ok := message.(bubbletea.KeyReleaseMsg); ok {
+		m.activationKeyGuard.consume(keymsg.KeyMsg{
+			Mod:      release.Mod,
+			Code:     release.Code,
+			Text:     release.Text,
+			Original: message,
+		}, true, m.currentTime())
+	}
+	_, keyUpdate := message.(keymsg.KeyMsg)
+	m.keyUpdate = keyUpdate
 	model, cmd := m.update(message)
 	next, ok := model.(*Model)
 	if !ok || next == nil {
+		m.keyUpdate = false
 		return model, cmd
 	}
+	next.keyUpdate = false
 	// Frame requests are delivered through the Program (Rust FrameRequester),
 	// so this never rewrites the command the message handler returned.
 	next.syncFrameDemand()

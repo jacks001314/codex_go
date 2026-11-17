@@ -149,6 +149,7 @@ func (m *Model) openStatuslineProviderPicker() bubbletea.Cmd {
 		state.cursorID = statuslineProviderDefaultOption
 	}
 	m.statuslinePicker = state
+	m.suppressCurrentViewKeyUntilRelease()
 	m.renderStatuslineProviderPicker()
 	if !state.discovering {
 		return nil
@@ -396,6 +397,7 @@ func (m *Model) applyStatuslineProviderPickerOption(optionID string) bubbletea.C
 	if optionID == statuslineProviderDefaultOption {
 		m.statuslinePickedProvider = nil
 		m.cancelStatuslineProviderPicker()
+		m.suppressCurrentViewKeyUntilRelease()
 		return m.SaveStatusLineProvider(config.StatusLineProviderSelection{Default: true})
 	}
 	server, tool, ok := parseProviderOptionID(optionID)
@@ -424,5 +426,6 @@ func (m *Model) applyStatuslineProviderPickerOption(optionID string) bubbletea.C
 			MarketplaceName: candidate.MarketplaceName,
 		}
 	}
+	m.suppressCurrentViewKeyUntilRelease()
 	return m.SaveStatusLineProvider(config.StatusLineProviderSelection{Server: server, Tool: tool})
 }

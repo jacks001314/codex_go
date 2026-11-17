@@ -92,6 +92,7 @@ func (m *Model) selectSidebarTab(index int) bubbletea.Cmd {
 		return nil
 	}
 	m.sidebarTabHover = -1
+	m.suppressCurrentViewKeyUntilRelease()
 	return batchSideCommands(m.closeSidebarChooser(), m.activateRetainedSideConversation(tabs[index], ""))
 }
 

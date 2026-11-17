@@ -3408,6 +3408,28 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestStatuslineProviderPickerHandsAdvertisementToReaderLikeRust;TestStatuslineProviderAdvertisementSurvivesRefreshLikeRust;TestResolveChecksProjectScopeAndLiveOwnerLikeRust"
+  },
+  {
+   "id": "tui-activation-key-guard",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/activation_key_guard.rs",
+    "tui/src/key_hint.rs",
+    "tui/src/app/input.rs",
+    "tui/src/app/side_focus.rs"
+   ],
+   "goPaths": [
+    "tui/tea/activation_key_guard.go",
+    "tui/tea/model.go",
+    "tui/tea/side.go",
+    "tui/tea/sidebar_close.go",
+    "tui/tea/config_panel.go",
+    "tui/tea/statusline_provider_picker.go",
+    "tui/tea/activation_key_guard_like_rust_test.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestActivationKeyGuardBoundsLegacyPressesLikeRust;TestActivationKeyGuardStopsOnAnotherKeyLikeRust;TestActivationKeyGuardSwallowsHeldEnterAcrossPickerLikeRust"
   }
 
 

@@ -134,6 +134,7 @@ func (m *Model) focusSidebarContent() bubbletea.Cmd {
 	// An already-open chooser gives focus back to the parent composer
 	// (Rust #59739 handle_side_focus_key).
 	if m.sidebarChooserVisible() {
+		m.suppressCurrentViewKeyUntilRelease()
 		return m.closeSidebarChooser()
 	}
 	// Rust #59458 applies even with side retention disabled: wait for the
@@ -150,13 +151,16 @@ func (m *Model) focusSidebarContent() bubbletea.Cmd {
 		if side == nil {
 			// Rust #59739: with no side chat yet, the sidebar shortcut opens
 			// the chooser instead of doing nothing.
+			m.suppressCurrentViewKeyUntilRelease()
 			return m.openSidebarChooser()
 		}
+		m.suppressCurrentViewKeyUntilRelease()
 		return m.activateRetainedSideConversation(side, "")
 	}
 	if m.activeSide.ShowingSide {
 		return nil
 	}
+	m.suppressCurrentViewKeyUntilRelease()
 	return m.toggleSideConversation()
 }
 

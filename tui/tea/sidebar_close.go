@@ -29,6 +29,7 @@ func (m *Model) closeSidebarTab() bubbletea.Cmd {
 	if side == nil {
 		return nil
 	}
+	m.suppressCurrentViewKeyUntilRelease()
 	return m.requestSideTabClose(side)
 }
 
