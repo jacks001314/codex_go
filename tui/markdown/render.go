@@ -336,6 +336,13 @@ func renderWithStyleSpacing(text string, width int, themeID string, cwd string, 
 	// glamour v2 emits the short reset "[m"; the TUI keeps the canonical
 	// "[0m" so downstream span handling sees one reset spelling.
 	out = strings.ReplaceAll(out, "\x1b[m", "\x1b[0m")
+	// Rust wraps prose with break_words enabled but never wraps code blocks
+	// ("we don't wrap code in code blocks, in order to preserve whitespace for
+	// copy/paste"). Code blocks, tables, and math are still masked by markers
+	// and placeholders at this point, so wrapping only touches prose rows.
+	// Without it an over-long token reached the viewport and was clipped
+	// instead of wrapped.
+	out = wrapRenderedOverflowRows(out, width)
 	out = replaceListParagraphBreakMarkers(out)
 	if renderLists {
 		out = stripRenderedTaskBullets(out)

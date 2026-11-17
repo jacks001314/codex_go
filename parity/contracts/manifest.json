@@ -3093,6 +3093,24 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestComposerUndoGroupsTypingLikeRust;TestComposerUndoGroupsBackspacesLikeRust;TestComposerUndoKeepsPasteSeparateLikeRust;TestComposerUndoInvalidatesRedoAndConsumesEmptyLikeRust;TestEditHistoryCommitRecordsChangesOnlyLikeRust;TestEditHistoryStepTransfersSnapshotsLikeRust;TestEditHistoryBoundsUndoStepsLikeRust"
+  },
+  {
+   "id": "transcript-breaks-long-prose-tokens",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/wrapping.rs",
+    "tui/src/markdown_render.rs",
+    "tui/src/terminal_hyperlinks.rs"
+   ],
+   "goPaths": [
+    "tui/markdown/rendered_wrap.go",
+    "tui/markdown/render.go",
+    "tui/markdown/rendered_wrap_like_rust_test.go",
+    "tui/tea/side_pane_long_token_like_rust_test.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestRenderedProseBreaksLongTokenLikeRust;TestRenderedURLTokenStaysWholeLikeRust;TestRenderedBrokenTokenKeepsIndentLikeRust;TestRenderedBrokenTokenKeepsStyleAndLinkLikeRust;TestRenderedWrapLeavesCodeBlocksAloneLikeRust;TestSidePaneWrapsLongProseTokenLikeRust;TestNarrowSideChatWrapsLongProseTokenLikeRust"
   }
   ]
 }
