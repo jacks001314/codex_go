@@ -1052,6 +1052,12 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 				wslgMaskedByAncestor = true
 			}
 		}
+		// Rust #61947: OpenSSH rejects host root-owned includes when root is
+		// unmapped, so filesystem-restricted commands get an empty, read-only
+		// system drop-in directory unless the policy explicitly reaches it.
+		if shouldMaskSSHConfigDropIns(fs, cmd.SandboxPolicyCWD, unreadableRoots, writableRoots) {
+			args = appendEmptyDirectoryArgs(args, sshConfigDropInsPath)
+		}
 	}
 	if wslgMask {
 		args = append(args, wslgMaskArgs(wslgMaskedByAncestor, cmd.NoProc, pathIsDirectory(wslInteropDir))...)
@@ -1194,6 +1200,104 @@ func appendUnreadableRootBwrapArgs(args *[]string, path string) (int, error) {
 	}
 	*args = append(*args, "--ro-bind-data", strconv.Itoa(fd), target)
 	return fd, nil
+}
+
+// sshConfigDropInsPath is the OpenSSH system drop-in directory masked for
+// filesystem-restricted commands (Rust #61947).
+const sshConfigDropInsPath = "/etc/ssh/ssh_config.d"
+
+// appendEmptyDirectoryArgs mirrors Rust's append_empty_directory_args: an
+// empty, read-only directory that makes OpenSSH's Include glob match nothing.
+func appendEmptyDirectoryArgs(args []string, path string) []string {
+	return append(args, "--perms", "555", "--tmpfs", path, "--remount-ro", path)
+}
+
+// shouldMaskSSHConfigDropIns mirrors Rust's bwrap.rs #61947 condition: mask the
+// system drop-ins for filesystem-restricted commands that inherit the host root
+// read view, unless the policy denies, writes, or explicitly grants a path
+// inside the drop-ins, or an ancestor is a symlink or unsafe directory.
+func shouldMaskSSHConfigDropIns(fs *linuxFilesystemPolicy, cwd string, unreadableRoots, writableRoots []string) bool {
+	return sshConfigDropInsMaskDecision(fs, cwd, unreadableRoots, writableRoots, safeSSHConfigDropInsAncestors)
+}
+
+func sshConfigDropInsMaskDecision(fs *linuxFilesystemPolicy, cwd string, unreadableRoots, writableRoots []string, ancestorsSafe func() bool) bool {
+	if fs == nil {
+		return false
+	}
+	inherits := fs.hasFullDiskReadAccess() || fs.includePlatformDefaults()
+	if !inherits {
+		for _, root := range fs.readableRoots(cwd) {
+			if pathWithinRoot(sshConfigDropInsPath, root) {
+				inherits = true
+				break
+			}
+		}
+	}
+	if !inherits {
+		return false
+	}
+	for _, root := range unreadableRoots {
+		if pathWithinRoot(sshConfigDropInsPath, root) {
+			return false
+		}
+	}
+	for _, root := range writableRoots {
+		if pathWithinRoot(sshConfigDropInsPath, root) || pathWithinRoot(root, sshConfigDropInsPath) {
+			return false
+		}
+	}
+	if ancestorsSafe == nil || !ancestorsSafe() {
+		return false
+	}
+	return !readEntriesReachSSHConfigDropIns(fs, cwd)
+}
+
+// safeSSHConfigDropInsAncestors rejects a mask target that is a symlink or that
+// lives under an ancestor OpenSSH would not treat as a trusted system path.
+func safeSSHConfigDropInsAncestors() bool {
+	info, err := os.Lstat(sshConfigDropInsPath)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	for path := filepath.Dir(sshConfigDropInsPath); ; path = filepath.Dir(path) {
+		info, err := os.Lstat(path)
+		if err != nil || !info.IsDir() {
+			return false
+		}
+		if stat, ok := info.Sys().(*unix.Stat_t); ok && (stat.Uid != 0 || info.Mode().Perm()&0o022 != 0) {
+			return false
+		}
+		if path == string(filepath.Separator) {
+			return true
+		}
+	}
+}
+
+// readEntriesReachSSHConfigDropIns reports an explicit read grant inside the
+// drop-ins, which masking would hide.
+func readEntriesReachSSHConfigDropIns(fs *linuxFilesystemPolicy, cwd string) bool {
+	for _, entry := range fs.Entries {
+		if entry.Access != "read" || entry.Special.Kind != "" {
+			continue
+		}
+		path := strings.TrimSpace(entry.Path)
+		if pattern := strings.TrimSpace(entry.Pattern); pattern != "" {
+			path = pattern
+		}
+		if path == "" {
+			continue
+		}
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(cwd, path)
+		}
+		if index := strings.IndexAny(path, "*?["); index >= 0 {
+			path = path[:index]
+		}
+		if pathWithinRoot(filepath.Clean(path), sshConfigDropInsPath) {
+			return true
+		}
+	}
+	return false
 }
 
 func firstMissingPathComponent(path string) string {
