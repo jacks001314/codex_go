@@ -345,10 +345,36 @@ type responsesStreamAccumulator struct {
 	// headers: the HTTP response headers for a streamed response, or the JSON
 	// `headers` of each WebSocket event (Rust's `safety_buffering_for_event`).
 	safetyBufferingTreatment safetyBufferingTreatment
+	// normalizeCompletedOutputItem mirrors Rust #62095's provider hook, which
+	// runs on every completed output item before it enters model history.
+	normalizeCompletedOutputItem func(*AgentItem)
 }
 
 func newResponsesStreamAccumulator(request *AgentRequest) *responsesStreamAccumulator {
 	return &responsesStreamAccumulator{declaredCustomTools: declaredCustomResponseTools(request)}
+}
+
+// completedOutputItemNormalizer resolves Rust #62095's provider hook from the
+// provider identity Go threads through the stream parser. Providers without a
+// rewrite return nil so the hot path stays untouched.
+func completedOutputItemNormalizer(provider string) func(*AgentItem) {
+	if strings.TrimSpace(provider) == "" {
+		return nil
+	}
+	info := &ProviderInfo{Name: strings.TrimSpace(provider)}
+	if !info.IsAmazonBedrock() || info.IsAmazonBedrockRuntime() {
+		return nil
+	}
+	return func(item *AgentItem) {
+		NormalizeCompletedOutputItemForProvider(provider, item)
+	}
+}
+
+func (a *responsesStreamAccumulator) normalizeItem(item *AgentItem) {
+	if a == nil || a.normalizeCompletedOutputItem == nil {
+		return
+	}
+	a.normalizeCompletedOutputItem(item)
 }
 
 func (r *ResponsesAgentRunner) runStreaming(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest) (*AgentResponse, error) {
@@ -812,6 +838,7 @@ func parseResponsesStreamWithTreatment(ctx context.Context, reader io.Reader, re
 	}
 	accumulator := newResponsesStreamAccumulator(request)
 	accumulator.safetyBufferingTreatment = treatment
+	accumulator.normalizeCompletedOutputItem = completedOutputItemNormalizer(providerID)
 	parser := newResponsesSSEParser(reader)
 	// Rust's turn loop wraps the streamed events in `receiving_stream`, with one
 	// `handle_responses` (the per-event span record_responses names) and one
@@ -1469,6 +1496,7 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 		}
 		a.applyToolInputDeltas(item)
 		a.releaseToolInputDeltas(item)
+		a.normalizeItem(item)
 		if item != nil {
 			a.recordAgentItem(item)
 		}
@@ -1566,6 +1594,7 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 		for i := range items {
 			a.applyToolInputDeltas(&items[i])
 			a.releaseToolInputDeltas(&items[i])
+			a.normalizeItem(&items[i])
 			a.recordAgentItem(&items[i])
 		}
 		usage, hasUsage := usageFromStreamEventData(sse.Data)

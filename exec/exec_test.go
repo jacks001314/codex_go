@@ -6951,6 +6951,11 @@ func TestExecMidTurnRollOverCompactsWhileSamplingLikeRust(t *testing.T) {
 	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
 		t.Fatalf("Save auth returned error: %v", err)
 	}
+	// Rust's mid-turn compaction coverage pins the context window instead of
+	// letting the current default model decide when the roll-over fires.
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model_context_window = 272000\n"), 0o600); err != nil {
+		t.Fatalf("Write config returned error: %v", err)
+	}
 	runner := NewRunner(home)
 	runner.Agent = &execMidTurnRolloverAgent{}
 	var stdout, stderr bytes.Buffer

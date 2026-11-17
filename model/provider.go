@@ -476,6 +476,79 @@ func (p *AmazonBedrockProvider) endpoint() bedrockEndpoint {
 	return bedrockEndpointForProviderName(p.info.Name)
 }
 
+// NormalizeCompletedOutputItemForProvider mirrors Rust #62095's
+// ModelProvider::normalize_completed_output_item hook: a provider may adjust a
+// completed response item before it enters model history so its reasoning
+// prefix stays stable across replays. Only Bedrock Mantle needs a rewrite.
+func NormalizeCompletedOutputItemForProvider(provider string, item *AgentItem) {
+	info := &ProviderInfo{Name: strings.TrimSpace(provider)}
+	if !info.IsAmazonBedrock() || info.IsAmazonBedrockRuntime() {
+		return
+	}
+	normalizeMantleCommentaryAnnotations(item)
+}
+
+// normalizeMantleCommentaryAnnotations mirrors
+// AmazonBedrockModelProvider::normalize_completed_output_item (Rust #62095):
+// Mantle's reasoning prefix omits empty `annotations` on assistant commentary,
+// so capture that form before the first replay by dropping an empty (but
+// present) annotations array. Nonempty annotations, final answers, and every
+// other item are left alone.
+func normalizeMantleCommentaryAnnotations(item *AgentItem) {
+	if item == nil || item.Type != "agent_message" {
+		return
+	}
+	phase := stringValueFromAgentItemMap(item.Data, "phase", "messagePhase", "message_phase")
+	if !strings.EqualFold(strings.TrimSpace(phase), "commentary") {
+		return
+	}
+	blocks, ok := agentItemOutputContentBlocks(item.Data)
+	if !ok {
+		return
+	}
+	changed := false
+	for i := range blocks {
+		if blocks[i].Type != "output_text" && blocks[i].Type != "text" {
+			continue
+		}
+		if blocks[i].Annotations != nil && len(*blocks[i].Annotations) == 0 {
+			blocks[i].Annotations = nil
+			changed = true
+		}
+	}
+	if !changed {
+		return
+	}
+	if item.Data == nil {
+		item.Data = map[string]any{}
+	}
+	item.Data["outputContent"] = blocks
+}
+
+// agentItemOutputContentBlocks reads the response content blocks an AgentItem
+// carries for replay without falling back to the flattened text.
+func agentItemOutputContentBlocks(data map[string]any) ([]responsesAgentContentBlock, bool) {
+	if len(data) == 0 {
+		return nil, false
+	}
+	switch blocks := data["outputContent"].(type) {
+	case []responsesAgentContentBlock:
+		return append([]responsesAgentContentBlock(nil), blocks...), true
+	case nil:
+		return nil, false
+	default:
+		encoded, err := json.Marshal(blocks)
+		if err != nil {
+			return nil, false
+		}
+		var decoded []responsesAgentContentBlock
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			return nil, false
+		}
+		return decoded, true
+	}
+}
+
 // bedrockBaseURLForRegion mirrors Rust runtime::base_url / mantle::base_url
 // (d5e256ceb2): the Runtime endpoint is
 // `https://bedrock-runtime.{region}.amazonaws.com/openai/v1` and, unlike the

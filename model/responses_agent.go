@@ -1581,6 +1581,11 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	activeHandler := handler
 	accumulator := newResponsesStreamAccumulator(request)
 	accumulator.routingAffinity = session.capturedAffinity
+	providerIdentity := strings.TrimSpace(r.ProviderID)
+	if providerIdentity == "" && r.Provider != nil {
+		providerIdentity = strings.TrimSpace(r.Provider.Name)
+	}
+	accumulator.normalizeCompletedOutputItem = completedOutputItemNormalizer(providerIdentity)
 	var outputText strings.Builder
 	receivedEvent := false
 	// Rust #55969: a mailbox preemption interrupts a Responses Lite stream

@@ -3595,7 +3595,7 @@
    "phase": "P3",
    "status": "complete",
    "verifier": "TestStatusLineSetupOffersCustomAuthoringLikeRust;TestStatusLineCreateCustomBindsBundledSkillLikeRust;TestStatusLineCreateCustomFallsBackWithoutSkillLikeRust;TestStatusLineCreateCustomActivatesOnEnterLikeRust;TestStatusLineCreateCustomPreservesPreviousDraftLikeRust;TestStatusLineCreateCustomDropsStaleSkillReadLikeRust"
-  }
+  },
   {
    "id": "gpt-6.2-model-catalog",
    "kind": "shared-fixtures",
@@ -3617,5 +3617,22 @@
    "status": "complete",
    "verifier": "TestBundledModelsCatalogMatchesRustSnapshot;TestFallbackBundledModelsMatchCurrentRustDefault;TestAmazonBedrockModelCatalogLikeRust;TestAmazonBedrockRuntimeModelCatalogLikeRust;TestBedrockCatalogAdvertisesUltrafastForAstraLikeRust;TestAmazonBedrockProviderModelsManagerUsesRuntimeCatalogLikeRust"
   },
+  {
+   "id": "bedrock-mantle-commentary-replay",
+   "kind": "source-surface",
+   "rustPaths": [
+    "core/src/client.rs",
+    "model-provider/src/amazon_bedrock/mod.rs",
+    "model-provider/src/provider.rs"
+   ],
+   "goPaths": [
+    "model/provider.go",
+    "model/responses_stream.go",
+    "model/responses_agent.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestBedrockMantleNormalizesCommentaryAnnotationsLikeRust;TestBedrockMantleStreamReplaysCommentaryWithoutEmptyAnnotationsLikeRust"
+  }
   ]
 }
