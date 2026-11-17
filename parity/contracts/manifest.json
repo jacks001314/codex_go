@@ -3285,6 +3285,26 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestStatuslineProviderPollsWithFreshStateLikeRust;TestStatuslineProviderInvalidContentStopsPollingLikeRust;TestStatuslineProviderRPCErrorStopsPollingLikeRust;TestStatuslineProviderRetireCancelsOutstandingReadsLikeRust;TestStatuslineProviderLateReplyAfterDeadlineFailsLikeRust;TestStatuslineProviderHungReadStopsAtDeadlineLikeRust;TestStatuslineProviderLookupDeadlineAndCancelLikeRust"
+  },
+  {
+   "id": "tui-statusline-provider-refresh",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/app/config_persistence.rs",
+    "tui/src/app/reconnect.rs",
+    "tui/src/app/status_line_settings.rs",
+    "tui/src/chatwidget.rs"
+   ],
+   "goPaths": [
+    "tui/tea/statusline_provider_footer.go",
+    "tui/tea/settings_commands.go",
+    "tui/tea/thread_reset.go",
+    "tui/tea/model.go",
+    "tui/tea/statusline_provider_refresh_like_rust_test.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestStatuslineProviderReselectionRestartsFailedReaderLikeRust;TestStatuslineProviderConfigReloadTogglesGateLikeRust;TestStatuslineProviderDisconnectShowsBuiltinAndReattachRestartsLikeRust"
   }
 
 

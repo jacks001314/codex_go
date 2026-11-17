@@ -161,7 +161,7 @@ func (g *statuslineReadyGate) signal() {
 // ChatWidget::selected_statusline_provider gates on read-only history and the
 // extensions feature.
 func (m *Model) selectedStatuslineProvider() *config.StatusLineProviderSelection {
-	if m == nil || m.readOnlyThread {
+	if m == nil || m.statuslineDisconnected || m.readOnlyThread {
 		return nil
 	}
 	if !features.Enabled(m.featureSettings, "tui_extensions_statusline") {

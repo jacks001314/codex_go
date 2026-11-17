@@ -37,6 +37,9 @@ func (m *Model) resetThreadScopedState() {
 	// tier until the new thread's settings arrive.
 	m.threadSettingsConfirmed = false
 	m.retireStatuslineProviderRead()
+	// Rust #61985 clears statusline_disconnected when reconnect builds the next
+	// widget; a thread this TUI attaches to is that fresh widget here.
+	m.statuslineDisconnected = false
 	m.statusLineExtension = nil
 	// Rust ChatWidget::set_current_cwd/session_flow clear the cached project
 	// root whenever the transcript switches threads.

@@ -467,6 +467,12 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 	// LocalSettings::reloaded + App::local_settings). A failed reload never
 	// reaches this point, so the staged record keeps the live settings.
 	m.applyLocalSettings(m.localSettings.Reloaded(msg.Result))
+	if msg.Kind == settingsWriteKindStatusLineProvider {
+		// Rust #61985 reselect_statusline_provider: saving the selection restarts
+		// the reader even when it names the same provider, so /statusline can
+		// retry a failed read without switching providers.
+		m.retireStatuslineProviderRead()
+	}
 	if msg.Kind == settingsWriteKindConfig {
 		if notice, ok := m.finishConfigPanelSave(msg.Result); ok {
 			m.notice = notice

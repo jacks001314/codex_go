@@ -3185,7 +3185,12 @@ type Model struct {
 	statusLineExtension *bottompane.StatusLine
 	// statuslineProviderRead is the footer read bound to the displayed thread,
 	// saved provider, and working directory (Rust ActiveStatuslineRead, #61979).
-	statuslineProviderRead      *activeStatuslineProviderRead
+	statuslineProviderRead *activeStatuslineProviderRead
+	// statuslineDisconnected hides provider content while the app-server
+	// transport is down (Rust #61985 statusline_disconnected): reads would only
+	// fail, so the built-in status line takes the footer until a new session
+	// attaches.
+	statuslineDisconnected      bool
 	statuslineProviderToken     uint64
 	statuslineProviderReady     *statuslineReadyGate
 	onResolveStatuslineProvider func(context.Context, StatuslineProviderReadRequest) (StatuslineProvider, error)
@@ -4569,6 +4574,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		reconnectThreads := m.retireThreadApprovalsForReconnect()
 		m.dropStaleBackendRequests()
 		m.handleAppServerDisconnect()
+		// Rust #61985: a disconnected transport cancels provider reads and shows
+		// the built-in status line instead of a stale provider footer.
+		m.statuslineDisconnected = true
 		// Rust #61596: a disconnected backend has no registered request handle,
 		// so its "Show more" row disappears and stale reads are cancelled.
 		if state := m.agentsOverviewBackendState(m.backendID); state != nil {
