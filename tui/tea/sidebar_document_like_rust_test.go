@@ -214,3 +214,97 @@ func TestSidebarDocumentTabStepLikeRust(t *testing.T) {
 		t.Fatal("stepping did not select the chat tab")
 	}
 }
+
+// openDocumentTabAt installs one loaded preview tab and makes it the visible
+// content so link navigation can be exercised without a chooser round trip.
+func openDocumentTabAt(t *testing.T, model *Model, view SidebarDocumentView) *sidebarDocumentTab {
+	t.Helper()
+	tab := &sidebarDocumentTab{ID: "doc-1", Parent: "parent-a", Source: "parent-a", Path: view.Path, View: view, Link: -1}
+	model.sidebarChooserOpen = true
+	model.sidebarChooserParent = "parent-a"
+	model.sidebarChooserFocused = true
+	model.sidebarDocuments["parent-a"] = []*sidebarDocumentTab{tab}
+	model.sidebarDocumentActive = tab.ID
+	model.refreshTranscript()
+	return tab
+}
+
+// Rust sidebar_document.rs `cycle_document_link` + `OpenDocument`: Tab selects
+// the links in order and Enter opens the selected one against the preview's
+// directory.
+func TestSidebarDocumentLinkCycleAndFollowLikeRust(t *testing.T) {
+	model, _ := newSidebarTabsModel(t)
+	var requests []SidebarDocumentRequest
+	model.onSidebarDocument = func(request SidebarDocumentRequest) SidebarDocumentView {
+		requests = append(requests, request)
+		return SidebarDocumentView{Path: request.Path, Text: "package main\n"}
+	}
+	tab := openDocumentTabAt(t, model, SidebarDocumentView{
+		Path: "/workspace/docs/readme.md",
+		Text: "# Doc\n\n[one](a.md) and [two](b.go#L2C1)\n",
+	})
+
+	if handled, _ := model.updateSidebarDocumentKey(keymsg.KeyMsg{Type: keymsg.KeyTab}); !handled || tab.Link != 0 {
+		t.Fatalf("first tab = handled %t link %d", handled, tab.Link)
+	}
+	model.updateSidebarDocumentKey(keymsg.KeyMsg{Type: keymsg.KeyTab})
+	if tab.Link != 1 {
+		t.Fatalf("second tab link = %d", tab.Link)
+	}
+	model.updateSidebarDocumentKey(keymsg.KeyMsg{Type: keymsg.KeyShiftTab})
+	if tab.Link != 0 {
+		t.Fatalf("backtab link = %d", tab.Link)
+	}
+	model.updateSidebarDocumentKey(keymsg.KeyMsg{Type: keymsg.KeyTab})
+
+	cmd := model.followSidebarDocumentLink(tab)
+	if cmd == nil {
+		t.Fatal("enter did not follow the selected link")
+	}
+	runTeaCmd(t, model, cmd)
+	if len(requests) != 1 {
+		t.Fatalf("requests = %d", len(requests))
+	}
+	if requests[0].Path != "/workspace/docs/b.go" || requests[0].Location == nil || requests[0].Location.Line != 2 {
+		t.Fatalf("request = %#v", requests[0])
+	}
+}
+
+// Rust Document::go_to / Esc: the first Esc clears the coordinate highlight
+// and the next one closes the tab.
+func TestSidebarDocumentEscClearsHighlightLikeRust(t *testing.T) {
+	model, _ := newSidebarTabsModel(t)
+	tab := openDocumentTabAt(t, model, SidebarDocumentView{
+		Path:       "/workspace/main.go",
+		Text:       "package main\n\nfunc main() {}\n",
+		Code:       true,
+		Language:   "go",
+		LineStarts: []int{0, 13, 14},
+		Target:     &SidebarDocumentTarget{Line: 3, Column: 1, Offset: 14},
+	})
+
+	model.updateSidebarDocumentKey(keymsg.KeyMsg{Type: keymsg.KeyEsc, Code: 0x1b})
+	if !tab.TargetCleared || !model.sidebarDocumentVisible() {
+		t.Fatalf("first esc cleared=%t visible=%t", tab.TargetCleared, model.sidebarDocumentVisible())
+	}
+	model.updateSidebarDocumentKey(keymsg.KeyMsg{Type: keymsg.KeyEsc, Code: 0x1b})
+	if model.sidebarDocumentVisible() {
+		t.Fatal("second esc did not close the tab")
+	}
+}
+
+// Rust LegacyAppPathString::resolve_against: relative link targets join the
+// preview's directory and absolute ones stay as written.
+func TestSidebarDocumentLinkPathResolutionLikeRust(t *testing.T) {
+	cases := []struct{ document, link, want string }{
+		{"/workspace/docs/readme.md", "b.go", "/workspace/docs/b.go"},
+		{"/workspace/docs/readme.md", "../src/app.go", "/workspace/src/app.go"},
+		{"/workspace/docs/readme.md", "/etc/hosts", "/etc/hosts"},
+		{`C:\work\docs\readme.md`, "b.go", `C:\work\docs\b.go`},
+	}
+	for _, testCase := range cases {
+		if got := resolveSidebarDocumentLinkPath(testCase.document, testCase.link); got != testCase.want {
+			t.Fatalf("resolve(%q, %q) = %q, want %q", testCase.document, testCase.link, got, testCase.want)
+		}
+	}
+}

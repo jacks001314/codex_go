@@ -7,6 +7,7 @@ import (
 	"time"
 
 	bubbletea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	codextui "codex_go/tui"
 	"codex_go/tui/keymsg"
@@ -66,17 +67,24 @@ type sidebarDocumentTab struct {
 	ID      string
 	Parent  string
 	Source  string
-	Link    int
 	Path    string
 	View    SidebarDocumentView
 	Loading bool
 	// Started anchors the loading glyph (Rust State::Loading(Instant)).
 	Started time.Time
 	Scroll  int
+	// Link is the selected document link index, or -1 (Rust Document::link).
+	Link int
+	// TargetCleared records that Esc removed the coordinate highlight (Rust
+	// Document::target.take()).
+	TargetCleared bool
 
 	renderWidth int
 	renderLines []string
 	rendered    bool
+	linkRowsFor int
+	linkRows    []sidebarDocumentLinkRow
+	linkRowsSet bool
 }
 
 // sidebarDocumentsFor returns the document tabs opened under one parent, in
@@ -115,6 +123,14 @@ func (m *Model) sidebarDocumentVisible() bool {
 // `open_resolved_document`): an existing tab for the same path is focused
 // again instead of duplicated, and a failed tab is replaced.
 func (m *Model) openSidebarFileDocument(link markdown.SidebarFileLink) bubbletea.Cmd {
+	return m.openSidebarDocumentAt(link.Path, -1, link.Location)
+}
+
+// openSidebarDocumentAt opens one path, optionally at a link's coordinate.
+// Rust `open_resolved_document` focuses an already-loaded document and replaces
+// a failed one; the Go pane re-reads when the coordinate changes so the app
+// side stays the single owner of source_target maths.
+func (m *Model) openSidebarDocumentAt(path string, linkIndex int, location *markdown.SidebarSourceLocation) bubbletea.Cmd {
 	if m == nil || m.onSidebarDocument == nil {
 		return nil
 	}
@@ -122,7 +138,7 @@ func (m *Model) openSidebarFileDocument(link markdown.SidebarFileLink) bubbletea
 	if parent == "" {
 		parent = m.sidebarParentThreadID()
 	}
-	path := strings.TrimSpace(link.Path)
+	path = strings.TrimSpace(path)
 	if parent == "" || path == "" {
 		return nil
 	}
@@ -145,6 +161,9 @@ func (m *Model) openSidebarFileDocument(link markdown.SidebarFileLink) bubbletea
 			// A failed preview is replaced so reopening retries the read.
 			m.closeSidebarDocumentTab(tab.ID)
 			break
+		}
+		if location != nil || tab.View.Code {
+			return m.reloadSidebarDocument(tab, linkIndex, location)
 		}
 		m.sidebarDocumentActive = tab.ID
 		m.sidebarChooserFocused = true
@@ -174,10 +193,41 @@ func (m *Model) openSidebarFileDocument(link markdown.SidebarFileLink) bubbletea
 		ParentThreadID: parent,
 		SourceThreadID: parent,
 		Path:           path,
-		Link:           -1,
+		Link:           linkIndex,
+		Location:       location,
 	}
 	return func() bubbletea.Msg {
 		return SidebarDocumentLoadedMsg{ParentThreadID: parent, ID: id, View: open(request)}
+	}
+}
+
+// reloadSidebarDocument re-reads one tab in place with a new coordinate.
+func (m *Model) reloadSidebarDocument(tab *sidebarDocumentTab, linkIndex int, location *markdown.SidebarSourceLocation) bubbletea.Cmd {
+	if m == nil || tab == nil || m.onSidebarDocument == nil {
+		return nil
+	}
+	tab.Loading = true
+	tab.Started = time.Now()
+	tab.Link = -1
+	tab.TargetCleared = false
+	tab.Scroll = 0
+	tab.rendered = false
+	tab.renderLines = nil
+	tab.linkRowsSet = false
+	m.sidebarDocumentActive = tab.ID
+	m.sidebarChooserFocused = true
+	m.sidebarTabHover = -1
+	m.refreshTranscript()
+	open := m.onSidebarDocument
+	request := SidebarDocumentRequest{
+		ParentThreadID: tab.Parent,
+		SourceThreadID: tab.Source,
+		Path:           tab.Path,
+		Link:           linkIndex,
+		Location:       location,
+	}
+	return func() bubbletea.Msg {
+		return SidebarDocumentLoadedMsg{ParentThreadID: tab.Parent, ID: tab.ID, View: open(request)}
 	}
 }
 
@@ -199,6 +249,7 @@ func (m *Model) applySidebarDocumentLoaded(msg SidebarDocumentLoadedMsg) bubblet
 		}
 		tab.rendered = false
 		tab.renderLines = nil
+		tab.linkRowsSet = false
 		m.refreshTranscript()
 		return nil
 	}
@@ -231,6 +282,174 @@ func (m *Model) closeSidebarDocumentTab(id string) bubbletea.Cmd {
 	m.sidebarTabHover = -1
 	m.refreshTranscript()
 	return nil
+}
+
+// sidebarDocumentLinkRow is one document link resolved onto a rendered row.
+type sidebarDocumentLinkRow struct {
+	Index int
+	Row   int // -1 when the rendered text does not repeat the destination
+	Path  string
+}
+
+// sidebarDocumentLinks lists the local file links a rendered Markdown preview
+// carries, in document order (Rust `document_links`). Source previews have no
+// reader links, so they select nothing.
+func (m *Model) sidebarDocumentLinks(tab *sidebarDocumentTab) []markdown.SidebarFileLink {
+	if tab == nil || tab.Loading || tab.View.Err != "" || tab.View.Code {
+		return nil
+	}
+	return markdown.SidebarFileLinks(tab.View.Text)
+}
+
+// sidebarDocumentLinkRows maps each link onto the rendered row that shows its
+// destination. The renderer paints the label and then the resolved target, so
+// the destination search runs forward and never reuses a row.
+func (m *Model) sidebarDocumentLinkRows(tab *sidebarDocumentTab) []sidebarDocumentLinkRow {
+	lines := m.sidebarDocumentLines(tab, m.sidebarDocumentBodyWidth())
+	if tab.linkRowsSet && tab.linkRowsFor == tab.renderWidth {
+		return tab.linkRows
+	}
+	links := m.sidebarDocumentLinks(tab)
+	if len(links) == 0 {
+		tab.linkRowsSet = true
+		tab.linkRowsFor = tab.renderWidth
+		tab.linkRows = nil
+		return nil
+	}
+	rows := make([]sidebarDocumentLinkRow, 0, len(links))
+	searchFrom := 0
+	for index, link := range links {
+		row := -1
+		path := strings.TrimSpace(link.Path)
+		for candidate := searchFrom; candidate < len(lines) && path != ""; candidate++ {
+			if strings.Contains(ansi.Strip(lines[candidate]), path) {
+				row = candidate
+				searchFrom = candidate
+				break
+			}
+		}
+		rows = append(rows, sidebarDocumentLinkRow{Index: index, Row: row, Path: path})
+	}
+	tab.linkRowsSet = true
+	tab.linkRowsFor = tab.renderWidth
+	tab.linkRows = rows
+	return rows
+}
+
+// cycleSidebarDocumentLink moves the selection like Rust `cycle_document_link`:
+// Tab starts at the first link, BackTab at the last, and the chooser scrolls
+// the selected link into view.
+func (m *Model) cycleSidebarDocumentLink(tab *sidebarDocumentTab, forward bool) {
+	rows := m.sidebarDocumentLinkRows(tab)
+	if len(rows) == 0 {
+		tab.Link = -1
+		m.refreshTranscript()
+		return
+	}
+	switch {
+	case tab.Link < 0 && forward:
+		tab.Link = 0
+	case tab.Link < 0:
+		tab.Link = len(rows) - 1
+	case forward:
+		tab.Link = (tab.Link + 1) % len(rows)
+	default:
+		tab.Link = (tab.Link + len(rows) - 1) % len(rows)
+	}
+	if tab.Link < len(rows) {
+		m.sidebarDocumentRevealRow(tab, rows[tab.Link].Row)
+	}
+	m.refreshTranscript()
+}
+
+// sidebarDocumentRevealRow scrolls the viewport so a row is visible.
+func (m *Model) sidebarDocumentRevealRow(tab *sidebarDocumentTab, row int) {
+	if m == nil || tab == nil || row < 0 {
+		return
+	}
+	height := m.sidebarDocumentViewportHeight()
+	if row < tab.Scroll {
+		tab.Scroll = row
+	}
+	if row >= tab.Scroll+height {
+		tab.Scroll = row - height + 1
+	}
+	tab.Scroll = clampModalInt(tab.Scroll, 0, m.sidebarDocumentMaxScroll(tab))
+}
+
+// followSidebarDocumentLink opens the selected link, resolving a relative
+// destination against the preview's own directory (Rust `OpenDocument`).
+func (m *Model) followSidebarDocumentLink(tab *sidebarDocumentTab) bubbletea.Cmd {
+	if tab == nil || tab.Link < 0 {
+		return nil
+	}
+	links := m.sidebarDocumentLinks(tab)
+	if tab.Link >= len(links) {
+		return nil
+	}
+	link := links[tab.Link]
+	link.Path = resolveSidebarDocumentLinkPath(tab.Path, link.Path)
+	tab.Link = -1
+	return m.openSidebarDocumentAt(link.Path, -1, link.Location)
+}
+
+// resolveSidebarDocumentLinkPath resolves a document link the way Rust's
+// `LegacyAppPathString::resolve_against` does: absolute targets stay as
+// written and relative ones join the preview's parent directory.
+func resolveSidebarDocumentLinkPath(documentPath string, linkPath string) string {
+	linkPath = strings.TrimSpace(linkPath)
+	if linkPath == "" {
+		return linkPath
+	}
+	if isAbsoluteSidebarPath(linkPath) || strings.HasPrefix(linkPath, `\\`) {
+		return linkPath
+	}
+	parent := documentPath
+	if index := strings.LastIndexAny(parent, `/\`); index >= 0 {
+		parent = parent[:index]
+	}
+	if parent == "" {
+		return linkPath
+	}
+	separator := "/"
+	if strings.Contains(parent, `\`) && !strings.Contains(parent, "/") {
+		separator = `\`
+	}
+	return cleanSidebarDocumentPath(parent+separator+linkPath, separator)
+}
+
+// cleanSidebarDocumentPath collapses `.` and `..` segments without touching
+// the root prefix.
+func cleanSidebarDocumentPath(value string, separator string) string {
+	parts := strings.Split(value, separator)
+	stack := make([]string, 0, len(parts))
+	rooted := false
+	for index, part := range parts {
+		switch part {
+		case "":
+			if index == 0 {
+				rooted = true
+			}
+		case ".":
+			continue
+		case "..":
+			if len(stack) > 0 && stack[len(stack)-1] != ".." {
+				stack = stack[:len(stack)-1]
+			} else if !rooted {
+				stack = append(stack, part)
+			}
+		default:
+			stack = append(stack, part)
+		}
+	}
+	joined := strings.Join(stack, separator)
+	if rooted {
+		return separator + joined
+	}
+	if joined == "" {
+		return "."
+	}
+	return joined
 }
 
 // stepSidebarDocumentTab moves the strip selection by one tab, wrapping around
@@ -273,6 +492,20 @@ func (m *Model) updateSidebarDocumentKey(msg keymsg.KeyMsg) (bool, bubbletea.Cmd
 		return false, nil
 	}
 	action := sidebarChooserListAction(msg)
+	if action == "" {
+		switch msg.Type {
+		case keymsg.KeyTab:
+			m.cycleSidebarDocumentLink(tab, true)
+			return true, nil
+		case keymsg.KeyShiftTab:
+			m.cycleSidebarDocumentLink(tab, false)
+			return true, nil
+		}
+	}
+	if tab.Link >= 0 && action != "cancel" && action != "accept" {
+		// Rust clears the link selection on any other pager or list key.
+		tab.Link = -1
+	}
 	switch action {
 	case "move_up":
 		m.scrollSidebarDocument(tab, -1)
@@ -295,11 +528,28 @@ func (m *Model) updateSidebarDocumentKey(msg keymsg.KeyMsg) (bool, bubbletea.Cmd
 		m.refreshTranscript()
 		return true, nil
 	case "cancel":
+		// Rust Esc clears the selected link, then the coordinate highlight,
+		// and only then closes the tab.
+		if tab.Link >= 0 {
+			tab.Link = -1
+			m.refreshTranscript()
+			return true, nil
+		}
+		if tab.View.Target != nil && !tab.TargetCleared {
+			tab.TargetCleared = true
+			m.refreshTranscript()
+			return true, nil
+		}
 		m.suppressCurrentViewKeyUntilRelease()
 		return true, m.closeSidebarDocumentTab(tab.ID)
-	case "accept", "move_left", "move_right":
-		// Rust keeps the tab shortcut on Left/Right and Enter for links; links
-		// arrive with the document link pass, so consume the key for now.
+	case "accept":
+		if cmd := m.followSidebarDocumentLink(tab); cmd != nil {
+			return true, cmd
+		}
+		return true, nil
+	case "move_left", "move_right":
+		// Rust keeps the strip shortcut on Left/Right while the reader owns
+		// the pane.
 		return true, nil
 	}
 	return false, nil
@@ -517,8 +767,24 @@ func (m *Model) renderSidebarDocument(width int, height int) string {
 	bodyWidth := max(width-2, 1)
 	lines := m.sidebarDocumentLines(tab, bodyWidth)
 	tab.Scroll = clampModalInt(tab.Scroll, 0, max(len(lines)-contentHeight, 0))
+	targetRow := -1
+	if tab.View.Target != nil && !tab.TargetCleared {
+		targetRow = tab.View.Target.Line - 1
+	}
+	linkPath := ""
+	if rows := m.sidebarDocumentLinkRows(tab); tab.Link >= 0 && tab.Link < len(rows) {
+		linkPath = rows[tab.Link].Path
+	}
 	for index := 0; index < contentHeight && tab.Scroll+index < len(lines); index++ {
-		rows[1+index] = " " + codextui.TruncateToWidth(lines[tab.Scroll+index], bodyWidth)
+		row := tab.Scroll + index
+		line := lines[row]
+		if linkPath != "" {
+			line = highlightSidebarDocumentLink(line, linkPath)
+		}
+		if row == targetRow {
+			line = paintSidebarDocumentTarget(line, bodyWidth)
+		}
+		rows[1+index] = " " + codextui.TruncateToWidth(line, bodyWidth)
 	}
 	rows[footer] = " " + m.sidebarDocumentFooter(bodyWidth, tab)
 	return strings.Join(rows, "\n")
@@ -530,14 +796,59 @@ func (m *Model) sidebarDocumentFooter(width int, tab *sidebarDocumentTab) string
 	if m == nil || tab == nil {
 		return ""
 	}
-	hints := make([]string, 0, 2)
+	hints := make([]string, 0, 4)
 	up := m.sidebarChooserListHint("move_up")
 	down := m.sidebarChooserListHint("move_down")
 	if up != "" && down != "" {
 		hints = append(hints, up+"/"+down+" read")
 	}
+	if len(m.sidebarDocumentLinks(tab)) > 0 {
+		hints = append(hints, "tab link")
+	}
 	if key := m.sidebarChooserListHint("cancel"); key != "" {
-		hints = append(hints, key+" close")
+		if tab.Link >= 0 || (tab.View.Target != nil && !tab.TargetCleared) {
+			hints = append(hints, key+" clear highlight")
+		} else {
+			hints = append(hints, key+" close")
+		}
 	}
 	return fitSidebarChooserHints(hints, width)
+}
+
+// paintSidebarDocumentTarget shades the coordinate link's row (Rust
+// render_document paints user_message_style over the target line).
+func paintSidebarDocumentTarget(line string, width int) string {
+	level := codextui.DetectStdoutColorLevel()
+	spec := selectionNotUnderlined(level)
+	prefix := codextui.SGRForStyleQuiet(spec, level)
+	if prefix == "" {
+		return line
+	}
+	padding := max(width-codextui.DisplayWidth(line), 0)
+	return prefix + line + strings.Repeat(" ", padding) + "\x1b[0m"
+}
+
+// highlightSidebarDocumentLink reverses the destination span of the selected
+// link so Tab navigation shows which link Enter would open.
+func highlightSidebarDocumentLink(line string, path string) string {
+	if path == "" {
+		return line
+	}
+	index := strings.LastIndex(line, path)
+	if index < 0 {
+		return line
+	}
+	start := index
+	for start > 0 && index-start <= 12 && line[start-1] != 'm' {
+		start--
+	}
+	if start > 0 && line[start-1] == 'm' {
+		if open := strings.LastIndex(line[:start], "\x1b["); open >= 0 {
+			start = open
+		}
+	} else {
+		start = index
+	}
+	end := index + len(path)
+	return line[:start] + "\x1b[7m" + line[start:end] + "\x1b[27m" + line[end:]
 }
