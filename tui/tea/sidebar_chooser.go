@@ -1686,9 +1686,14 @@ func (m *Model) requestSidebarFiles() bubbletea.Cmd {
 	if m == nil {
 		return nil
 	}
+	transcript := m.sidebarTranscriptFileLinks()
 	parentThreadID := strings.TrimSpace(m.sidebarChooserParent)
 	if parentThreadID == "" || m.onSidebarFiles == nil {
 		m.sidebarFilesLoading = false
+		selected := m.sidebarChooserSelectedFilePath()
+		m.sidebarFiles = transcript
+		m.restoreSidebarFileSelection(selected)
+		m.clampSidebarChoice()
 		return nil
 	}
 	m.sidebarFilesRequest++
@@ -1696,8 +1701,79 @@ func (m *Model) requestSidebarFiles() bubbletea.Cmd {
 	m.sidebarFilesLoading = true
 	load := m.onSidebarFiles
 	return func() bubbletea.Msg {
-		return SidebarFilesLoadedMsg{ParentThreadID: parentThreadID, RequestID: request, Snapshot: load(parentThreadID)}
+		snapshot := load(parentThreadID)
+		snapshot.Files = mergeSidebarFileLinks(nil, append(append([]markdown.SidebarFileLink{}, transcript...), snapshot.Files...))
+		return SidebarFilesLoadedMsg{ParentThreadID: parentThreadID, RequestID: request, Snapshot: snapshot}
 	}
+}
+
+// sidebarTranscriptFileLinks is the chooser's view of Rust's
+// refresh_sidebar_files transcript pass: every file a visible user or agent
+// message links to, newest message first. Tool output is not scanned.
+func (m *Model) sidebarTranscriptFileLinks() []markdown.SidebarFileLink {
+	if m == nil || m.State == nil {
+		return nil
+	}
+	cwd := strings.TrimSpace(m.State.CWD)
+	links := make([]markdown.SidebarFileLink, 0, 8)
+	messages := m.State.Messages
+	for index := len(messages) - 1; index >= 0; index-- {
+		message := messages[index]
+		if message.TranscriptOnly {
+			continue
+		}
+		var source string
+		switch message.Role {
+		case codextui.RoleUser:
+			source = message.UserPrompt
+			if strings.TrimSpace(source) == "" {
+				source = message.Text
+			}
+		case codextui.RoleAssistant:
+			source = message.Text
+		default:
+			continue
+		}
+		found := markdown.SidebarFileLinks(source)
+		for linkIndex := len(found) - 1; linkIndex >= 0; linkIndex-- {
+			if resolved, ok := resolveSidebarFileLink(cwd, found[linkIndex]); ok {
+				links = append(links, resolved)
+			}
+		}
+	}
+	return links
+}
+
+// resolveSidebarFileLink is Rust sidebar_files::resolve: length and control
+// characters gate the destination, and relative paths join the workspace.
+func resolveSidebarFileLink(cwd string, link markdown.SidebarFileLink) (markdown.SidebarFileLink, bool) {
+	if link.Path == "" || len(link.Path) > 4096 {
+		return markdown.SidebarFileLink{}, false
+	}
+	for _, r := range link.Path {
+		if r < 0x20 || r == 0x7f {
+			return markdown.SidebarFileLink{}, false
+		}
+	}
+	if cwd == "" || isAbsoluteSidebarPath(link.Path) {
+		return link, true
+	}
+	separator := "/"
+	if strings.Contains(cwd, "\\") && !strings.Contains(cwd, "/") {
+		separator = "\\"
+	}
+	link.Path = strings.TrimRight(cwd, "/\\") + separator + strings.TrimLeft(link.Path, "/\\")
+	if len(link.Path) > 4096 {
+		return markdown.SidebarFileLink{}, false
+	}
+	return link, true
+}
+
+func isAbsoluteSidebarPath(path string) bool {
+	if strings.HasPrefix(path, "/") || strings.HasPrefix(path, "\\\\") {
+		return true
+	}
+	return len(path) >= 3 && path[1] == ':' && (path[2] == '\\' || path[2] == '/')
 }
 
 // applySidebarFilesLoaded replaces the Files group and keeps a selected file

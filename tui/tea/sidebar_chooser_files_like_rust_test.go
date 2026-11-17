@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
+	codextui "codex_go/tui"
 	"codex_go/tui/keymsg"
 	"codex_go/tui/markdown"
 )
@@ -201,6 +202,58 @@ func TestSidebarChooserKeepsFileSelectionWhenInventoryChangesLikeRust(t *testing
 	})
 	if got := model.sidebarChooserSelectedFilePath(); got != "/workspace/b.ts" {
 		t.Fatalf("selection after the inventory grew = %q, want b.ts", got)
+	}
+}
+
+// Rust refresh_sidebar_files transcript pass: markdown links from visible user
+// and agent messages join the workspace and list newest first.
+func TestSidebarChooserListsTranscriptLinksLikeRust(t *testing.T) {
+	model, _ := newSidebarTabsModel(t)
+	model.State.CWD = "/workspace"
+	model.State.AddMessage(codextui.RoleUser, "see [first](src/first.ts) and [root](README.md)")
+	model.State.AddMessage(codextui.RoleAssistant, "updated [second](/workspace/src/second.ts)")
+
+	if cmd := model.openSidebarChooser(); cmd != nil {
+		runTeaCmdChain(t, model, cmd, 0)
+	}
+	got := make([]string, 0, len(model.sidebarFiles))
+	for _, file := range model.sidebarFiles {
+		got = append(got, file.Path)
+	}
+	want := []string{"/workspace/src/second.ts", "/workspace/README.md", "/workspace/src/first.ts"}
+	if len(got) != len(want) {
+		t.Fatalf("transcript files = %v, want %v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("transcript files = %v, want %v", got, want)
+		}
+	}
+}
+
+// Rust promote_files: the host-provided inventory (patches, generated images)
+// follows the transcript links without duplicating a mentioned file.
+func TestSidebarChooserMergesHostFilesLikeRust(t *testing.T) {
+	model, _ := newSidebarTabsModel(t)
+	model.State.CWD = "/workspace"
+	model.State.AddMessage(codextui.RoleAssistant, "see [app](src/app.ts)")
+	model.onSidebarFiles = func(string) SidebarFilesSnapshot {
+		return SidebarFilesSnapshot{
+			Files: []markdown.SidebarFileLink{
+				{Path: "/workspace/src/app.ts"},
+				{Path: "/workspace/src/generated.ts"},
+			},
+			CWD: "/workspace",
+		}
+	}
+	if cmd := model.openSidebarChooser(); cmd != nil {
+		runTeaCmdChain(t, model, cmd, 0)
+	}
+	if len(model.sidebarFiles) != 2 {
+		t.Fatalf("merged files = %+v, want two unique entries", model.sidebarFiles)
+	}
+	if model.sidebarFiles[0].Path != "/workspace/src/app.ts" || model.sidebarFiles[1].Path != "/workspace/src/generated.ts" {
+		t.Fatalf("merged files = %+v, want the transcript link first", model.sidebarFiles)
 	}
 }
 
