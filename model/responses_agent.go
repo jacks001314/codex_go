@@ -1075,6 +1075,33 @@ func stopResponsesWebsocketReader(session *responsesWebsocketSession) {
 	session.messages = nil
 }
 
+// requestWithContextTrace fills an unset request trace from the caller's span
+// carrier, mirroring Rust codex-api's response_create_client_metadata reading
+// the current span (#62103). The caller's request is copied so a prewarm trace
+// never leaks into later turns.
+func requestWithContextTrace(ctx context.Context, request *AgentRequest) *AgentRequest {
+	if request == nil || request.Trace != nil {
+		return request
+	}
+	var trace *protocol.W3CTraceContext
+	if carrier := TelemetryTraceCarrierFromContext(ctx); carrier != nil {
+		if traceparent, tracestate, ok := carrier.TraceContext(); ok && strings.TrimSpace(traceparent) != "" {
+			trace = &protocol.W3CTraceContext{Traceparent: traceparent, Tracestate: tracestate}
+		}
+	}
+	if trace == nil {
+		if fromRequest, ok := protocol.TraceContextFromContext(ctx); ok && fromRequest != nil && strings.TrimSpace(fromRequest.Traceparent) != "" {
+			trace = fromRequest
+		}
+	}
+	if trace == nil {
+		return request
+	}
+	cloned := *request
+	cloned.Trace = trace
+	return &cloned
+}
+
 func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentRequest) (*AgentResponse, error) {
 	if r == nil || !r.SupportsWebsockets || r.websocketsDisabled() {
 		return nil, nil
@@ -1085,6 +1112,7 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	request = requestWithContextTrace(ctx, request)
 	session := r.websocketSession(request)
 	session.mu.Lock()
 	defer session.mu.Unlock()
@@ -1153,7 +1181,10 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 		reauth := session.websocketReauth(r.AuthSnapshot)
 		// Rust #46506: a secure WebSocket handshake reuses the HTTP factory's
 		// ChatGPT cookie store, while an explicit Cookie header still wins.
-		headers := network.WebsocketHandshakeCookies(endpoint, httpRequest.Header)
+		headers := network.WebsocketHandshakeCookies(endpoint, httpRequest.Header).Clone()
+		// Rust #62103: the handshake carries the current span's W3C trace
+		// context, so prewarm traffic joins the trace that started it.
+		InjectTraceHeadersFromContext(ctx, headers)
 		var response *http.Response
 		conn, response, err = websocket.Dial(connectCtx, endpoint, &websocket.DialOptions{HTTPHeader: headers})
 		if response != nil {
@@ -1428,6 +1459,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	request = requestWithContextTrace(ctx, request)
 	session := r.websocketSession(request)
 	session.mu.Lock()
 	locked := true
@@ -1488,7 +1520,11 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 			}
 		}
 		reauth := session.websocketReauth(r.AuthSnapshot)
-		dialOptions := &websocket.DialOptions{HTTPHeader: network.WebsocketHandshakeCookies(endpoint, dialHeader)}
+		handshakeHeaders := network.WebsocketHandshakeCookies(endpoint, dialHeader).Clone()
+		// Rust #62103: every WebSocket handshake carries the current span's W3C
+		// trace context.
+		InjectTraceHeadersFromContext(ctx, handshakeHeaders)
+		dialOptions := &websocket.DialOptions{HTTPHeader: handshakeHeaders}
 		if client := r.websocketHTTPClient(); client != nil {
 			dialOptions.HTTPClient = client
 		}

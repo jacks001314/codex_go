@@ -3681,6 +3681,22 @@
    "phase": "P1",
    "status": "complete",
    "verifier": "TestMaterializeThreadHistoryDurableSuffixSkipsCoveredProjectionLikeRust;TestMaterializeThreadHistoryDurableSuffixProjectsPlainAndCompressedSuffixLikeRust;TestRouterRolloutFlushReconcilesStateAndLazilyProjectsHistory"
+  },
+  {
+   "id": "websocket-handshake-trace-context",
+   "kind": "source-surface",
+   "rustPaths": [
+    "core/src/client.rs",
+    "core/src/session/startup_prewarm.rs",
+    "core/tests/suite/client_websockets.rs"
+   ],
+   "goPaths": [
+    "model/responses_agent.go",
+    "model/websocket_prewarm_trace_like_rust_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestResponsesWebsocketHandshakeCarriesSpanTraceLikeRust;TestResponsesWebsocketHandshakeFallsBackToRequestTraceLikeRust"
   }
   ]
 }
