@@ -43,6 +43,9 @@ func (c *remoteAppServerTUIClient) accountStatusUpdated(payload auth.AccountUpda
 	}
 	authMode := strings.TrimSpace(stringPtrValue(payload.AuthMode))
 	status, hasChatGPTAccount := remoteAccountStatusFromAuthMode(authMode, payload.PlanType)
+	// The status display uses the remapped label, but billing needs the raw plan
+	// value the app-server reported (Rust update_account_state, #61978).
+	planType := remoteAccountPlanType(payload.PlanType)
 	display := ""
 	if status != nil {
 		display, _ = status.DisplayValue()
@@ -58,6 +61,7 @@ func (c *remoteAppServerTUIClient) accountStatusUpdated(payload auth.AccountUpda
 		Display:           display,
 		HasChatGPTAccount: hasChatGPTAccount,
 		EmailRequestID:    requestID,
+		PlanType:          planType,
 	})
 	if requestID != "" {
 		go c.refreshAccountEmail(requestID)
@@ -104,11 +108,26 @@ func (c *remoteAppServerTUIClient) refreshAccountEmail(requestID string) {
 	if response.Account.Email != nil {
 		email = strings.TrimSpace(*response.Account.Email)
 	}
+	accountPlan := response.Account.PlanType
 	c.send(codextea.AccountEmailLoadedMsg{
 		RequestID: requestID,
 		Email:     email,
 		Workspace: remoteStatusWorkspaceValue(response),
+		PlanType:  remoteAccountPlanType(&accountPlan),
 	})
+}
+
+// remoteAccountPlanType keeps the raw plan value for billing. An unknown plan
+// must stay empty so it cannot erase a plan a quota read confirmed.
+func remoteAccountPlanType(planType *auth.PlanType) string {
+	if planType == nil {
+		return ""
+	}
+	plan := strings.TrimSpace(string(*planType))
+	if plan == "" || strings.EqualFold(plan, string(auth.PlanUnknown)) {
+		return ""
+	}
+	return plan
 }
 
 // remoteStatusWorkspaceValue mirrors Rust's workspace_display for the /status

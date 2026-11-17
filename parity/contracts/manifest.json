@@ -3111,6 +3111,27 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestRenderedProseBreaksLongTokenLikeRust;TestRenderedURLTokenStaysWholeLikeRust;TestRenderedBrokenTokenKeepsIndentLikeRust;TestRenderedBrokenTokenKeepsStyleAndLinkLikeRust;TestRenderedWrapLeavesCodeBlocksAloneLikeRust;TestSidePaneWrapsLongProseTokenLikeRust;TestNarrowSideChatWrapsLongProseTokenLikeRust"
+  },
+  {
+   "id": "tui-billing-plan-from-quota",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/chatwidget/rate_limits.rs",
+    "tui/src/chatwidget/settings.rs",
+    "tui/src/chatwidget/thread_usage.rs",
+    "tui/src/app/account_status.rs"
+   ],
+   "goPaths": [
+    "tui/tea/billing_plan.go",
+    "tui/tea/model.go",
+    "tui/tea/account_status.go",
+    "tui/tea/billing_plan_like_rust_test.go",
+    "app/remote_account_status.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestBillingPlanPrefersKnownQuotaPlanInEitherReplyOrderLikeRust;TestBillingPlanIgnoresNonCodexQuotaLimitsLikeRust;TestRollingQuotaCannotRestoreObsoleteBillingPlanLikeRust;TestAccountUpdateDropsQuotaPlanLikeRust;TestBillingPlanClearsThreadUsageOnlyWhenUnavailableLikeRust;TestQuotaReadReArmsPendingStatusThreadUsageLikeRust;TestAgentsOverviewUsagePlanChangeRepricesCache"
   }
+
   ]
 }

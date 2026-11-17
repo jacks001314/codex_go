@@ -164,13 +164,30 @@ func TestAgentsOverviewUsageGates(t *testing.T) {
 	}
 }
 
-func TestAgentsOverviewUsagePlanChangeClearsCache(t *testing.T) {
+// TestAgentsOverviewUsagePlanChangeRepricesCache covers Rust #61978: a full
+// quota read may correct the billing plan, and the cached dashboard estimate is
+// repriced with the plan that now serves requests instead of being dropped.
+func TestAgentsOverviewUsagePlanChangeRepricesCache(t *testing.T) {
 	model := newUsageDashboardModel(t, "business")
-	model.agentsOverviewUsage["root-1"] = &agentsOverviewUsageEntry{estimate: &AgentsOverviewThreadUsage{ThreadID: "root-1"}}
-	model.agentsOverviewUsageDisabled = true
-	model.applyRateLimitSnapshot(chatwidget.RateLimitSnapshot{LimitID: "codex", PlanType: "free"})
-	if len(model.agentsOverviewUsage) != 0 || model.agentsOverviewUsageDisabled {
-		t.Fatalf("plan change must clear usage: %#v disabled=%v", model.agentsOverviewUsage, model.agentsOverviewUsageDisabled)
+	model.agentsOverviewUsage["root-1"] = &agentsOverviewUsageEntry{
+		estimate: &AgentsOverviewThreadUsage{
+			ThreadID:               "root-1",
+			EstimatedCreditsMicros: 46_000_000,
+			EstimatedUSDMicros:     usageInt64Ptr(1_820_000),
+			NativeUSDMicros:        usageInt64Ptr(750_000),
+		},
+	}
+	model.syncAgentsOverviewUsageLines()
+	model.applyRateLimitSnapshotFromSource(chatwidget.RateLimitSnapshot{LimitID: "codex", PlanType: "ent26"}, rateLimitSnapshotAccountUsage, false)
+	if model.chatGPTPlanType != "ent26" {
+		t.Fatalf("billing plan = %q, want ent26", model.chatGPTPlanType)
+	}
+	if len(model.agentsOverviewUsage) != 1 {
+		t.Fatalf("plan change dropped cached usage: %#v", model.agentsOverviewUsage)
+	}
+	view := utils.StripANSI(model.viewString())
+	if !strings.Contains(view, "Est. usage: ~$0.75") {
+		t.Fatalf("cached usage was not repriced for ENT26: %s", view)
 	}
 }
 

@@ -3,6 +3,8 @@ package tea
 import (
 	"strings"
 
+	bubbletea "charm.land/bubbletea/v2"
+
 	"codex_go/tui/chatwidget"
 	tuistatus "codex_go/tui/status"
 )
@@ -10,9 +12,9 @@ import (
 // applyAccountStatusUpdated replaces the status account immediately. The email
 // request id identifies the single asynchronous result allowed to complete it
 // (Rust #50199).
-func (m *Model) applyAccountStatusUpdated(message AccountStatusUpdatedMsg) {
+func (m *Model) applyAccountStatusUpdated(message AccountStatusUpdatedMsg) bubbletea.Cmd {
 	if m == nil {
-		return
+		return nil
 	}
 	previousDisplay := ""
 	previousChatGPT := m.hasChatGPTAccount
@@ -35,8 +37,12 @@ func (m *Model) applyAccountStatusUpdated(message AccountStatusUpdatedMsg) {
 		// scoped to the account the connected server authenticated.
 		m.invalidatePermissionDiscoveryCache()
 	}
+	// Rust update_account_state always rebinds the account plan and drops the
+	// quota plan, which spoke for the previous account (#61978).
+	planCmd := m.setAccountPlan(message.PlanType)
 	m.accountEmailRequestID = strings.TrimSpace(message.EmailRequestID)
 	m.refreshTranscript()
+	return planCmd
 }
 
 func accountIdentityChanged(previousDisplay, currentDisplay string, previousChatGPT, currentChatGPT bool) bool {
@@ -52,24 +58,27 @@ func (m *Model) clearUsageNoticeState() {
 	}
 	m.rateLimitSnapshots = map[string]chatwidget.RateLimitSnapshot{}
 	m.rateLimitWarnings = chatwidget.RateLimitWarningState{}
-	m.chatGPTPlanType = ""
+	m.quotaPlanType = ""
 	m.clearThreadUsage()
 	m.syncStateRateLimits()
 }
 
 // applyAccountEmailLoaded updates only the current account-email request and
 // reports whether the display changed.
-func (m *Model) applyAccountEmailLoaded(message AccountEmailLoadedMsg) bool {
+func (m *Model) applyAccountEmailLoaded(message AccountEmailLoadedMsg) (bool, bubbletea.Cmd) {
 	if m == nil || m.State == nil {
-		return false
+		return false, nil
 	}
 	requestID := strings.TrimSpace(message.RequestID)
 	if requestID == "" || requestID != m.accountEmailRequestID {
-		return false
+		return false, nil
 	}
 	m.accountEmailRequestID = ""
 	m.State.AccountDisplay = tuistatus.AccountDisplayWithEmail(m.State.AccountDisplay, message.Email)
 	m.State.WorkspaceDisplay = strings.TrimSpace(message.Workspace)
+	// Rust on_account_email_loaded rebinds the account plan from the fresh read
+	// while keeping the quota plan, so a known quota plan still wins.
+	planCmd := m.setAccountReadPlan(message.PlanType)
 	m.refreshTranscript()
-	return true
+	return true, planCmd
 }

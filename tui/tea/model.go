@@ -788,6 +788,10 @@ type AccountStatusUpdatedMsg struct {
 	Workspace         string
 	HasChatGPTAccount bool
 	EmailRequestID    string
+	// PlanType is the raw account plan reported with the update. It replaces
+	// the account plan and clears any quota plan that belonged to the previous
+	// account (Rust update_account_state, #61978).
+	PlanType string
 }
 
 // AccountEmailLoadedMsg carries the asynchronous account email read started by
@@ -797,6 +801,10 @@ type AccountEmailLoadedMsg struct {
 	RequestID string
 	Email     string
 	Workspace string
+	// PlanType is the raw plan from account/read. A fresh account read may be
+	// less cached than the token behind the notification (Rust
+	// on_account_email_loaded, #61978).
+	PlanType string
 }
 
 type reviewTokenSnapshot struct {
@@ -3200,12 +3208,18 @@ type Model struct {
 	// threadGoals keeps the last observed goal per thread. The TUI displays one
 	// thread at a time and side conversations are ephemeral forks with no goal
 	// state, so the parent thread's goal must not leak into a side transcript.
-	threadGoals                      map[string]*appserver.Goal
-	goalStatusTickActive             bool
-	goalObservedAt                   time.Time
-	pendingGoalObjective             string
-	hasChatGPTAccount                bool
-	accountEmailRequestID            string
+	threadGoals           map[string]*appserver.Goal
+	goalStatusTickActive  bool
+	goalObservedAt        time.Time
+	pendingGoalObjective  string
+	hasChatGPTAccount     bool
+	accountEmailRequestID string
+	// accountPlanType is the plan the signed-in account reports and
+	// quotaPlanType is the plan a full Codex quota read confirmed. The effective
+	// chatGPTPlanType prefers the quota plan so thread usage bills with the plan
+	// that actually serves requests (Rust #61978).
+	accountPlanType                  string
+	quotaPlanType                    string
 	chatGPTPlanType                  string
 	availableRateLimitResetCredits   *int64
 	nextUsageRequestID               uint64
@@ -3836,6 +3850,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		approvalsReviewer:                approvalsReviewerFromState(state),
 		permissionRequirements:           clonePermissionRequirementsTea(options.PermissionRequirements),
 		hasChatGPTAccount:                options.HasChatGPTAccount,
+		accountPlanType:                  strings.TrimSpace(options.ChatGPTPlanType),
 		chatGPTPlanType:                  strings.TrimSpace(options.ChatGPTPlanType),
 		availableRateLimitResetCredits:   cloneInt64PtrTea(options.AvailableRateLimitResetCredits),
 		toolCalls:                        map[string]*toolCallDisplayState{},
@@ -4487,14 +4502,13 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case SafetyRecourseRewriteFailedMsg:
 		return m, m.applySafetyRecourseRewriteFailed(msg)
 	case AccountStatusUpdatedMsg:
-		m.applyAccountStatusUpdated(msg)
-		return m, m.refreshStatusControlsCmd()
+		return m, batchSideCommands(m.applyAccountStatusUpdated(msg), m.refreshStatusControlsCmd())
 	case BackgroundTerminalsLoadedMsg:
 		m.restoreBackgroundTerminals(msg)
 		return m, nil
 	case AccountEmailLoadedMsg:
-		if m.applyAccountEmailLoaded(msg) {
-			return m, m.refreshStatusControlsCmd()
+		if applied, command := m.applyAccountEmailLoaded(msg); applied {
+			return m, batchSideCommands(command, m.refreshStatusControlsCmd())
 		}
 		return m, nil
 	case NewSessionStartFailedMsg:
@@ -11449,15 +11463,14 @@ func (m *Model) applyRateLimitSnapshotFromSource(snapshot chatwidget.RateLimitSn
 			snapshot = mergeRollingRateLimitSnapshot(previous, true, snapshot)
 		}
 	}
-	if strings.TrimSpace(snapshot.PlanType) != "" {
-		// Rust #44970: an account/plan change invalidates cached dashboard usage
-		// and the disabled-capability state.
-		if plan := strings.TrimSpace(snapshot.PlanType); plan != m.chatGPTPlanType {
-			m.clearAgentsOverviewUsage()
-			m.clearThreadUsage()
-		}
-		m.chatGPTPlanType = strings.TrimSpace(snapshot.PlanType)
-	} else if m.chatGPTPlanType != "" {
+	planCmd := bubbletea.Cmd(nil)
+	if source != rateLimitSnapshotRollingUpdate {
+		// Rust #61977/#61978: only a full Codex quota read may set the billing
+		// plan. A rolling update can still carry the plan the thread started
+		// under, so it must not reprice usage that the quota read corrected.
+		planCmd = m.observeQuotaPlan(snapshot)
+	}
+	if m.chatGPTPlanType != "" {
 		snapshot.PlanType = m.chatGPTPlanType
 	}
 	m.rateLimitSnapshots[limitID] = snapshot
@@ -11492,14 +11505,7 @@ func (m *Model) applyRateLimitSnapshotFromSource(snapshot chatwidget.RateLimitSn
 		}
 	}
 	promptCmd := m.maybeOpenRateLimitSwitchPrompt(snapshot)
-	switch {
-	case promptCmd == nil:
-		return recoveryCmd
-	case recoveryCmd == nil:
-		return promptCmd
-	default:
-		return bubbletea.Batch(promptCmd, recoveryCmd)
-	}
+	return batchSideCommands(recoveryCmd, promptCmd, planCmd)
 }
 
 func (m *Model) syncStateRateLimits() {
