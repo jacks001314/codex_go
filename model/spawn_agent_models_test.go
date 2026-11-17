@@ -7,7 +7,7 @@ import (
 
 // Mirrors Rust's spawn-agent model resolution: the requested model must be
 // advertised for the active multi-agent backend, and the error lists the
-// picker-visible candidates, capped at five.
+// picker-visible candidates, capped at sixteen (#62051).
 func TestSpawnAgentModelNameMatchesRust(t *testing.T) {
 	available := []ModelPreset{
 		{Model: "v2-visible", Visibility: VisibilityList, MultiAgentVersion: "v2", DefaultReasoningLevel: "medium", SupportedReasoningLevels: []string{"low", "medium", "high"}},
@@ -44,8 +44,12 @@ func TestSpawnAgentModelNameMatchesRust(t *testing.T) {
 }
 
 func TestSpawnAgentModelNameCapsAvailableModels(t *testing.T) {
-	available := make([]ModelPreset, 0, 8)
-	for _, name := range []string{"a", "b", "c", "d", "e", "f", "g"} {
+	names := make([]string, 0, 17)
+	for char := 'a'; char <= 'q'; char++ {
+		names = append(names, string(char))
+	}
+	available := make([]ModelPreset, 0, len(names))
+	for _, name := range names {
 		available = append(available, ModelPreset{Model: name, Visibility: VisibilityList, MultiAgentVersion: "v2"})
 	}
 	_, err := SpawnAgentModelName(available, "missing", "v2")
@@ -53,8 +57,8 @@ func TestSpawnAgentModelNameCapsAvailableModels(t *testing.T) {
 		t.Fatal("an unknown model must fail")
 	}
 	_, available2, found := strings.Cut(err.Error(), "Available models: ")
-	if !found || available2 != "a, b, c, d, e" {
-		t.Fatalf("available models were not capped at five: %v", err)
+	if want := strings.Join(names[:MaxSpawnAgentModelOverrides], ", "); !found || available2 != want {
+		t.Fatalf("available models were not capped at %d: %v", MaxSpawnAgentModelOverrides, err)
 	}
 }
 

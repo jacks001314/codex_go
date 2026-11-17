@@ -6,8 +6,8 @@ import (
 )
 
 // MaxSpawnAgentModelOverrides caps how many models an unknown-model error lists
-// (Rust `MAX_SPAWN_AGENT_MODEL_OVERRIDES`).
-const MaxSpawnAgentModelOverrides = 5
+// (Rust `MAX_SPAWN_AGENT_MODEL_OVERRIDES`, #62051).
+const MaxSpawnAgentModelOverrides = 16
 
 // ModelPresetShowInPicker mirrors Rust `ModelPreset::show_in_picker`, which is
 // `visibility == ModelVisibility::List`. The Go TUI picker additionally accepts
