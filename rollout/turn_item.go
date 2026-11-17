@@ -104,7 +104,11 @@ func (r *Recorder) appendPaginatedItem(item Item, now time.Time) error {
 		CreatedAt: now, ResponseID: item.ResponseID, Metadata: cloneAnyMap(item.Metadata),
 	}
 	for i := range item.Content {
-		sessionItem.Content = append(sessionItem.Content, session.ContentPart{Type: item.Content[i].Type, Text: item.Content[i].Text, ImageURL: item.Content[i].ImageURL, Detail: cloneStringPtr(item.Content[i].Detail)})
+		sessionItem.Content = append(sessionItem.Content, session.ContentPart{
+			Type: item.Content[i].Type, Text: item.Content[i].Text, ImageURL: item.Content[i].ImageURL,
+			FileID: item.Content[i].FileID, AudioURL: item.Content[i].AudioURL,
+			Detail: cloneStringPtr(item.Content[i].Detail),
+		})
 	}
 	// Additional-context tool outputs keep their ResponseItem shape and
 	// provenance instead of being rewritten as DynamicToolCall items.

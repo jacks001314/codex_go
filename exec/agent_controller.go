@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -998,7 +997,7 @@ func execAgentCommunicationInputItem(communication execAgentCommunication) map[s
 
 func (c *execAgentController) parentInputItems(forkTurns *string) []any {
 	s := c.shared()
-	store := session.NewStore(filepath.Join(s.runner.CodexHome, "sessions"))
+	store := s.runner.sessionStore()
 	record, err := store.Read(session.ThreadID(c.parentID), true, true)
 	if err != nil || record == nil {
 		return nil

@@ -457,7 +457,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		return nil, err
 	}
 	if resumeContext != nil && resumeContext.ForkOnly {
-		sessionPath, pathErr := session.NewStore(filepath.Join(r.CodexHome, "sessions")).Path(session.ThreadID(threadID))
+		sessionPath, pathErr := r.sessionStore().Path(session.ThreadID(threadID))
 		if pathErr != nil && !errors.Is(pathErr, session.ErrThreadNotFound) {
 			return nil, pathErr
 		}
@@ -1756,7 +1756,7 @@ func (r *Runner) openExecLiveThreadItems(req *Request, threadID string, turnID s
 	if strings.TrimSpace(r.CodexHome) == "" || strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
 		return nil
 	}
-	store := session.NewStore(filepath.Join(r.CodexHome, "sessions"))
+	store := r.sessionStore()
 	return session.OpenLiveThreadItems(store, session.ThreadID(threadID), turnID)
 }
 
@@ -2435,6 +2435,34 @@ func resumeInputItemsWithPolicy(ctx *execResumeContext, policy *utils.Truncation
 	})
 }
 
+// sessionStore opens the file-backed thread store with the same rollout-backed
+// physical-history resolver the app server installs. A paginated fork keeps only
+// its own items in the record and references the parent's rollout prefix, so
+// without the resolver every read of such a thread fails and `exec resume` loses
+// the inherited conversation (Rust RolloutReference materialization).
+func (r *Runner) sessionStore() *session.Store {
+	home := ""
+	if r != nil {
+		home = r.CodexHome
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	if r == nil {
+		return store
+	}
+	store.SetPhysicalHistoryResolver(func(position session.HistoryPosition) (*session.ResolvedPhysicalHistory, error) {
+		items, turns, err := rollout.ResolveHistoryPrefix(home, rollout.HistoryPosition{
+			ThreadID:            string(position.ThreadID),
+			EndOrdinalExclusive: position.EndOrdinalExclusive,
+			EndByteOffset:       position.EndByteOffset,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &session.ResolvedPhysicalHistory{Items: items, RolloutTurns: turns}, nil
+	})
+	return store
+}
+
 func execModelTruncationPolicy(info *model.ModelInfo) *utils.TruncationPolicy {
 	if info == nil || info.TruncationPolicy.Limit <= 0 {
 		return nil
@@ -2530,7 +2558,7 @@ func (r *Runner) promptForRequest(req *Request, cfg *config.Config, stdin io.Rea
 		if source.Archived {
 			return "", nil, fmt.Errorf("session %s is archived", source.ID)
 		}
-		store := session.NewStore(filepath.Join(r.CodexHome, "sessions"))
+		store := r.sessionStore()
 		now := r.now().UTC()
 		forked, err := store.ForkRecord(source, session.ForkOptions{
 			Mode:      session.ForkAll,
@@ -5012,7 +5040,7 @@ func (r *Runner) persistSession(req *Request, threadID string, turnID string, us
 	}
 	response := result.Response
 	now := r.now().UTC()
-	store := session.NewStore(filepath.Join(r.CodexHome, "sessions"))
+	store := r.sessionStore()
 	record, err := store.Read(session.ThreadID(threadID), true, true)
 	if err != nil {
 		return "", err
@@ -5122,7 +5150,7 @@ func (r *Runner) persistSessionTurnStart(req *Request, threadID string, turnID s
 		return nil
 	}
 	now := r.now().UTC()
-	store := session.NewStore(filepath.Join(r.CodexHome, "sessions"))
+	store := r.sessionStore()
 	record, err := store.Read(session.ThreadID(threadID), true, true)
 	fresh := errors.Is(err, session.ErrThreadNotFound)
 	if err != nil && !fresh {
@@ -5263,7 +5291,7 @@ func (r *Runner) persistInterruptedSession(threadID string, turnID string, cause
 	if r == nil || strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
 		return nil
 	}
-	store := session.NewStore(filepath.Join(r.CodexHome, "sessions"))
+	store := r.sessionStore()
 	record, err := store.Read(session.ThreadID(threadID), true, true)
 	if err != nil {
 		return err
@@ -5304,7 +5332,7 @@ func (r *Runner) persistFailedSession(threadID string, turnID string, cause erro
 	if r == nil || strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" || cause == nil {
 		return nil
 	}
-	store := session.NewStore(filepath.Join(r.CodexHome, "sessions"))
+	store := r.sessionStore()
 	record, err := store.Read(session.ThreadID(threadID), true, true)
 	if err != nil {
 		return err
@@ -5556,7 +5584,7 @@ func (r *Runner) execMidTurnSamplingCompaction(cfg *config.Config, modelID strin
 		if ctx == nil || ctx.Result == nil || ctx.Response == nil {
 			return nil, nil
 		}
-		store := session.NewStore(filepath.Join(r.CodexHome, "sessions"))
+		store := r.sessionStore()
 		record, err := store.Read(session.ThreadID(threadID), true, true)
 		if err != nil || record == nil {
 			return nil, err
@@ -5890,7 +5918,7 @@ func (r *Runner) compactResumeBeforeTurn(ctx context.Context, resumeContext *exe
 	// the compaction input snapshot is neither summarized nor part of the
 	// replacement. Re-read the stored history and keep those edits, in their
 	// original order, after it.
-	if latest, latestErr := session.NewStore(filepath.Join(r.CodexHome, "sessions")).Read(session.ThreadID(threadID), true, true); latestErr == nil && latest != nil {
+	if latest, latestErr := r.sessionStore().Read(session.ThreadID(threadID), true, true); latestErr == nil && latest != nil {
 		compactedItems = retainExecGoalInstructionsAcrossCompaction(compactedItems, latest.Items, execUserGoalInstructionIDs(request.History))
 	}
 	record.Items = compactedItems
@@ -5936,7 +5964,7 @@ func (r *Runner) compactResumeBeforeTurn(ctx context.Context, resumeContext *exe
 	// reasoning item (Rust #55991 marks recomputed usage as including reasoning).
 	extra["server_reasoning_included"] = true
 	record.Metadata.Extra = execTokenUsageMetadata(extra, &usage)
-	if err := session.NewStore(filepath.Join(r.CodexHome, "sessions")).Save(record); err != nil {
+	if err := r.sessionStore().Save(record); err != nil {
 		return false, err
 	}
 	if err := r.appendExecCompacted(threadID, record, compacted.Summary, now); err != nil {
@@ -6062,7 +6090,7 @@ func (r *Runner) persistExecContextWindowExceeded(record *session.Record) error 
 	status["newContextWindowRequired"] = true
 	extra["token_status"] = status
 	record.Metadata.Extra = extra
-	return session.NewStore(filepath.Join(r.CodexHome, "sessions")).Save(record)
+	return r.sessionStore().Save(record)
 }
 
 type execAgentCompactRunner struct {
@@ -6216,7 +6244,7 @@ func (r *Runner) resolveExecResumeRecordForMethod(req *Request, method string) (
 	if r == nil {
 		return nil, errors.New("exec runner is nil")
 	}
-	store := session.NewStore(filepath.Join(r.CodexHome, "sessions"))
+	store := r.sessionStore()
 	resume := &req.Exec.Resume
 	var threadID session.ThreadID
 	if resume.Last {

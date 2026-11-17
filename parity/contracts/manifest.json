@@ -3558,6 +3558,25 @@
    "phase": "P3",
    "status": "complete",
    "verifier": "TestSideContextLabelSharesPassiveHintRowLikeRust;TestSideContextLabelCollapsesHintsLikeRust;TestSideContextLabelClipsLastLikeRust;TestSideWorkspacePanesOwnTheirBottomPaneLikeRust"
+  },
+  {
+   "id": "history-response-item-content-normalization",
+   "kind": "source-surface",
+   "rustPaths": [
+    "core/src/context_manager/history.rs",
+    "protocol/src/items.rs",
+    "protocol/src/models.rs",
+    "core/src/rollout.rs"
+   ],
+   "goPaths": [
+    "session/history.go",
+    "rollout/session_items.go",
+    "rollout/turn_item.go",
+    "exec/exec.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestInputItemsFromRecordNormalizesCanonicalTurnItemContentLikeRust;TestRunnerSessionStoreResolvesPaginatedHistoryLikeRust"
   }
   ]
 }

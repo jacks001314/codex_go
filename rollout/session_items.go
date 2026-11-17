@@ -38,6 +38,8 @@ func ItemFromSessionItem(item *session.Item) *Item {
 				Type:     item.Content[i].Type,
 				Text:     item.Content[i].Text,
 				ImageURL: item.Content[i].ImageURL,
+				FileID:   item.Content[i].FileID,
+				AudioURL: item.Content[i].AudioURL,
 				Detail:   cloneStringPtr(item.Content[i].Detail),
 			}
 		}
@@ -2892,6 +2894,8 @@ func sessionContentPartsFromRollout(content []ContentPart) []session.ContentPart
 			Type:     content[i].Type,
 			Text:     content[i].Text,
 			ImageURL: content[i].ImageURL,
+			FileID:   content[i].FileID,
+			AudioURL: content[i].AudioURL,
 			Detail:   cloneStringPtr(content[i].Detail),
 		})
 	}

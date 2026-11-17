@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -64,7 +63,7 @@ func (r *Runner) goalToolExecutorsForRequest(req *Request, run *agentRunConfig) 
 	}
 	handler := &execGoalToolHandler{
 		runner:             r,
-		store:              session.NewStore(filepath.Join(r.CodexHome, "sessions")),
+		store:              r.sessionStore(),
 		maxGoalTokenBudget: maxGoalTokenBudget,
 	}
 	return []tool.Executor{

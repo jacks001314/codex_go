@@ -449,7 +449,7 @@ func turnItemMessageInputItem(item *Item, raw map[string]any, options *HistoryBu
 	role := firstNonEmpty(item.Role, roleForSessionItemType(item.Type), stringValue(raw, "role"), "user")
 	content := contentBlocksFromSessionItem(item, role, options)
 	if len(content) == 0 {
-		content = contentBlocksFromTurnItemMessage(raw["content"], role)
+		content = contentBlocksFromTurnItemMessage(raw["content"], role, options)
 	}
 	if len(content) == 0 {
 		return nil
@@ -466,25 +466,36 @@ func turnItemMessageInputItem(item *Item, raw map[string]any, options *HistoryBu
 }
 
 // contentBlocksFromTurnItemMessage converts a TurnItem message `content` array
-// into Responses content blocks.
-func contentBlocksFromTurnItemMessage(value any, role string) []map[string]any {
+// into Responses content blocks. The projection keeps images, audio and file
+// references beside the text (`text_elements` is display-only), so replaying
+// only the text would drop the user's attachments from the model context.
+func contentBlocksFromTurnItemMessage(value any, role string, options *HistoryBuildOptions) []map[string]any {
 	entries, _ := value.([]any)
-	blocks := make([]map[string]any, 0, len(entries))
+	parts := make([]ContentPart, 0, len(entries))
 	for _, entry := range entries {
 		block, ok := entry.(map[string]any)
 		if !ok {
 			continue
 		}
-		text, _ := block["text"].(string)
-		if strings.TrimSpace(text) == "" {
+		part := ContentPart{
+			Type:     strings.TrimSpace(stringValue(block, "type")),
+			Text:     stringValue(block, "text"),
+			ImageURL: firstNonEmpty(stringValue(block, "image_url"), stringValue(block, "path")),
+			FileID:   stringValue(block, "file_id"),
+			AudioURL: stringValue(block, "audio_url"),
+		}
+		if detail, ok := block["detail"].(string); ok && strings.TrimSpace(detail) != "" {
+			part.Detail = &detail
+		}
+		if part.Type == "" {
 			continue
 		}
-		blocks = append(blocks, map[string]any{
-			"type": defaultContentTypeForRole(role),
-			"text": text,
-		})
+		parts = append(parts, part)
 	}
-	return blocks
+	if len(parts) == 0 {
+		return nil
+	}
+	return contentBlocksFromSessionItem(&Item{Content: parts}, role, options)
 }
 
 // additionalToolsInputItem rebuilds a model-authored additional_tools response
@@ -704,6 +715,12 @@ func sanitizeHistoryInputItem(input any) any {
 			typed["internal_chat_message_metadata_passthrough"] = map[string]any{"image_replay_sources": replaySources}
 		}
 		if itemType == "message" {
+			// Rust's ResponseItem::Message always carries a role, so a legacy
+			// record without one (an older TurnItem projection) still replays as
+			// a user message instead of failing provider validation.
+			if role, _ := typed["role"].(string); strings.TrimSpace(role) == "" {
+				typed["role"] = "user"
+			}
 			normalizeHistoryMessageContentTypes(typed)
 		}
 		if itemType == "image_generation_call" {
@@ -988,6 +1005,18 @@ func contentBlocksFromSessionItem(item *Item, role string, options *HistoryBuild
 			if item.Content[i].Detail != nil {
 				block["detail"] = *item.Content[i].Detail
 			}
+			// Rust's ResponseInputImage requires a detail, and an input_file
+			// without a file reference carries no content at all. A recorded
+			// TurnItem may omit both, so fill the default and drop the empty
+			// block instead of replaying an item the provider rejects.
+			if contentType == "input_image" || contentType == "input_file" {
+				if _, present := block["detail"]; !present {
+					block["detail"] = "high"
+				}
+			}
+			if len(block) == 1 && (contentType == "input_file" || contentType == "input_audio") {
+				continue
+			}
 			blocks = append(blocks, block)
 		}
 		return blocks
@@ -1099,12 +1128,16 @@ func historyContentType(value string, role string, imageURL string) string {
 // value is false when the value should pass through unchanged.
 func normalizedHistoryContentType(value string, role string) (string, bool) {
 	value = strings.TrimSpace(value)
-	switch value {
-	case "image", "inputImage", "input_image", "localImage", "local_image":
+	// Rust serializes typed ResponseItems, so conversation history normally
+	// already uses the Responses vocabulary. Go's rollout additionally stores
+	// the TUI TurnItem projection, whose blocks are spelled `Text`/`text`,
+	// `image` and `localImage`; folding case keeps that replay valid.
+	switch strings.ToLower(value) {
+	case "image", "inputimage", "input_image", "localimage", "local_image":
 		return "input_image", true
-	case "audio", "inputAudio", "input_audio", "localAudio", "local_audio":
+	case "audio", "inputaudio", "input_audio", "localaudio", "local_audio":
 		return "input_audio", true
-	case "text", "inputText", "outputText":
+	case "text", "inputtext", "outputtext":
 		return defaultContentTypeForRole(role), true
 	case "file":
 		return "input_file", true
