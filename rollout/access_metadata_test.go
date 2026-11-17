@@ -16,9 +16,9 @@ func TestSameRolloutStateDetectsAccessMetadataChange(t *testing.T) {
 	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatal(err)
 	}
-	state, err := coldRolloutState(path)
-	if err != nil || state == nil {
-		t.Fatalf("coldRolloutState() = %#v, %v", state, err)
+	state, cold, err := coldRolloutState(path)
+	if err != nil || state == nil || !cold {
+		t.Fatalf("coldRolloutState() = %#v, %v, %v", state, cold, err)
 	}
 	if err := os.Chmod(path, 0o444); err != nil {
 		t.Fatal(err)

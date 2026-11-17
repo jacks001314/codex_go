@@ -18,9 +18,9 @@ func TestSameRolloutStateDetectsCTimeOnlyChange(t *testing.T) {
 	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatal(err)
 	}
-	state, err := coldRolloutState(path)
-	if err != nil || state == nil || !state.hasCTime {
-		t.Fatalf("coldRolloutState() = %#v, %v", state, err)
+	state, cold, err := coldRolloutState(path)
+	if err != nil || state == nil || !cold || !state.hasCTime {
+		t.Fatalf("coldRolloutState() = %#v, %v, %v", state, cold, err)
 	}
 	// Keep mtime and mode unchanged; only ctime moves.
 	if err := os.Chtimes(path, time.Now(), old); err != nil {

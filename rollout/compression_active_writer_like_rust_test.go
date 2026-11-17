@@ -27,12 +27,12 @@ func TestRolloutCompressionSkipsActiveWriterLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AcquireWriter: %v", err)
 	}
-	outcome, err := compressRolloutIfCold(path, "busy", RolloutCompressionTriggerRPC, store)
+	measurement, err := compressRolloutIfCold(path, "busy", store)
 	if err != nil {
 		t.Fatalf("compressRolloutIfCold() error = %v", err)
 	}
-	if outcome != compressionSkippedBusy {
-		t.Fatalf("outcome = %q, want %q", outcome, compressionSkippedBusy)
+	if measurement.outcome != compressionSkippedBusy {
+		t.Fatalf("outcome = %q, want %q", measurement.outcome, compressionSkippedBusy)
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("busy rollout was removed: %v", err)
@@ -44,12 +44,12 @@ func TestRolloutCompressionSkipsActiveWriterLikeRust(t *testing.T) {
 	if err := writer.Close(); err != nil {
 		t.Fatalf("writer.Close() error = %v", err)
 	}
-	outcome, err = compressRolloutIfCold(path, "busy", RolloutCompressionTriggerRPC, store)
+	measurement, err = compressRolloutIfCold(path, "busy", store)
 	if err != nil {
 		t.Fatalf("compressRolloutIfCold() after release error = %v", err)
 	}
-	if outcome != compressionCompressed {
-		t.Fatalf("outcome after release = %q, want %q", outcome, compressionCompressed)
+	if measurement.outcome != compressionCompressed {
+		t.Fatalf("outcome after release = %q, want %q", measurement.outcome, compressionCompressed)
 	}
 	if _, err := os.Stat(path + ".zst"); err != nil {
 		t.Fatalf("compressed rollout missing: %v", err)
@@ -73,12 +73,12 @@ func TestRolloutCompressionPublicationLeavesNoWriterLockLikeRust(t *testing.T) {
 	if err := os.Chtimes(idle, cold, cold); err != nil {
 		t.Fatalf("Chtimes(idle): %v", err)
 	}
-	outcome, err := compressRolloutIfCold(idle, "idle", RolloutCompressionTriggerRPC, store)
+	measurement, err := compressRolloutIfCold(idle, "idle", store)
 	if err != nil {
 		t.Fatalf("compressRolloutIfCold(idle) error = %v", err)
 	}
-	if outcome != compressionCompressed {
-		t.Fatalf("idle outcome = %q, want %q", outcome, compressionCompressed)
+	if measurement.outcome != compressionCompressed {
+		t.Fatalf("idle outcome = %q, want %q", measurement.outcome, compressionCompressed)
 	}
 	lockPath := filepath.Join(root, "thread-writer-locks", "idle.lock")
 	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
@@ -97,11 +97,11 @@ func TestRolloutCompressionPublicationLeavesNoWriterLockLikeRust(t *testing.T) {
 	if err := os.WriteFile(staleLock, nil, 0o600); err != nil {
 		t.Fatalf("WriteFile(stale lock): %v", err)
 	}
-	outcome, err = compressRolloutIfCold(stale, "stale", RolloutCompressionTriggerRPC, store)
+	measurement, err = compressRolloutIfCold(stale, "stale", store)
 	if err != nil {
 		t.Fatalf("compressRolloutIfCold(stale) error = %v", err)
 	}
-	if outcome != compressionCompressed {
-		t.Fatalf("stale outcome = %q, want %q", outcome, compressionCompressed)
+	if measurement.outcome != compressionCompressed {
+		t.Fatalf("stale outcome = %q, want %q", measurement.outcome, compressionCompressed)
 	}
 }

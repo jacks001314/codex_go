@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Mirrors Rust #47026's bounded MetadataReadError reasons used by rollout
@@ -116,6 +117,11 @@ func TestRolloutCompressionMetadataDiagnosticsLikeRust(t *testing.T) {
 		id := fmt.Sprintf("bad-%d", i)
 		path := filepath.Join(root, "rollout-2025-01-01T00-00-00-"+id+".jsonl")
 		writeTestRollout(t, path, id, "future")
+		// Recent rollouts are skipped before their header is read (#62092).
+		old := time.Now().Add(-8 * 24 * time.Hour)
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatalf("Chtimes(%s): %v", path, err)
+		}
 	}
 
 	recorder := installRolloutMetricsRecorder(t)

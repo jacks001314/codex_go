@@ -3648,6 +3648,22 @@
    "phase": "P1",
    "status": "complete",
    "verifier": "TestSessionCommandsRejectConflictingRemotesLikeRust;TestParseSessionRemoteOptions"
+  },
+  {
+   "id": "rollout-compression-skip-recent-before-header",
+   "kind": "source-surface",
+   "rustPaths": [
+    "rollout/src/compression.rs",
+    "rollout/src/compression_tests.rs"
+   ],
+   "goPaths": [
+    "rollout/compression.go",
+    "rollout/compression_skip_recent_like_rust_test.go",
+    "rollout/compression_skip_recent_atime_linux_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestRolloutCompressionSkipsRecentBeforeReadingHeaderLikeRust;TestRolloutCompressionAgedMalformedHeaderRecordsMetadataFailureLikeRust;TestRolloutCompressionLeavesRecentAccessTimeLikeRust"
   }
   ]
 }

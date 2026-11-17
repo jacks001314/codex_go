@@ -292,6 +292,44 @@ const (
 	compressionSkippedAlreadyCompressed compressionOutcome = "skipped_already_compressed"
 )
 
+// compressionMeasurement mirrors Rust's `CompressionMeasurement`: one file's
+// outcome plus the byte counts its metrics are recorded with.
+type compressionMeasurement struct {
+	outcome            compressionOutcome
+	sourceBytes        int64
+	hasSourceBytes     bool
+	compressedBytes    int64
+	hasCompressedBytes bool
+}
+
+// scannedFile mirrors Rust's `CompressionStats::scanned_file`.
+func (s *RolloutCompressionStats) scannedFile(trigger RolloutCompressionTrigger) {
+	s.Scanned++
+	rolloutCompressionFile(trigger, "scanned")
+}
+
+// measuredFile mirrors Rust's `CompressionStats::measured_file`: a measured
+// outcome updates the counters and every per-file metric in one place.
+func (s *RolloutCompressionStats) measuredFile(trigger RolloutCompressionTrigger, duration time.Duration, measurement compressionMeasurement) {
+	outcome := string(measurement.outcome)
+	if measurement.outcome == compressionCompressed {
+		s.Compressed++
+	} else {
+		s.Skipped++
+	}
+	rolloutCompressionFile(trigger, outcome)
+	rolloutCompressionFileDuration(trigger, outcome, duration)
+	if measurement.hasSourceBytes {
+		rolloutCompressionSourceBytes(trigger, outcome, measurement.sourceBytes)
+	}
+	if measurement.hasCompressedBytes {
+		rolloutCompressionCompressedBytes(trigger, outcome, measurement.compressedBytes)
+		if measurement.hasSourceBytes {
+			rolloutCompressionRatio(trigger, outcome, measurement.sourceBytes, measurement.compressedBytes)
+		}
+	}
+}
+
 // compressRolloutsInRoot mirrors Rust's `compress_rollouts_in_root`: walk a
 // sessions root and compress every cold plain rollout.
 func compressRolloutsInRoot(ctx context.Context, root string, deadline time.Time, stats *RolloutCompressionStats, trigger RolloutCompressionTrigger, writerStore *session.Store) error {
@@ -326,6 +364,20 @@ func compressRolloutsInRoot(ctx context.Context, root string, deadline time.Time
 		if strings.HasSuffix(strings.ToLower(path), ".zst") {
 			continue
 		}
+		// Recent files cannot be compressed. Only open the header for a
+		// possible candidate; the job rechecks the age before encoding.
+		checkedAt := time.Now()
+		if info, statErr := os.Stat(path); statErr == nil && !isColdRollout(info.ModTime()) {
+			mu.Lock()
+			stats.scannedFile(trigger)
+			stats.measuredFile(trigger, time.Since(checkedAt), compressionMeasurement{
+				outcome:        compressionSkippedNotCold,
+				sourceBytes:    info.Size(),
+				hasSourceBytes: true,
+			})
+			mu.Unlock()
+			continue
+		}
 		meta, err := FirstSessionMeta(path)
 		if err != nil {
 			reason := metadataReadReason(err)
@@ -353,27 +405,26 @@ func compressRolloutsInRoot(ctx context.Context, root string, deadline time.Time
 			continue
 		}
 		mu.Lock()
-		stats.Scanned++
+		stats.scannedFile(trigger)
 		mu.Unlock()
-		rolloutCompressionFile(trigger, "scanned")
 		sem <- struct{}{}
 		wg.Add(1)
 		go func(path string, threadID string) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			outcome, err := compressRolloutIfCold(path, threadID, trigger, writerStore)
+			startedAt := time.Now()
+			measurement, err := compressRolloutIfCold(path, threadID, writerStore)
+			duration := time.Since(startedAt)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
 				stats.Failed++
+				rolloutCompressionFailure(rolloutCompressionFileCounter, "outcome", &trigger, "compress", err)
+				rolloutCompressionFileDuration(trigger, "failed", duration)
 				slog.Warn("failed to compress rollout", "path", path, "error", err)
 				return
 			}
-			if outcome == compressionCompressed {
-				stats.Compressed++
-				return
-			}
-			stats.Skipped++
+			stats.measuredFile(trigger, duration, measurement)
 		}(path, threadID)
 	}
 	wg.Wait()
@@ -409,77 +460,62 @@ func logRolloutMetadataSkip(trigger RolloutCompressionTrigger, path string, reas
 // compressRolloutIfCold mirrors Rust's `compress_rollout_if_cold_blocking`: a
 // cold plain rollout is encoded to a sibling temp file, verified, and published
 // with a no-clobber rename before the plain file is removed.
-func compressRolloutIfCold(path string, threadID string, trigger RolloutCompressionTrigger, writerStore *session.Store) (compressionOutcome, error) {
-	startedAt := time.Now()
-	outcome, sourceBytes, compressedBytes, err := compressRolloutIfColdInner(path, threadID, writerStore)
+func compressRolloutIfCold(path string, threadID string, writerStore *session.Store) (compressionMeasurement, error) {
+	before, cold, err := coldRolloutState(path)
 	if err != nil {
-		// Rust labels the failing stage; Go's encode/publish steps are one
-		// function, so the pass records the single "compress" stage.
-		rolloutCompressionFailure(rolloutCompressionFileCounter, "outcome", &trigger, "compress", err)
-		rolloutCompressionFileDuration(trigger, "failed", time.Since(startedAt))
-		return "", err
-	}
-	rolloutCompressionFile(trigger, string(outcome))
-	rolloutCompressionFileDuration(trigger, string(outcome), time.Since(startedAt))
-	if outcome == compressionCompressed {
-		rolloutCompressionSourceBytes(trigger, string(outcome), sourceBytes)
-		rolloutCompressionCompressedBytes(trigger, string(outcome), compressedBytes)
-		rolloutCompressionRatio(trigger, string(outcome), sourceBytes, compressedBytes)
-	}
-	return outcome, nil
-}
-
-func compressRolloutIfColdInner(path string, threadID string, writerStore *session.Store) (compressionOutcome, int64, int64, error) {
-	before, err := coldRolloutState(path)
-	if err != nil {
-		return "", 0, 0, err
+		return compressionMeasurement{}, err
 	}
 	if before == nil {
-		return compressionSkippedNotCold, 0, 0, nil
+		return compressionMeasurement{outcome: compressionSkippedNotCold}, nil
+	}
+	skip := func(outcome compressionOutcome) compressionMeasurement {
+		return compressionMeasurement{outcome: outcome, sourceBytes: before.size, hasSourceBytes: true}
+	}
+	if !cold {
+		return skip(compressionSkippedNotCold), nil
 	}
 	compressedPath := path + ".zst"
 	if _, err := os.Stat(compressedPath); err == nil {
-		return compressionSkippedAlreadyCompressed, before.size, 0, nil
+		return skip(compressionSkippedAlreadyCompressed), nil
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", 0, 0, err
+		return compressionMeasurement{}, err
 	}
-	_ = threadID
 	temp, err := os.CreateTemp(filepath.Dir(path), "rollout-compress-*.tmp")
 	if err != nil {
-		return "", 0, 0, err
+		return compressionMeasurement{}, err
 	}
 	tempPath := temp.Name()
 	defer temp.Close()
 	defer func() { _ = os.Remove(tempPath) }()
 	if err := encodeRolloutZstd(path, temp); err != nil {
-		return "", 0, 0, err
+		return compressionMeasurement{}, err
 	}
 	if err := temp.Sync(); err != nil {
-		return "", 0, 0, err
+		return compressionMeasurement{}, err
 	}
 	same, err := sameRolloutState(path, before)
 	if err != nil {
-		return "", 0, 0, err
+		return compressionMeasurement{}, err
 	}
 	if !same {
-		return compressionSkippedChanged, before.size, 0, nil
+		return skip(compressionSkippedChanged), nil
 	}
 	// Preserve the source's access metadata before verifying or publishing.
 	// Metadata failures leave the source intact instead of changing who can
 	// read or append to the transcript.
 	if err := preserveRolloutAccessMetadata(path, tempPath, before.info); err != nil {
-		return "", 0, 0, err
+		return compressionMeasurement{}, err
 	}
 	// Reopen after applying final metadata: the owner-only temporary file can
 	// be readable while the published access policy is not.
 	if err := verifyZstdRollout(tempPath); err != nil {
-		return "", 0, 0, err
+		return compressionMeasurement{}, err
 	}
 	if err := temp.Sync(); err != nil {
-		return "", 0, 0, err
+		return compressionMeasurement{}, err
 	}
 	if err := temp.Close(); err != nil {
-		return "", 0, 0, err
+		return compressionMeasurement{}, err
 	}
 	// Encoding and verification do not block writers. Take publication ownership
 	// only now, so an active writer's append can neither race the final state
@@ -487,42 +523,48 @@ func compressRolloutIfColdInner(path string, threadID string, writerStore *sessi
 	publication, err := writerStore.TryAcquireForPublication(session.ThreadID(threadID))
 	if err != nil {
 		if errors.Is(err, session.ErrConflict) {
-			return compressionSkippedBusy, before.size, 0, nil
+			return skip(compressionSkippedBusy), nil
 		}
-		return "", 0, 0, err
+		return compressionMeasurement{}, err
 	}
 	defer func() { _ = publication.Release() }()
 	same, err = sameRolloutState(path, before)
 	if err != nil {
-		return "", 0, 0, err
+		return compressionMeasurement{}, err
 	}
 	if !same {
-		return compressionSkippedChanged, before.size, 0, nil
+		return skip(compressionSkippedChanged), nil
 	}
 	if _, err := os.Stat(compressedPath); err == nil {
-		return compressionSkippedAlreadyCompressed, before.size, 0, nil
+		return skip(compressionSkippedAlreadyCompressed), nil
 	}
 	if err := os.Rename(tempPath, compressedPath); err != nil {
 		if errors.Is(err, os.ErrExist) {
-			return compressionSkippedAlreadyCompressed, before.size, 0, nil
+			return skip(compressionSkippedAlreadyCompressed), nil
 		}
-		return "", 0, 0, err
+		return compressionMeasurement{}, err
 	}
 	if same, err := sameRolloutState(path, before); err != nil || !same {
 		_ = os.Remove(compressedPath)
 		if err != nil {
-			return "", 0, 0, err
+			return compressionMeasurement{}, err
 		}
-		return compressionSkippedChanged, before.size, 0, nil
+		return skip(compressionSkippedChanged), nil
 	}
 	if err := os.Remove(path); err != nil {
-		return "", 0, 0, err
+		return compressionMeasurement{}, err
 	}
 	compressedBytes := int64(0)
 	if info, err := os.Stat(compressedPath); err == nil {
 		compressedBytes = info.Size()
 	}
-	return compressionCompressed, before.size, compressedBytes, nil
+	return compressionMeasurement{
+		outcome:            compressionCompressed,
+		sourceBytes:        before.size,
+		hasSourceBytes:     true,
+		compressedBytes:    compressedBytes,
+		hasCompressedBytes: true,
+	}, nil
 }
 
 type rolloutFileState struct {
@@ -534,21 +576,18 @@ type rolloutFileState struct {
 	info       os.FileInfo
 }
 
-// coldRolloutState returns the file state when the rollout is cold, nil when it
-// is too fresh (or gone).
-func coldRolloutState(path string) (*rolloutFileState, error) {
+// coldRolloutState returns the file state and whether the rollout is cold. The
+// state is nil when the file is gone or is not a regular file.
+func coldRolloutState(path string) (*rolloutFileState, bool, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+			return nil, false, nil
 		}
-		return nil, err
+		return nil, false, err
 	}
 	if !info.Mode().IsRegular() {
-		return nil, nil
-	}
-	if time.Since(info.ModTime()) < minRolloutAge {
-		return nil, nil
+		return nil, false, nil
 	}
 	changeTime, hasCTime := rolloutInfoChangeTime(info)
 	return &rolloutFileState{
@@ -558,7 +597,13 @@ func coldRolloutState(path string) (*rolloutFileState, error) {
 		changeTime: changeTime,
 		hasCTime:   hasCTime,
 		info:       info,
-	}, nil
+	}, isColdRollout(info.ModTime()), nil
+}
+
+// isColdRollout mirrors Rust's `is_cold`: rollouts younger than the minimum age
+// are ineligible for compression.
+func isColdRollout(modified time.Time) bool {
+	return time.Since(modified) >= minRolloutAge
 }
 
 // sameRolloutState mirrors Rust's `same_file_state`: the source must not have
