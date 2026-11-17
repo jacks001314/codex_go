@@ -590,6 +590,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	// Rust refresh_sidebar_files returns early for a Cloud session, which the
 	// client does not page through thread/items/list.
 	var onSidebarFiles codextea.SidebarFilesFunc
+	var onSidebarDocument codextea.SidebarDocumentFunc
 	if paramsMode != ThreadParamsModeCloud {
 		sidebarFilesSource := newRemoteSidebarFilesSource(ctx, endpoint)
 		sidebarFileHost := newRemoteSidebarFilesHost(
@@ -600,6 +601,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 			},
 		)
 		onSidebarFiles = sidebarFileHost.snapshot
+		onSidebarDocument = newRemoteSidebarDocumentHost(ctx, endpoint).open
 	}
 	options := codextea.Options{
 		Profile:                      interactiveStringFromSharedProfile(root),
@@ -685,6 +687,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnReadSessionTranscript:     interactiveRemoteSessionTranscriptHandler(ctx, endpoint, showRawReasoning),
 		LoadOlderHistory:            interactiveRemoteOlderHistoryLoader(ctx, endpoint),
 		OnSidebarFiles:              onSidebarFiles,
+		OnSidebarDocument:           onSidebarDocument,
 		OnAcknowledgeSessionRead:    interactiveRemoteSessionReadAcknowledgeHandler(ctx, endpoint),
 		OnRenameThread:              renameThreadHandler,
 		OnUpdateDaybreak:            interactiveRemoteDaybreakUpdateHandler(ctx, endpoint),

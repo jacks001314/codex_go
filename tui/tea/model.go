@@ -1825,6 +1825,9 @@ type Options struct {
 	// OnSidebarFiles snapshots the chooser's file inventory; nil leaves the
 	// Files group empty.
 	OnSidebarFiles SidebarFilesFunc
+	// OnSidebarDocument loads a file preview for a chooser row; nil leaves file
+	// rows inert.
+	OnSidebarDocument SidebarDocumentFunc
 	// OnOpenSideChat attaches a saved side chat that is not retained in memory.
 	OnOpenSideChat       SideOpenFunc
 	OnReadReviewBranches ReviewBranchesReaderFunc
@@ -3105,6 +3108,7 @@ type Model struct {
 	onListSideChats                   SideChatListFunc
 	onReadSideChatPrompts             SideChatPromptFunc
 	onSidebarFiles                    SidebarFilesFunc
+	onSidebarDocument                 SidebarDocumentFunc
 	onOpenSideChat                    SideOpenFunc
 	onReadReviewBranches              ReviewBranchesReaderFunc
 	onReadReviewCommits               ReviewCommitsReaderFunc
@@ -3157,6 +3161,13 @@ type Model struct {
 	sidebarFilesCwd               string
 	sidebarFilePreviewUnavailable string
 	sidebarFilesRequest           uint64
+	// sidebarDocuments keeps the file previews opened from the chooser, in tab
+	// order per parent conversation (Rust SidebarPane::documents + tabs).
+	// sidebarDocumentActive is the preview the pane shows, or empty when the
+	// chooser owns it again.
+	sidebarDocuments       map[string][]*sidebarDocumentTab
+	sidebarDocumentActive  string
+	sidebarDocumentCounter uint64
 	// sidebarPromotedFiles keeps completed patch and image paths per parent so
 	// reopening the chooser still lists them (Rust notice_sidebar_file_item).
 	sidebarPromotedFiles map[string][]markdown.SidebarFileLink
@@ -3788,6 +3799,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		sideConversations:                map[string]*activeSideConversation{},
 		threadGoals:                      map[string]*appserver.Goal{},
 		sidebarTabs:                      map[string][]*activeSideConversation{},
+		sidebarDocuments:                 map[string][]*sidebarDocumentTab{},
 		clipboardWrite:                   clipboardWrite,
 		clipboardWriteRich:               clipboardWriteRich,
 		clipboardRead:                    clipboardRead,
@@ -3913,6 +3925,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onListSideChats:                  options.OnListSideChats,
 		onReadSideChatPrompts:            options.OnReadSideChatPrompts,
 		onSidebarFiles:                   options.OnSidebarFiles,
+		onSidebarDocument:                options.OnSidebarDocument,
 		onOpenSideChat:                   options.OnOpenSideChat,
 		onReadReviewBranches:             options.OnReadReviewBranches,
 		onReadReviewCommits:              options.OnReadReviewCommits,
@@ -5055,6 +5068,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, m.applySidebarFilesLoaded(msg)
 	case SidebarFilePromotedMsg:
 		return m, m.applySidebarFilePromoted(msg)
+	case SidebarDocumentLoadedMsg:
+		return m, m.applySidebarDocumentLoaded(msg)
 	case SideOpenResultMsg:
 		return m, m.applySideOpenResult(msg)
 	case WorkingDirectoryChangeResultMsg:
@@ -5319,6 +5334,13 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		switch msg.Type {
 		case keymsg.KeyCtrlC:
+			if m.sidebarDocumentVisible() && m.sidebarChooserFocused {
+				// Rust side_focus: Ctrl+C over the focused sidebar hides the pane
+				// and returns to the parent composer.
+				tab := m.sidebarDocumentActiveTab()
+				cmd := m.closeSidebarDocumentTab(tab.ID)
+				return m, batchSideCommands(cmd, m.closeSidebarChooser())
+			}
 			if m.sidebarChooserVisible() && m.sidebarChooserFocused {
 				// Rust #60319: Ctrl+C dismisses the chooser and returns focus to
 				// the main composer, preserving its draft.
@@ -5359,6 +5381,14 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		if m.modal != nil {
 			return m, m.updateModal(msg)
+		}
+		if m.sidebarDocumentVisible() && m.sidebarChooserFocused {
+			if handled, cmd := m.updateSidebarDocumentKey(msg); handled {
+				return m, cmd
+			}
+			// The focused reader consumes the keys it does not bind so they
+			// cannot reach the parent composer underneath.
+			return m, nil
 		}
 		if m.sidebarChooserVisible() && m.sidebarChooserFocused {
 			if handled, cmd := m.updateSidebarChooserKey(msg); handled {

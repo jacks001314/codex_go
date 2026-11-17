@@ -111,7 +111,20 @@ func (m *Model) focusMainComposerExplicit() bubbletea.Cmd {
 }
 
 func (m *Model) focusMainComposerWithOptions(clearInteraction bool) bubbletea.Cmd {
-	if m == nil || m.activeSide == nil || !m.sideWorkspaceEnabled() {
+	if m == nil || m.State == nil || !m.sideWorkspaceEnabled() {
+		return nil
+	}
+	if m.sidebarDocumentVisible() {
+		// Rust side_focus keeps the preview painted and moves only the pane
+		// focus back to the composer.
+		m.sidebarChooserFocused = false
+		if clearInteraction {
+			m.clearMainTranscriptFind(false)
+		}
+		m.refreshTranscript()
+		return nil
+	}
+	if m.activeSide == nil {
 		return nil
 	}
 	var cmd bubbletea.Cmd
@@ -129,6 +142,11 @@ func (m *Model) focusMainComposerWithOptions(clearInteraction bool) bubbletea.Cm
 // hide_focused_side_pane is retained and reopened here (Rust #59130/#59208).
 func (m *Model) focusSidebarContent() bubbletea.Cmd {
 	if m == nil || m.State == nil || !m.sideWorkspaceEnabled() {
+		return nil
+	}
+	if m.sidebarDocumentVisible() {
+		m.sidebarChooserFocused = true
+		m.refreshTranscript()
 		return nil
 	}
 	// An already-open chooser gives focus back to the parent composer
@@ -167,7 +185,17 @@ func (m *Model) focusSidebarContent() bubbletea.Cmd {
 // hideFocusedSidePane closes the visible pane while retaining the side
 // conversation, so the workspace shortcut can reopen it later (Rust #59130).
 func (m *Model) hideFocusedSidePane() bubbletea.Cmd {
-	if m == nil || m.State == nil || m.activeSide == nil || !m.sideWorkspaceEnabled() {
+	if m == nil || m.State == nil || !m.sideWorkspaceEnabled() {
+		return nil
+	}
+	if m.sidebarDocumentVisible() {
+		// Rust side_focus hides the whole pane; the chooser behind the preview
+		// closes with it and the tabs stay for the next open.
+		tab := m.sidebarDocumentActiveTab()
+		cmd := m.closeSidebarDocumentTab(tab.ID)
+		return batchSideCommands(cmd, m.closeSidebarChooser())
+	}
+	if m.activeSide == nil {
 		return nil
 	}
 	var cmd bubbletea.Cmd

@@ -3457,6 +3457,29 @@
    "phase": "P3",
    "status": "partial",
    "verifier": "TestSidebarChooserFilesGroupLikeRust;TestSidebarChooserNarrowFileRowsLikeRust;TestSidebarChooserMarkdownFilesHeaderLikeRust;TestSidebarChooserFileRowsInertWithoutPreviewLikeRust;TestSidebarChooserWheelScrollsFilesLikeRust;TestSidebarChooserFilePathViewLikeRust;TestSidebarChooserKeepsFileSelectionWhenInventoryChangesLikeRust;TestMiddleLabelKeepsBothEndsLikeRust;TestFilenameLabelKeepsExtensionLikeRust;TestDocumentLabelJoinsPartsTowardRootLikeRust;TestDocumentLabelKeepsDirectorySuffixWhenNarrowLikeRust;TestSidebarChooserListsTranscriptLinksLikeRust;TestSidebarChooserMergesHostFilesLikeRust;TestSidebarChooserPromotesPatchFilesLikeRust;TestRemoteTUIPromotesCompletedPatchToSidebarFilesLikeRust;TestRemoteTUIPromotesGeneratedImageLikeRust;TestSidebarChooserChainsSidebarFilePagesLikeRust;TestEmbeddedSidebarFilesHostPagesTheStoreLikeRust;TestEmbeddedSidebarFilesHostChainsPagesLikeRust;TestSidebarProtocolPromotionEntriesLikeRust;TestSidebarPreviewUnavailableForRemoteLikeRust"
+  },
+  {
+   "id": "sidebar-document-preview",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/app/sidebar_document.rs",
+    "tui/src/transcript_view/document.rs",
+    "tui/src/sidebar_tab_strip.rs",
+    "tui/src/app/sidebar.rs"
+   ],
+   "goPaths": [
+    "app/sidebar_document.go",
+    "app/sidebar_document_host.go",
+    "app/sidebar_document_host_like_rust_test.go",
+    "app/interactive.go",
+    "app/remote_tui.go",
+    "tui/tea/sidebar_document.go",
+    "tui/tea/sidebar_document_like_rust_test.go",
+    "tui/tea/sidebar_chooser.go"
+   ],
+   "phase": "P3",
+   "status": "partial",
+   "verifier": "TestSidebarChooserOpensDocumentTabLikeRust;TestSidebarDocumentCodeGutterLikeRust;TestSidebarDocumentTabTitlesLikeRust;TestSidebarDocumentEscReturnsToChooserLikeRust;TestSidebarDocumentTabPaintsInStripLikeRust;TestSidebarChooserPreviewUnavailableIgnoresAcceptLikeRust;TestSidebarDocumentPaintsInWorkspaceLikeRust;TestSidebarDocumentTabStepLikeRust;TestEmbeddedSidebarDocumentHostReadsWorkspaceLikeRust;TestEmbeddedSidebarDocumentHostLimitsLikeRust;TestEmbeddedSidebarDocumentHostRejectsNonTextLikeRust;TestSidebarDocumentViewOfLocationLikeRust"
   }
   ]
 }

@@ -6,8 +6,6 @@ import (
 	"errors"
 	"path"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"codex_go/appserver"
 )
@@ -128,16 +126,7 @@ func readRemoteDocumentText(ctx context.Context, client *remoteAppServerTUIClien
 	if err != nil {
 		return "", err
 	}
-	if !utf8.Valid(data) {
-		return "", errors.New(remotePreviewNotUTF8)
-	}
-	text := string(data)
-	for _, r := range text {
-		if unicode.IsControl(r) && r != '\t' && r != '\n' && r != '\r' {
-			return "", errors.New(remotePreviewNotText)
-		}
-	}
-	return text, nil
+	return documentTextFromBytes(data)
 }
 
 // readRemotePreviewFile re-resolves the original path before and after the read

@@ -1744,6 +1744,9 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		func() string { return strings.TrimSpace(state.CWD) },
 		sidebarPreviewUnavailableForEmbedded,
 	)
+	// Rust #61889: a chooser row opens a read-only preview from the same local
+	// workspace the inventory came from.
+	sidebarDocumentPreviewHost := newEmbeddedSidebarDocumentHost(func() string { return strings.TrimSpace(state.CWD) })
 	options := codextea.Options{
 		// Rust #57516: the status line's profile item reports the profile
 		// selected with --profile.
@@ -1822,6 +1825,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnReadSessionTranscript:     interactiveSessionTranscriptHandler(interactiveShowRawAgentReasoning(root)),
 		LoadOlderHistory:            interactiveOlderHistoryLoader(store, strings.TrimSpace(root.Shared.CWD)),
 		OnSidebarFiles:              sidebarFileHost.snapshot,
+		OnSidebarDocument:           sidebarDocumentPreviewHost.open,
 		OnAcknowledgeSessionRead:    interactiveSessionReadAcknowledgeHandler(store),
 		OnRenameThread:              interactiveRenameThreadHandler(),
 		OnGenerateRecap:             localStructuredGenerate,

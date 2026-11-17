@@ -85,13 +85,28 @@ func (m *Model) handleSidebarTabStripMouse(msg mousemsg.MouseMsg) (bool, bubblet
 // when it was open (Rust #59928 paints the tabs as click targets).
 func (m *Model) selectSidebarTab(index int) bubbletea.Cmd {
 	tabs := m.sidebarTabsFor(m.sidebarParentThreadID())
-	if index < 0 || index >= len(tabs) || tabs[index] == nil {
+	if index < 0 {
+		return nil
+	}
+	if index >= len(tabs) {
+		docs := m.sidebarDocumentsFor(m.sidebarParentThreadID())
+		if offset := index - len(tabs); offset >= 0 && offset < len(docs) && docs[offset] != nil {
+			m.sidebarDocumentActive = docs[offset].ID
+			m.sidebarChooserFocused = true
+			m.sidebarTabHover = -1
+			m.suppressCurrentViewKeyUntilRelease()
+			m.refreshTranscript()
+		}
+		return nil
+	}
+	if tabs[index] == nil {
 		return nil
 	}
 	if m.activeSide == tabs[index] && m.activeSide.ShowingSide && !m.sidebarChooserOpen {
 		return nil
 	}
 	m.sidebarTabHover = -1
+	m.sidebarDocumentActive = ""
 	m.suppressCurrentViewKeyUntilRelease()
 	return batchSideCommands(m.closeSidebarChooser(), m.activateRetainedSideConversation(tabs[index], ""))
 }
@@ -99,6 +114,28 @@ func (m *Model) selectSidebarTab(index int) bubbletea.Cmd {
 func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd) {
 	if handled, cmd := m.handleSidebarTabStripMouse(msg); handled {
 		return true, cmd
+	}
+	if m != nil && m.sidebarDocumentVisible() {
+		// Rust side_focus.rs: the wheel over the reader scrolls it in fixed
+		// three-row steps, and a press focuses the pane without leaving it.
+		if left, _, _, ok := m.sidePaneLayout(firstPositive(m.width, defaultWidth)); ok {
+			dividerWidth := ansi.StringWidth(sideWorkspaceDivider)
+			inside := msg.X >= left+dividerWidth
+			if rows, wheel := m.transcriptWheelRows(msg); wheel && inside {
+				delta := 3
+				if rows < 0 {
+					delta = -3
+				}
+				m.scrollSidebarDocument(m.sidebarDocumentActiveTab(), delta)
+				return true, nil
+			}
+			if msg.Action == mousemsg.MouseActionPress && msg.Button == mousemsg.MouseButtonLeft &&
+				inside && !m.sidebarChooserFocused {
+				m.sidebarChooserFocused = true
+				m.refreshTranscript()
+				return true, nil
+			}
+		}
 	}
 	// Rust app/link_hover.rs paints PointerShape::Resize while the pointer is
 	// over the divider, and side_pane::paint_divider accents it in that case.

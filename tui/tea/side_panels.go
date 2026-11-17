@@ -117,7 +117,8 @@ func (m *Model) sidePaneLayout(width int) (leftWidth int, rightWidth int, sideFo
 		return 0, 0, false, false
 	}
 	chooser := m.sidebarChooserVisible()
-	if !m.sideWorkspaceEnabled() || (m.activeSide == nil && !chooser) {
+	document := m.sidebarDocumentVisible()
+	if !m.sideWorkspaceEnabled() || (m.activeSide == nil && !chooser && !document) {
 		return 0, 0, false, false
 	}
 	if m.transcriptUnavailableForPanes() {
@@ -138,6 +139,9 @@ func (m *Model) sidePaneLayout(width int) (leftWidth int, rightWidth int, sideFo
 	}
 	if chooser {
 		return leftWidth, rightWidth, true, true
+	}
+	if document {
+		return leftWidth, rightWidth, m.sidebarChooserFocused, true
 	}
 	return leftWidth, rightWidth, m.activeSide.ShowingSide, true
 }
@@ -173,6 +177,22 @@ func (m *Model) renderSideWorkspace(width int, height int) (string, bool) {
 	resizing := m.sideResize != nil
 	if resizing && height > 1 {
 		height--
+	}
+	if m.sidebarDocumentVisible() {
+		// A preview owns the sidebar exactly like the chooser does: the parent
+		// conversation keeps the left column and the preview paints on the
+		// right (Rust sidebar::SidebarContent::Document).
+		left := m.renderFocusedPane(leftWidth, height)
+		right := strings.Split(m.renderSidebarDocument(rightWidth, height), "\n")
+		for index := range right {
+			right[index] = padSidePaneLine(codextui.TruncateToWidth(right[index], rightWidth), rightWidth)
+		}
+		m.sidebarTabStripTop = 0
+		rendered := m.zipSidePanes(left, right, leftWidth, height)
+		if resizing {
+			rendered += "\n" + m.sideResizeHint(rightWidth)
+		}
+		return padSideWorkspaceRows(rendered, width), true
 	}
 	if m.sidebarChooserVisible() {
 		// The chooser belongs to the parent conversation, so the live

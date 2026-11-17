@@ -15,12 +15,18 @@ import (
 // sidebarLoadingGlyph mirrors Rust motion::loading_glyph for the chooser's
 // discovery row: the shared frame table animates, reduced motion keeps ◌.
 func (m *Model) sidebarLoadingGlyph() string {
-	if m == nil {
-		return codextui.LoadingGlyphReducedMotion
-	}
 	started := m.sidebarDiscoveryStarted
 	if started.IsZero() {
 		started = time.Now()
+	}
+	return m.sidebarLoadingGlyphAt(started)
+}
+
+// sidebarLoadingGlyphAt anchors the shared loading glyph at one operation's
+// start, so the chooser and a document preview animate independently.
+func (m *Model) sidebarLoadingGlyphAt(started time.Time) string {
+	if m == nil {
+		return codextui.LoadingGlyphReducedMotion
 	}
 	motion := codextui.MotionReduced
 	if m.animationsEnabled {
@@ -266,6 +272,11 @@ func (m *Model) sidebarChooserVisible() bool {
 	if m == nil || !m.sidebarChooserOpen || !m.sideWorkspaceEnabled() {
 		return false
 	}
+	// A preview replaces the list while it owns the pane; the chooser stays
+	// open underneath so closing the tab can restore it.
+	if m.sidebarDocumentActiveTab() != nil {
+		return false
+	}
 	return strings.TrimSpace(m.sidebarChooserParent) == m.sidebarParentThreadID()
 }
 
@@ -286,6 +297,7 @@ func (m *Model) openSidebarChooser() bubbletea.Cmd {
 	m.sidebarChooserOpen = true
 	m.sidebarChooserParent = parentThreadID
 	m.sidebarChooserFocused = true
+	m.sidebarDocumentActive = ""
 	m.sidebarChooserScroll = sidebarChooserScroll{}
 	m.sidebarShowingFilePath = false
 	m.sidebarFilePathScroll = 0
@@ -322,6 +334,7 @@ func (m *Model) closeSidebarChooser() bubbletea.Cmd {
 	m.sidebarChooserOpen = false
 	m.sidebarChooserFocused = false
 	m.sidebarChooserParent = ""
+	m.sidebarDocumentActive = ""
 	m.sidebarChoice = 0
 	m.sidebarChooserScroll = sidebarChooserScroll{}
 	m.sidebarShowingFilePath = false
@@ -529,7 +542,16 @@ func (m *Model) updateSidebarChooserKey(msg keymsg.KeyMsg) (bool, bubbletea.Cmd)
 // moveSidebarChooserChoice moves the chooser selection for the sidebar_up and
 // sidebar_down leader chords (Rust #60152 leader_defaults).
 func (m *Model) moveSidebarChooserChoice(delta int) {
-	if m == nil || !m.sidebarChooserVisible() || !m.sidebarChooserFocused {
+	if m == nil || !m.sidebarChooserFocused {
+		return
+	}
+	if m.sidebarDocumentVisible() {
+		// Rust step_sidebar_tab: sidebar_up/down step through the strip,
+		// documents included, while a preview owns the pane.
+		m.stepSidebarDocumentTab(delta)
+		return
+	}
+	if !m.sidebarChooserVisible() {
 		return
 	}
 	action := "move_up"
@@ -587,6 +609,9 @@ func (m *Model) sidebarTabStripVisible() bool {
 	if m.sidebarChooserVisible() {
 		return true
 	}
+	if m.sidebarDocumentVisible() {
+		return true
+	}
 	return m.activeSide != nil
 }
 
@@ -595,7 +620,10 @@ func (m *Model) sidebarTabStripVisible() bool {
 // pointer column always maps back to the tab painted there (Rust #59928
 // sidebar_tab_strip.rs TabStrip::targets and hit share one layout).
 type sidebarTabStripWindow struct {
-	tabs     []*activeSideConversation
+	tabs []*activeSideConversation
+	// docs holds the preview tabs painted after the chats (Rust
+	// SidebarTab::Document); labels keeps one entry per cell of both kinds.
+	docs     []*sidebarDocumentTab
 	labels   []string
 	tabWidth int
 	stride   int
@@ -610,27 +638,69 @@ type sidebarTabStripWindow struct {
 	addWidth   int
 }
 
+// total is the number of tab cells in the strip, chats first.
+func (w sidebarTabStripWindow) total() int {
+	return len(w.tabs) + len(w.docs)
+}
+
+// isDocument reports whether a strip index belongs to a preview tab.
+func (w sidebarTabStripWindow) isDocument(index int) bool {
+	return index >= len(w.tabs) && index < w.total()
+}
+
+// document returns the preview tab at a strip index.
+func (w sidebarTabStripWindow) document(index int) *sidebarDocumentTab {
+	if !w.isDocument(index) {
+		return nil
+	}
+	return w.docs[index-len(w.tabs)]
+}
+
 // sidebarTabStripWindowFor builds the window for a strip of the given width,
 // keeping the selected tab in view (Rust #59784).
 func sidebarTabStripWindowFor(tabs []*activeSideConversation, selected string, width int, cloud bool) sidebarTabStripWindow {
+	return sidebarTabStripWindowForTabs(tabs, nil, selected, "", width, cloud)
+}
+
+// sidebarTabStripWindowForTabs builds the strip over the opened chats and the
+// preview tabs opened after them (Rust SidebarTab ordering).
+func sidebarTabStripWindowForTabs(tabs []*activeSideConversation, docs []*sidebarDocumentTab, selectedChat, selectedDoc string, width int, cloud bool) sidebarTabStripWindow {
 	labels := sidebarTabLabels(len(tabs), cloud)
+	for range docs {
+		// The title depends on the painted cell width, so documents keep a
+		// placeholder here and renderSidebarTabStrip resolves the real label.
+		labels = append(labels, "")
+	}
 	tabWidth, count, gutter := sidebarTabGeometry(width, len(labels))
+	total := len(tabs) + len(docs)
 	first := 0
-	selected = strings.TrimSpace(selected)
-	if selected != "" {
-		for index, tab := range tabs {
-			if tab != nil && strings.TrimSpace(tab.SideThreadID) == selected {
-				if count > 0 && index+1 > count {
-					first = index + 1 - count
-				}
+	selectedIndex := -1
+	selectedChat = strings.TrimSpace(selectedChat)
+	selectedDoc = strings.TrimSpace(selectedDoc)
+	if selectedDoc != "" {
+		for index, doc := range docs {
+			if doc != nil && doc.ID == selectedDoc {
+				selectedIndex = len(tabs) + index
 				break
 			}
 		}
 	}
+	if selectedIndex < 0 && selectedChat != "" {
+		for index, tab := range tabs {
+			if tab != nil && strings.TrimSpace(tab.SideThreadID) == selectedChat {
+				selectedIndex = index
+				break
+			}
+		}
+	}
+	if selectedIndex >= 0 && count > 0 && selectedIndex+1 > count {
+		first = selectedIndex + 1 - count
+	}
 	available, addWidth := sidebarTabStripSpace(width)
-	end := min(first+count, len(tabs))
+	end := min(first+count, total)
 	return sidebarTabStripWindow{
 		tabs:       tabs,
+		docs:       docs,
 		labels:     labels,
 		tabWidth:   tabWidth,
 		stride:     tabWidth + sidebarTabGap,
@@ -638,7 +708,7 @@ func sidebarTabStripWindowFor(tabs []*activeSideConversation, selected string, w
 		first:      first,
 		gutter:     gutter,
 		leftArrow:  gutter > 0 && first > 0,
-		rightArrow: gutter > 0 && end < len(tabs),
+		rightArrow: gutter > 0 && end < total,
 		addStart:   available,
 		addWidth:   addWidth,
 	}
@@ -665,7 +735,7 @@ func (w sidebarTabStripWindow) tabCellAt(column int) (index int, within int, ok 
 		return 0, 0, false
 	}
 	index = w.first + offset
-	if index < 0 || index >= len(w.tabs) {
+	if index < 0 || index >= w.total() {
 		return 0, 0, false
 	}
 	return index, within, true
@@ -702,7 +772,7 @@ func (w sidebarTabStripWindow) overflowAt(column int) int {
 		return w.first - 1
 	}
 	if w.rightArrow && column == w.addStart-1 {
-		if index := w.first + w.count; index < len(w.tabs) {
+		if index := w.first + w.count; index < w.total() {
 			return index
 		}
 	}
@@ -723,8 +793,13 @@ func (m *Model) sidebarTabStripWindowWidth(width int) sidebarTabStripWindow {
 	if m.activeSide != nil {
 		selected = strings.TrimSpace(m.activeSide.SideThreadID)
 	}
+	selectedDoc := ""
+	if m.sidebarDocumentActiveTab() != nil {
+		selectedDoc = m.sidebarDocumentActive
+	}
 	cloud := m.threadLabelCloud(m.sidebarParentThreadID(), m.backendID)
-	return sidebarTabStripWindowFor(m.sidebarTabsFor(m.sidebarParentThreadID()), selected, width, cloud)
+	parent := m.sidebarParentThreadID()
+	return sidebarTabStripWindowForTabs(m.sidebarTabsFor(parent), m.sidebarDocumentsFor(parent), selected, selectedDoc, width, cloud)
 }
 
 // sidebarTabStripWidth is the width of the sidebar pane the strip paints in,
@@ -855,11 +930,17 @@ func (m *Model) acceptSidebarChooser() bubbletea.Cmd {
 	case m.sidebarChooserIsRetryRow(m.sidebarChoice, choices):
 		return m.requestSideChatDiscovery(true)
 	default:
-		if _, file := m.sidebarChooserFile(m.sidebarChoice); file {
-			// Rust opens the file in a document tab (sidebar_document.rs). The
-			// Go pane has no document tabs yet, so the row stays selectable but
-			// inert until that port lands (#61889/#61890).
-			return nil
+		if file, ok := m.sidebarChooserFile(m.sidebarChoice); ok {
+			if m.sidebarFilePreviewUnavailable != "" {
+				// Rust side_focus: a row that cannot preview keeps the chooser
+				// focused and opens nothing.
+				return nil
+			}
+			// The chooser opens the file itself, so a transcript coordinate is
+			// not carried into the preview (Rust side_focus).
+			file.Location = nil
+			m.suppressCurrentViewKeyUntilRelease()
+			return m.openSidebarFileDocument(file)
 		}
 		choice, ok := m.sidebarChooserChat(m.sidebarChoice)
 		if !ok {
@@ -960,17 +1041,28 @@ func (m *Model) renderSidebarTabStrip(width int) string {
 	}
 	for offset := 0; offset < window.count; offset++ {
 		index := window.first + offset
-		if index >= len(window.labels) {
+		if index >= window.total() {
 			break
 		}
 		if offset > 0 {
 			// Rust #60319 TAB_GAP: one blank, noninteractive column.
 			writeSpaces(sidebarTabGap)
 		}
-		cell := renderSidebarTabCell(window.labels[index], window.tabWidth)
+		label := ""
+		if document := window.document(index); document != nil {
+			// Rust sidebar_chooser::tab_strip prefixes the document title with
+			// one space and resolves it against the cell's title column.
+			label = " " + m.sidebarDocumentTitle(document, max(window.tabWidth-2, 1))
+		} else if index < len(window.labels) {
+			label = window.labels[index]
+		}
+		cell := renderSidebarTabCell(label, window.tabWidth)
 		spec := styles.rest
 		switch {
-		case chatState != sidebarTabStateAbsent && m.sidebarTabSelected(window.tabs[index]):
+		case chatState != sidebarTabStateAbsent && window.isDocument(index) &&
+			window.document(index) != nil && window.document(index).ID == m.sidebarDocumentActive:
+			spec = styles.selected
+		case chatState != sidebarTabStateAbsent && index < len(window.tabs) && m.sidebarTabSelected(window.tabs[index]):
 			spec = styles.selected
 		case index == m.sidebarTabHover:
 			spec = styles.hover
@@ -1062,7 +1154,18 @@ func selectionNotUnderlined(level codextui.StdoutColorLevel) codextui.StyleSpec 
 // chat (Active), another tab while a side pair exists (Inactive), or no side
 // chat at all (Absent), mirroring Rust owned_transcript.rs's `chat`.
 func (m *Model) sidebarTabChatState() sidebarTabState {
-	if m == nil || m.activeSide == nil {
+	if m == nil {
+		return sidebarTabStateAbsent
+	}
+	// Rust owned_transcript.rs passes Active while the pane owns focus and
+	// Inactive otherwise; a preview tab keeps the same chip as a selected chat.
+	if m.sidebarDocumentVisible() {
+		if m.sidebarChooserFocused {
+			return sidebarTabStateActive
+		}
+		return sidebarTabStateInactive
+	}
+	if m.activeSide == nil {
 		return sidebarTabStateAbsent
 	}
 	if m.activeSide.ShowingSide {

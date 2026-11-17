@@ -25,6 +25,12 @@ func (m *Model) closeSidebarTab() bubbletea.Cmd {
 	if m == nil {
 		return nil
 	}
+	if m.sidebarDocumentVisible() && m.sidebarChooserFocused {
+		if tab := m.sidebarDocumentActiveTab(); tab != nil {
+			m.suppressCurrentViewKeyUntilRelease()
+			return m.closeSidebarDocumentTab(tab.ID)
+		}
+	}
 	side := m.sidebarTabCloseTarget()
 	if side == nil {
 		return nil
@@ -40,7 +46,17 @@ func (m *Model) closeSidebarTabAtIndex(index int) bubbletea.Cmd {
 		return nil
 	}
 	tabs := m.sidebarTabsFor(m.sidebarParentThreadID())
-	if index < 0 || index >= len(tabs) || tabs[index] == nil {
+	if index < 0 {
+		return nil
+	}
+	if index >= len(tabs) {
+		docs := m.sidebarDocumentsFor(m.sidebarParentThreadID())
+		if offset := index - len(tabs); offset >= 0 && offset < len(docs) && docs[offset] != nil {
+			return m.closeSidebarDocumentTab(docs[offset].ID)
+		}
+		return nil
+	}
+	if tabs[index] == nil {
 		return nil
 	}
 	return m.requestSideTabClose(tabs[index])
