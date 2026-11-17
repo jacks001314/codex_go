@@ -6022,12 +6022,23 @@ func (m *Model) viewString() string {
 			sections = append(sections, m.renderVimSearchFooter())
 		}
 	}
+	footerLine, footerAlreadyStyled := "", false
+	footerVisible := false
+	if !m.composerSurfaceSuppressed() {
+		footerLine, footerAlreadyStyled = m.footerHelpLine()
+		footerVisible = shouldRenderFooterHintRow(statusLine, footerLine)
+	}
+	// Rust paints the side conversation context label on the passive hint row,
+	// so a steady-state label does not claim a row of its own.
+	sideOnFooter := footerVisible && m.footerRowCarriesSideLabel(footerLine, footerAlreadyStyled)
+	sideLabel := strings.TrimSpace(m.sideContextLabel())
+	notice := strings.TrimSpace(m.notice)
 	// A notice shares the composer's rows, so a bottom-pane view (modal or
 	// picker) replaces it entirely.
-	if strings.TrimSpace(m.notice) != "" && m.modal == nil {
+	if notice != "" && m.modal == nil && !(sideOnFooter && notice == sideLabel) {
 		sections = append(sections, m.noticeRow(m.notice))
 	}
-	if sideLabel := strings.TrimSpace(m.sideContextLabel()); sideLabel != "" && sideLabel != strings.TrimSpace(m.notice) {
+	if sideLabel != "" && sideLabel != notice && !sideOnFooter {
 		sections = append(sections, m.noticeRow(sideLabel))
 	}
 	if agentLabel := strings.TrimSpace(m.activeAgentLabel); agentLabel != "" && agentLabel != strings.TrimSpace(m.notice) {
@@ -6036,12 +6047,9 @@ func (m *Model) viewString() string {
 	if m.ideContext.Enabled {
 		sections = append(sections, m.footerStyle.Render("IDE context"))
 	}
-	if !m.composerSurfaceSuppressed() {
-		footerLine, footerAlreadyStyled := m.footerHelpLine()
-		if shouldRenderFooterHintRow(statusLine, footerLine) {
-			footerIndex = len(sections)
-			sections = append(sections, m.renderFooterHelpSection(footerLine, footerAlreadyStyled))
-		}
+	if footerVisible {
+		footerIndex = len(sections)
+		sections = append(sections, m.renderFooterHelpSection(footerLine, footerAlreadyStyled))
 	}
 	if m.ownedScreen {
 		// Rust's flex layout keeps the frame inside the terminal: the transcript
@@ -6119,7 +6127,7 @@ func (m *Model) footerHelpLine() (string, bool) {
 			// output is unseen or the reader can return to the latest row.
 			footerLine = followLine
 		} else {
-			footerLine = strings.Join(m.passiveFooterHintSegments(), " \u00b7 ")
+			footerLine = strings.Join(m.passiveFooterHintSegmentsWithSide(), " \u00b7 ")
 		}
 		if usageNotice == "" {
 			// Rust #48205/#48206: the passive hint row right-aligns the retained
@@ -6171,12 +6179,41 @@ func (m *Model) passiveFooterHintSegments() []string {
 	return segments
 }
 
+// passiveFooterHintSegmentsWithSide appends the side conversation context
+// label to the passive hints. Rust's passive_hints keeps navigation and
+// actions on the left of the row and adds the side label as the last left
+// label (Kind order: Agents, Shortcuts, Action, Side).
+func (m *Model) passiveFooterHintSegmentsWithSide() []string {
+	segments := m.passiveFooterHintSegments()
+	if label := strings.TrimSpace(m.sideContextLabel()); label != "" {
+		segments = append(segments, label)
+	}
+	return segments
+}
+
+// footerRowCarriesSideLabel reports whether the painted passive row already
+// shows the side conversation context label, so the label does not claim a
+// row of its own.
+func (m *Model) footerRowCarriesSideLabel(footerLine string, alreadyStyled bool) bool {
+	if m == nil || alreadyStyled || footerLine == "" {
+		return false
+	}
+	if strings.TrimSpace(m.sideContextLabel()) == "" {
+		return false
+	}
+	return footerLine == strings.Join(m.passiveFooterHintSegmentsWithSide(), " \u00b7 ")
+}
+
 func (m *Model) renderFooterHelpSection(footerLine string, alreadyStyled bool) string {
 	// Rust indents the passive hint row by LIVE_PREFIX_COLS (2) so it lines up
 	// with the composer text and the status line.
 	width := max(m.width-2, 1)
 	if !alreadyStyled {
-		if segments := m.passiveFooterHintSegments(); len(segments) > 0 && strings.Join(segments, " \u00b7 ") == footerLine {
+		segments := m.passiveFooterHintSegmentsWithSide()
+		if len(segments) > 0 && strings.Join(segments, " \u00b7 ") == footerLine {
+			if label := strings.TrimSpace(m.sideContextLabel()); label != "" && segments[len(segments)-1] == label {
+				return m.renderSideFooterHintRow(segments[:len(segments)-1], label, width)
+			}
 			rows := renderFooterHintRows(segments, width, m.footerHintRowBudget())
 			lines := make([]string, 0, len(rows))
 			for _, row := range rows {
@@ -6216,6 +6253,52 @@ func renderFooterHintRows(segments []string, width int, budget int) []string {
 		out = append(out, strings.Join(row, " \u00b7 "))
 	}
 	return out
+}
+
+// renderSideFooterHintRow paints the passive row that carries the side
+// conversation context label. Rust's passive hints keep the label on the same
+// row as the key hints, dropping `? for shortcuts` first and `← for agents`
+// second so the label keeps its text; a label that still overflows is clipped
+// at the row width (bottom_pane/chat_composer/passive_hints.rs fit()).
+func (m *Model) renderSideFooterHintRow(hints []string, label string, width int) string {
+	width = max(width, 1)
+	fits := func(hints []string) bool {
+		total := codextui.DisplayWidth(label)
+		for _, hint := range hints {
+			total += codextui.DisplayWidth(hint) + 3
+		}
+		return total <= width
+	}
+	kept := hints
+	if !fits(kept) {
+		kept = nil
+		candidates := make([][]string, 0, 2)
+		// Rust drops the shortcuts hint before the agents hint.
+		if len(hints) > 1 {
+			candidates = append(candidates, hints[:len(hints)-1])
+		}
+		candidates = append(candidates, nil)
+		for _, candidate := range candidates {
+			if fits(candidate) {
+				kept = candidate
+				break
+			}
+		}
+	}
+	labelWidth := width
+	if len(kept) > 0 {
+		plainWidth := 0
+		for _, hint := range kept {
+			plainWidth += codextui.DisplayWidth(hint) + 3
+		}
+		labelWidth = max(width-plainWidth, 1)
+	}
+	styledLabel := m.renderSideContextLine(label, labelWidth)
+	if len(kept) == 0 {
+		return "  " + styledLabel
+	}
+	plain := strings.Join(kept, " \u00b7 ")
+	return "  " + m.footerStyle.Render(plain+" \u00b7 ") + styledLabel
 }
 
 // shouldRenderFooterHintRow mirrors Rust #60681: an enabled status line already
@@ -12758,11 +12841,20 @@ func (m *Model) trailingBottomRows() int {
 // trailingBottomRowsExceptVoice is trailingBottomRows without the composer
 // strip, which now renders inside the composer block.
 func (m *Model) trailingBottomRowsExceptVoice() int {
+	footerLine, footerAlreadyStyled := "", false
+	footerVisible := false
+	if !m.composerSurfaceSuppressed() {
+		footerLine, footerAlreadyStyled = m.footerHelpLine()
+		footerVisible = shouldRenderFooterHintRow(m.statusLineContent(), footerLine)
+	}
+	sideOnFooter := footerVisible && m.footerRowCarriesSideLabel(footerLine, footerAlreadyStyled)
+	sideLabel := strings.TrimSpace(m.sideContextLabel())
+	notice := strings.TrimSpace(m.notice)
 	rows := 0
-	if strings.TrimSpace(m.notice) != "" {
+	if notice != "" && !(sideOnFooter && notice == sideLabel) {
 		rows++
 	}
-	if sideLabel := strings.TrimSpace(m.sideContextLabel()); sideLabel != "" && sideLabel != strings.TrimSpace(m.notice) {
+	if sideLabel != "" && sideLabel != notice && !sideOnFooter {
 		rows++
 	}
 	if agentLabel := strings.TrimSpace(m.activeAgentLabel); agentLabel != "" && agentLabel != strings.TrimSpace(m.notice) {
@@ -12771,11 +12863,8 @@ func (m *Model) trailingBottomRowsExceptVoice() int {
 	if m.ideContext.Enabled {
 		rows++
 	}
-	if !m.composerSurfaceSuppressed() {
-		footerLine, _ := m.footerHelpLine()
-		if shouldRenderFooterHintRow(m.statusLineContent(), footerLine) {
-			rows++
-		}
+	if footerVisible {
+		rows++
 	}
 	return rows
 }

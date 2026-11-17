@@ -52,7 +52,10 @@ func TestSideWorkspacePanesOwnTheirBottomPaneLikeRust(t *testing.T) {
 	if divider < 0 {
 		t.Fatalf("composer row has no divider: %q", prompt)
 	}
-	if strings.TrimSpace(prompt[:divider]) != "" {
+	// The panes size their own bottom stacks, so the parked column may paint a
+	// status row beside the focused composer; the parent half must still never
+	// paint a second prompt.
+	if strings.Contains(prompt[:divider], "\u203a") {
 		t.Fatalf("focused side composer spilled into the parent column: %q", prompt)
 	}
 	if !strings.Contains(prompt[divider:], "› "+SideComposerPlaceholder) {

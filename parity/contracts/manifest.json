@@ -3541,6 +3541,23 @@
    "phase": "P3",
    "status": "complete",
    "verifier": "TestSideConversationPlaceholderLikeRust;TestSideConversationKeepsPromptSuggestionOverrideLikeRust;TestParkedSideConversationUsesMainPlaceholderLikeRust"
+  },
+  {
+   "id": "side-conversation-footer-row",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/bottom_pane/chat_composer/passive_hints.rs",
+    "tui/src/bottom_pane/chat_composer.rs",
+    "tui/src/bottom_pane/footer.rs",
+    "tui/src/app/side.rs"
+   ],
+   "goPaths": [
+    "tui/tea/model.go",
+    "tui/tea/side.go"
+   ],
+   "phase": "P3",
+   "status": "complete",
+   "verifier": "TestSideContextLabelSharesPassiveHintRowLikeRust;TestSideContextLabelCollapsesHintsLikeRust;TestSideContextLabelClipsLastLikeRust;TestSideWorkspacePanesOwnTheirBottomPaneLikeRust"
   }
   ]
 }
