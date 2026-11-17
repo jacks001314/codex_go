@@ -22,6 +22,7 @@ const (
 	sidebarTargetTabAdd
 	sidebarTargetTabOverflow
 	sidebarTargetChooserRow
+	sidebarTargetFooter
 )
 
 // sidebarSpan is the painted column or row range of a target, which is what
@@ -34,9 +35,10 @@ type sidebarSpan struct {
 // sidebarTarget mirrors Rust side_focus.rs SidebarTarget. index is the strip
 // cell index (chats first, then previews) or the chooser choice index.
 type sidebarTarget struct {
-	kind  sidebarTargetKind
-	index int
-	span  sidebarSpan
+	kind   sidebarTargetKind
+	index  int
+	action string
+	span   sidebarSpan
 }
 
 // sidebarInputState snapshots which sidebar content the frame painted, so a
@@ -141,6 +143,11 @@ func (m *Model) sidebarTargetAt(msg mousemsg.MouseMsg) (sidebarTarget, bool) {
 					span:  sidebarSpan{start: msg.Y, end: msg.Y + 1},
 				}, true
 			}
+			if column, ok := m.sidebarStripColumn(msg.X); ok {
+				if target, hit := m.sidebarChooserFooterTargetAt(row, column); hit {
+					return target, true
+				}
+			}
 		}
 	}
 	return sidebarTarget{}, false
@@ -214,6 +221,24 @@ func (m *Model) activateSidebarTarget(press sidebarPress) bubbletea.Cmd {
 		}
 		m.sidebarChoice = press.target.index
 		return m.acceptSidebarChooser()
+	case sidebarTargetFooter:
+		if press.button != mousemsg.MouseButtonLeft {
+			return nil
+		}
+		switch press.target.action {
+		case "open", "retry":
+			return m.acceptSidebarChooser()
+		case "back":
+			m.cancelSideChatOpen()
+			return m.closeSidebarChooser()
+		case "path":
+			m.sidebarShowingFilePath = !m.sidebarShowingFilePath
+			m.sidebarFilePathScroll = 0
+			m.refreshTranscript()
+			return nil
+		case "hide":
+			return m.hideFocusedSidePane()
+		}
 	}
 	return nil
 }

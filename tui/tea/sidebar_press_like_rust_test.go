@@ -132,3 +132,62 @@ func TestSidebarChooserBackgroundPressReturnsFocusToMainLikeRust(t *testing.T) {
 		t.Fatalf("press in the main pane moved the selection from %d to %d", choice, model.sidebarChoice)
 	}
 }
+
+// Rust sidebar_chooser::footer_targets registers a click area for every hint
+// that maps to a ChooserAction, so clicking "esc back" or "enter open" runs the
+// same action the key would.
+func TestSidebarChooserFooterHintsAreClickableLikeRust(t *testing.T) {
+	model, started := newSidebarTabsModel(t)
+	if cmd := model.focusSidebarContent(); cmd != nil {
+		runTeaCmd(t, model, cmd)
+	}
+	_ = model.viewString()
+	left, _, _, ok := model.sidePaneLayout(model.width)
+	if !ok {
+		t.Fatal("split layout unavailable")
+	}
+	base := left + sideWorkspaceDividerWidth
+	footerRow := model.sidebarChooserPanelHeight() - 1
+	width := sidebarChooserBodyWidth(model.sidebarTabStripWidth())
+	targets := model.sidebarChooserFooterTargets(width)
+	spanFor := func(action string) (int, int) {
+		t.Helper()
+		for _, target := range targets {
+			if target.action == action {
+				return target.start, target.end
+			}
+		}
+		t.Fatalf("footer has no %q hint: %+v", action, targets)
+		return 0, 0
+	}
+
+	// The back hint closes the chooser.
+	start, end := spanFor("back")
+	handled, cmd := clickSidebarPane(t, model, mousemsg.MouseButtonLeft, base+(start+end)/2, footerRow)
+	if !handled {
+		t.Fatal("press on the back hint was not handled")
+	}
+	runTeaCmd(t, model, cmd)
+	if model.sidebarChooserVisible() {
+		t.Fatal("back hint left the chooser open")
+	}
+
+	// The open hint starts the selected side chat.
+	if cmd := model.focusSidebarContent(); cmd != nil {
+		runTeaCmd(t, model, cmd)
+	}
+	_ = model.viewString()
+	targets = model.sidebarChooserFooterTargets(width)
+	start, end = spanFor("open")
+	handled, cmd = clickSidebarPane(t, model, mousemsg.MouseButtonLeft, base+(start+end)/2, footerRow)
+	if !handled {
+		t.Fatal("press on the open hint was not handled")
+	}
+	runTeaCmd(t, model, cmd)
+	if len(*started) != 1 {
+		t.Fatalf("side starters = %d, want 1", len(*started))
+	}
+	if model.State.ThreadID != "side-1" {
+		t.Fatalf("open hint left thread %q, want side-1", model.State.ThreadID)
+	}
+}

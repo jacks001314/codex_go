@@ -1558,45 +1558,100 @@ func (m *Model) sideOpenStatusLabel(threadID string) string {
 // cancel opening, movement only exists once a side chat can start, and the
 // global hide-pane chord always closes the pane.
 func (m *Model) sidebarChooserFooter(width int) string {
+	line, _ := fitSidebarChooserHintLine(m.sidebarChooserFooterHints(), width)
+	return line
+}
+
+// sidebarChooserFooterHint is one clickable footer hint: the painted text and
+// the chooser action its keys run (Rust sidebar_chooser::footer actions).
+type sidebarChooserFooterHint struct {
+	text   string
+	action string
+}
+
+// sidebarChooserFooterTarget is a painted footer hint's column span, the area
+// Rust registers as SidebarTarget::Footer.
+type sidebarChooserFooterTarget struct {
+	start  int
+	end    int
+	action string
+}
+
+// sidebarChooserFooterHints builds the footer hint list the shared keymap
+// describes, keeping each hint's action so the painted span stays clickable.
+func (m *Model) sidebarChooserFooterHints() []sidebarChooserFooterHint {
 	if m == nil {
-		return ""
+		return nil
 	}
 	if m.sidebarShowingFilePath {
-		hints := make([]string, 0, 2)
+		hints := make([]sidebarChooserFooterHint, 0, 2)
 		if key := m.sidebarChooserListHint("cancel"); key != "" {
-			hints = append(hints, key+" back")
+			hints = append(hints, sidebarChooserFooterHint{text: key + " back", action: "back"})
 		}
 		if key := m.sidebarChooserListHint("move_down"); key != "" {
-			hints = append(hints, key+" scroll")
+			hints = append(hints, sidebarChooserFooterHint{text: key + " scroll"})
 		}
-		return fitSidebarChooserHints(hints, width)
+		return hints
 	}
 	available := m.sidebarChatCreationAvailable()
 	fileSelected := m.sidebarChooserSelectedFile()
 	visible := m.sidebarChooserSelectionVisible()
-	hints := make([]string, 0, 4)
+	hints := make([]sidebarChooserFooterHint, 0, 4)
 	if visible && (available || fileSelected) && (!fileSelected || m.sidebarFilePreviewUnavailable == "") {
 		if key := m.sidebarChooserListHint("accept"); key != "" {
-			hints = append(hints, key+" "+m.sidebarChooserAcceptLabel())
+			hints = append(hints, sidebarChooserFooterHint{
+				text:   key + " " + m.sidebarChooserAcceptLabel(),
+				action: "open",
+			})
 		}
 	}
 	if key := m.sidebarChooserListHint("cancel"); key != "" {
-		hints = append(hints, key+" "+m.sidebarChooserCancelLabel())
+		hints = append(hints, sidebarChooserFooterHint{
+			text:   key + " " + m.sidebarChooserCancelLabel(),
+			action: "back",
+		})
 	}
 	if fileSelected && visible && m.sidebarChooserFilePathKeyAvailable() {
-		hints = append(hints, "p path")
+		hints = append(hints, sidebarChooserFooterHint{text: "p path", action: "path"})
 	}
 	if available || len(m.sidebarFiles) > 0 {
 		up := m.sidebarChooserListHint("move_up")
 		down := m.sidebarChooserListHint("move_down")
 		if up != "" && down != "" {
-			hints = append(hints, up+"/"+down+" move")
+			hints = append(hints, sidebarChooserFooterHint{text: up + "/" + down + " move"})
 		}
 	}
 	if key := m.sidebarChooserHideHint(); key != "" {
-		hints = append(hints, key+" hide pane")
+		hints = append(hints, sidebarChooserFooterHint{text: key + " hide pane", action: "hide"})
 	}
-	return fitSidebarChooserHints(hints, width)
+	return hints
+}
+
+// sidebarChooserFooterTargets is the painted footer's clickable spans at the
+// width it was laid out for (Rust sidebar_chooser::footer_targets).
+func (m *Model) sidebarChooserFooterTargets(width int) []sidebarChooserFooterTarget {
+	_, targets := fitSidebarChooserHintLine(m.sidebarChooserFooterHints(), width)
+	return targets
+}
+
+// sidebarChooserFooterTargetAt maps a pane row/column onto the footer hint
+// painted there. The footer owns the pane's last row.
+func (m *Model) sidebarChooserFooterTargetAt(row int, column int) (sidebarTarget, bool) {
+	if m == nil || !m.sidebarChooserVisible() || row != m.sidebarChooserPanelHeight()-1 {
+		return sidebarTarget{}, false
+	}
+	width := sidebarChooserBodyWidth(m.sidebarTabStripWidth())
+	for _, target := range m.sidebarChooserFooterTargets(width) {
+		if column >= target.start && column < target.end {
+			return sidebarTarget{
+				kind:   sidebarTargetFooter,
+				index:  -1,
+				action: target.action,
+				span:   sidebarSpan{start: target.start, end: target.end},
+			}, true
+		}
+	}
+	return sidebarTarget{}, false
 }
 
 // sidebarChooserFilePathKeyAvailable is Rust file_path_key_available: `p` only
@@ -1619,7 +1674,19 @@ func (m *Model) sidebarChooserFilePathKeyAvailable() bool {
 // fitSidebarChooserHints drops whole hints that do not fit and marks the cut
 // with an ellipsis, the way Rust footer_hint::HintLine::new measures them.
 func fitSidebarChooserHints(hints []string, width int) string {
+	structured := make([]sidebarChooserFooterHint, 0, len(hints))
+	for _, hint := range hints {
+		structured = append(structured, sidebarChooserFooterHint{text: hint})
+	}
+	line, _ := fitSidebarChooserHintLine(structured, width)
+	return line
+}
+
+// fitSidebarChooserHintLine drops whole hints that do not fit, marks the cut
+// with an ellipsis, and reports the spans of the hints that were painted.
+func fitSidebarChooserHintLine(hints []sidebarChooserFooterHint, width int) (string, []sidebarChooserFooterTarget) {
 	var builder strings.Builder
+	targets := make([]sidebarChooserFooterTarget, 0, len(hints))
 	end := 0
 	for index, hint := range hints {
 		separator := 0
@@ -1627,7 +1694,7 @@ func fitSidebarChooserHints(hints []string, width int) string {
 			separator = 3
 		}
 		start := end + separator
-		next := start + codextui.DisplayWidth(hint)
+		next := start + codextui.DisplayWidth(hint.text)
 		overflowSpace := 0
 		if index < len(hints)-1 {
 			overflowSpace = 2
@@ -1640,15 +1707,18 @@ func fitSidebarChooserHints(hints []string, width int) string {
 					builder.WriteString(" …")
 				}
 			}
-			return builder.String()
+			return builder.String(), targets
 		}
 		if index > 0 {
 			builder.WriteString(" · ")
 		}
-		builder.WriteString(hint)
+		builder.WriteString(hint.text)
+		if hint.action != "" {
+			targets = append(targets, sidebarChooserFooterTarget{start: start, end: next, action: hint.action})
+		}
 		end = next
 	}
-	return builder.String()
+	return builder.String(), targets
 }
 
 func (m *Model) sidebarChooserListHint(action string) string {
