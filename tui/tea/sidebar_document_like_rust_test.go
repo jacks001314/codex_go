@@ -363,3 +363,44 @@ func TestSidebarDocumentHoverAndClickOpenLinkLikeRust(t *testing.T) {
 		t.Fatalf("hover after opening = %d", tab.HoverLink)
 	}
 }
+
+// Rust open_resolved_document pushes the preview into `opened_files`, and
+// refresh_sidebar_files appends those paths after the promoted and visible
+// links so the file stays listed once the tab closes.
+func TestSidebarDocumentRecordsOpenedFilesLikeRust(t *testing.T) {
+	model, _ := newSidebarTabsModel(t)
+	model.sidebarChooserOpen = true
+	model.sidebarChooserParent = "parent-a"
+	model.sidebarChooserFocused = true
+	model.sidebarFilesCwd = "/workspace"
+	model.sidebarFiles = []markdown.SidebarFileLink{{Path: "/workspace/docs/readme.md"}}
+	model.sidebarPromotedFiles = map[string][]markdown.SidebarFileLink{
+		"parent-a": {{Path: "/workspace/patch.go"}},
+	}
+	model.onSidebarDocument = func(request SidebarDocumentRequest) SidebarDocumentView {
+		return SidebarDocumentView{Path: "/workspace/docs/b.go", Text: "package main\n"}
+	}
+
+	cmd := model.openSidebarDocumentAt("docs/b.go", -1, nil)
+	if cmd == nil {
+		t.Fatal("opening a preview returned no load command")
+	}
+	runTeaCmd(t, model, cmd)
+
+	opened := model.sidebarOpenedFiles["parent-a"]
+	if len(opened) != 1 || opened[0].Path != "/workspace/docs/b.go" {
+		t.Fatalf("opened files = %#v", opened)
+	}
+	if last := model.sidebarFiles[len(model.sidebarFiles)-1]; last.Path != "/workspace/docs/b.go" {
+		t.Fatalf("chooser files = %#v", model.sidebarFiles)
+	}
+	links := model.sidebarRequestedFileLinks()
+	if len(links) != 2 || links[0].Path != "/workspace/patch.go" || links[1].Path != "/workspace/docs/b.go" {
+		t.Fatalf("requested files = %#v", links)
+	}
+
+	model.openSidebarDocumentAt("docs/b.go", -1, nil)
+	if len(model.sidebarOpenedFiles["parent-a"]) != 1 {
+		t.Fatalf("reopening duplicated opened files = %#v", model.sidebarOpenedFiles["parent-a"])
+	}
+}

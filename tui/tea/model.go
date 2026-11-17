@@ -3171,6 +3171,9 @@ type Model struct {
 	// sidebarPromotedFiles keeps completed patch and image paths per parent so
 	// reopening the chooser still lists them (Rust notice_sidebar_file_item).
 	sidebarPromotedFiles map[string][]markdown.SidebarFileLink
+	// sidebarOpenedFiles keeps the previews a parent opened, so the Files group
+	// still lists them after the tab closes (Rust SidebarPane::opened_files).
+	sidebarOpenedFiles map[string][]markdown.SidebarFileLink
 	// sidebarChooserScroll mirrors Rust ChooserScroll: the wheel can move the
 	// viewport away from the keyboard selection.
 	sidebarChooserScroll    sidebarChooserScroll

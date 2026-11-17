@@ -176,6 +176,7 @@ func (m *Model) openSidebarDocumentAt(path string, linkIndex int, location *mark
 		return nil
 	}
 	m.sidebarDocumentCounter++
+	m.recordSidebarOpenedFile(parent, path)
 	id := "document-" + strconv.FormatUint(m.sidebarDocumentCounter, 10)
 	tab := &sidebarDocumentTab{
 		ID:        id,
@@ -503,6 +504,16 @@ func (m *Model) followSidebarDocumentLinkIndex(tab *sidebarDocumentTab, index in
 // `LegacyAppPathString::resolve_against` does: absolute targets stay as
 // written and relative ones join the preview's parent directory.
 func resolveSidebarDocumentLinkPath(documentPath string, linkPath string) string {
+	parent := documentPath
+	if index := strings.LastIndexAny(parent, `/\`); index >= 0 {
+		parent = parent[:index]
+	}
+	return joinSidebarDocumentPath(parent, linkPath)
+}
+
+// joinSidebarDocumentPath joins a relative target onto a base directory,
+// keeping absolute targets as written and matching the base's separator.
+func joinSidebarDocumentPath(base string, linkPath string) string {
 	linkPath = strings.TrimSpace(linkPath)
 	if linkPath == "" {
 		return linkPath
@@ -510,18 +521,49 @@ func resolveSidebarDocumentLinkPath(documentPath string, linkPath string) string
 	if isAbsoluteSidebarPath(linkPath) || strings.HasPrefix(linkPath, `\\`) {
 		return linkPath
 	}
-	parent := documentPath
-	if index := strings.LastIndexAny(parent, `/\`); index >= 0 {
-		parent = parent[:index]
-	}
-	if parent == "" {
+	base = strings.TrimSpace(base)
+	if base == "" {
 		return linkPath
 	}
 	separator := "/"
-	if strings.Contains(parent, `\`) && !strings.Contains(parent, "/") {
+	if strings.Contains(base, `\`) && !strings.Contains(base, "/") {
 		separator = `\`
 	}
-	return cleanSidebarDocumentPath(parent+separator+linkPath, separator)
+	return cleanSidebarDocumentPath(base+separator+linkPath, separator)
+}
+
+// recordSidebarOpenedFile keeps the preview's path in the parent's opened list
+// and in a chooser that is already painted, like Rust's `opened_files` push in
+// `open_resolved_document`.
+func (m *Model) recordSidebarOpenedFile(parent string, path string) {
+	if m == nil {
+		return
+	}
+	parent = strings.TrimSpace(parent)
+	path = strings.TrimSpace(path)
+	if parent == "" || path == "" {
+		return
+	}
+	if !isAbsoluteSidebarPath(path) && !strings.HasPrefix(path, `\\`) {
+		path = joinSidebarDocumentPath(m.sidebarFilesCwd, path)
+	}
+	if m.sidebarOpenedFiles == nil {
+		m.sidebarOpenedFiles = map[string][]markdown.SidebarFileLink{}
+	}
+	for _, existing := range m.sidebarOpenedFiles[parent] {
+		if existing.Path == path {
+			return
+		}
+	}
+	link := markdown.SidebarFileLink{Path: path}
+	m.sidebarOpenedFiles[parent] = append(m.sidebarOpenedFiles[parent], link)
+	if !m.sidebarChooserOpen || parent != m.sidebarChooserParent {
+		return
+	}
+	selected := m.sidebarChooserSelectedFilePath()
+	m.sidebarFiles = mergeSidebarFileLinks(nil, append(m.sidebarFiles, link))
+	m.restoreSidebarFileSelection(selected)
+	m.clampSidebarChoice()
 }
 
 // cleanSidebarDocumentPath collapses `.` and `..` segments without touching

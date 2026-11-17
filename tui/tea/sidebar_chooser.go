@@ -1868,7 +1868,9 @@ func (m *Model) sidebarRequestedFileLinks() []markdown.SidebarFileLink {
 	}
 	parentThreadID := strings.TrimSpace(m.sidebarChooserParent)
 	promoted := append([]markdown.SidebarFileLink(nil), m.sidebarPromotedFiles[parentThreadID]...)
-	return mergeSidebarFileLinks(nil, append(promoted, m.sidebarTranscriptFileLinks()...))
+	// Rust appends `opened_files` after the promoted entries and visible links,
+	// so a preview someone opened stays listed even when nothing links to it.
+	return mergeSidebarFileLinks(nil, append(append(promoted, m.sidebarTranscriptFileLinks()...), m.sidebarOpenedFiles[parentThreadID]...))
 }
 
 // applySidebarFilePromoted keeps live patch and image paths ahead of the
