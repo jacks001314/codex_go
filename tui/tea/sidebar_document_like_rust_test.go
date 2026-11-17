@@ -8,6 +8,7 @@ import (
 
 	"codex_go/tui/keymsg"
 	"codex_go/tui/markdown"
+	mousemsg "codex_go/tui/mousemsg"
 )
 
 // Rust sidebar_document.rs `open_resolved_document`: accepting a chooser file
@@ -219,7 +220,7 @@ func TestSidebarDocumentTabStepLikeRust(t *testing.T) {
 // content so link navigation can be exercised without a chooser round trip.
 func openDocumentTabAt(t *testing.T, model *Model, view SidebarDocumentView) *sidebarDocumentTab {
 	t.Helper()
-	tab := &sidebarDocumentTab{ID: "doc-1", Parent: "parent-a", Source: "parent-a", Path: view.Path, View: view, Link: -1}
+	tab := &sidebarDocumentTab{ID: "doc-1", Parent: "parent-a", Source: "parent-a", Path: view.Path, View: view, Link: -1, HoverLink: -1}
 	model.sidebarChooserOpen = true
 	model.sidebarChooserParent = "parent-a"
 	model.sidebarChooserFocused = true
@@ -306,5 +307,59 @@ func TestSidebarDocumentLinkPathResolutionLikeRust(t *testing.T) {
 		if got := resolveSidebarDocumentLinkPath(testCase.document, testCase.link); got != testCase.want {
 			t.Fatalf("resolve(%q, %q) = %q, want %q", testCase.document, testCase.link, got, testCase.want)
 		}
+	}
+}
+
+// Rust #61890 pointer path: hovering a painted destination emphasizes it, and
+// a left press opens that link with the same geometry as the Tab selection.
+func TestSidebarDocumentHoverAndClickOpenLinkLikeRust(t *testing.T) {
+	model, _ := newSidebarTabsModel(t)
+	model.transcript.Height = 20
+	var requests []SidebarDocumentRequest
+	model.onSidebarDocument = func(request SidebarDocumentRequest) SidebarDocumentView {
+		requests = append(requests, request)
+		return SidebarDocumentView{Path: request.Path, Text: "package main\n"}
+	}
+	tab := openDocumentTabAt(t, model, SidebarDocumentView{
+		Path: "/workspace/docs/readme.md",
+		Text: "# Doc\n\n[one](a.md) and [two](b.go#L2C1)\n",
+	})
+	linkRows := model.sidebarDocumentLinkRows(tab)
+	if len(linkRows) != 2 || linkRows[1].Row < 0 {
+		t.Fatalf("link rows = %#v", linkRows)
+	}
+	width := model.sidebarTabStripWidth()
+	left, _, _, ok := model.sidePaneLayout(model.width)
+	if !ok {
+		t.Fatal("side pane layout unavailable")
+	}
+	x := left + ansi.StringWidth(sideWorkspaceDivider) + 1 + linkRows[1].Column
+	y := linkRows[1].Row - tab.Scroll + 1
+
+	if handled, _ := model.handleSidePaneMouse(mousemsg.MouseMsg{X: x, Y: y, Action: mousemsg.MouseActionMotion}); !handled {
+		t.Fatal("motion over the preview was not handled")
+	}
+	if tab.HoverLink != 1 {
+		t.Fatalf("hover link = %d, want 1", tab.HoverLink)
+	}
+	if painted := model.renderSidebarDocument(width, 20); !strings.Contains(painted, "\x1b[1m") {
+		t.Fatal("hovered destination was not emphasized")
+	}
+
+	_, cmd := model.handleSidePaneMouse(mousemsg.MouseMsg{
+		X: x, Y: y, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft,
+	})
+	if cmd == nil {
+		t.Fatal("click on a painted destination did not open it")
+	}
+	runTeaCmd(t, model, cmd)
+	if len(requests) != 1 {
+		t.Fatalf("requests = %d", len(requests))
+	}
+	if requests[0].Path != "/workspace/docs/b.go" || requests[0].Location == nil || requests[0].Location.Line != 2 {
+		t.Fatalf("request = %#v", requests[0])
+	}
+	if tab.HoverLink != -1 {
+		t.Fatalf("hover after opening = %d", tab.HoverLink)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	codextui "codex_go/tui"
 	"codex_go/tui/keymsg"
 	"codex_go/tui/markdown"
+	mousemsg "codex_go/tui/mousemsg"
 )
 
 // Rust parity: codex-rs/tui/src/app/sidebar_document.rs (#61888/#61889/#61890).
@@ -75,6 +76,9 @@ type sidebarDocumentTab struct {
 	Scroll  int
 	// Link is the selected document link index, or -1 (Rust Document::link).
 	Link int
+	// HoverLink is the link under the pointer, or -1 (Rust
+	// TranscriptView::paint_document_links emphasizes the hovered destination).
+	HoverLink int
 	// TargetCleared records that Esc removed the coordinate highlight (Rust
 	// Document::target.take()).
 	TargetCleared bool
@@ -174,13 +178,14 @@ func (m *Model) openSidebarDocumentAt(path string, linkIndex int, location *mark
 	m.sidebarDocumentCounter++
 	id := "document-" + strconv.FormatUint(m.sidebarDocumentCounter, 10)
 	tab := &sidebarDocumentTab{
-		ID:      id,
-		Parent:  parent,
-		Source:  parent,
-		Link:    -1,
-		Path:    path,
-		Loading: true,
-		Started: time.Now(),
+		ID:        id,
+		Parent:    parent,
+		Source:    parent,
+		Link:      -1,
+		HoverLink: -1,
+		Path:      path,
+		Loading:   true,
+		Started:   time.Now(),
 	}
 	m.sidebarDocuments[parent] = append(m.sidebarDocuments[parent], tab)
 	m.sidebarDocumentActive = id
@@ -209,6 +214,7 @@ func (m *Model) reloadSidebarDocument(tab *sidebarDocumentTab, linkIndex int, lo
 	tab.Loading = true
 	tab.Started = time.Now()
 	tab.Link = -1
+	tab.HoverLink = -1
 	tab.TargetCleared = false
 	tab.Scroll = 0
 	tab.rendered = false
@@ -250,6 +256,7 @@ func (m *Model) applySidebarDocumentLoaded(msg SidebarDocumentLoadedMsg) bubblet
 		tab.rendered = false
 		tab.renderLines = nil
 		tab.linkRowsSet = false
+		tab.HoverLink = -1
 		m.refreshTranscript()
 		return nil
 	}
@@ -289,6 +296,10 @@ type sidebarDocumentLinkRow struct {
 	Index int
 	Row   int // -1 when the rendered text does not repeat the destination
 	Path  string
+	// Column is the destination's display column inside the rendered row, so a
+	// row carrying several destinations still hit-tests the one under the
+	// pointer (Rust resolves the pointer's column through the link spans).
+	Column int
 }
 
 // sidebarDocumentLinks lists the local file links a rendered Markdown preview
@@ -320,20 +331,104 @@ func (m *Model) sidebarDocumentLinkRows(tab *sidebarDocumentTab) []sidebarDocume
 	searchFrom := 0
 	for index, link := range links {
 		row := -1
+		column := 0
 		path := strings.TrimSpace(link.Path)
 		for candidate := searchFrom; candidate < len(lines) && path != ""; candidate++ {
-			if strings.Contains(ansi.Strip(lines[candidate]), path) {
+			if offset := strings.Index(ansi.Strip(lines[candidate]), path); offset >= 0 {
 				row = candidate
+				column = codextui.DisplayWidth(ansi.Strip(lines[candidate])[:offset])
 				searchFrom = candidate
 				break
 			}
 		}
-		rows = append(rows, sidebarDocumentLinkRow{Index: index, Row: row, Path: path})
+		rows = append(rows, sidebarDocumentLinkRow{Index: index, Row: row, Path: path, Column: column})
 	}
 	tab.linkRowsSet = true
 	tab.linkRowsFor = tab.renderWidth
 	tab.linkRows = rows
 	return rows
+}
+
+// sidebarDocumentLinkAtRow returns the document-order index of the link painted
+// on a rendered row, or -1. Rust resolves the pointer through the reader's row
+// layout; the preview keeps the same rows in sidebarDocumentLinkRows.
+func (m *Model) sidebarDocumentLinkAtRow(tab *sidebarDocumentTab, row int, column int) int {
+	if tab == nil || row < 0 {
+		return -1
+	}
+	best, bestDistance := -1, 0
+	for _, linkRow := range m.sidebarDocumentLinkRows(tab) {
+		if linkRow.Row < 0 || linkRow.Row != row {
+			continue
+		}
+		width := codextui.DisplayWidth(linkRow.Path)
+		if column >= linkRow.Column && column < linkRow.Column+width {
+			return linkRow.Index
+		}
+		distance := linkRow.Column - column
+		if column >= linkRow.Column+width {
+			distance = column - (linkRow.Column + width)
+		}
+		if best < 0 || distance < bestDistance {
+			best, bestDistance = linkRow.Index, distance
+		}
+	}
+	return best
+}
+
+// sidebarDocumentPointerRow maps a side-pane pointer row onto the rendered
+// preview row under it. Row 0 is the tab strip and the last row is the footer,
+// so only body rows resolve (Rust Document::paint reserves the same bands).
+func (m *Model) sidebarDocumentPointerRow(tab *sidebarDocumentTab, y int, height int) (int, bool) {
+	if tab == nil || y < 1 || y > height-2 {
+		return 0, false
+	}
+	row := tab.Scroll + (y - 1)
+	if row < 0 || row >= len(m.sidebarDocumentLines(tab, m.sidebarDocumentBodyWidth())) {
+		return 0, false
+	}
+	return row, true
+}
+
+// setSidebarDocumentHover tracks the link under the pointer so the renderer
+// can emphasize it. Moving outside the pane clears the hover.
+func (m *Model) setSidebarDocumentHover(tab *sidebarDocumentTab, msg mousemsg.MouseMsg, inside bool, height int, column int) {
+	if m == nil || tab == nil {
+		return
+	}
+	hover := -1
+	if inside {
+		if row, ok := m.sidebarDocumentPointerRow(tab, msg.Y, height); ok {
+			hover = m.sidebarDocumentLinkAtRow(tab, row, column)
+		}
+	}
+	if tab.HoverLink == hover {
+		return
+	}
+	tab.HoverLink = hover
+	m.refreshTranscript()
+}
+
+// handleSidebarDocumentClick opens the link under a left press and clears the
+// cycled link first, like Rust's pointer handler setting `doc.link = None`.
+func (m *Model) handleSidebarDocumentClick(tab *sidebarDocumentTab, y int, height int, column int) bubbletea.Cmd {
+	if m == nil || tab == nil {
+		return nil
+	}
+	// Rust clears the cycled link before handling a pointer press.
+	if tab.Link >= 0 {
+		tab.Link = -1
+		m.refreshTranscript()
+	}
+	row, ok := m.sidebarDocumentPointerRow(tab, y, height)
+	if !ok {
+		return nil
+	}
+	index := m.sidebarDocumentLinkAtRow(tab, row, column)
+	if index < 0 {
+		return nil
+	}
+	return m.followSidebarDocumentLinkIndex(tab, index)
 }
 
 // cycleSidebarDocumentLink moves the selection like Rust `cycle_document_link`:
@@ -380,16 +475,27 @@ func (m *Model) sidebarDocumentRevealRow(tab *sidebarDocumentTab, row int) {
 // followSidebarDocumentLink opens the selected link, resolving a relative
 // destination against the preview's own directory (Rust `OpenDocument`).
 func (m *Model) followSidebarDocumentLink(tab *sidebarDocumentTab) bubbletea.Cmd {
-	if tab == nil || tab.Link < 0 {
+	if tab == nil {
+		return nil
+	}
+	return m.followSidebarDocumentLinkIndex(tab, tab.Link)
+}
+
+// followSidebarDocumentLinkIndex opens the link with the given document order
+// index. Rust reaches this from both Enter on a cycled link and a mouse click
+// on a painted destination (ViewAction::OpenDocument).
+func (m *Model) followSidebarDocumentLinkIndex(tab *sidebarDocumentTab, index int) bubbletea.Cmd {
+	if tab == nil || index < 0 {
 		return nil
 	}
 	links := m.sidebarDocumentLinks(tab)
-	if tab.Link >= len(links) {
+	if index >= len(links) {
 		return nil
 	}
-	link := links[tab.Link]
+	link := links[index]
 	link.Path = resolveSidebarDocumentLinkPath(tab.Path, link.Path)
 	tab.Link = -1
+	tab.HoverLink = -1
 	return m.openSidebarDocumentAt(link.Path, -1, link.Location)
 }
 
@@ -771,13 +877,22 @@ func (m *Model) renderSidebarDocument(width int, height int) string {
 	if tab.View.Target != nil && !tab.TargetCleared {
 		targetRow = tab.View.Target.Line - 1
 	}
+	linkRows := m.sidebarDocumentLinkRows(tab)
 	linkPath := ""
-	if rows := m.sidebarDocumentLinkRows(tab); tab.Link >= 0 && tab.Link < len(rows) {
-		linkPath = rows[tab.Link].Path
+	if tab.Link >= 0 && tab.Link < len(linkRows) {
+		linkPath = linkRows[tab.Link].Path
+	}
+	hoverRow, hoverPath := -1, ""
+	if tab.HoverLink >= 0 && tab.HoverLink < len(linkRows) && tab.HoverLink != tab.Link {
+		hoverRow = linkRows[tab.HoverLink].Row
+		hoverPath = linkRows[tab.HoverLink].Path
 	}
 	for index := 0; index < contentHeight && tab.Scroll+index < len(lines); index++ {
 		row := tab.Scroll + index
 		line := lines[row]
+		if row == hoverRow {
+			line = boldSidebarDocumentLink(line, hoverPath)
+		}
 		if linkPath != "" {
 			line = highlightSidebarDocumentLink(line, linkPath)
 		}
@@ -828,15 +943,16 @@ func paintSidebarDocumentTarget(line string, width int) string {
 	return prefix + line + strings.Repeat(" ", padding) + "\x1b[0m"
 }
 
-// highlightSidebarDocumentLink reverses the destination span of the selected
-// link so Tab navigation shows which link Enter would open.
-func highlightSidebarDocumentLink(line string, path string) string {
+// sidebarDocumentLinkSpan finds the destination span of a rendered link and
+// widens it over the escape sequence that introduces it, so a style applied to
+// the span replaces the link color instead of nesting inside it.
+func sidebarDocumentLinkSpan(line string, path string) (int, int, bool) {
 	if path == "" {
-		return line
+		return 0, 0, false
 	}
 	index := strings.LastIndex(line, path)
 	if index < 0 {
-		return line
+		return 0, 0, false
 	}
 	start := index
 	for start > 0 && index-start <= 12 && line[start-1] != 'm' {
@@ -849,6 +965,25 @@ func highlightSidebarDocumentLink(line string, path string) string {
 	} else {
 		start = index
 	}
-	end := index + len(path)
+	return start, index + len(path), true
+}
+
+// highlightSidebarDocumentLink reverses the destination span of the selected
+// link so Tab navigation shows which link Enter would open.
+func highlightSidebarDocumentLink(line string, path string) string {
+	start, end, ok := sidebarDocumentLinkSpan(line, path)
+	if !ok || end <= start {
+		return line
+	}
 	return line[:start] + "\x1b[7m" + line[start:end] + "\x1b[27m" + line[end:]
+}
+
+// boldSidebarDocumentLink emphasizes the link under the pointer (Rust
+// TranscriptView::paint_document_links uses bold for the hovered destination).
+func boldSidebarDocumentLink(line string, path string) string {
+	start, end, ok := sidebarDocumentLinkSpan(line, path)
+	if !ok || end <= start {
+		return line
+	}
+	return line[:start] + "\x1b[1m" + line[start:end] + "\x1b[22m" + line[end:]
 }

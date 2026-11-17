@@ -117,10 +117,20 @@ func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd)
 	}
 	if m != nil && m.sidebarDocumentVisible() {
 		// Rust side_focus.rs: the wheel over the reader scrolls it in fixed
-		// three-row steps, and a press focuses the pane without leaving it.
+		// three-row steps, a press focuses the pane without leaving it, and a
+		// press on a painted destination opens that link (#61890).
 		if left, _, _, ok := m.sidePaneLayout(firstPositive(m.width, defaultWidth)); ok {
 			dividerWidth := ansi.StringWidth(sideWorkspaceDivider)
 			inside := msg.X >= left+dividerWidth
+			height := max(m.transcript.Height, 1)
+			tab := m.sidebarDocumentActiveTab()
+			column := msg.X - (left + dividerWidth) - 1
+			if msg.Action == mousemsg.MouseActionMotion && tab != nil {
+				m.setSidebarDocumentHover(tab, msg, inside, height, column)
+				if inside {
+					return true, nil
+				}
+			}
 			if rows, wheel := m.transcriptWheelRows(msg); wheel && inside {
 				delta := 3
 				if rows < 0 {
@@ -130,9 +140,15 @@ func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd)
 				return true, nil
 			}
 			if msg.Action == mousemsg.MouseActionPress && msg.Button == mousemsg.MouseButtonLeft &&
-				inside && !m.sidebarChooserFocused {
-				m.sidebarChooserFocused = true
-				m.refreshTranscript()
+				inside && msg.Y >= 0 && msg.Y < height {
+				if cmd := m.handleSidebarDocumentClick(tab, msg.Y, height, column); cmd != nil {
+					m.sidebarChooserFocused = true
+					return true, cmd
+				}
+				if !m.sidebarChooserFocused {
+					m.sidebarChooserFocused = true
+					m.refreshTranscript()
+				}
 				return true, nil
 			}
 		}
