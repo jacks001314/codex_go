@@ -216,6 +216,21 @@ func TestComposerUndoSurvivesVimToggleLikeRust(t *testing.T) {
 	}
 }
 
+// Rust #61954 tracks edits made while the thread is unavailable so new input
+// still invalidates redo and undo works on the draft.
+func TestComposerUndoTracksDisconnectedEditsLikeRust(t *testing.T) {
+	m := composerUndoTestModel(t)
+	m.setThreadUnavailable(true)
+	m = composerTypeText(m, "ab")
+	if got := m.composer.Value(); got != "ab" {
+		t.Fatalf("draft = %q, want ab", got)
+	}
+	m = composerUndo(m)
+	if got := m.composer.Value(); got != "" {
+		t.Fatalf("after undo = %q, want the disconnected edit removed", got)
+	}
+}
+
 // A detected paste is its own undo step and never merges with preceding typing.
 func TestComposerUndoKeepsPasteSeparateLikeRust(t *testing.T) {
 	m := composerUndoTestModel(t)
