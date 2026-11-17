@@ -333,6 +333,11 @@ func TestSidebarChooserClickActivatesPreviewRowLikeRust(t *testing.T) {
 		t.Fatal("click on the second chat row was not handled")
 	}
 	runTeaCmdChain(t, model, cmd, 0)
+	if _, releaseCmd := model.handleSidePaneMouse(mousemsg.MouseMsg{
+		Action: mousemsg.MouseActionRelease, Button: mousemsg.MouseButtonLeft, X: x, Y: 11,
+	}); releaseCmd != nil {
+		runTeaCmdChain(t, model, releaseCmd, 0)
+	}
 	if opened != "saved-2" {
 		t.Fatalf("click opened %q, want saved-2", opened)
 	}

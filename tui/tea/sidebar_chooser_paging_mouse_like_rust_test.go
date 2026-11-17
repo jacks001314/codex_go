@@ -112,9 +112,7 @@ func TestSidebarTabStripMouseSelectsVisibleTabLikeRust(t *testing.T) {
 		t.Fatalf("motion changed the selection: thread=%q side=%#v", model.State.ThreadID, model.activeSide)
 	}
 
-	handled, cmd := model.handleSidePaneMouse(mousemsg.MouseMsg{
-		Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft, X: secondColumn, Y: 0,
-	})
+	handled, cmd := clickSidebarPane(t, model, mousemsg.MouseButtonLeft, secondColumn, 0)
 	if !handled {
 		t.Fatal("press on the second tab was not handled")
 	}
@@ -126,9 +124,7 @@ func TestSidebarTabStripMouseSelectsVisibleTabLikeRust(t *testing.T) {
 		t.Fatalf("press on the second tab left thread %q, want side-2", model.State.ThreadID)
 	}
 
-	handled, cmd = model.handleSidePaneMouse(mousemsg.MouseMsg{
-		Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft, X: base + right - 2, Y: 0,
-	})
+	handled, cmd = clickSidebarPane(t, model, mousemsg.MouseButtonLeft, base+right-2, 0)
 	if !handled {
 		t.Fatal("press on the + button was not handled")
 	}

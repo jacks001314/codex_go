@@ -3217,6 +3217,11 @@ type Model struct {
 	// strip owns the pane's first row, so the renderer records where that row
 	// landed and the pointer hit test reads it back instead of assuming row 0.
 	sidebarTabStripTop int
+	// sidebarPress is the sidebar control a pointer pressed down on and has not
+	// released over yet (Rust App::sidebar_press). Rust activates a tab, the
+	// add button or a chooser row only when the release lands on the same
+	// painted target, so a drag never fires the control it started on.
+	sidebarPress *sidebarPress
 	// sideDividerHover accents the pane divider while the pointer is over it
 	// (Rust app/link_hover.rs PointerShape::Resize -> side_pane::paint_divider).
 	sideDividerHover           bool

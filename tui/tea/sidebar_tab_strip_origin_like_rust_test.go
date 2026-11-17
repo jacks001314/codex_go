@@ -60,10 +60,7 @@ func TestSidebarTabStripMouseHitFollowsRenderedOriginLikeRust(t *testing.T) {
 		t.Fatalf("press on row 0 selected %#v, want side-1 untouched", model.activeSide)
 	}
 
-	handled, cmd := model.handleSidePaneMouse(mousemsg.MouseMsg{
-		Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft,
-		X: secondColumn, Y: model.sidebarTabStripTop,
-	})
+	handled, cmd := clickSidebarPane(t, model, mousemsg.MouseButtonLeft, secondColumn, model.sidebarTabStripTop)
 	if !handled {
 		t.Fatalf("press on the painted strip row %d was not handled", model.sidebarTabStripTop)
 	}

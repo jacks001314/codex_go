@@ -31,11 +31,15 @@ func (m *Model) sidebarStripColumn(x int) (int, bool) {
 
 // handleSidebarTabStripMouse hit-tests the strip exactly as it paints
 // (Rust #59928 sidebar_tab_strip.rs hit): motion highlights the tab under the
-// pointer, a left press selects that tab, and a press on " + " opens the
-// chooser on the new-chat row. It runs before the side-pane guards because a
-// first side chat has no active side conversation yet.
+// pointer. Presses and releases go through handleSidebarPressMouse because
+// Rust #61922 activates a control only when both land on the same target.
+// It runs before the side-pane guards because a first side chat has no active
+// side conversation yet.
 func (m *Model) handleSidebarTabStripMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd) {
 	if m == nil || m.State == nil || m.sidebarTabStripTop < 0 || !m.sidebarTabStripVisible() {
+		return false, nil
+	}
+	if msg.Action != mousemsg.MouseActionMotion {
 		return false, nil
 	}
 	// The pointer row is measured against the row the strip was painted on, so a
@@ -47,38 +51,7 @@ func (m *Model) handleSidebarTabStripMouse(msg mousemsg.MouseMsg) (bool, bubblet
 	if !inside {
 		return false, nil
 	}
-	window := m.sidebarTabStripWindow()
-	switch msg.Action {
-	case mousemsg.MouseActionMotion:
-		return m.hoverSidebarTab(column), nil
-	case mousemsg.MouseActionPress:
-		// Rust closes a tab from its close cell or from a middle click anywhere
-		// on the tab cell (side_focus.rs: close_cell(area).contains(point) ||
-		// middle).
-		if msg.Button == mousemsg.MouseButtonMiddle {
-			if index := window.tabAt(column); index >= 0 {
-				return true, m.closeSidebarTabAtIndex(index)
-			}
-			return false, nil
-		}
-		if msg.Button != mousemsg.MouseButtonLeft {
-			return false, nil
-		}
-		if window.addAt(column) {
-			return true, m.openSidebarChooser()
-		}
-		// Rust's gutter arrows step to the neighbouring tab (TabTarget::Overflow).
-		if index := window.overflowAt(column); index >= 0 {
-			return true, m.selectSidebarTab(index)
-		}
-		if index := window.closeAt(column); index >= 0 {
-			return true, m.closeSidebarTabAtIndex(index)
-		}
-		if index := window.tabAt(column); index >= 0 {
-			return true, m.selectSidebarTab(index)
-		}
-	}
-	return false, nil
+	return m.hoverSidebarTab(column), nil
 }
 
 // selectSidebarTab reopens the tab the pointer picked and leaves the chooser
@@ -113,6 +86,12 @@ func (m *Model) selectSidebarTab(index int) bubbletea.Cmd {
 
 func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd) {
 	if handled, cmd := m.handleSidebarTabStripMouse(msg); handled {
+		return true, cmd
+	}
+	// Rust #61922 side_focus::handle_sidebar_input owns both halves of a
+	// sidebar click, so the press is captured here before any pane treats the
+	// same event as a focus change or a link click.
+	if handled, cmd := m.handleSidebarPressMouse(msg); handled {
 		return true, cmd
 	}
 	if m != nil && m.sidebarDocumentVisible() {
@@ -179,19 +158,6 @@ func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd)
 			m.sideDividerHover = hover
 			if m.sideDrag == nil {
 				return true, nil
-			}
-		}
-	}
-	// The chooser can be open before any side chat exists, so its row hit test
-	// runs ahead of the active-side guard (Rust #60319 choice_at on click).
-	if m != nil && m.sidebarChooserVisible() && m.sidebarChooserFocused &&
-		msg.Action == mousemsg.MouseActionPress && msg.Button == mousemsg.MouseButtonLeft {
-		if left, _, _, ok := m.sidePaneLayout(m.width); ok {
-			dividerWidth := ansi.StringWidth(sideWorkspaceDivider)
-			if msg.X >= left+dividerWidth {
-				if handled, cmd, _ := m.handleSidebarChooserMouseRow(msg.Y); handled {
-					return true, cmd
-				}
 			}
 		}
 	}

@@ -118,10 +118,7 @@ func TestSidebarTabStripUsesFixedRustTabWidthLikeRust(t *testing.T) {
 		t.Fatal("split layout unavailable")
 	}
 	base := left + ansi.StringWidth(sideWorkspaceDivider)
-	handled, cmd := model.handleSidePaneMouse(mousemsg.MouseMsg{
-		Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft,
-		X: base + window.addStart + 1, Y: model.sidebarTabStripTop,
-	})
+	handled, cmd := clickSidebarPane(t, model, mousemsg.MouseButtonLeft, base+window.addStart+1, model.sidebarTabStripTop)
 	if !handled {
 		t.Fatalf("press on the add button at column %d was not handled", window.addStart+1)
 	}

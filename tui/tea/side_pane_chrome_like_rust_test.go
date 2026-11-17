@@ -93,10 +93,7 @@ func TestSidebarTabStripOverflowArrowsLikeRust(t *testing.T) {
 		t.Fatal("split layout unavailable")
 	}
 	base := left + sideWorkspaceDividerWidth
-	handled, cmd := model.handleSidePaneMouse(mousemsg.MouseMsg{
-		Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft,
-		X: base, Y: model.sidebarTabStripTop,
-	})
+	handled, cmd := clickSidebarPane(t, model, mousemsg.MouseButtonLeft, base, model.sidebarTabStripTop)
 	if !handled {
 		t.Fatal("press on the left arrow was not handled")
 	}
@@ -107,10 +104,7 @@ func TestSidebarTabStripOverflowArrowsLikeRust(t *testing.T) {
 
 	_ = model.viewString()
 	window = model.sidebarTabStripWindowWidth(width)
-	handled, cmd = model.handleSidePaneMouse(mousemsg.MouseMsg{
-		Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft,
-		X: base + window.addStart - 1, Y: model.sidebarTabStripTop,
-	})
+	handled, cmd = clickSidebarPane(t, model, mousemsg.MouseButtonLeft, base+window.addStart-1, model.sidebarTabStripTop)
 	if !handled {
 		t.Fatal("press on the right arrow was not handled")
 	}
@@ -169,10 +163,7 @@ func TestSidebarTabStripCloseCellClosesTabLikeRust(t *testing.T) {
 		t.Fatal("split layout unavailable")
 	}
 	closeColumn := left + sideWorkspaceDividerWidth + window.tabWidth - 1
-	handled, cmd := model.handleSidePaneMouse(mousemsg.MouseMsg{
-		Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft,
-		X: closeColumn, Y: model.sidebarTabStripTop,
-	})
+	handled, cmd := clickSidebarPane(t, model, mousemsg.MouseButtonLeft, closeColumn, model.sidebarTabStripTop)
 	if !handled {
 		t.Fatalf("press on the close cell at column %d was not handled", closeColumn)
 	}
@@ -198,10 +189,8 @@ func TestSidebarTabStripCloseCellClosesTabLikeRust(t *testing.T) {
 		return fresh
 	}
 	resetTabs()
-	handled, cmd = model.handleSidePaneMouse(mousemsg.MouseMsg{
-		Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft,
-		X: left + sideWorkspaceDividerWidth + window.tabWidth - 2, Y: model.sidebarTabStripTop,
-	})
+	handled, cmd = clickSidebarPane(t, model, mousemsg.MouseButtonLeft,
+		left+sideWorkspaceDividerWidth+window.tabWidth-2, model.sidebarTabStripTop)
 	if !handled {
 		t.Fatal("press on the tab title was not handled as a selection")
 	}
@@ -213,10 +202,8 @@ func TestSidebarTabStripCloseCellClosesTabLikeRust(t *testing.T) {
 	// Rust also closes the tab on a middle click anywhere in its cell.
 	resetTabs()
 	_ = model.viewString()
-	handled, cmd = model.handleSidePaneMouse(mousemsg.MouseMsg{
-		Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonMiddle,
-		X: left + sideWorkspaceDividerWidth + 2, Y: model.sidebarTabStripTop,
-	})
+	handled, cmd = clickSidebarPane(t, model, mousemsg.MouseButtonMiddle,
+		left+sideWorkspaceDividerWidth+2, model.sidebarTabStripTop)
 	if !handled {
 		t.Fatal("middle press on the tab was not handled as a close")
 	}

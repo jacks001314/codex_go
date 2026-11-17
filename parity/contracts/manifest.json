@@ -2278,7 +2278,7 @@
    ],
    "phase": "P3",
    "status": "complete",
-   "verifier": "TestSideWorkspaceDividerUsesRustGapColumnLikeRust;TestSidebarTabStripOverflowArrowsLikeRust;TestSideWorkspaceWidthsUseRustPercentMathLikeRust;TestSidebarTabStripCloseCellClosesTabLikeRust"
+   "verifier": "TestSideWorkspaceDividerUsesRustGapColumnLikeRust;TestSidebarTabStripOverflowArrowsLikeRust;TestSideWorkspaceWidthsUseRustPercentMathLikeRust;TestSidebarTabStripCloseCellClosesTabLikeRust;TestSidebarTabActivationRequiresMatchingPressAndReleaseLikeRust"
   },
   {
    "id": "status-line-content-surface",
