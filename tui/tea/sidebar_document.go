@@ -81,6 +81,9 @@ type sidebarDocumentTab struct {
 	HoverLink int
 	// Find is this preview's reader search (Rust TranscriptView::search).
 	Find sidebarDocumentFind
+	// Selection is the pointer selection inside the body (Rust
+	// TranscriptView::selection).
+	Selection sidebarDocumentSelection
 	// TargetCleared records that Esc removed the coordinate highlight (Rust
 	// Document::target.take()).
 	TargetCleared bool
@@ -218,6 +221,7 @@ func (m *Model) reloadSidebarDocument(tab *sidebarDocumentTab, linkIndex int, lo
 	tab.Started = time.Now()
 	tab.Link = -1
 	tab.HoverLink = -1
+	tab.Selection.clear()
 	tab.TargetCleared = false
 	tab.Scroll = 0
 	tab.rendered = false
@@ -260,6 +264,7 @@ func (m *Model) applySidebarDocumentLoaded(msg SidebarDocumentLoadedMsg) bubblet
 		tab.renderLines = nil
 		tab.linkRowsSet = false
 		tab.HoverLink = -1
+		tab.Selection.clear()
 		if tab.Find.active() {
 			// Rust keeps the query and caret across a reload and rescans the
 			// freshly loaded rows.
@@ -693,8 +698,13 @@ func (m *Model) updateSidebarDocumentKey(msg keymsg.KeyMsg) (bool, bubbletea.Cmd
 		m.refreshTranscript()
 		return true, nil
 	case "cancel":
-		// Rust Esc clears the selected link, then the coordinate highlight,
-		// and only then closes the tab.
+		// Rust Esc clears the selection, then the selected link, then the
+		// coordinate highlight, and only then closes the tab.
+		if tab.Selection.active {
+			tab.Selection.clear()
+			m.refreshTranscript()
+			return true, nil
+		}
 		if tab.Link >= 0 {
 			tab.Link = -1
 			m.refreshTranscript()
@@ -961,6 +971,11 @@ func (m *Model) renderSidebarDocument(width int, height int) string {
 		}
 		if row == targetRow {
 			line = paintSidebarDocumentTarget(line, bodyWidth)
+		}
+		if tab.Selection.active {
+			if from, to, ok := tab.Selection.spanFor(row, bodyWidth); ok {
+				line = highlightDisplayCells(line, from, to)
+			}
 		}
 		if row == matchRow {
 			line = reverseVideoTranscriptLine(line)

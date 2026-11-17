@@ -470,3 +470,57 @@ func TestSidebarDocumentFindScansAndNavigatesLikeRust(t *testing.T) {
 		t.Fatalf("esc left find active=%t visible=%t", tab.Find.active(), model.sidebarDocumentVisible())
 	}
 }
+
+// Rust #61889 selection: a drag over the preview selects cells and copies them
+// on release when copy_on_select is enabled; Esc clears the selection before it
+// closes the tab.
+func TestSidebarDocumentDragSelectionCopiesLikeRust(t *testing.T) {
+	model, _ := newSidebarTabsModel(t)
+	model.transcript.Height = 20
+	model.copyOnSelectMode = "always"
+	tab := openDocumentTabAt(t, model, SidebarDocumentView{
+		Path:       "/workspace/main.go",
+		Text:       "alpha beta\ngamma delta\n",
+		Code:       true,
+		Language:   "go",
+		LineStarts: []int{0, 11},
+	})
+	left, _, _, ok := model.sidePaneLayout(model.width)
+	if !ok {
+		t.Fatal("side pane layout unavailable")
+	}
+	divider := ansi.StringWidth(sideWorkspaceDivider)
+	x := left + divider + 1
+	y := 1
+
+	if handled, _ := model.handleSidePaneMouse(mousemsg.MouseMsg{
+		X: x, Y: y, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft,
+	}); !handled {
+		t.Fatal("press did not start a selection")
+	}
+	model.handleSidePaneMouse(mousemsg.MouseMsg{
+		X: x + 4, Y: y + 1, Action: mousemsg.MouseActionMotion, Button: mousemsg.MouseButtonLeft,
+	})
+	if !tab.Selection.active {
+		t.Fatal("drag did not keep the selection active")
+	}
+	if got, want := model.sidebarDocumentSelectionText(tab), "alpha beta\ngamma"; got != want {
+		t.Fatalf("selection text = %q, want %q", got, want)
+	}
+	width := model.sidebarTabStripWidth()
+	if painted := model.renderSidebarDocument(width, 20); !strings.Contains(painted, "\x1b[7m") {
+		t.Fatal("selection was not highlighted")
+	}
+
+	_, cmd := model.handleSidePaneMouse(mousemsg.MouseMsg{
+		X: x + 4, Y: y + 1, Action: mousemsg.MouseActionRelease, Button: mousemsg.MouseButtonLeft,
+	})
+	if cmd == nil {
+		t.Fatal("release did not copy the selection")
+	}
+
+	model.updateSidebarDocumentKey(keymsg.KeyMsg{Type: keymsg.KeyEsc, Code: 0x1b})
+	if tab.Selection.active || !model.sidebarDocumentVisible() {
+		t.Fatalf("esc left selection active=%t visible=%t", tab.Selection.active, model.sidebarDocumentVisible())
+	}
+}

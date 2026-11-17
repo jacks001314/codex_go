@@ -97,6 +97,7 @@ func (m *Model) beginSidebarDocumentFind(tab *sidebarDocumentTab) {
 	}
 	tab.Find.editing = true
 	tab.Find.exhausted = false
+	tab.Selection.clear()
 	if tab.Find.query != "" {
 		m.refreshSidebarDocumentFindMatches(tab, false)
 	}

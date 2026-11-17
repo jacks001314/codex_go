@@ -126,6 +126,10 @@ func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd)
 			tab := m.sidebarDocumentActiveTab()
 			column := msg.X - (left + dividerWidth) - 1
 			if msg.Action == mousemsg.MouseActionMotion && tab != nil {
+				if tab.Selection.active && inside {
+					m.extendSidebarDocumentSelection(tab, msg.Y, height, column)
+					return true, nil
+				}
 				m.setSidebarDocumentHover(tab, msg, inside, height, column)
 				if inside {
 					return true, nil
@@ -145,11 +149,19 @@ func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd)
 					m.sidebarChooserFocused = true
 					return true, cmd
 				}
+				if row, ok := m.sidebarDocumentPointerRow(tab, msg.Y, height); ok {
+					m.startSidebarDocumentSelection(tab, row, column)
+				}
 				if !m.sidebarChooserFocused {
 					m.sidebarChooserFocused = true
 					m.refreshTranscript()
 				}
 				return true, nil
+			}
+			if msg.Action == mousemsg.MouseActionRelease && msg.Button == mousemsg.MouseButtonLeft &&
+				tab != nil && tab.Selection.active {
+				m.extendSidebarDocumentSelection(tab, msg.Y, height, column)
+				return true, m.finishSidebarDocumentSelection(tab)
 			}
 		}
 	}
