@@ -1,0 +1,268 @@
+{
+ "schemaVersion": 1,
+ "rustFromExclusive": "a394ff9cf66e9c17258077e8f8295178ca0c2025",
+ "rustToInclusive": "75fc67e8f4284a669eebd90ab6bc9ef7697e876e",
+ "note": "Staged audit of the first 20 commits of a394ff9c..59ac39addb. parity/commits.json cannot take these entries until the full 99-commit range is audited and the anchor worktree plus baseline are re-pinned together.",
+ "commits": [
+  {
+   "sha": "598df2d0158544c3b9ce199d3d7ca9db5621af55",
+   "subject": "Refactor exec to use the shared app-server client (#61706)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 37183005: Exec uses the shared app-server client, so local and remote exec share one request path.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "e51c551fb406486afb7ef5c3d43387f1be3c09e8",
+   "subject": "Support remote app servers in `codex exec` (#61707)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 37183005: codex exec accepts remote app servers through the same shared client.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "b048d4a95cacdccd40425d94d4b5a313df5ed5f5",
+   "subject": "Avoid legacy transcript reads in the agents overview (#61709)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 37183005 4392a2ad: The agents overview reads previews from retained thread data instead of legacy transcript reads.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "96e0673f6ec42bd7f48c9182cea477a8fa0e8949",
+   "subject": "Enable slash-command completion for unavailable threads (#61710)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 37183005: Slash-command completion stays available for threads whose session is unavailable.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "58d5d3a0404bdd4e5d6af0f90a729068eb30396a",
+   "subject": "Open Windows desktop sessions through the registered URL handler (#61711)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 37183005: Windows desktop sessions open through the registered URL handler.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "aea4c6ee4b652d84b416731b11c2b8299d767209",
+   "subject": "Restore raw mode after returning from external editors (#61713)",
+   "kind": "not_applicable",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Rust-only crossterm raw-mode cache reset: Go runs editors through Bubble Tea ExecProcess, which suspends and re-enters its own raw mode, so no cache can go stale.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "09c711b783cf19f5ed60b6e26fcf4ef269acae00",
+   "subject": "Use `clip.exe` for single-line ASCII clipboard copies in WSL (#61724)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go d22331b2: WSL single-line ASCII clipboard copies run through clip.exe.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "e649c6d74c92c638658af8f08290a1ea81d6872f",
+   "subject": "Fix Unicode grapheme highlighting in history search (#61725)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go f6256b0f: History-search highlighting walks graphemes instead of bytes.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "eff3036bf41b4b00bb5d34c6ec0ca3a1ff131baa",
+   "subject": "Preserve graphemes in mention search match highlighting (#61726)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go f6256b0f: Mention-search match highlighting keeps grapheme clusters intact.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "ca0bbbdf0c83cb64f2fb48cf0d5ffbc3d4409ab9",
+   "subject": "Optimize default and attached thread listings with targeted indexes (#61727)",
+   "kind": "persistence",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go f6256b0f: Default and attached thread listings read through targeted SQLite indexes.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "eb53da6c3ab0787f22707fcdc7f26ffd7316055e",
+   "subject": "Fix thread listing migration numbering and test setup (#61730)",
+   "kind": "persistence",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go f6256b0f: Thread listing migration numbering and test setup match the Rust schema history.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "540eb31ece8b5fea95062795183fc00a05340c85",
+   "subject": "Keep bidirectional TUI headers stable during shimmer (#61731)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go d22331b2: Bidirectional TUI headers stay static while the shimmer animates.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "ac2c4a339c15d96c9cd32b242ef487d48d27961b",
+   "subject": "Preserve agent message phases in the cloud backend (#61737)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 4e6319f3: Cloud agent-message phases survive the backend round trip.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "f1ebc7b372bc837b7c6386113e867256d7cc7036",
+   "subject": "Reuse matching thread inventories for lightweight MCP status pages (#61738)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 7780853f: Lightweight MCP status pages reuse a fixed-credential thread inventory.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "630c0d75abbe74784a35673926868cc4133ef6fa",
+   "subject": "Mark cloud threads with a cloud icon in the TUI (#61742)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go e57ed43a: Cloud threads render with a cloud icon in the TUI thread list.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "5a6bbd29a45d81c69395c12f0d6fa5b31747aaa6",
+   "subject": "Clarify shell-specific login guidance for `exec_command` (#61744)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 6544d0e5 643ff81f: exec_command login guidance names the shell the session actually uses.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "710bee73a89385aaf2afb41d885edf82473d941f",
+   "subject": "Refactor history and notes tool registration (#61747)",
+   "kind": "not_applicable",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Rust-only extension refactor: Go registers history and notes actions from one flat tools.go table with unchanged behavior.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "0184dfa6a48f0110dd9c6835522492908e5abcf3",
+   "subject": "Fix the missing label style in the mention truncation test (#61762)",
+   "kind": "not_applicable",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Rust test-fixture style fix only (mentions_v2 render test label).",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "98e1584a082234ae716a3cc69d4c6f2d3631cf2d",
+   "subject": "Simplify history and notes tool registration (#61764)",
+   "kind": "not_applicable",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Rust-only extension refactor of history/notes registration; Go remains a flat table and keeps the same schemas.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "75fc67e8f4284a669eebd90ab6bc9ef7697e876e",
+   "subject": "Remove numeric positions from project responses (#61771)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "Project responses omit numeric positions; project/list still sorts by position without exposing it (appserver/projects.go).",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  }
+ ]
+}
