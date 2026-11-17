@@ -2765,6 +2765,20 @@
    "verifier": "TestListThreadsFiltersCanonicalSessionMetaLikeRust"
   },
   {
+   "id": "agent-message-acknowledgement",
+   "kind": "source-surface",
+   "rustPaths": [
+    "core/src/tools/handlers/multi_agents_v2/message_tool.rs"
+   ],
+   "goPaths": [
+    "agent/tools_v2.go",
+    "agent/send_message_acknowledgement_like_rust_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestSendMessageAcknowledgesDeliveryLikeRust"
+  },
+  {
    "id": "network-proxy-tool-call-attribution",
    "kind": "source-surface",
    "rustPaths": [
