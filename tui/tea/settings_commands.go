@@ -382,6 +382,11 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 	// when the reader had scrolled away from the live tail.
 	m.activityFollow = true
 	if msg.Err != nil {
+		// A failed write never reaches Rust's change comparison, so the captured
+		// previous selection is dropped with it.
+		if msg.Kind == settingsWriteKindStatusLineProvider {
+			m.statuslineProviderChange = nil
+		}
 		// Rust #51510: a failed configuration reload preserves the live TUI
 		// settings, so msg.Result is never applied on this path; only the
 		// failure notice below is reported.
@@ -468,6 +473,9 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 	// reaches this point, so the staged record keeps the live settings.
 	m.applyLocalSettings(m.localSettings.Reloaded(msg.Result))
 	if msg.Kind == settingsWriteKindStatusLineProvider {
+		// Rust save_status_line_provider records the change kind only after the
+		// write succeeded, comparing the stored selection with the new one.
+		m.recordStatuslineProviderChange()
 		// Rust #61985 reselect_statusline_provider: saving the selection restarts
 		// the reader even when it names the same provider, so /statusline can
 		// retry a failed read without switching providers.

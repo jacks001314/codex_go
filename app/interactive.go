@@ -1758,6 +1758,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		TerminalSizeContext:          tuiTelemetry.context,
 		TerminalSizeExporter:         tuiTelemetry.exporter,
 		TerminalSizeAnalyticsEnabled: tuiTelemetry.analyticsEnabled,
+		StatuslineMetrics:            tuiTelemetry.statuslineMetrics,
 		// The embedded session is neither the local daemon nor an explicit
 		// remote, but /daemon still manages the local background server with
 		// this CLI (Rust App::open_daemon_menu with AppServerTarget::Embedded).

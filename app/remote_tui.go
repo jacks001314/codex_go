@@ -611,6 +611,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		TerminalSizeContext:          tuiTelemetry.context,
 		TerminalSizeExporter:         tuiTelemetry.exporter,
 		TerminalSizeAnalyticsEnabled: tuiTelemetry.analyticsEnabled,
+		StatuslineMetrics:            tuiTelemetry.statuslineMetrics,
 		LocalDaemonSession:           interactiveRemoteEndpointIsLocal(endpoint),
 		LocalSession:                 interactiveRemoteEndpointIsLocal(endpoint),
 		DaemonCLIExecutable:          daemonCLIExecutable,

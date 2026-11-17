@@ -14,6 +14,7 @@ import (
 	"codex_go/otelinit"
 	"codex_go/shell"
 	codextui "codex_go/tui"
+	codextea "codex_go/tui/tea"
 )
 
 // Rust parity: codex-rs/tui/src/startup_orchestration.rs and
@@ -65,6 +66,10 @@ type interactiveTUITelemetry struct {
 	// settingsTags are the bounded daemon settings captured at launch, without
 	// terminal tags, so later observations do not read settings again.
 	settingsTags map[string]string
+	// statuslineMetrics carries Rust's launch-scoped `/statusline` counters:
+	// the launch exporter, the analytics consent, and the provider's metrics
+	// client captured before it is shut down.
+	statuslineMetrics *codextea.StatuslineMetrics
 }
 
 func (t interactiveTUITelemetry) close() {
@@ -99,6 +104,9 @@ func startInteractiveTUITelemetry(root *cli.RootOptions, selectionReason string,
 	}
 	telemetry.shutdown = shutdown
 	telemetry.sink = sink
+	if statuslineSink, ok := sink.(codextea.StatuslineMetricSink); ok {
+		telemetry.statuslineMetrics = codextea.NewStatuslineMetrics(loaded, statuslineSink, tuiClientName)
+	}
 	telemetry.settingsTags = appserverdaemon.DaemonSettingsTagMap(auth.DefaultCodexHome())
 	tags := cloneTUITelemetryTags(telemetry.settingsTags)
 	width, height := codextui.TerminalSizeRead()

@@ -3485,6 +3485,27 @@
    "phase": "P1",
    "status": "complete",
    "verifier": "TestManagedNetworkEnforcementDropsDisabledExecutorProxyLikeRust;TestShellExecutorDropsExplicitlyDisabledExecutorProxyLikeRust;TestShellStartupCredentialsClassificationLikeRust;TestShellStartupCredentialsForCommandMatchesUnclassifiedStartups"
+  },
+  {
+   "id": "tui-statusline-metrics",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/app/status_line_settings.rs",
+    "tui/src/app/statusline_picker.rs",
+    "tui/src/chatwidget/statusline_reader.rs",
+    "tui/src/app/user_turn_submission.rs"
+   ],
+   "goPaths": [
+    "tui/tea/statusline_metrics.go",
+    "tui/tea/statusline_provider_footer.go",
+    "tui/tea/status_line_provider_settings.go",
+    "tui/tea/statusline_provider_picker.go",
+    "tui/tea/model.go",
+    "tui/tea/statusline_metrics_like_rust_test.go"
+   ],
+   "phase": "P3",
+   "status": "complete",
+   "verifier": "TestStatuslineMetricsExporterEligibilityLikeRust;TestStatuslineMetricsAppliesAnalyticsConsentLikeRust;TestStatuslineMetricsRecordsPickerOpenedLikeRust;TestStatuslineProviderChangeKindsLikeRust;TestStatuslineProviderChangeRecordsOnlyTransitionsLikeRust;TestStatuslineMetricsFirstPromptModesLikeRust;TestStatuslineMetricsFirstPromptSkipsSideAndSubagentThreadsLikeRust;TestStatuslineProviderMetricsRecordStartAndFailuresLikeRust"
   }
   ]
 }

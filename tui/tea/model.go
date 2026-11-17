@@ -1315,6 +1315,10 @@ type Options struct {
 	// they decide whether terminal-size observations are eligible.
 	TerminalSizeExporter         config.OtelExporterKind
 	TerminalSizeAnalyticsEnabled *bool
+	// StatuslineMetrics is the launch-scoped `/statusline` counter set
+	// (Rust App::statusline_metrics). A nil value keeps every statusline
+	// observation off, which is what a host without a metrics client wants.
+	StatuslineMetrics *StatuslineMetrics
 	// TerminalSizeReader probes the terminal geometry (tests override it).
 	TerminalSizeReader func() (int, int)
 	// TerminalSizeSettleDelay is how long a resize must stay stable before it
@@ -1913,6 +1917,7 @@ type Model struct {
 	terminalSizeContext          map[string]string
 	terminalSizeExporter         config.OtelExporterKind
 	terminalSizeAnalyticsEnabled *bool
+	statuslineMetrics            *StatuslineMetrics
 	terminalSizeReader           func() (int, int)
 	terminalSizeSettleDelay      time.Duration
 	terminalSizeRecorder         func(context map[string]string, analyticsEnabled bool, reason string, width int, height int)
@@ -3231,6 +3236,10 @@ type Model struct {
 	statusLineConfiguredByUser bool
 	// statusLineProvider is the live local `tui.status_line_provider` choice.
 	statusLineProvider *config.StatusLineProviderSelection
+	// statuslineProviderChange is the selection a pending save moves from and
+	// to, kept until the write lands so `/statusline` can report the change kind
+	// (Rust save_status_line_provider's `previous`/`provider` pair).
+	statuslineProviderChange *statuslineProviderChange
 	// statusLineExtension carries prepared provider-supplied status content
 	// (Rust StatusLine extension variant). Native configured status lines stay
 	// on the span renderer when this is nil.
@@ -3656,6 +3665,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		terminalSizeContext:          cloneStringMapTea(options.TerminalSizeContext),
 		terminalSizeExporter:         options.TerminalSizeExporter,
 		terminalSizeAnalyticsEnabled: cloneBoolPtrTea(options.TerminalSizeAnalyticsEnabled),
+		statuslineMetrics:            options.StatuslineMetrics,
 		terminalSizeReader:           options.TerminalSizeReader,
 		terminalSizeSettleDelay:      options.TerminalSizeSettleDelay,
 		terminalSizeRecorder:         options.OnTerminalSizeObservation,
@@ -7511,6 +7521,9 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 		request.CyberAccessProgram = program
 	}
 	m.captureIDEContext(&request)
+	// Rust app/user_turn_submission.rs records the visit's first primary-thread
+	// prompt before the turn reaches the app server.
+	m.recordStatuslineFirstPrompt()
 	displayPrompt := m.promptWithRequestAttachments(request)
 	m.notice = ""
 	// Rust #43055: a new user message returns /copy to response copying.
@@ -7809,8 +7822,14 @@ func (m *Model) switchThreadID(threadID string) {
 		return
 	}
 	threadID = strings.TrimSpace(threadID)
+	previousThreadID := strings.TrimSpace(m.State.ThreadID)
 	m.stashQueuedThreadInput()
 	m.State.SetThreadID(threadID)
+	// Rust StatuslineMetrics::begin_visit: attaching a different thread is a new
+	// visit, so the once-per-visit first-prompt counter is re-armed.
+	if threadID != "" && threadID != previousThreadID {
+		m.statuslineMetrics.BeginVisit()
+	}
 	m.restoreQueuedThreadInput(threadID)
 	m.syncGoalForCurrentThread()
 	m.setPendingSteerThread(threadID)

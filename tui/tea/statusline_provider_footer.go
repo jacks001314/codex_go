@@ -360,6 +360,9 @@ func (m *Model) ensureProviderFooterCmd() bubbletea.Cmd {
 		return nil
 	}
 	read.started = true
+	// Rust records provider_started when the reader handles ReadStep::Start,
+	// before the lookup can succeed or fail.
+	m.statuslineMetrics.Record("codex.statusline.provider_started", nil)
 	return m.statuslineProviderResolveCmd(read)
 }
 
@@ -525,6 +528,9 @@ func (m *Model) applyStatuslineProviderResolve(msg statuslineProviderResolveMsg)
 	}
 	if msg.err != nil || !msg.provider.Found {
 		read.failed = true
+		m.statuslineMetrics.Record("codex.statusline.provider_failed", map[string]string{
+			"kind": statuslineProviderFailureKind(msg.err),
+		})
 		m.setProviderFooterFailure(statuslineProviderLookupFailureCopy(msg.err))
 		return nil
 	}
@@ -553,12 +559,18 @@ func (m *Model) applyStatuslineProviderRead(msg statuslineProviderReadMsg) bubbl
 	}
 	if msg.err != nil {
 		read.failed = true
+		m.statuslineMetrics.Record("codex.statusline.provider_failed", map[string]string{
+			"kind": statuslineProviderFailureKind(msg.err),
+		})
 		m.setProviderFooterFailure(statuslineProviderReadFailureCopy(msg.err))
 		return nil
 	}
 	tree, err := decodeStatuslineProviderTree(read.uri, msg.contents)
 	if err != nil {
 		read.failed = true
+		// Rust classifies every malformed envelope, URI, media type, or tree as
+		// a generic error, never a timeout.
+		m.statuslineMetrics.Record("codex.statusline.provider_failed", map[string]string{"kind": "error"})
 		m.setProviderFooterFailure(statuslineProviderFailedCopy)
 		return nil
 	}
@@ -611,6 +623,17 @@ func statuslineProviderReadFailureCopy(err error) string {
 		return statuslineProviderTimedOutCopy
 	}
 	return statuslineProviderFailedCopy
+}
+
+// statuslineProviderFailureKind mirrors Rust Failure::metric_kind: only a
+// lookup or read that runs out of its deadline reports "timeout"; a provider
+// that could not be resolved, a rejected request, and every malformed response
+// report "error".
+func statuslineProviderFailureKind(err error) string {
+	if errors.Is(err, errStatuslineProviderReadTimeout) || errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	return "error"
 }
 
 // statuslineProviderLookupFailureCopy mirrors Rust #61993: the shared five-second

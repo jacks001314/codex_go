@@ -128,6 +128,9 @@ func (m *Model) openStatuslineProviderPicker() bubbletea.Cmd {
 	if m == nil || !m.statuslineProviderPickerEnabled() {
 		return nil
 	}
+	// Rust #62041 records the picker open before any discovery work so a picker
+	// that never finishes still counts as an adoption attempt.
+	m.statuslineMetrics.Record("codex.statusline.picker_opened", nil)
 	selected := m.StatusLineProvider()
 	known := []string{}
 	if selected != nil && !selected.Default && strings.TrimSpace(selected.Server) != "" {
