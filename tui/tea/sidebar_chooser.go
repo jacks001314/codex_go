@@ -161,6 +161,14 @@ type SidebarFilesLoadedMsg struct {
 	Snapshot       SidebarFilesSnapshot
 }
 
+// SidebarFilePromotedMsg folds one newly completed patch or generated image
+// into the Files group before its history page arrives (Rust
+// notice_sidebar_file_item).
+type SidebarFilePromotedMsg struct {
+	ParentThreadID string
+	Entries        []markdown.SidebarFileLink
+}
+
 type SideOpenResultMsg struct {
 	// RequestID identifies the newest accepted open; older completions are
 	// ignored after the user selects another chat or cancels (Rust #60599).
@@ -1688,6 +1696,8 @@ func (m *Model) requestSidebarFiles() bubbletea.Cmd {
 	}
 	transcript := m.sidebarTranscriptFileLinks()
 	parentThreadID := strings.TrimSpace(m.sidebarChooserParent)
+	promoted := append([]markdown.SidebarFileLink(nil), m.sidebarPromotedFiles[parentThreadID]...)
+	transcript = mergeSidebarFileLinks(nil, append(promoted, transcript...))
 	if parentThreadID == "" || m.onSidebarFiles == nil {
 		m.sidebarFilesLoading = false
 		selected := m.sidebarChooserSelectedFilePath()
@@ -1705,6 +1715,31 @@ func (m *Model) requestSidebarFiles() bubbletea.Cmd {
 		snapshot.Files = mergeSidebarFileLinks(nil, append(append([]markdown.SidebarFileLink{}, transcript...), snapshot.Files...))
 		return SidebarFilesLoadedMsg{ParentThreadID: parentThreadID, RequestID: request, Snapshot: snapshot}
 	}
+}
+
+// applySidebarFilePromoted keeps live patch and image paths ahead of the
+// transcript links, the way Rust promotes buffered item completions.
+func (m *Model) applySidebarFilePromoted(msg SidebarFilePromotedMsg) bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	parentThreadID := strings.TrimSpace(msg.ParentThreadID)
+	if parentThreadID == "" || len(msg.Entries) == 0 {
+		return nil
+	}
+	if m.sidebarPromotedFiles == nil {
+		m.sidebarPromotedFiles = map[string][]markdown.SidebarFileLink{}
+	}
+	m.sidebarPromotedFiles[parentThreadID] = mergeSidebarFileLinks(nil, append(msg.Entries, m.sidebarPromotedFiles[parentThreadID]...))
+	if !m.sidebarChooserOpen || parentThreadID != m.sidebarChooserParent {
+		return nil
+	}
+	selected := m.sidebarChooserSelectedFilePath()
+	m.sidebarFiles = mergeSidebarFileLinks(nil, append(msg.Entries, m.sidebarFiles...))
+	m.restoreSidebarFileSelection(selected)
+	m.clampSidebarChoice()
+	m.refreshTranscript()
+	return nil
 }
 
 // sidebarTranscriptFileLinks is the chooser's view of Rust's

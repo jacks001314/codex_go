@@ -5641,6 +5641,35 @@ func (c *remoteAppServerTUIClient) notificationThreadIsActive(threadID string) b
 	return current == "" || current == threadID
 }
 
+// promoteSidebarFiles mirrors Rust App::notice_sidebar_file_item: a completed
+// patch or generated image becomes a chooser Files row immediately, with paths
+// resolved against the thread workspace the TUI knows.
+func (c *remoteAppServerTUIClient) promoteSidebarFiles(threadID string, payload appserver.ThreadItemPayload) {
+	if c == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	cwd := ""
+	if c.state != nil && strings.TrimSpace(c.state.ThreadID) == threadID {
+		cwd = strings.TrimSpace(c.state.CWD)
+	}
+	item := appserver.ThreadItem{
+		ID:     remotePayloadString(payload, "id"),
+		Type:   remotePayloadString(payload, "type"),
+		Status: remotePayloadString(payload, "status"),
+		Text:   remotePayloadString(payload, "text"),
+		Data:   map[string]any(payload),
+	}
+	entries := sidebarNewestItemFileLinks(cwd, item)
+	if len(entries) == 0 {
+		return
+	}
+	c.send(codextea.SidebarFilePromotedMsg{ParentThreadID: threadID, Entries: entries})
+}
+
 // hiddenThreadStartedNotification reports whether a thread/started event
 // belongs to an internal helper that must stay out of visible TUI routing.
 // Persisted system threads remain visible; only ephemeral feature workers
@@ -6031,6 +6060,9 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 		if err := json.Unmarshal(message.Params, &payload); err != nil {
 			return err
 		}
+		// Rust App::notice_sidebar_file_item: completed patches and generated
+		// images reach the chooser before their history page.
+		c.promoteSidebarFiles(payload.ThreadID, payload.Item)
 		if !c.notificationThreadIsActive(payload.ThreadID) {
 			item := remoteProtocolItemFromPayload(payload.Item, true)
 			c.send(codextea.ThreadScopedEventMsg{ThreadID: payload.ThreadID, Event: protocol.ItemCompleted(item)})

@@ -3157,6 +3157,9 @@ type Model struct {
 	sidebarFilesCwd               string
 	sidebarFilePreviewUnavailable string
 	sidebarFilesRequest           uint64
+	// sidebarPromotedFiles keeps completed patch and image paths per parent so
+	// reopening the chooser still lists them (Rust notice_sidebar_file_item).
+	sidebarPromotedFiles map[string][]markdown.SidebarFileLink
 	// sidebarChooserScroll mirrors Rust ChooserScroll: the wheel can move the
 	// viewport away from the keyboard selection.
 	sidebarChooserScroll    sidebarChooserScroll
@@ -5050,6 +5053,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, m.applySideChatPrompts(msg)
 	case SidebarFilesLoadedMsg:
 		return m, m.applySidebarFilesLoaded(msg)
+	case SidebarFilePromotedMsg:
+		return m, m.applySidebarFilePromoted(msg)
 	case SideOpenResultMsg:
 		return m, m.applySideOpenResult(msg)
 	case WorkingDirectoryChangeResultMsg:

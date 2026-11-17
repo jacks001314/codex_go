@@ -3447,11 +3447,13 @@
     "tui/tea/sidebar_chooser.go",
     "tui/tea/sidebar_chooser_rows.go",
     "tui/line_truncation.go",
-    "tui/tea/sidebar_chooser_files_like_rust_test.go"
+    "tui/tea/sidebar_chooser_files_like_rust_test.go",
+    "app/remote_tui.go",
+    "app/sidebar_file_promote_like_rust_test.go"
    ],
    "phase": "P3",
    "status": "partial",
-   "verifier": "TestSidebarChooserFilesGroupLikeRust;TestSidebarChooserNarrowFileRowsLikeRust;TestSidebarChooserMarkdownFilesHeaderLikeRust;TestSidebarChooserFileRowsInertWithoutPreviewLikeRust;TestSidebarChooserWheelScrollsFilesLikeRust;TestSidebarChooserFilePathViewLikeRust;TestSidebarChooserKeepsFileSelectionWhenInventoryChangesLikeRust;TestMiddleLabelKeepsBothEndsLikeRust;TestFilenameLabelKeepsExtensionLikeRust;TestDocumentLabelJoinsPartsTowardRootLikeRust;TestDocumentLabelKeepsDirectorySuffixWhenNarrowLikeRust"
+   "verifier": "TestSidebarChooserFilesGroupLikeRust;TestSidebarChooserNarrowFileRowsLikeRust;TestSidebarChooserMarkdownFilesHeaderLikeRust;TestSidebarChooserFileRowsInertWithoutPreviewLikeRust;TestSidebarChooserWheelScrollsFilesLikeRust;TestSidebarChooserFilePathViewLikeRust;TestSidebarChooserKeepsFileSelectionWhenInventoryChangesLikeRust;TestMiddleLabelKeepsBothEndsLikeRust;TestFilenameLabelKeepsExtensionLikeRust;TestDocumentLabelJoinsPartsTowardRootLikeRust;TestDocumentLabelKeepsDirectorySuffixWhenNarrowLikeRust;TestSidebarChooserListsTranscriptLinksLikeRust;TestSidebarChooserMergesHostFilesLikeRust;TestSidebarChooserPromotesPatchFilesLikeRust;TestRemoteTUIPromotesCompletedPatchToSidebarFilesLikeRust;TestRemoteTUIPromotesGeneratedImageLikeRust"
   }
   ]
 }

@@ -257,6 +257,30 @@ func TestSidebarChooserMergesHostFilesLikeRust(t *testing.T) {
 	}
 }
 
+// Rust notice_sidebar_file_item: a completed patch is remembered while the
+// chooser is closed and heads the Files group when it opens.
+func TestSidebarChooserPromotesPatchFilesLikeRust(t *testing.T) {
+	model, _ := newSidebarTabsModel(t)
+	model.State.CWD = "/workspace"
+	model.State.AddMessage(codextui.RoleAssistant, "see [app](src/app.ts)")
+	model.Update(SidebarFilePromotedMsg{
+		ParentThreadID: "parent-a",
+		Entries:        []markdown.SidebarFileLink{{Path: "/workspace/src/fixed.ts"}},
+	})
+	if len(model.sidebarFiles) != 0 {
+		t.Fatalf("closed chooser painted %+v", model.sidebarFiles)
+	}
+	if cmd := model.openSidebarChooser(); cmd != nil {
+		runTeaCmdChain(t, model, cmd, 0)
+	}
+	if len(model.sidebarFiles) != 2 {
+		t.Fatalf("files = %+v, want the patch and the transcript link", model.sidebarFiles)
+	}
+	if model.sidebarFiles[0].Path != "/workspace/src/fixed.ts" || model.sidebarFiles[1].Path != "/workspace/src/app.ts" {
+		t.Fatalf("files = %+v, want the patch first", model.sidebarFiles)
+	}
+}
+
 // keymsgPageDown keeps the path-view test readable while spelling the key the
 // shared list bindings resolve (ctrl+f).
 func keymsgPageDown() keymsg.KeyType { return keymsg.KeyCtrlF }
