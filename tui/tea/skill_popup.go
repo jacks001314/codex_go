@@ -78,7 +78,9 @@ func (m *Model) refreshSkillPopup() bubbletea.Cmd {
 			return SkillsInventoryResultMsg{CWD: cwd, Response: response, Err: err}
 		}
 	}
-	items := filterSkillPopupItems(skillPopupItemsFromResponse(*m.skillsInventory, cwd), query, m.mentionUsage.frequencies())
+	pluginRoots := skillPluginCacheRoots(m.codexHome)
+	frequencies := skillFrequenciesByVersionIndependentKey(m.mentionUsage.frequencies(), pluginRoots)
+	items := filterSkillPopupItems(skillPopupItemsFromResponse(*m.skillsInventory, cwd), query, frequencies, pluginRoots)
 	selected := 0
 	if len(items) == 0 {
 		selected = -1
@@ -784,11 +786,11 @@ func (item skillPopupItem) matchTier(lowercaseQuery string) skillPopupMatchTier 
 // filterSkillPopupItems mirrors Rust SkillPopup::filtered (#55596): stronger
 // match tiers stay ahead of usage preferences, and confirmed selections rank
 // within a tier.
-func filterSkillPopupItems(items []skillPopupItem, query string, frequencies map[string]int) []skillPopupItem {
+func filterSkillPopupItems(items []skillPopupItem, query string, frequencies map[string]int, pluginRoots []string) []skillPopupItem {
 	query = strings.ToLower(strings.TrimSpace(query))
 	if query == "" {
 		out := append([]skillPopupItem(nil), items...)
-		sortSkillPopupItems(out, "", frequencies)
+		sortSkillPopupItems(out, "", frequencies, pluginRoots)
 		return out
 	}
 	out := []skillPopupItem{}
@@ -800,11 +802,11 @@ func filterSkillPopupItems(items []skillPopupItem, query string, frequencies map
 			}
 		}
 	}
-	sortSkillPopupItems(out, query, frequencies)
+	sortSkillPopupItems(out, query, frequencies, pluginRoots)
 	return out
 }
 
-func sortSkillPopupItems(items []skillPopupItem, query string, frequencies map[string]int) {
+func sortSkillPopupItems(items []skillPopupItem, query string, frequencies map[string]int, pluginRoots []string) {
 	if len(items) < 2 {
 		return
 	}
@@ -818,7 +820,8 @@ func sortSkillPopupItems(items []skillPopupItem, query string, frequencies map[s
 		if at != bt {
 			return at < bt
 		}
-		af, bf := frequencies[strings.TrimSpace(a.Path)], frequencies[strings.TrimSpace(b.Path)]
+		af := skillSelectionFrequency(frequencies, a.Path, pluginRoots)
+		bf := skillSelectionFrequency(frequencies, b.Path, pluginRoots)
 		if af != bf {
 			return af > bf
 		}

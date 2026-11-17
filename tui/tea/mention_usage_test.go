@@ -18,7 +18,7 @@ func TestFilterSkillPopupItemsPrefersFrequentSelectionsWithinTier(t *testing.T) 
 		"skill://hello-statsig": 2,
 		"skill://status":        1,
 	}
-	got := filterSkillPopupItems(items, "stat", frequencies)
+	got := filterSkillPopupItems(items, "stat", frequencies, nil)
 	if len(got) != 3 {
 		t.Fatalf("items = %#v, want three", got)
 	}
@@ -26,7 +26,7 @@ func TestFilterSkillPopupItemsPrefersFrequentSelectionsWithinTier(t *testing.T) 
 		t.Fatalf("order = %q, %q, %q", got[0].Name, got[1].Name, got[2].Name)
 	}
 
-	exact := filterSkillPopupItems(items, "statsig", frequencies)
+	exact := filterSkillPopupItems(items, "statsig", frequencies, nil)
 	if len(exact) == 0 || exact[0].Name != "statsig" {
 		t.Fatalf("exact match must win: %#v", exact)
 	}
