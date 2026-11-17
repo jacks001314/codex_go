@@ -224,13 +224,16 @@ type RemoteNetworkProxyConfig struct {
 	// CredentialProviders carries configured provider rules to the executor.
 	// They are discarded when masking is off, even when this config is
 	// forwarded.
-	CredentialProviders            map[string]network.CredentialProviderConfig `json:"credentialProviders,omitempty"`
-	EnableSOCKS5                   bool                                        `json:"enableSocks5"`
-	EnableSOCKS5UDP                bool                                        `json:"enableSocks5Udp"`
-	AllowUpstreamProxy             bool                                        `json:"allowUpstreamProxy"`
-	DangerouslyAllowAllUnixSockets bool                                        `json:"dangerouslyAllowAllUnixSockets"`
-	Mode                           string                                      `json:"mode"`
-	Domains                        map[string]string                           `json:"domains,omitempty"`
+	CredentialProviders map[string]network.CredentialProviderConfig `json:"credentialProviders,omitempty"`
+	EnableSOCKS5        bool                                        `json:"enableSocks5"`
+	// TransparentTCP asks the executor to capture managed Linux sandbox TCP
+	// into its SOCKS5 proxy (Rust #61851).
+	TransparentTCP                 bool              `json:"transparentTcp,omitempty"`
+	EnableSOCKS5UDP                bool              `json:"enableSocks5Udp"`
+	AllowUpstreamProxy             bool              `json:"allowUpstreamProxy"`
+	DangerouslyAllowAllUnixSockets bool              `json:"dangerouslyAllowAllUnixSockets"`
+	Mode                           string            `json:"mode"`
+	Domains                        map[string]string `json:"domains,omitempty"`
 	// ReviewDomains are managed selectors that must pass the approval flow
 	// before ordinary allows (Rust #56154). Clients must require the
 	// networkProxyReviewDomains capability when this is nonempty.
@@ -319,6 +322,7 @@ func RemoteNetworkProxyConfigFromProxyConfigWithCredentialMaskingMode(config net
 		CredentialMasking:              credentialMasking,
 		CredentialProviders:            providers,
 		EnableSOCKS5:                   settings.EnableSocks5,
+		TransparentTCP:                 settings.TransparentTCP,
 		EnableSOCKS5UDP:                settings.EnableSocks5UDP,
 		AllowUpstreamProxy:             settings.AllowUpstreamProxy,
 		DangerouslyAllowAllUnixSockets: allowAllUnixSockets,
@@ -338,6 +342,7 @@ func (c RemoteNetworkProxyConfig) ProxyConfig() (network.ProxyConfig, error) {
 		settings.CredentialProviders = c.CredentialProviders
 	}
 	settings.EnableSocks5 = c.EnableSOCKS5
+	settings.TransparentTCP = c.TransparentTCP
 	settings.EnableSocks5UDP = c.EnableSOCKS5UDP
 	settings.AllowUpstreamProxy = c.AllowUpstreamProxy
 	// Rust #46004: a remote config always supplies an explicit bool, so it

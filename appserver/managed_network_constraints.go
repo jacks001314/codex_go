@@ -282,6 +282,7 @@ func proxyRequirementsFromConfig(requirements *config.NetworkRequirements) *netw
 		Enabled:                          cloneNetworkBool(requirements.Enabled),
 		HTTPPort:                         cloneNetworkUint16(requirements.HTTPPort),
 		SOCKSPort:                        cloneNetworkUint16(requirements.SOCKSPort),
+		TransparentTCP:                   cloneNetworkBool(requirements.TransparentTCP),
 		AllowUpstreamProxy:               cloneNetworkBool(requirements.AllowUpstreamProxy),
 		DangerouslyAllowNonLoopbackProxy: cloneNetworkBool(requirements.DangerouslyAllowNonLoopbackProxy),
 		DangerouslyAllowAllUnixSockets:   cloneNetworkBool(requirements.DangerouslyAllowAllUnixSockets),

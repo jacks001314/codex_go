@@ -1,6 +1,7 @@
 package linuxsandbox
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -81,6 +82,14 @@ func CreateCommandArgsWithSandboxExeAndManagedNetworkAndTransparentTCP(sandboxEx
 	}
 	if managedNetworkJSON != "" {
 		args = append(args, "--managed-network", managedNetworkJSON)
+		// Rust #61851 SandboxManager: the prepared context can request capture
+		// on its own, without the executor startup switch.
+		var context struct {
+			TransparentTCP bool `json:"transparentTcp"`
+		}
+		if err := json.Unmarshal([]byte(managedNetworkJSON), &context); err == nil && context.TransparentTCP {
+			transparentTCP = true
+		}
 	}
 	if transparentTCP && managedNetwork {
 		args = append(args, "--transparent-tcp")

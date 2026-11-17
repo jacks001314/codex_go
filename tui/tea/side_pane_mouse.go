@@ -52,11 +52,27 @@ func (m *Model) handleSidebarTabStripMouse(msg mousemsg.MouseMsg) (bool, bubblet
 	case mousemsg.MouseActionMotion:
 		return m.hoverSidebarTab(column), nil
 	case mousemsg.MouseActionPress:
+		// Rust closes a tab from its close cell or from a middle click anywhere
+		// on the tab cell (side_focus.rs: close_cell(area).contains(point) ||
+		// middle).
+		if msg.Button == mousemsg.MouseButtonMiddle {
+			if index := window.tabAt(column); index >= 0 {
+				return true, m.closeSidebarTabAtIndex(index)
+			}
+			return false, nil
+		}
 		if msg.Button != mousemsg.MouseButtonLeft {
 			return false, nil
 		}
 		if window.addAt(column) {
 			return true, m.openSidebarChooser()
+		}
+		// Rust's gutter arrows step to the neighbouring tab (TabTarget::Overflow).
+		if index := window.overflowAt(column); index >= 0 {
+			return true, m.selectSidebarTab(index)
+		}
+		if index := window.closeAt(column); index >= 0 {
+			return true, m.closeSidebarTabAtIndex(index)
 		}
 		if index := window.tabAt(column); index >= 0 {
 			return true, m.selectSidebarTab(index)
@@ -82,6 +98,23 @@ func (m *Model) selectSidebarTab(index int) bubbletea.Cmd {
 func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd) {
 	if handled, cmd := m.handleSidebarTabStripMouse(msg); handled {
 		return true, cmd
+	}
+	// Rust app/link_hover.rs paints PointerShape::Resize while the pointer is
+	// over the divider, and side_pane::paint_divider accents it in that case.
+	// The hover is tracked even while the chooser owns the side pane.
+	if m != nil && msg.Action == mousemsg.MouseActionMotion {
+		hover := false
+		if m.sideWorkspaceEnabled() && !m.sideZoomed {
+			if left, _, _, ok := m.sidePaneLayout(firstPositive(m.width, defaultWidth)); ok {
+				hover = msg.X == left && msg.Y >= 0 && msg.Y < max(m.transcript.Height, 1)
+			}
+		}
+		if hover != m.sideDividerHover {
+			m.sideDividerHover = hover
+			if m.sideDrag == nil {
+				return true, nil
+			}
+		}
 	}
 	// The chooser can be open before any side chat exists, so its row hit test
 	// runs ahead of the active-side guard (Rust #60319 choice_at on click).

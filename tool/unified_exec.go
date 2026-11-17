@@ -878,6 +878,11 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 	// Rust reports the executor's process start as a trace-safe event, because a
 	// sandbox retry can reuse the public id for a new executor process.
 	openSession.processStartRequested(processID, remoteID)
+	// Rust #61851 exec_server_params_for_request: capture only applies to a
+	// sandboxed launch, and only a local Linux sandbox can capture TCP itself.
+	managedNetwork := unifiedExecManagedNetworkContext(req.ManagedNetwork)
+	networkProxy := req.RemoteNetworkProxy
+	managedNetwork, networkProxy = trimUnifiedExecTransparentTCP(len(sandboxJSON) > 0, managedNetwork, networkProxy)
 	startResponse, err := client.Start(startCtx, &execserver.ExecParams{
 		ProcessID:             remoteID,
 		Metadata:              unifiedExecWireMetadata(req, callID),
@@ -890,8 +895,8 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 		PipeStdin:             false,
 		Sandbox:               sandboxJSON,
 		EnforceManagedNetwork: req.EnforceManagedNetwork,
-		ManagedNetwork:        unifiedExecManagedNetworkContext(req.ManagedNetwork),
-		NetworkProxy:          req.RemoteNetworkProxy,
+		ManagedNetwork:        managedNetwork,
+		NetworkProxy:          networkProxy,
 	})
 	startCancel()
 	openSession.finish(err, ctx)
@@ -1057,11 +1062,28 @@ func unifiedExecManagedNetworkContext(value *network.ProxyManagedNetworkSandboxC
 		return nil
 	}
 	return &execserver.ManagedNetworkSandboxContext{
+		TransparentTCP:                 value.TransparentTCP,
 		LoopbackPorts:                  append([]uint16(nil), value.LoopbackPorts...),
 		AllowLocalBinding:              value.AllowLocalBinding,
 		AllowUnixSockets:               append([]string(nil), value.AllowUnixSockets...),
 		DangerouslyAllowAllUnixSockets: value.DangerouslyAllowAllUnixSockets,
 	}
+}
+
+// trimUnifiedExecTransparentTCP mirrors Rust #61851
+// exec_server_params_for_request: a prepared context uses the local sandbox, so
+// capture survives only for a sandboxed Linux launch, while a remote proxy can
+// capture on any sandboxed launch because the executor owns the final check.
+func trimUnifiedExecTransparentTCP(sandboxed bool, managed *execserver.ManagedNetworkSandboxContext, proxy *execserver.RemoteNetworkProxyLaunchConfig) (*execserver.ManagedNetworkSandboxContext, *execserver.RemoteNetworkProxyLaunchConfig) {
+	if managed != nil && !(sandboxed && runtime.GOOS == "linux") {
+		managed.TransparentTCP = false
+	}
+	if proxy != nil && !sandboxed {
+		trimmed := *proxy
+		trimmed.Proxy.TransparentTCP = false
+		proxy = &trimmed
+	}
+	return managed, proxy
 }
 
 func unifiedExecSandboxContext(req *ShellRequest) (*execserver.FileSystemSandboxContext, error) {

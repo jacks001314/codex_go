@@ -126,14 +126,21 @@ type WorldStateUpdate struct {
 	// kept for callers that build updates positionally.)
 }
 
-// TopLevelToolsSnapshot is the persisted comparison state of the Responses Lite
-// top-level tool catalog: the window it belongs to and the stable hash of every
-// namespace, namespace member and built-in declaration. A snapshot recorded for
-// a different window is treated as absent, so a window replacement (compaction
-// or context reset) re-declares the full catalog.
-type TopLevelToolsSnapshot struct {
+// topLevelToolsLegacySnapshot is the retired Go wire shape: the context window
+// and the catalog hashes in one object. It stays decodable so an existing store
+// upgrades in place, but EncodeTopLevelToolsSnapshot never writes it again.
+type topLevelToolsLegacySnapshot struct {
 	Window *uint64           `json:"window,omitempty"`
 	Hashes map[string]string `json:"hashes,omitempty"`
+}
+
+// topLevelToolsExecSnapshot is Rust's TopLevelToolsSnapshot::WithExec shape
+// (codex-rs/core/src/context/world_state/top_level_tools.rs). Go does not emit
+// granular exec updates yet, so it only reads the shared `tools` half and keeps
+// the exec baseline untouched.
+type topLevelToolsExecSnapshot struct {
+	Tools map[string]string `json:"tools"`
+	Exec  map[string]string `json:"exec"`
 }
 
 // BaseInstructionsSnapshot is the persisted comparison state of the recorded
@@ -146,24 +153,40 @@ type BaseInstructionsSnapshot struct {
 	Model string `json:"model,omitempty"`
 }
 
-// DecodeTopLevelToolsSnapshot decodes a persisted catalog snapshot. ok is false
-// when nothing usable was recorded, which callers treat as "absent" (a fresh
-// window) or "unknown" (retained history without a typed snapshot).
-func DecodeTopLevelToolsSnapshot(raw json.RawMessage) (TopLevelToolsSnapshot, bool) {
-	if len(bytes.TrimSpace(raw)) == 0 {
-		return TopLevelToolsSnapshot{}, false
+// DecodeTopLevelToolsSnapshot reads Rust's untagged TopLevelToolsSnapshot:
+// either a bare `{name: hash}` map (ToolsOnly) or `{tools, exec}` (WithExec).
+// It also accepts the retired Go `{window, hashes}` object, returning its
+// recorded window so the caller can keep the old window-replacement rule.
+// ok is false when nothing usable was recorded, which callers treat as
+// "absent" (a fresh window) or "unknown" (retained history without a typed
+// snapshot).
+func DecodeTopLevelToolsSnapshot(raw json.RawMessage) (hashes map[string]string, legacyWindow *uint64, ok bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) || trimmed[0] != '{' {
+		return nil, nil, false
 	}
-	var snapshot TopLevelToolsSnapshot
-	if err := json.Unmarshal(raw, &snapshot); err != nil {
-		return TopLevelToolsSnapshot{}, false
+	var legacy topLevelToolsLegacySnapshot
+	if err := json.Unmarshal(trimmed, &legacy); err == nil && legacy.Window != nil {
+		if legacy.Hashes == nil {
+			legacy.Hashes = map[string]string{}
+		}
+		return legacy.Hashes, legacy.Window, true
 	}
-	if snapshot.Window == nil {
-		return TopLevelToolsSnapshot{}, false
+	var withExec topLevelToolsExecSnapshot
+	if err := json.Unmarshal(trimmed, &withExec); err == nil && (withExec.Tools != nil || withExec.Exec != nil) {
+		if withExec.Tools == nil {
+			withExec.Tools = map[string]string{}
+		}
+		return withExec.Tools, nil, true
 	}
-	if snapshot.Hashes == nil {
-		snapshot.Hashes = map[string]string{}
+	var bare map[string]string
+	if err := json.Unmarshal(trimmed, &bare); err != nil {
+		return nil, nil, false
 	}
-	return snapshot, true
+	if bare == nil {
+		bare = map[string]string{}
+	}
+	return bare, nil, true
 }
 
 // DecodeBaseInstructionsSnapshot decodes a persisted base-instruction snapshot.
@@ -182,15 +205,28 @@ func DecodeBaseInstructionsSnapshot(raw json.RawMessage) (BaseInstructionsSnapsh
 }
 
 // TopLevelToolsSnapshotForWindow returns the recorded catalog hashes for a
-// specific context window. A snapshot recorded for another window is treated as
-// absent: a window replacement (compaction or context reset) re-derives the full
-// catalog from the current settings, so there is nothing to diff against.
-func TopLevelToolsSnapshotForWindow(raw json.RawMessage, window uint64) (map[string]string, bool) {
-	snapshot, ok := DecodeTopLevelToolsSnapshot(raw)
-	if !ok || snapshot.Window == nil || *snapshot.Window != window {
+// specific context window. Rust's snapshot carries no window, so recordedWindow
+// (Go's own bookkeeping in Record.Metadata.Extra) decides whether a Rust-shaped
+// snapshot still belongs to this window. A snapshot recorded for another window
+// is treated as absent: a window replacement (compaction or context reset)
+// re-derives the full catalog, so there is nothing to diff against.
+func TopLevelToolsSnapshotForWindow(raw json.RawMessage, window uint64, recordedWindow *uint64) (map[string]string, bool) {
+	hashes, legacyWindow, ok := DecodeTopLevelToolsSnapshot(raw)
+	if !ok {
 		return nil, false
 	}
-	return snapshot.Hashes, true
+	if legacyWindow != nil {
+		if *legacyWindow != window {
+			return nil, false
+		}
+		return hashes, true
+	}
+	if recordedWindow != nil {
+		if *recordedWindow != window {
+			return nil, false
+		}
+	}
+	return hashes, true
 }
 
 // BaseInstructionsSnapshotForWindow returns the recorded base-instruction hash
@@ -214,12 +250,54 @@ func ModelInstructionsSnapshotForWindow(raw json.RawMessage, window uint64) (mod
 	return snapshot.Model, snapshot.Hash, true
 }
 
-// EncodeTopLevelToolsSnapshot serializes a catalog snapshot for the record.
-func EncodeTopLevelToolsSnapshot(window uint64, hashes map[string]string) (json.RawMessage, error) {
+// ModelStateSnapshot is Rust's ModelInstructionsSnapshot::WithInstructions
+// branch (codex-rs/core/src/context/world_state/model.rs): the `model` section
+// records the model identity together with the base-instruction fragment hash
+// inside an incremental-tool window.
+type ModelStateSnapshot struct {
+	Model        string `json:"model"`
+	Instructions string `json:"instructions"`
+}
+
+// DecodeModelStateSnapshot reads Rust's untagged ModelInstructionsSnapshot from
+// the `model` section: a bare string is ModelOnly, an object with both fields is
+// WithInstructions. modelKnown is true for either shape; hasInstructions is
+// true only for the object form (the instructions hash is present).
+func DecodeModelStateSnapshot(raw json.RawMessage) (modelID string, instructionsHash string, modelKnown bool, hasInstructions bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return "", "", false, false
+	}
+	var modelOnly string
+	if err := json.Unmarshal(trimmed, &modelOnly); err == nil {
+		return strings.TrimSpace(modelOnly), "", strings.TrimSpace(modelOnly) != "", false
+	}
+	var snapshot ModelStateSnapshot
+	if err := json.Unmarshal(trimmed, &snapshot); err != nil {
+		return "", "", false, false
+	}
+	modelID = strings.TrimSpace(snapshot.Model)
+	instructionsHash = strings.TrimSpace(snapshot.Instructions)
+	if modelID == "" || instructionsHash == "" {
+		return modelID, instructionsHash, modelID != "", false
+	}
+	return modelID, instructionsHash, true, true
+}
+
+// EncodeModelStateSnapshot serializes Rust's ModelInstructionsSnapshot::
+// WithInstructions branch for the `model` section.
+func EncodeModelStateSnapshot(modelID string, instructionsHash string) (json.RawMessage, error) {
+	return json.Marshal(ModelStateSnapshot{Model: strings.TrimSpace(modelID), Instructions: instructionsHash})
+}
+
+// EncodeTopLevelToolsSnapshot serializes Rust's ToolsOnly snapshot: the bare
+// `{name: hash}` catalog map. The context window stays in Record.Metadata.Extra
+// because Rust does not persist it in the section.
+func EncodeTopLevelToolsSnapshot(hashes map[string]string) (json.RawMessage, error) {
 	if hashes == nil {
 		hashes = map[string]string{}
 	}
-	return json.Marshal(TopLevelToolsSnapshot{Window: &window, Hashes: hashes})
+	return json.Marshal(hashes)
 }
 
 // EncodeBaseInstructionsSnapshot serializes a base-instruction snapshot.
@@ -534,7 +612,7 @@ func BaseInstructionsUpdate(text string, previousKnown bool) (string, []WorldSta
 // changed instructions (Rust #58405). advance reports that the caller must
 // persist the returned hash/model snapshot even when no update was emitted, so
 // a suppressed model switch is still recognized on later turns.
-func ModelInstructionsUpdate(modelID string, text string, previousModel string, previousHash string, previousKnown bool, suppressModelChangeAnnouncements bool) (string, []WorldStateUpdate, bool) {
+func ModelInstructionsUpdate(modelID string, text string, previousModel string, previousHash string, previousKnown bool, previousHasInstructions bool, suppressModelChangeAnnouncements bool) (string, []WorldStateUpdate, bool) {
 	hash := BaseInstructionsHash(text)
 	if !previousKnown {
 		if strings.TrimSpace(text) == "" {
@@ -550,7 +628,12 @@ func ModelInstructionsUpdate(modelID string, text string, previousModel string, 
 	modelID = strings.TrimSpace(modelID)
 	previousModel = strings.TrimSpace(previousModel)
 	modelChanged := previousModel != "" && modelID != "" && previousModel != modelID
-	instructionsChanged := hash != previousHash
+	// Rust's legacy ModelOnly snapshot refreshes instructions only when the
+	// model changes; a WithInstructions snapshot compares the fragment hash.
+	instructionsChanged := modelChanged
+	if previousHasInstructions {
+		instructionsChanged = hash != previousHash
+	}
 	announceModel := modelChanged && !suppressModelChangeAnnouncements
 	if !announceModel && !instructionsChanged {
 		return hash, nil, modelChanged
@@ -580,6 +663,13 @@ func ModelInstructionsUpdate(modelID string, text string, previousModel string, 
 // rendered content, SHA-1 in lowercase hex).
 func BaseInstructionsHash(text string) string {
 	return textWorldStateFragmentHash("developer", text)
+}
+
+// TextWorldStateFragmentHash is the exported form of Rust's
+// `WorldStateHash::from_fragment` for a single InputText body. Callers pass the
+// rendered text (markers included, Rust renders them in the fragment).
+func TextWorldStateFragmentHash(role string, text string) string {
+	return textWorldStateFragmentHash(role, text)
 }
 
 // textWorldStateFragmentHash is the Rust v1 branch of
@@ -874,6 +964,11 @@ func worldStateJSONHash(value any) string {
 	encoded := bytes.TrimRight(buffer.Bytes(), "\n")
 	sum := sha1.Sum(encoded)
 	return hex.EncodeToString(sum[:])
+}
+
+// WorldStateJSONHash is the exported form of Rust's `WorldStateHash::from_json`.
+func WorldStateJSONHash(value any) string {
+	return worldStateJSONHash(value)
 }
 
 func hashComponent(hasher interface{ Write([]byte) (int, error) }, value string) {

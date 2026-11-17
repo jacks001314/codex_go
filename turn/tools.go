@@ -309,6 +309,17 @@ func MultiAgentToolOverridesFromCatalog(messages *model.ModelMessages) map[strin
 	return out
 }
 
+// MultiAgentToolsInCodeMode mirrors Rust #61854: model metadata can decide
+// whether native multi-agent tools follow the model's tool mode. When the
+// catalog omits the flag, the runtime's `multi_agent_v2.non_code_mode_only`
+// setting keeps its historical meaning.
+func MultiAgentToolsInCodeMode(info *model.ModelInfo, nonCodeModeOnly bool) bool {
+	if info != nil && info.MultiAgentToolsInCodeMode != nil {
+		return *info.MultiAgentToolsInCodeMode
+	}
+	return !nonCodeModeOnly
+}
+
 // MessageBoardOptions supplies the caller-bound board and the host-owned
 // namespace for the shared-discussion tools of one turn.
 type MessageBoardOptions struct {

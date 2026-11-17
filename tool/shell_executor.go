@@ -177,6 +177,12 @@ type ShellApprovalDecision struct {
 	DenyReason string
 }
 
+// ErrApprovalTurnTransition marks an approval the app-server canceled because
+// the thread moved to another turn. Rust drops the request entirely; the TUI
+// layer has already closed the command item, so this must not surface as a
+// tool failure.
+var ErrApprovalTurnTransition = errors.New("approval request canceled because the turn state changed")
+
 type ShellApprovalRequest struct {
 	Request    *ShellRequest
 	Invocation *Invocation
@@ -861,6 +867,15 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 		if e.approval != nil {
 			decision, approvalErr := e.approval(ctx, &ShellApprovalRequest{Request: req, Invocation: invocation})
 			if approvalErr != nil {
+				// Rust #61841: a turn transition cancels the pending approval and
+				// the app-server closes the command item itself. Report the
+				// cancellation without turning it into a tool failure.
+				if errors.Is(approvalErr, ErrApprovalTurnTransition) {
+					return &Output{
+						Success: false,
+						Data:    shellApprovalDeniedData(req, "turnTransition"),
+					}, nil
+				}
 				body := "Approval request failed: " + approvalErr.Error()
 				return &Output{
 					Success:    false,

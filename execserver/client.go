@@ -1143,7 +1143,7 @@ func (c *Client) Start(ctx context.Context, params *ExecParams) (*ExecResponse, 
 		return nil, err
 	}
 	request.CWD = cwd
-	if err := c.ensureNetworkReviewCapability(ctx, &request); err != nil {
+	if err := c.ensureNetworkProxyCapabilities(ctx, &request); err != nil {
 		return nil, err
 	}
 	audit := networkPolicyAuditContextFromParams(&request)
@@ -1167,19 +1167,23 @@ func networkPolicyAuditContextFromParams(params *ExecParams) *networkPolicyAudit
 	}
 }
 
-// ensureNetworkReviewCapability rejects a launch whose proxy carries managed
-// review domains when the executor cannot enforce them, matching Rust
-// #56154's ExecServerClient::ensure_network_review_capability.
-func (c *Client) ensureNetworkReviewCapability(ctx context.Context, params *ExecParams) error {
-	if params == nil || params.NetworkProxy == nil || len(params.NetworkProxy.Proxy.ReviewDomains) == 0 {
+// ensureNetworkProxyCapabilities rejects a launch the executor cannot honor:
+// managed review domains (#56154) or transparent TCP capture (#61851).
+func (c *Client) ensureNetworkProxyCapabilities(ctx context.Context, params *ExecParams) error {
+	needsReview := params != nil && params.NetworkProxy != nil && len(params.NetworkProxy.Proxy.ReviewDomains) > 0
+	needsCapture := params.requestsTransparentTCP()
+	if !needsReview && !needsCapture {
 		return nil
 	}
 	info, err := c.cachedEnvironmentInfo(ctx)
 	if err != nil {
 		return err
 	}
-	if info == nil || !info.Capabilities.NetworkProxyReviewDomains {
+	if needsReview && (info == nil || !info.Capabilities.NetworkProxyReviewDomains) {
 		return errors.New("selected exec-server does not support managed network review domains")
+	}
+	if needsCapture && (info == nil || !info.Capabilities.NetworkProxyTransparentTCP) {
+		return errors.New("selected exec-server does not support transparent TCP")
 	}
 	return nil
 }

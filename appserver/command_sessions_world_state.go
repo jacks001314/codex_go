@@ -3,6 +3,7 @@ package appserver
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -31,35 +32,95 @@ const (
 )
 
 const (
-	commandSessionStatusRunning = "running"
-	commandSessionStatusExited  = "exited"
+	// Rust serializes `CommandSessionStatus` with its variant names
+	// (`Running` / `Exited`), while the rendered body uses lowercase prose.
+	commandSessionStatusRunning = "Running"
+	commandSessionStatusExited  = "Exited"
 )
 
+func normalizeCommandSessionStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "running":
+		return commandSessionStatusRunning
+	case "exited":
+		return commandSessionStatusExited
+	default:
+		return strings.TrimSpace(status)
+	}
+}
+
 // commandSessionSnapshot is one harness-visible retained session. Only the
-// harness-assigned id and fixed lifecycle labels are rendered.
+// harness-assigned id and fixed lifecycle labels are rendered. The field names
+// and the capitalized lifecycle values are Rust's serde shape for
+// `CommandSession` / `CommandSessionStatus`
+// (codex-rs/core/src/context/world_state/command_sessions.rs).
 type commandSessionSnapshot struct {
-	SessionID int    `json:"sessionId"`
+	SessionID int    `json:"session_id"`
 	Status    string `json:"status"`
-	InUse     bool   `json:"inUse,omitempty"`
+	InUse     bool   `json:"in_use"`
 }
 
-// commandSessionsSnapshot mirrors Rust CommandSessionsState: at most 16
-// sessions ordered by id, the number of sessions that did not fit, and whether
-// write_stdin polling is unavailable for this turn's tool set.
+// commandSessionsSnapshot mirrors Rust CommandSessionsState: a BTreeMap of at
+// most 16 sessions keyed by id, the number of sessions that did not fit, and
+// whether write_stdin polling is unavailable for this turn's tool set. Rust
+// always serializes all three fields, so the Go snapshot does too.
 type commandSessionsSnapshot struct {
-	Sessions           []commandSessionSnapshot `json:"sessions,omitempty"`
-	Omitted            int                      `json:"omitted,omitempty"`
-	PollingUnavailable bool                     `json:"pollingUnavailable,omitempty"`
+	Sessions           map[string]commandSessionSnapshot `json:"sessions"`
+	Omitted            int                               `json:"omitted"`
+	PollingUnavailable bool                              `json:"polling_unavailable"`
 }
 
+func newCommandSessionsSnapshot(sessions []commandSessionSnapshot) commandSessionsSnapshot {
+	snapshot := commandSessionsSnapshot{Sessions: map[string]commandSessionSnapshot{}}
+	for _, session := range sessions {
+		snapshot.Sessions[fmt.Sprintf("%d", session.SessionID)] = session
+	}
+	return snapshot
+}
+
+// decodeCommandSessionsSnapshot reads Rust's nested-map snapshot. The retired
+// Go array shape (`sessionId`/`inUse`/`pollingUnavailable`) stays readable so
+// threads written before the alignment keep their duplicate-suppression
+// baseline.
 func decodeCommandSessionsSnapshot(raw json.RawMessage) (commandSessionsSnapshot, bool) {
 	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
 		return commandSessionsSnapshot{}, false
 	}
-	var snapshot commandSessionsSnapshot
-	if err := json.Unmarshal(raw, &snapshot); err != nil {
+	var current struct {
+		Sessions           map[string]commandSessionSnapshot `json:"sessions"`
+		Omitted            int                               `json:"omitted"`
+		PollingUnavailable bool                              `json:"polling_unavailable"`
+	}
+	if err := json.Unmarshal(raw, &current); err == nil && current.Sessions != nil {
+		for key, session := range current.Sessions {
+			session.Status = normalizeCommandSessionStatus(session.Status)
+			current.Sessions[key] = session
+		}
+		return commandSessionsSnapshot(current), true
+	}
+	var legacy struct {
+		Sessions []struct {
+			SessionID int    `json:"sessionId"`
+			Status    string `json:"status"`
+			InUse     bool   `json:"inUse"`
+		} `json:"sessions"`
+		Omitted            int  `json:"omitted"`
+		PollingUnavailable bool `json:"pollingUnavailable"`
+	}
+	if err := json.Unmarshal(raw, &legacy); err != nil {
 		return commandSessionsSnapshot{}, false
 	}
+	sessions := make([]commandSessionSnapshot, 0, len(legacy.Sessions))
+	for _, session := range legacy.Sessions {
+		sessions = append(sessions, commandSessionSnapshot{
+			SessionID: session.SessionID,
+			Status:    normalizeCommandSessionStatus(session.Status),
+			InUse:     session.InUse,
+		})
+	}
+	snapshot := newCommandSessionsSnapshot(sessions)
+	snapshot.Omitted = legacy.Omitted
+	snapshot.PollingUnavailable = legacy.PollingUnavailable
 	return snapshot, true
 }
 
@@ -67,21 +128,45 @@ func commandSessionsSnapshotsEqual(a commandSessionsSnapshot, b commandSessionsS
 	if a.Omitted != b.Omitted || a.PollingUnavailable != b.PollingUnavailable || len(a.Sessions) != len(b.Sessions) {
 		return false
 	}
-	for i := range a.Sessions {
-		if a.Sessions[i] != b.Sessions[i] {
+	for id, session := range a.Sessions {
+		other, ok := b.Sessions[id]
+		if !ok || other != session {
 			return false
 		}
 	}
 	return true
 }
 
+// sortedCommandSessions returns the persisted sessions in ascending id order,
+// matching Rust's BTreeMap iteration.
+func sortedCommandSessions(snapshot commandSessionsSnapshot) []commandSessionSnapshot {
+	ids := make([]int, 0, len(snapshot.Sessions))
+	for key := range snapshot.Sessions {
+		id := 0
+		if _, err := fmt.Sscanf(key, "%d", &id); err != nil {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	sessions := make([]commandSessionSnapshot, 0, len(ids))
+	for _, id := range ids {
+		if session, ok := snapshot.Sessions[fmt.Sprintf("%d", id)]; ok {
+			sessions = append(sessions, session)
+		}
+	}
+	return sessions
+}
+
 // boundedCommandSessions keeps the lowest 16 session ids like Rust's
 // BTreeMap-ordered CommandSessionsState and counts the rest as omitted.
 func boundedCommandSessions(sessions []commandSessionSnapshot) ([]commandSessionSnapshot, int) {
-	if len(sessions) <= commandSessionsMaxEntries {
-		return sessions, 0
+	sorted := append([]commandSessionSnapshot(nil), sessions...)
+	sort.Slice(sorted, func(i int, j int) bool { return sorted[i].SessionID < sorted[j].SessionID })
+	if len(sorted) <= commandSessionsMaxEntries {
+		return sorted, 0
 	}
-	return sessions[:commandSessionsMaxEntries], len(sessions) - commandSessionsMaxEntries
+	return sorted[:commandSessionsMaxEntries], len(sorted) - commandSessionsMaxEntries
 }
 
 // renderCommandSessionsBody mirrors CommandSessionsState::body byte for byte,
@@ -95,9 +180,9 @@ func renderCommandSessionsBody(snapshot commandSessionsSnapshot) string {
 	if len(snapshot.Sessions) == 0 && snapshot.Omitted == 0 {
 		body.WriteString(commandSessionsEmptyBody)
 	}
-	for _, entry := range snapshot.Sessions {
+	for _, entry := range sortedCommandSessions(snapshot) {
 		status := "running"
-		if entry.Status == commandSessionStatusExited {
+		if normalizeCommandSessionStatus(entry.Status) == commandSessionStatusExited {
 			status = "exited; poll to collect"
 		}
 		fmt.Fprintf(&body, "%d: %s", entry.SessionID, status)
@@ -143,7 +228,7 @@ func (r *RuntimeRouter) commandSessionsWorldStateSection(threadID string, turnID
 		return commandSessionsSectionResult{}, err
 	}
 	previous, known := decodeCommandSessionsSnapshot(state.CommandSessions)
-	current := commandSessionsSnapshot{}
+	current := newCommandSessionsSnapshot(nil)
 	if cfg != nil && features.Enabled(cfg.FeatureSettings(), "command_sessions_world_state") {
 		if r.services.UnifiedExec != nil {
 			retained := r.services.UnifiedExec.CommandSessions(threadID)
@@ -159,7 +244,9 @@ func (r *RuntimeRouter) commandSessionsWorldStateSection(threadID string, turnID
 					InUse:     entry.InUse,
 				})
 			}
-			current.Sessions, current.Omitted = boundedCommandSessions(sessions)
+			kept, omitted := boundedCommandSessions(sessions)
+			current = newCommandSessionsSnapshot(kept)
+			current.Omitted = omitted
 		}
 		current.PollingUnavailable = !writeStdinAvailable
 	}

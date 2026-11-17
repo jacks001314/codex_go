@@ -74,6 +74,9 @@ func applyProxySettingsTable(settings *ProxySettings, table map[string]any, path
 	if value, ok := boolConfigValue(table, "enable_socks5"); ok {
 		settings.EnableSocks5 = value
 	}
+	if value, ok := boolConfigValue(table, "transparent_tcp"); ok {
+		settings.TransparentTCP = value
+	}
 	if value, ok := stringConfigValue(table, "socks_url"); ok {
 		settings.SocksURL = value
 	}
@@ -159,6 +162,7 @@ var proxySettingsAllowedKeys = map[string]struct{}{
 	"enabled":                              {},
 	"proxy_url":                            {},
 	"enable_socks5":                        {},
+	"transparent_tcp":                      {},
 	"socks_url":                            {},
 	"enable_socks5_udp":                    {},
 	"allow_upstream_proxy":                 {},

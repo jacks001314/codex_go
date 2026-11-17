@@ -6120,10 +6120,17 @@ Write a concise but high-fidelity summary that preserves the user's objective, c
 Return only the summary.`)
 }
 
+// execCompactItemsFromSession converts the record into the history the model
+// actually sees. Rust keeps TurnItem display projections out of ContextManager;
+// Go stores them in Record.Items, so every estimate and compaction request must
+// filter them exactly like session.InputItemsFromRecord does.
 func execCompactItemsFromSession(items []session.Item) []compact.Item {
 	out := make([]compact.Item, 0, len(items))
 	for i := range items {
 		item := items[i]
+		if !session.ModelVisibleHistoryItem(&item) {
+			continue
+		}
 		kind := item.Type
 		if item.Metadata != nil {
 			if value, ok := item.Metadata["kind"].(string); ok && strings.TrimSpace(value) != "" {

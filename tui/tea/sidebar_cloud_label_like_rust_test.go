@@ -13,7 +13,9 @@ func TestSidebarCloudLabelsLikeRust(t *testing.T) {
 	openSideForTest(t, model)
 
 	strip := model.renderSidebarTabStrip(60)
-	if !strings.Contains(strip, "☁︎") || !strings.Contains(strip, "Side cha") {
+	// The Cloud marker shares the fixed cell with the title and the close glyph,
+	// so the title is clipped at the cell edge exactly like Rust's strip.
+	if !strings.Contains(strip, "☁︎") || !strings.Contains(strip, "Side ch") {
 		t.Fatalf("cloud tab strip = %q", strip)
 	}
 

@@ -92,6 +92,24 @@ type AvailableSkillsRenderOptions struct {
 	// they are removed from the model-visible catalog and from its budget and
 	// fingerprint accounting.
 	OmitDescriptions bool
+	// PrimaryEnvironment is the turn's primary environment id. Rust
+	// PreparedSkillCatalog::entries_for_render uses it to decide whether a
+	// repository-scoped host skill depends on the primary filesystem grant.
+	PrimaryEnvironment string
+	// GrantedEnvironmentIDs holds the environments whose turn-scoped grants
+	// include a non-empty filesystem profile (Rust
+	// TurnSkillFilesystemGrants::environment_ids). Executor skills inherit a
+	// grant from their own main-prompt environment; repository host skills
+	// inherit one from PrimaryEnvironment.
+	GrantedEnvironmentIDs map[string]struct{}
+}
+
+// grantContext adapts the render options to the per-entry grant decision.
+func (o AvailableSkillsRenderOptions) grantContext() skillGrantContext {
+	return skillGrantContext{
+		primaryEnvironment: o.PrimaryEnvironment,
+		environmentIDs:     o.GrantedEnvironmentIDs,
+	}
 }
 
 type AvailableSkills struct {
@@ -127,7 +145,15 @@ type SkillCatalogEntryRender struct {
 	RootValue string
 	// Shown reports whether the row made it into the rendered catalog.
 	Shown bool
+	// Grant records that the row depends on a filesystem grant that this turn
+	// holds (Rust GrantStatus::Active). An empty value means the row is either
+	// ungated or lost its grant.
+	Grant string
 }
+
+// SkillGrantActive is the persisted grant marker for a shown row that depends
+// on an active filesystem grant (Rust GrantStatus::Active, renamed camelCase).
+const SkillGrantActive = "active"
 
 type SkillRenderReport struct {
 	TotalCount                     int
@@ -161,6 +187,10 @@ type skillRenderLine struct {
 	hasRootOrder bool
 	id           string
 	mainPrompt   string
+	// authorityKind and environmentID carry the grant inputs Rust keeps on
+	// SkillCatalogEntry (authority.kind and main_prompt.environment_id()).
+	authorityKind string
+	environmentID string
 }
 
 type skillAliasPlan struct {
@@ -303,7 +333,7 @@ func RenderAvailableSkillsWithOptions(skills []InstructionsSkillMetadata, option
 	if budget.Limit <= 0 {
 		budget = SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: DefaultSkillMetadataCharBudget}
 	}
-	selected := renderBestSkillCatalogForScope(lines, budget, options.AliasScope, policy)
+	selected := renderBestSkillCatalogForScope(lines, budget, options.AliasScope, policy, options.grantContext())
 	warning := skillRenderWarningWithPolicy(selected.report, budget, false)
 	return &AvailableSkills{
 		Body:             renderAvailableSkillsBodyWithPolicy(selected.rootLines, selected.skillLines, options.IncludeUsageInstructions, policy),
@@ -339,7 +369,7 @@ func RenderExtensionAvailableSkillsWithOptions(skills []InstructionsSkillMetadat
 		SkillLines:       skillLines,
 		Report:           report,
 		WarningMessage:   warning,
-		Entries:          skillCatalogEntriesForRender(lines, lines, allocations, nil, policy),
+		Entries:          skillCatalogEntriesForRender(lines, lines, allocations, nil, policy, options.grantContext()),
 		OmitDescriptions: policy.omitDescriptions,
 	}
 }
@@ -366,14 +396,15 @@ func RenderCombinedAvailableSkills(hostSkills []InstructionsSkillMetadata, execu
 		return RenderAvailableSkillsWithOptions(hostSkills, options), RenderExtensionAvailableSkillsWithOptions(executorSkills, options)
 	}
 
-	absolute := renderCombinedSkillCatalog(hostLines, executorLines, budget, nil, nil, policy)
+	grants := options.grantContext()
+	absolute := renderCombinedSkillCatalog(hostLines, executorLines, budget, nil, nil, policy, grants)
 	selected := absolute
 	// Rust #41011: evaluate aliased catalogs regardless of budget pressure and
 	// select them when they preserve inclusion/description while reducing size.
 	if plan, ok := buildSkillAliasPlanForScope(hostLines, budget, options.AliasScope); ok && plan.tableCost < budget.Limit {
 		adjustedBudget := budget
 		adjustedBudget.Limit -= plan.tableCost
-		aliased := renderCombinedSkillCatalog(hostLines, executorLines, adjustedBudget, plan, nil, policy)
+		aliased := renderCombinedSkillCatalog(hostLines, executorLines, adjustedBudget, plan, nil, policy, grants)
 		if combinedSkillsRenderIsBetterWithPolicy(aliased, absolute, budget, policy) {
 			selected = aliased
 		}
@@ -383,7 +414,7 @@ func RenderCombinedAvailableSkills(hostSkills []InstructionsSkillMetadata, execu
 	if plan, ok := buildExtensionAliasPlanForScope(fullExecutorLines, budget, options.AliasScope); ok && plan.tableCost < budget.Limit {
 		adjustedBudget := budget
 		adjustedBudget.Limit -= plan.tableCost
-		aliased := renderCombinedSkillCatalog(hostLines, executorLines, adjustedBudget, nil, plan, policy)
+		aliased := renderCombinedSkillCatalog(hostLines, executorLines, adjustedBudget, nil, plan, policy, grants)
 		if combinedSkillsRenderIsBetterWithPolicy(aliased, selected, budget, policy) {
 			selected = aliased
 		}
@@ -541,12 +572,14 @@ func extensionSkillRenderLinesWithPolicy(skills []InstructionsSkillMetadata, pol
 			locatorKind = "file"
 		}
 		lines = append(lines, skillRenderLine{
-			name:        skill.Name,
-			description: policy.description(truncateSkillDescription(skill.Description)),
-			path:        skillRenderLocator(skill),
-			locatorKind: locatorKind,
-			id:          skillCatalogEntryID(skill),
-			mainPrompt:  firstNonEmptyString(skill.LocatorPath, skill.Path),
+			name:          skill.Name,
+			description:   policy.description(truncateSkillDescription(skill.Description)),
+			path:          skillRenderLocator(skill),
+			locatorKind:   locatorKind,
+			id:            skillCatalogEntryID(skill),
+			mainPrompt:    firstNonEmptyString(skill.LocatorPath, skill.Path),
+			authorityKind: skill.AuthorityKind,
+			environmentID: skill.EnvironmentID,
 		})
 	}
 	return lines
@@ -616,6 +649,8 @@ func orderedSkillRenderLinesWithPolicy(skills []InstructionsSkillMetadata, polic
 			hasRootOrder: skill.HasRootOrder,
 			id:           skillCatalogEntryID(skill),
 			mainPrompt:   firstNonEmptyString(skill.LocatorPath, skill.Path),
+			authorityKind: skill.AuthorityKind,
+			environmentID: skill.EnvironmentID,
 		})
 	}
 	sort.SliceStable(lines, func(i int, j int) bool {
@@ -635,7 +670,7 @@ func renderBestSkillLines(lines []skillRenderLine, budget SkillMetadataBudget) (
 }
 
 func renderBestSkillLinesForScope(lines []skillRenderLine, budget SkillMetadataBudget, scope string) ([]string, *SkillRenderReport, []string) {
-	selected := renderBestSkillCatalogForScope(lines, budget, scope, skillCatalogPolicy{})
+	selected := renderBestSkillCatalogForScope(lines, budget, scope, skillCatalogPolicy{}, skillGrantContext{})
 	return selected.skillLines, selected.report, selected.rootLines
 }
 
@@ -730,15 +765,15 @@ func renderCombinedSkillCatalogWithRootLines(hostLines []skillRenderLine, execut
 		hostReport:         hostReport,
 		executorSkillLines: executorRendered,
 		executorReport:     executorReport,
-		hostEntries:        skillCatalogEntriesForRender(hostLines, hostLines, allocations[len(executorLines):], nil, skillCatalogPolicy{}),
-		executorEntries:    skillCatalogEntriesForRender(executorLines, executorLines, allocations[:len(executorLines)], nil, skillCatalogPolicy{}),
+		hostEntries:        skillCatalogEntriesForRender(hostLines, hostLines, allocations[len(executorLines):], nil, skillCatalogPolicy{}, skillGrantContext{}),
+		executorEntries:    skillCatalogEntriesForRender(executorLines, executorLines, allocations[:len(executorLines)], nil, skillCatalogPolicy{}, skillGrantContext{}),
 	}
 }
 
 // renderCombinedSkillCatalog renders both catalogs under one budget, applying
 // the alias plans inside so per-entry comparison metadata sees the original
 // locator for each row (Rust #57262 PreparedSkillCatalog::entries_for_render).
-func renderCombinedSkillCatalog(hostLines []skillRenderLine, executorLines []skillRenderLine, budget SkillMetadataBudget, hostPlan *skillAliasPlan, executorPlan *skillAliasPlan, policy skillCatalogPolicy) *combinedAvailableSkillsRender {
+func renderCombinedSkillCatalog(hostLines []skillRenderLine, executorLines []skillRenderLine, budget SkillMetadataBudget, hostPlan *skillAliasPlan, executorPlan *skillAliasPlan, policy skillCatalogPolicy, grants skillGrantContext) *combinedAvailableSkillsRender {
 	hostApplied := applySkillAliases(hostLines, hostPlan)
 	executorApplied := applySkillAliases(executorLines, executorPlan)
 	allLines := append(append([]skillRenderLine(nil), executorApplied...), hostApplied...)
@@ -759,8 +794,8 @@ func renderCombinedSkillCatalog(hostLines []skillRenderLine, executorLines []ski
 		hostReport:         hostReport,
 		executorSkillLines: executorRendered,
 		executorReport:     executorReport,
-		hostEntries:        skillCatalogEntriesForRender(hostLines, hostApplied, allocations[len(executorApplied):], hostPlan, policy),
-		executorEntries:    skillCatalogEntriesForRender(executorLines, executorApplied, allocations[:len(executorApplied)], executorPlan, policy),
+		hostEntries:        skillCatalogEntriesForRender(hostLines, hostApplied, allocations[len(executorApplied):], hostPlan, policy, grants),
+		executorEntries:    skillCatalogEntriesForRender(executorLines, executorApplied, allocations[:len(executorApplied)], executorPlan, policy, grants),
 	}
 }
 

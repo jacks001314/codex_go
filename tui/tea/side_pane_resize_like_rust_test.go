@@ -53,7 +53,7 @@ func TestSidePaneWidthPresetsLikeRust(t *testing.T) {
 	if !ok {
 		t.Fatal("maximized layout unavailable")
 	}
-	available := m.width - 3
+	available := m.width - sideWorkspaceDividerWidth
 	if side != available-sideWorkspaceMinParentWidth {
 		t.Fatalf("maximized sidebar = %d, want %d", side, available-sideWorkspaceMinParentWidth)
 	}

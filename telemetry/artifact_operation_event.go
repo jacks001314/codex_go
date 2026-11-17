@@ -21,6 +21,10 @@ type ArtifactOperationEventRequest struct {
 // ArtifactOperationEventParams mirrors the Rust codex_artifact_operation event
 // payload (Rust #38057).
 type ArtifactOperationEventParams struct {
+	// TurnTrigger is the trigger that started the turn the operation belongs to
+	// (Rust analytics CodexArtifactOperationEventParams::turn_trigger); absent
+	// stays off the wire.
+	TurnTrigger         *string              `json:"turn_trigger,omitempty"`
 	ThreadID            string               `json:"thread_id"`
 	TurnID              string               `json:"turn_id"`
 	ItemID              string               `json:"item_id"`

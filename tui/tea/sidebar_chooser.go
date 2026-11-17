@@ -3,12 +3,30 @@ package tea
 import (
 	"strconv"
 	"strings"
+	"time"
 
 	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	"codex_go/tui/keymsg"
 )
+
+// sidebarLoadingGlyph mirrors Rust motion::loading_glyph for the chooser's
+// discovery row: the shared frame table animates, reduced motion keeps ◌.
+func (m *Model) sidebarLoadingGlyph() string {
+	if m == nil {
+		return codextui.LoadingGlyphReducedMotion
+	}
+	started := m.sidebarDiscoveryStarted
+	if started.IsZero() {
+		started = time.Now()
+	}
+	motion := codextui.MotionReduced
+	if m.animationsEnabled {
+		motion = codextui.MotionAnimated
+	}
+	return codextui.LoadingGlyph(started, motion, time.Now())
+}
 
 // Rust #59739/#59767/#59784: each parent owns one sidebar. The chooser lists
 // its sibling side chats plus a "New side chat" entry, and the tab strip stays
@@ -18,10 +36,22 @@ const (
 	sidebarSingleTabLabel = " Side chat "
 	sidebarTabWidth       = len(sidebarSingleTabLabel)
 	// Rust #60319: adjacent tabs paint one noninteractive column between them.
-	sidebarTabGap       = 1
-	sidebarAddLabel     = " + "
-	sidebarChooserTitle = "Open in sidebar"
-	sidebarNewChatTitle = "+ New side chat"
+	sidebarTabGap   = 1
+	sidebarAddLabel = " + "
+	// Rust sidebar_chooser::close_cell paints a one-column close glyph in the
+	// last column of every tab cell, including the single " Side chat " tab.
+	sidebarTabCloseGlyph = "×"
+	// sidebarSingleTabCell is the painted lone tab: the title fills every column
+	// but the last and the close glyph occupies the last one.
+	sidebarSingleTabCell = " Side chat" + sidebarTabCloseGlyph
+	// Rust sidebar_tab_strip.rs reserves both gutter columns when the tabs
+	// overflow, so the tabs keep their place while the user switches between
+	// them; the arrows step to the neighbouring tab.
+	sidebarTabOverflowLeft   = "‹"
+	sidebarTabOverflowRight  = "›"
+	sidebarTabOverflowGutter = 2
+	sidebarChooserTitle      = "Open in sidebar"
+	sidebarNewChatTitle      = "+ New side chat"
 
 	// Rust #60319 sidebar_chooser.rs: the new-chat row explains where a side
 	// chat starts, the chooser waits for the first main-chat turn, and a failed
@@ -31,6 +61,9 @@ const (
 	sidebarRetryingChatsTitle  = "Retrying…"
 	sidebarRetryChatsTitle     = "Retry loading side chats"
 	sidebarSideChatsGroupTitle = "Side chats"
+	// Rust sidebar_chooser.rs WIDE_WIDTH: the new-chat subtitle shares the row
+	// with its title only when the body is this wide.
+	sidebarChooserWideWidth = 58
 )
 
 // SideChatChoice is one saved side chat the chooser can reopen (Rust #60319
@@ -49,6 +82,40 @@ const (
 	SideChatDiscoveryLoading SideChatDiscoveryKind = "loading"
 	SideChatDiscoveryFailed  SideChatDiscoveryKind = "failed"
 )
+
+// sideOpenState mirrors Rust's sidebar_chooser::OpenState for the saved chat
+// the chooser is preparing. Rust keeps the target while it waits, while the
+// attach runs, and after a failure so the row can offer a retry.
+type sideOpenState string
+
+const (
+	sideOpenNone    sideOpenState = ""
+	sideOpenWaiting sideOpenState = "waiting"
+	sideOpenLoading sideOpenState = "loading"
+	sideOpenFailed  sideOpenState = "failed"
+)
+
+// sideOpenConcurrency is Rust's saved_openings.active limit: two attaches may
+// run at once and every further target waits for a slot.
+const sideOpenConcurrency = 2
+
+// sideOpenFlight is one saved-chat attach that has not reported yet (Rust
+// saved_openings::Flight). A retired flight keeps its slot until it finishes so
+// the client never exceeds the concurrency limit.
+type sideOpenFlight struct {
+	request int
+	retired bool
+}
+
+// sideOpenTarget identifies one saved chat under its parent thread.
+type sideOpenTarget struct {
+	parentThreadID string
+	sideThreadID   string
+}
+
+func sideOpenKey(parentThreadID, sideThreadID string) string {
+	return strings.TrimSpace(parentThreadID) + "\x00" + strings.TrimSpace(sideThreadID)
+}
 
 // SideChatListFunc discovers the saved side chats attached to a parent.
 type SideChatListFunc func(parentThreadID string) ([]SideChatChoice, error)
@@ -190,7 +257,9 @@ func (m *Model) openSidebarChooser() bubbletea.Cmd {
 	if index := m.sidebarChooserChoiceIndex(selected); index > 0 {
 		m.sidebarChoice = index
 	}
-	m.notice = "Select a side chat or start a new one."
+	// Rust paints the chooser in the side pane without a notice in the main
+	// conversation, so opening it leaves the parent pane untouched.
+	m.notice = ""
 	m.refreshTranscript()
 	discovery := m.requestSideChatDiscovery(false)
 	if discovery == nil {
@@ -220,47 +289,128 @@ func (m *Model) closeSidebarChooser() bubbletea.Cmd {
 // sidebarChooserListActions are the shared `list` context actions the chooser
 // honours, in tui/keymap.go order (Rust keymap.rs list bindings).
 
-// cancelSideChatOpen invalidates an in-flight saved-chat attach so its
-// completion cannot switch conversations after the user cancels
-// (Rust #60599 sidebar_loading supersession).
+// cancelSideChatOpen retires the attach the chooser is waiting on so its
+// completion cannot switch conversations after the user cancels (Rust #60599
+// sidebar_loading supersession). Other targets' flights keep running; they
+// release their own slot when they report.
 func (m *Model) cancelSideChatOpen() {
-	if m == nil || m.sideOpeningThreadID == "" {
+	if m == nil || (m.sideOpeningThreadID == "" && m.sideOpenQueued == nil) {
 		return
 	}
+	if m.sideOpeningThreadID != "" {
+		if flight, ok := m.sideOpenFlights[sideOpenKey(m.sidebarChooserParent, m.sideOpeningThreadID)]; ok {
+			flight.retired = true
+		}
+	}
+	m.sideOpenQueued = nil
+	m.clearSideOpen()
+}
+
+// startSideOpen records the flight and returns the attach command (Rust
+// saved_openings.active.insert + Incoming::begin).
+func (m *Model) startSideOpen(parentThreadID, sideThreadID string, open SideOpenFunc) bubbletea.Cmd {
+	if m == nil || open == nil {
+		return nil
+	}
 	m.sideOpenRequest++
+	request := m.sideOpenRequest
+	if m.sideOpenFlights == nil {
+		m.sideOpenFlights = make(map[string]*sideOpenFlight, sideOpenConcurrency)
+	}
+	m.sideOpenFlights[sideOpenKey(parentThreadID, sideThreadID)] = &sideOpenFlight{request: request}
+	m.sideOpenQueued = nil
+	m.sideOpeningThreadID = sideThreadID
+	m.sideOpenState = sideOpenLoading
+	m.sideOpenError = ""
+	m.sideOpenStarted = time.Now()
+	m.refreshTranscript()
+	return func() bubbletea.Msg {
+		response, err := open(parentThreadID, sideThreadID)
+		return SideOpenResultMsg{RequestID: request, ParentThreadID: parentThreadID, SideThreadID: sideThreadID, Response: response, Err: err}
+	}
+}
+
+// startQueuedSideOpen launches the target parked in OpenState::Waiting once a
+// flight released a slot (Rust SavedChatReleased -> StartQueuedSavedChat).
+func (m *Model) startQueuedSideOpen() bubbletea.Cmd {
+	if m == nil || m.sideOpenQueued == nil {
+		return nil
+	}
+	target := m.sideOpenQueued
+	m.sideOpenQueued = nil
+	if !m.sidebarChooserVisible() || strings.TrimSpace(m.sideOpeningThreadID) != target.sideThreadID {
+		return nil
+	}
+	if _, inFlight := m.sideOpenFlights[sideOpenKey(target.parentThreadID, target.sideThreadID)]; inFlight ||
+		len(m.sideOpenFlights) >= sideOpenConcurrency {
+		m.sideOpenQueued = target
+		return nil
+	}
+	return m.startSideOpen(target.parentThreadID, target.sideThreadID, m.onOpenSideChat)
+}
+
+// clearSideOpen drops the pending attach without touching the request counter,
+// matching Rust's pane.opening = None before a chooser action.
+func (m *Model) clearSideOpen() {
+	if m == nil {
+		return
+	}
 	m.sideOpeningThreadID = ""
+	m.sideOpenState = sideOpenNone
+	m.sideOpenError = ""
 }
 
 var sidebarChooserListActions = []string{
-	"move_up", "move_down", "page_up", "page_down", "jump_top", "jump_bottom", "accept", "cancel",
+	"move_up", "move_down", "move_left", "move_right", "page_up", "page_down", "jump_top", "jump_bottom", "accept", "cancel",
 }
 
-// sidebarChooserVisibleRows is how many choice rows a chooser panel of the
-// given height paints. Rust #59928 windows the list from the painted area
-// (tui/src/sidebar_chooser.rs choice_rows): the tab strip, a spacer and the
-// title sit above it and the footer hint takes the bottom row, so the list owns
-// whatever is left.
-func sidebarChooserVisibleRows(height int) int {
-	if height <= 0 {
-		return 0
-	}
-	if height <= 5 {
-		return 1
-	}
-	return height - 5
-}
-
-// sidebarChooserPageRows is one page of chooser rows: the window the panel
-// actually paints for its current height, never a fixed constant.
-func (m *Model) sidebarChooserPageRows() int {
+// sidebarChooserPageSize mirrors Rust sidebar_chooser::page_size: a page is
+// measured in painted chat rows (prompt previews included), and page_down from
+// the new-chat row steps by the chats the window already shows.
+func (m *Model) sidebarChooserPageSize(action string) int {
 	if m == nil {
 		return 1
 	}
-	rows := len(m.sidebarChooserWindow(m.sidebarChooserPanelHeight()))
-	if rows < 1 {
-		return 1
+	choices := m.sidebarChooserChoices()
+	count := m.sidebarChooserChoiceCountFor(choices)
+	choice := m.sidebarChooserClampedChoice()
+	layout := m.sidebarChooserLayoutFor(m.sidebarTabStripWidth(), m.sidebarChooserPanelHeight())
+	rows := layout.chats.len()
+	size := 1
+	switch action {
+	case "page_up":
+		indices := make([]int, 0, choice)
+		for index := choice - 1; index >= 0; index-- {
+			indices = append(indices, index)
+		}
+		size = m.fittingSidebarChooserRows(indices, rows, choices)
+	case "page_down":
+		if choice == 0 {
+			size = len(layout.visible)
+		} else {
+			indices := make([]int, 0, count-choice)
+			for index := choice; index < count; index++ {
+				indices = append(indices, index)
+			}
+			size = m.fittingSidebarChooserRows(indices, rows, choices)
+		}
 	}
-	return rows
+	return max(size, 1)
+}
+
+// fittingSidebarChooserRows counts the leading choices whose painted rows fit
+// in height (Rust ChatTabs::fitting_choices).
+func (m *Model) fittingSidebarChooserRows(indices []int, height int, choices []SideChatChoice) int {
+	used := 0
+	fitted := 0
+	for _, index := range indices {
+		used += m.sidebarChooserRowHeight(index, choices)
+		if used > height {
+			break
+		}
+		fitted++
+	}
+	return fitted
 }
 
 // sidebarChooserPanelHeight is the pane height the chooser paints into;
@@ -325,11 +475,26 @@ func (m *Model) updateSidebarChooserKey(msg keymsg.KeyMsg) (bool, bubbletea.Cmd)
 	case "move_down":
 		m.moveSidebarChooserChoice(1)
 		return true, nil
+	case "move_left", "move_right":
+		// Rust app/side_focus.rs: a horizontal list move with a chat selected is
+		// a Back. Without one it falls through to apply_vertical_action, which
+		// ignores horizontal moves, so the key is consumed with no effect.
+		if m.sidebarPaneSelectedChatID() == "" {
+			return true, nil
+		}
+		// Back cancels a pending opening first and leaves the chooser open
+		// (footer: "cancel opening"), exactly like Esc.
+		if m.sideOpeningThreadID != "" && m.sideOpenState != sideOpenFailed {
+			m.cancelSideChatOpen()
+			m.refreshTranscript()
+			return true, nil
+		}
+		return true, m.backToSelectedSideChat(keySpecFromKeyMsg(msg))
 	case "page_up":
-		m.sidebarChoice = clamp(m.sidebarChoice - m.sidebarChooserPageRows())
+		m.sidebarChoice = clamp(m.sidebarChoice - m.sidebarChooserPageSize(action))
 		return true, nil
 	case "page_down":
-		m.sidebarChoice = clamp(m.sidebarChoice + m.sidebarChooserPageRows())
+		m.sidebarChoice = clamp(m.sidebarChoice + m.sidebarChooserPageSize(action))
 		return true, nil
 	case "jump_top":
 		m.sidebarChoice = 0
@@ -343,6 +508,14 @@ func (m *Model) updateSidebarChooserKey(msg keymsg.KeyMsg) (bool, bubbletea.Cmd)
 		m.armSelectExitGuard(keySpecFromKeyMsg(msg))
 		return true, m.acceptSidebarChooser()
 	case "cancel":
+		// Rust app/side_focus.rs: Cancel during a pending attach cancels the
+		// opening and keeps the chooser open, so the hint reads "cancel
+		// opening". A failed opening (or none) falls through to Back.
+		if m.sideOpeningThreadID != "" && m.sideOpenState != sideOpenFailed {
+			m.cancelSideChatOpen()
+			m.refreshTranscript()
+			return true, nil
+		}
 		m.cancelSideChatOpen()
 		return true, m.closeSidebarChooser()
 	}
@@ -364,6 +537,41 @@ func (m *Model) moveSidebarChooserChoice(delta int) {
 		next = max(last, 0)
 	}
 	m.sidebarChoice = next
+}
+
+// sidebarPaneSelectedChatID is the chat the pane was last showing (Rust
+// sidebar::selected_chat = visits.last()). It is the chat a horizontal list
+// move returns to, independent of the row the chooser highlights.
+func (m *Model) sidebarPaneSelectedChatID() string {
+	if m == nil || m.activeSide == nil {
+		return ""
+	}
+	side := m.activeSide
+	if parent := strings.TrimSpace(m.sidebarChooserParent); parent != "" &&
+		strings.TrimSpace(side.ParentThreadID) != parent {
+		return ""
+	}
+	return strings.TrimSpace(side.SideThreadID)
+}
+
+// backToSelectedSideChat leaves the chooser and re-selects the chat the pane was
+// showing (Rust ChooserAction::Back -> select_agent_thread(selected_chat())).
+func (m *Model) backToSelectedSideChat(activation string) bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	side := m.activeSide
+	selected := m.sidebarPaneSelectedChatID()
+	closeCmd := m.closeSidebarChooser()
+	cmd := closeCmd
+	if side != nil && selected != "" &&
+		(!side.ShowingSide || strings.TrimSpace(m.State.ThreadID) != selected) {
+		cmd = batchSideCommands(closeCmd, m.activateRetainedSideConversation(side, ""))
+	}
+	// Rust guards the key that just left the chooser so it cannot repeat in the
+	// composer it returns to.
+	m.armSelectExitGuard(activation)
+	return cmd
 }
 
 // sidebarTabStripVisible reports whether a tab strip is on screen: the chooser
@@ -391,15 +599,20 @@ type sidebarTabStripWindow struct {
 	stride   int
 	count    int
 	first    int
-	addStart int
-	addWidth int
+	// gutter is the reserved arrow columns before the tab cells when the strip
+	// overflows; leftArrow/rightArrow report which arrows are painted.
+	gutter     int
+	leftArrow  bool
+	rightArrow bool
+	addStart   int
+	addWidth   int
 }
 
 // sidebarTabStripWindowFor builds the window for a strip of the given width,
 // keeping the selected tab in view (Rust #59784).
 func sidebarTabStripWindowFor(tabs []*activeSideConversation, selected string, width int, cloud bool) sidebarTabStripWindow {
 	labels := sidebarTabLabels(len(tabs), cloud)
-	tabWidth, count := sidebarTabLayout(labels, width)
+	tabWidth, count, gutter := sidebarTabGeometry(width, len(labels))
 	first := 0
 	selected = strings.TrimSpace(selected)
 	if selected != "" {
@@ -413,34 +626,85 @@ func sidebarTabStripWindowFor(tabs []*activeSideConversation, selected string, w
 		}
 	}
 	available, addWidth := sidebarTabStripSpace(width)
+	end := min(first+count, len(tabs))
 	return sidebarTabStripWindow{
-		tabs:     tabs,
-		labels:   labels,
-		tabWidth: tabWidth,
-		stride:   tabWidth + sidebarTabGap,
-		count:    count,
-		first:    first,
-		addStart: available,
-		addWidth: addWidth,
+		tabs:       tabs,
+		labels:     labels,
+		tabWidth:   tabWidth,
+		stride:     tabWidth + sidebarTabGap,
+		count:      count,
+		first:      first,
+		gutter:     gutter,
+		leftArrow:  gutter > 0 && first > 0,
+		rightArrow: gutter > 0 && end < len(tabs),
+		addStart:   available,
+		addWidth:   addWidth,
 	}
+}
+
+// tabCellAt maps a strip column onto the tab cell painted there and the column
+// inside that cell. Gutter columns, the gaps between cells, the add button and
+// the blank columns after the last tab are not tab cells.
+func (w sidebarTabStripWindow) tabCellAt(column int) (index int, within int, ok bool) {
+	if w.count == 0 || w.tabWidth <= 0 || w.stride <= 0 {
+		return 0, 0, false
+	}
+	relative := column - w.gutter
+	if relative < 0 {
+		return 0, 0, false
+	}
+	offset := relative / w.stride
+	if offset >= w.count {
+		return 0, 0, false
+	}
+	within = relative - offset*w.stride
+	if within >= w.tabWidth {
+		// The gap between tabs is not an interactive target.
+		return 0, 0, false
+	}
+	index = w.first + offset
+	if index < 0 || index >= len(w.tabs) {
+		return 0, 0, false
+	}
+	return index, within, true
+}
+
+// closeAt maps a strip column onto the close glyph painted in the last column
+// of a tab cell (Rust sidebar_chooser::close_cell). The close cell belongs to
+// the tab's click target in Rust, so it keeps the same hover highlight.
+func (w sidebarTabStripWindow) closeAt(column int) int {
+	if w.tabWidth < 3 {
+		return -1
+	}
+	index, within, ok := w.tabCellAt(column)
+	if !ok || within != w.tabWidth-1 {
+		return -1
+	}
+	return index
 }
 
 // tabAt maps a strip column back to the tab painted there, or -1 for the "+"
 // button and for the blank cells after the last tab.
 func (w sidebarTabStripWindow) tabAt(column int) int {
-	if w.count == 0 || w.tabWidth <= 0 || w.stride <= 0 || column < 0 || column >= w.count*w.stride {
-		return -1
-	}
-	offset := column / w.stride
-	if column-offset*w.stride >= w.tabWidth {
-		// The gap between tabs is not an interactive target.
-		return -1
-	}
-	index := w.first + offset
-	if index < 0 || index >= len(w.tabs) {
+	index, _, ok := w.tabCellAt(column)
+	if !ok {
 		return -1
 	}
 	return index
+}
+
+// overflowAt maps a gutter column onto the neighbouring tab the arrow steps to
+// (Rust TabTarget::Overflow).
+func (w sidebarTabStripWindow) overflowAt(column int) int {
+	if w.leftArrow && column == 0 && w.first > 0 {
+		return w.first - 1
+	}
+	if w.rightArrow && column == w.addStart-1 {
+		if index := w.first + w.count; index < len(w.tabs) {
+			return index
+		}
+	}
+	return -1
 }
 
 // addAt reports whether the column lands on the trailing "+" button.
@@ -535,23 +799,35 @@ func sidebarTabStripSpace(width int) (int, int) {
 	return available, addWidth
 }
 
-// sidebarTabLayout returns the tab cell width and how many tabs fit in one
-// strip row. Rust pins the cell to " Side chat " and clips a longer label at the
-// cell edge instead of widening the cell, so the width never follows the labels.
-func sidebarTabLayout(labels []string, width int) (int, int) {
+// sidebarTabGeometry mirrors Rust TabStrip::strip_targets: the cell keeps the
+// fixed " Side chat " width unless the strip is narrower, the separating gap is
+// part of the budget, and an overflowing strip reserves both arrow gutters so
+// the cells do not shift while the user steps through them.
+func sidebarTabGeometry(width int, tabCount int) (tabWidth int, count int, gutter int) {
 	available, _ := sidebarTabStripSpace(width)
-	tabWidth := sidebarTabWidth
-	if tabWidth > available {
-		tabWidth = available
+	if available <= 0 || tabCount <= 0 {
+		return 0, 0, 0
 	}
-	count := 0
-	if tabWidth > 0 {
-		// Each tab after the first also needs its separating gap column.
-		count = (available + sidebarTabGap) / (tabWidth + sidebarTabGap)
+	stride := sidebarTabWidth + sidebarTabGap
+	overflow := tabCount > max((available+sidebarTabGap)/stride, 1)
+	if overflow && available >= 7 {
+		gutter = sidebarTabOverflowGutter
 	}
-	if count > len(labels) {
-		count = len(labels)
+	space := available - 2*gutter
+	tabWidth = min(sidebarTabWidth, space)
+	if tabWidth <= 0 {
+		return 0, 0, gutter
 	}
+	count = (space + sidebarTabGap) / (tabWidth + sidebarTabGap)
+	if count > tabCount {
+		count = tabCount
+	}
+	return tabWidth, count, gutter
+}
+
+// sidebarTabLayout returns the painted cell width and how many tabs fit.
+func sidebarTabLayout(labels []string, width int) (int, int) {
+	tabWidth, count, _ := sidebarTabGeometry(width, len(labels))
 	return tabWidth, count
 }
 
@@ -568,6 +844,9 @@ func (m *Model) acceptSidebarChooser() bubbletea.Cmd {
 		if !m.sidebarChatCreationAvailable() {
 			return nil
 		}
+		// Rust side_focus.rs clears the pending opening before acting on the
+		// new-chat row.
+		m.clearSideOpen()
 		cmd := m.closeSidebarChooser()
 		m.sidebarChoice = 0
 		return batchSideCommands(cmd, m.startSideConversation("/side", ""))
@@ -579,6 +858,7 @@ func (m *Model) acceptSidebarChooser() bubbletea.Cmd {
 			return nil
 		}
 		if side := m.liveSideTab(choice.ThreadID); side != nil {
+			m.clearSideOpen()
 			return batchSideCommands(m.closeSidebarChooser(), m.activateRetainedSideConversation(side, ""))
 		}
 		if m.onOpenSideChat == nil {
@@ -588,15 +868,31 @@ func (m *Model) acceptSidebarChooser() bubbletea.Cmd {
 		sideThreadID := choice.ThreadID
 		open := m.onOpenSideChat
 		// Rust #60599: prepare saved chats in the background, keep the chooser
-		// usable, and let a newer selection supersede this one.
-		m.sideOpenRequest++
-		request := m.sideOpenRequest
-		m.sideOpeningThreadID = sideThreadID
-		m.refreshTranscript()
-		return func() bubbletea.Msg {
-			response, err := open(parentThreadID, sideThreadID)
-			return SideOpenResultMsg{RequestID: request, ParentThreadID: parentThreadID, SideThreadID: sideThreadID, Response: response, Err: err}
+		// usable, and let a newer selection supersede this one. Accepting a row
+		// whose attach failed retries it (OpenState::Failed -> Loading).
+		flight, inFlight := m.sideOpenFlights[sideOpenKey(parentThreadID, sideThreadID)]
+		if inFlight && !flight.retired {
+			// The same chat is already attaching; Rust paints Loading without
+			// starting a second request.
+			m.sideOpeningThreadID = sideThreadID
+			m.sideOpenState = sideOpenLoading
+			m.sideOpenError = ""
+			m.sideOpenQueued = nil
+			m.refreshTranscript()
+			return nil
 		}
+		if inFlight || len(m.sideOpenFlights) >= sideOpenConcurrency {
+			// Rust saved_openings.open_saved_chat parks the target in
+			// OpenState::Waiting until a flight releases its slot.
+			m.sideOpeningThreadID = sideThreadID
+			m.sideOpenState = sideOpenWaiting
+			m.sideOpenError = ""
+			m.sideOpenStarted = time.Now()
+			m.sideOpenQueued = &sideOpenTarget{parentThreadID: parentThreadID, sideThreadID: sideThreadID}
+			m.refreshTranscript()
+			return nil
+		}
+		return m.startSideOpen(parentThreadID, sideThreadID, open)
 	}
 }
 
@@ -624,8 +920,36 @@ func (m *Model) renderSidebarTabStrip(width int) string {
 	if m == nil || width <= 0 {
 		return ""
 	}
+	level := codextui.DetectStdoutColorLevel()
+	chooserState := m.sidebarTabChooserState()
+	chatState := m.sidebarTabChatState()
+	if chooserState != sidebarTabStateAbsent {
+		// Rust paints the chooser's own strip with TabState::Absent for the
+		// chats, because the list below carries the selection instead.
+		chatState = sidebarTabStateAbsent
+	}
+	styles := sidebarTabStripStylesFor(chooserState, chatState, level)
 	window := m.sidebarTabStripWindowWidth(width)
 	var builder strings.Builder
+	column := 0
+	writeSpaces := func(count int) {
+		if count <= 0 {
+			return
+		}
+		builder.WriteString(strings.Repeat(" ", count))
+		column += count
+	}
+	if window.gutter > 0 {
+		// Rust paints ‹ in the left gutter while an earlier tab is hidden and
+		// keeps the reserved columns blank otherwise.
+		if window.leftArrow {
+			builder.WriteString(paintSidebarCell(sidebarTabOverflowLeft, styles.rest, level))
+			column++
+		} else {
+			writeSpaces(1)
+		}
+		writeSpaces(window.gutter - 1)
+	}
 	for offset := 0; offset < window.count; offset++ {
 		index := window.first + offset
 		if index >= len(window.labels) {
@@ -633,27 +957,146 @@ func (m *Model) renderSidebarTabStrip(width int) string {
 		}
 		if offset > 0 {
 			// Rust #60319 TAB_GAP: one blank, noninteractive column.
-			builder.WriteString(strings.Repeat(" ", sidebarTabGap))
+			writeSpaces(sidebarTabGap)
 		}
-		cell := padSidebarCell(window.labels[index], window.tabWidth)
-		if index == m.sidebarTabHover {
-			cell = "\x1b[7m" + cell + "\x1b[27m"
+		cell := renderSidebarTabCell(window.labels[index], window.tabWidth)
+		spec := styles.rest
+		switch {
+		case chatState != sidebarTabStateAbsent && m.sidebarTabSelected(window.tabs[index]):
+			spec = styles.selected
+		case index == m.sidebarTabHover:
+			spec = styles.hover
 		}
-		builder.WriteString(cell)
+		builder.WriteString(paintSidebarCell(cell, spec, level))
+		column += window.tabWidth
 	}
-	used := 0
-	if window.count > 0 {
-		used = window.count*window.tabWidth + (window.count-1)*sidebarTabGap
+	if window.rightArrow {
+		// The trailing arrow occupies the last column before the add button.
+		writeSpaces(window.addStart - 1 - column)
+		builder.WriteString(paintSidebarCell(sidebarTabOverflowRight, styles.rest, level))
+		column++
 	}
-	if remaining := window.addStart - used; remaining > 0 {
-		builder.WriteString(strings.Repeat(" ", remaining))
+	writeSpaces(window.addStart - column)
+	addSpec := styles.add
+	if m.sidebarAddHover {
+		addSpec = styles.addHover
 	}
 	addCell := padSidebarCell(sidebarAddLabel, window.addWidth)
-	if m.sidebarAddHover {
-		addCell = "\x1b[7m" + addCell + "\x1b[27m"
-	}
-	builder.WriteString(addCell)
+	builder.WriteString(paintSidebarCell(addCell, addSpec, level))
 	return codextui.TruncateWithEllipsis(builder.String(), width)
+}
+
+// sidebarTabState mirrors Rust sidebar_tab_strip.rs TabState, which decides
+// how much surface a strip cell carries.
+type sidebarTabState int
+
+const (
+	sidebarTabStateAbsent sidebarTabState = iota
+	sidebarTabStateActive
+	sidebarTabStateInactive
+)
+
+// sidebarTabStripStyles is the resolved style set the strip paints with: the
+// quiet chip every cell starts from, the shaded hover chip, the selected
+// chat's chip, and the "+" button's resting and hovered chips.
+type sidebarTabStripStyles struct {
+	rest     codextui.StyleSpec
+	hover    codextui.StyleSpec
+	selected codextui.StyleSpec
+	add      codextui.StyleSpec
+	addHover codextui.StyleSpec
+}
+
+// sidebarTabStripStylesFor resolves Rust sidebar_tab_strip::render's styles:
+// `rest` is secondary text on the user-message surface, `hover` shades that
+// surface twice toward the terminal background, and the selected chat keeps the
+// shared selection fill.
+func sidebarTabStripStylesFor(chooser, chat sidebarTabState, level codextui.StdoutColorLevel) sidebarTabStripStyles {
+	hover := codextui.HoverStyleFor(codextui.StyleSpec{}, level)
+	styles := sidebarTabStripStyles{
+		rest:     codextui.SecondarySurfaceStyle(level),
+		hover:    hover,
+		selected: codextui.SecondarySurfaceStyle(level),
+		add:      codextui.SecondaryTextStyle(level),
+		addHover: hover,
+	}
+	switch chat {
+	case sidebarTabStateActive:
+		styles.selected = selectionNotUnderlined(level)
+	case sidebarTabStateInactive:
+		// Rust paints a paired-but-not-displayed chat with the hover chip in
+		// bold so the strip still shows where the other chat lives.
+		styles.selected = hover
+		styles.selected.Bold = true
+	}
+	switch chooser {
+	case sidebarTabStateActive:
+		styles.add = selectionNotUnderlined(level)
+		styles.addHover = codextui.HoverStyleFor(styles.add, level)
+	case sidebarTabStateInactive:
+		styles.add = codextui.QuietWorkspaceStyle(level)
+	}
+	return styles
+}
+
+// selectionNotUnderlined resolves Rust's `selection_style().not_underlined()`.
+func selectionNotUnderlined(level codextui.StdoutColorLevel) codextui.StyleSpec {
+	background, known := codextui.DefaultBackgroundRGB()
+	spec := codextui.SelectionStyleFor(nil, level)
+	if known {
+		spec = codextui.SelectionStyleFor(&background, level)
+	}
+	spec.Underlined = false
+	return spec
+}
+
+// sidebarTabChatState reports whether the strip is painting the displayed side
+// chat (Active), another tab while a side pair exists (Inactive), or no side
+// chat at all (Absent), mirroring Rust owned_transcript.rs's `chat`.
+func (m *Model) sidebarTabChatState() sidebarTabState {
+	if m == nil || m.activeSide == nil {
+		return sidebarTabStateAbsent
+	}
+	if m.activeSide.ShowingSide {
+		return sidebarTabStateActive
+	}
+	return sidebarTabStateInactive
+}
+
+// sidebarTabChooserState reports the "+" button's state: Active while the
+// chooser owns focus, Inactive while the chooser is painted but the composer
+// does, and Absent in the plain side-pane strip (Rust `chooser`).
+func (m *Model) sidebarTabChooserState() sidebarTabState {
+	if m == nil || !m.sidebarChooserVisible() {
+		return sidebarTabStateAbsent
+	}
+	if m.sidebarChooserFocused {
+		return sidebarTabStateActive
+	}
+	return sidebarTabStateInactive
+}
+
+// sidebarTabSelected reports whether the strip tab is the chat the pane has
+// selected (Rust sidebar::selected_chat).
+func (m *Model) sidebarTabSelected(tab *activeSideConversation) bool {
+	if m == nil || m.activeSide == nil || tab == nil {
+		return false
+	}
+	selected := strings.TrimSpace(m.activeSide.SideThreadID)
+	return selected != "" && selected == strings.TrimSpace(tab.SideThreadID)
+}
+
+// paintSidebarCell wraps one strip cell in its SGR prefix, like the per-cell
+// styles ratatui writes into the buffer.
+func paintSidebarCell(cell string, spec codextui.StyleSpec, level codextui.StdoutColorLevel) string {
+	if cell == "" {
+		return ""
+	}
+	prefix := codextui.SGRForStyleQuiet(spec, level)
+	if prefix == "" {
+		return cell
+	}
+	return prefix + cell + "\x1b[0m"
 }
 
 func padSidebarCell(label string, width int) string {
@@ -666,6 +1109,19 @@ func padSidebarCell(label string, width int) string {
 	return label + strings.Repeat(" ", width-codextui.DisplayWidth(label))
 }
 
+// renderSidebarTabCell paints one tab like Rust's sidebar_chooser strip: the
+// title fills every column but the last, and the close glyph occupies that
+// trailing column (close_cell is tab.right()-1).
+func renderSidebarTabCell(label string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if width < 3 {
+		return padSidebarCell(label, width)
+	}
+	return padSidebarCell(label, width-1) + sidebarTabCloseGlyph
+}
+
 // renderSidebarChooser paints the chooser panel: the tab strip, discovery
 // status, the new-chat row, the saved chats with their latest prompt previews,
 // an inline retry row after a discovery failure, and the footer hints.
@@ -673,100 +1129,322 @@ func (m *Model) renderSidebarChooser(width int, height int) string {
 	if m == nil || width <= 0 {
 		return ""
 	}
-	if m.sideStartPending {
-		lines := []string{m.renderSidebarTabStrip(width), "", "Starting side conversation...", "", " Esc back "}
-		if height > 0 && len(lines) > height {
-			lines = lines[:height]
-		}
-		for index, line := range lines {
-			lines[index] = codextui.TruncateWithEllipsis(line, width)
-		}
-		return strings.Join(lines, "\n")
+	return joinSidebarChooserRows(m.sidebarChooserRows(width, height), width)
+}
+
+// sidebarChooserRows paints the chooser into a fixed-height row buffer the way
+// Rust sidebar_chooser::paint does: the tab strip owns row 0, the title row 2,
+// the discovery state row 3, the choice window starts at FIRST_CHOICE_ROW, and
+// the footer hint owns the pane's last row.
+func (m *Model) sidebarChooserRows(width int, height int) []string {
+	if height <= 0 {
+		height = m.sidebarChooserPanelHeight()
 	}
-	lines := []string{m.renderSidebarTabStrip(width), "", sidebarChooserTitle}
+	height = max(height, 1)
+	rows := make([]string, height)
+	footer := height - 1
+	set := func(row int, text string) {
+		if row < 0 || row >= footer {
+			return
+		}
+		rows[row] = text
+	}
+	rows[0] = m.renderSidebarTabStrip(width)
+	if height <= 1 {
+		return rows
+	}
+	finish := func() []string {
+		rows[footer] = m.sidebarChooserFooter(sidebarChooserBodyWidth(width))
+		return rows
+	}
+	if m.sideStartPending {
+		set(2, "Starting side conversation...")
+		return finish()
+	}
+	set(2, sidebarChooserTitle)
+	if !m.sidebarChatCreationAvailable() {
+		// Rust paints the waiting note wrapped from FIRST_CHOICE_ROW and skips
+		// discovery entirely until the parent has its first user turn.
+		for offset, text := range wrapSidebarChooserText(sidebarWaitingSideChats, sidebarChooserBodyWidth(width)) {
+			set(sidebarChooserFirstChoiceRow+offset, "\x1b[2m"+text+"\x1b[22m")
+		}
+		return finish()
+	}
 	switch m.sidebarDiscovery {
 	case SideChatDiscoveryLoading:
-		if len(m.sidebarChooserChoices()) == 0 {
-			lines = append(lines, "… Loading side chats…")
-		} else {
-			lines = append(lines, "… Refreshing side chats…")
+		label := "Loading side chats…"
+		if len(m.sidebarChooserChoices()) > 0 {
+			label = "Refreshing side chats…"
 		}
+		set(3, "\x1b[2m"+m.sidebarLoadingGlyph()+" "+label+"\x1b[22m")
 	case SideChatDiscoveryFailed:
-		lines = append(lines, "\x1b[31m"+m.sidebarDiscoveryError+"\x1b[39m")
-	default:
-		if m.sideOpeningThreadID != "" {
-			lines = append(lines, "… Opening side chat…")
-		} else {
-			lines = append(lines, "")
-		}
+		set(3, "\x1b[31m"+m.sidebarDiscoveryError+"\x1b[39m")
 	}
-	if !m.sidebarChatCreationAvailable() {
-		lines = append(lines, sidebarWaitingSideChats, "", "Esc back")
-		if height > 0 && len(lines) > height {
-			lines = lines[:height]
-		}
-		for index, line := range lines {
-			lines[index] = codextui.TruncateWithEllipsis(line, width)
-		}
-		return strings.Join(lines, "\n")
-	}
+	m.paintSidebarChooserBody(width, footer+1, set)
+	return finish()
+}
+
+// paintSidebarChooserBody paints the new-chat entry, the group header and the
+// visible chat rows from sidebarChooserLayoutFor, so the renderer and the
+// pointer hit test agree on every row (Rust sidebar_chooser::paint).
+func (m *Model) paintSidebarChooserBody(width int, height int, set func(int, string)) {
+	layout := m.sidebarChooserLayoutFor(width, height)
 	choices := m.sidebarChooserChoices()
-	groupHeader := len(choices) > 1
-	body := make([]string, 0, len(choices)*2)
-	for _, index := range m.sidebarChooserWindow(height) {
-		marker := "  "
+	bodyWidth := sidebarChooserBodyWidth(width)
+	marker := func(index int) string {
 		if index == m.sidebarChoice {
-			marker = "› "
+			return "› "
 		}
-		switch {
-		case index == 0:
-			body = append(body, marker+sidebarNewChatTitle)
-			if width >= 58 {
-				body[len(body)-1] = marker + sidebarNewChatTitle + "  " + sidebarNewChatSubtitle
-			}
-		case m.sidebarChooserIsRetryRow(index, choices):
+		return "  "
+	}
+	// Rust row_style paints the selection marker as a single character; the
+	// retry row then adds three spaces before its label.
+	markerCell := func(index int) string {
+		if index == m.sidebarChoice {
+			return "›"
+		}
+		return " "
+	}
+	if layout.newChat.len() > 0 {
+		title := marker(0) + sidebarNewChatTitle
+		if layout.wide {
+			detail := sidebarNewChatSubtitle
+			pad := max(bodyWidth-1-codextui.DisplayWidth(detail), codextui.DisplayWidth(title))
+			title += strings.Repeat(" ", pad-codextui.DisplayWidth(title))
+			set(layout.newChat.start, truncateSidebarChooserRow(title+detail, bodyWidth))
+		} else {
+			set(layout.newChat.start, title)
+			set(layout.newChat.start+1, "    "+sidebarNewChatSubtitle)
+		}
+	}
+	if layout.group >= 0 && len(choices) > 0 {
+		set(layout.group, sidebarSideChatsGroupTitle+"  "+strconv.Itoa(len(choices)))
+	}
+	for _, visible := range layout.visible {
+		index := visible.index
+		if m.sidebarChooserIsRetryRow(index, choices) {
 			label := sidebarRetryChatsTitle
 			if m.sidebarDiscovery == SideChatDiscoveryLoading {
 				label = sidebarRetryingChatsTitle
 			}
-			body = append(body, marker+"  "+label)
-		default:
-			choice, _ := m.sidebarChooserChat(index)
-			if groupHeader && index == 1 {
-				body = append(body, sidebarSideChatsGroupTitle+"  "+strconv.Itoa(len(choices)))
-			}
-			label := sideChatChoiceLabel(choice, index, len(choices))
-			if m.threadLabelCloud(m.sidebarParentThreadID(), m.backendID) {
-				label = codextui.ThreadLabelPrefix(true) + label
-			}
-			body = append(body, marker+"○ "+label)
+			set(visible.rows.start, markerCell(index)+"   "+label)
+			continue
+		}
+		choice, ok := m.sidebarChooserChat(index)
+		if !ok {
+			continue
+		}
+		label := sideChatChoiceLabel(choice, index, len(choices))
+		if m.threadLabelCloud(m.sidebarParentThreadID(), m.backendID) {
+			label = codextui.ThreadLabelPrefix(true) + label
+		}
+		row := marker(index) + "○ " + label
+		if status := m.sideOpenStatusLabel(choice.ThreadID); status != "" {
+			// Rust reserves the status width before truncating the title so the
+			// pending state stays visible on narrow panes.
+			budget := max(bodyWidth-6, 1)
+			titleWidth := max(budget-codextui.DisplayWidth(status), budget/3)
+			row = marker(index) + "○ " + truncateSidebarChooserRow(label, max(titleWidth, 1)) + "  " + status
+		}
+		set(visible.rows.start, truncateSidebarChooserRow(row, bodyWidth))
+		if visible.rows.len() == 2 {
 			if prompt := m.sidebarChooserPrompt(choice); prompt != "" {
-				body = append(body, "    "+prompt)
+				set(visible.rows.start+1, truncateSidebarChooserRow("    "+prompt, bodyWidth))
 			}
 		}
 	}
-	footer := "Enter open · Esc back · ↑/↓ move"
-	if m.sideOpeningThreadID != "" {
-		footer = "Esc cancel · Enter open · ↑/↓ move"
+}
+
+func truncateSidebarChooserRow(text string, width int) string {
+	return codextui.TruncateWithEllipsis(text, width)
+}
+
+// wrapSidebarChooserText wraps on word boundaries the way textwrap::wrap does
+// for the chooser's waiting note.
+func wrapSidebarChooserText(text string, width int) []string {
+	if text == "" {
+		return nil
 	}
-	if height > 0 {
-		budget := height - len(lines) - 1
-		if budget < 0 {
-			budget = 0
+	if width <= 0 {
+		return []string{text}
+	}
+	lines := make([]string, 0, 2)
+	current := ""
+	for _, word := range strings.Fields(text) {
+		switch {
+		case current == "":
+			current = word
+		case codextui.DisplayWidth(current)+1+codextui.DisplayWidth(word) <= width:
+			current += " " + word
+		default:
+			lines = append(lines, current)
+			current = word
 		}
-		if len(body) > budget {
-			body = body[:budget]
+	}
+	if current != "" {
+		lines = append(lines, current)
+	}
+	return lines
+}
+
+// sideOpenStatusLabel paints the pending saved-chat state appended to its row
+// (Rust sidebar_chooser.rs OpenState arms).
+func (m *Model) sideOpenStatusLabel(threadID string) string {
+	if m == nil || m.sideOpeningThreadID == "" {
+		return ""
+	}
+	if strings.TrimSpace(m.sideOpeningThreadID) != strings.TrimSpace(threadID) {
+		return ""
+	}
+	switch m.sideOpenState {
+	case sideOpenWaiting:
+		return "\x1b[2mWaiting to open…\x1b[22m"
+	case sideOpenFailed:
+		return "\x1b[31mRetry · " + m.sideOpenError + "\x1b[39m"
+	default:
+		return "\x1b[2mOpening…\x1b[22m"
+	}
+}
+
+// sidebarChooserFooter paints the footer hint line from the shared keymap
+// (Rust sidebar_chooser::footer): accept flips to retry, cancel flips to
+// cancel opening, movement only exists once a side chat can start, and the
+// global hide-pane chord always closes the pane.
+func (m *Model) sidebarChooserFooter(width int) string {
+	if m == nil {
+		return ""
+	}
+	available := m.sidebarChatCreationAvailable()
+	hints := make([]string, 0, 4)
+	if available {
+		if key := m.sidebarChooserListHint("accept"); key != "" {
+			hints = append(hints, key+" "+m.sidebarChooserAcceptLabel())
 		}
 	}
-	lines = append(lines, body...)
-	lines = append(lines, footer)
-	if height > 0 && len(lines) > height {
-		lines = lines[:height]
+	if key := m.sidebarChooserListHint("cancel"); key != "" {
+		hints = append(hints, key+" "+m.sidebarChooserCancelLabel())
 	}
-	for index, line := range lines {
-		lines[index] = codextui.TruncateWithEllipsis(line, width)
+	if available {
+		up := m.sidebarChooserListHint("move_up")
+		down := m.sidebarChooserListHint("move_down")
+		if up != "" && down != "" {
+			hints = append(hints, up+"/"+down+" move")
+		}
 	}
-	return strings.Join(lines, "\n")
+	if key := m.sidebarChooserHideHint(); key != "" {
+		hints = append(hints, key+" hide pane")
+	}
+	return fitSidebarChooserHints(hints, width)
+}
+
+// fitSidebarChooserHints drops whole hints that do not fit and marks the cut
+// with an ellipsis, the way Rust footer_hint::HintLine::new measures them.
+func fitSidebarChooserHints(hints []string, width int) string {
+	var builder strings.Builder
+	end := 0
+	for index, hint := range hints {
+		separator := 0
+		if index > 0 {
+			separator = 3
+		}
+		start := end + separator
+		next := start + codextui.DisplayWidth(hint)
+		overflowSpace := 0
+		if index < len(hints)-1 {
+			overflowSpace = 2
+		}
+		if next+overflowSpace > width {
+			if width > 0 {
+				if index == 0 {
+					builder.WriteString("…")
+				} else {
+					builder.WriteString(" …")
+				}
+			}
+			return builder.String()
+		}
+		if index > 0 {
+			builder.WriteString(" · ")
+		}
+		builder.WriteString(hint)
+		end = next
+	}
+	return builder.String()
+}
+
+func (m *Model) sidebarChooserListHint(action string) string {
+	bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, "list", action)
+	if len(bindings) == 0 {
+		return ""
+	}
+	return codextui.KeybindingDisplayLabel(strings.TrimSpace(bindings[0]))
+}
+
+func (m *Model) sidebarChooserAcceptLabel() string {
+	if m.sidebarChooserRetrySelected() {
+		return "retry"
+	}
+	return "open"
+}
+
+// sidebarChooserRetrySelected mirrors Rust footer: accept retries on the
+// discovery retry row or on a chat whose attach failed.
+func (m *Model) sidebarChooserRetrySelected() bool {
+	choices := m.sidebarChooserChoices()
+	if m.sidebarChooserIsRetryRow(m.sidebarChoice, choices) {
+		return true
+	}
+	choice, ok := m.sidebarChooserChat(m.sidebarChoice)
+	if !ok || m.sideOpenState != sideOpenFailed {
+		return false
+	}
+	return strings.TrimSpace(m.sideOpeningThreadID) == strings.TrimSpace(choice.ThreadID)
+}
+
+func (m *Model) sidebarChooserCancelLabel() string {
+	if m.sideOpeningThreadID != "" && m.sideOpenState != sideOpenFailed {
+		return "cancel opening"
+	}
+	return "back"
+}
+
+// sidebarChooserHideHint resolves the global hide-pane leader chord the way
+// Rust footer's primary_hint(Global, "hide_pane") does.
+func (m *Model) sidebarChooserHideHint() string {
+	prefixes, err := codextui.LeaderKeybindings(m.keymapConfig)
+	if err != nil || len(prefixes) == 0 {
+		return ""
+	}
+	prefix := prefixes[0]
+	bindings, _, custom := codextui.ResolvedKeymapBindings(m.keymapConfig, "global", "hide_pane")
+	if custom && len(bindings) > 0 {
+		for _, binding := range bindings {
+			if completion, ok := codextui.LeaderSpecCompletion(binding); ok {
+				return codextui.KeybindingDisplayLabel(prefix + " " + completion)
+			}
+		}
+		return codextui.KeybindingDisplayLabel(strings.TrimSpace(bindings[0]))
+	}
+	if m.leaderPrefixClaimed(prefix, "global", "hide_pane") {
+		return ""
+	}
+	return codextui.KeybindingDisplayLabel(prefix + " -")
+}
+
+// joinSidebarChooserRows clips the tab strip to the pane and every body row to
+// Rust's body_row geometry: one leading inset column and two reserved trailing
+// columns (sidebar_chooser.rs body_row).
+func joinSidebarChooserRows(rows []string, width int) string {
+	bodyWidth := max(width-3, 1)
+	out := make([]string, len(rows))
+	for index, row := range rows {
+		if index == 0 {
+			out[index] = codextui.TruncateWithEllipsis(row, width)
+			continue
+		}
+		out[index] = " " + codextui.TruncateWithEllipsis(row, bodyWidth)
+	}
+	return strings.Join(out, "\n")
 }
 
 // requestSideChatDiscovery starts a chooser refresh (Rust #60319
@@ -785,6 +1463,7 @@ func (m *Model) requestSideChatDiscovery(retry bool) bubbletea.Cmd {
 	m.sidebarDiscovery = SideChatDiscoveryLoading
 	m.sidebarDiscoveryRetry = retry
 	m.sidebarDiscoveryError = ""
+	m.sidebarDiscoveryStarted = time.Now()
 	list := m.onListSideChats
 	return func() bubbletea.Msg {
 		choices, err := list(parentThreadID)
@@ -803,7 +1482,9 @@ func (m *Model) applySideChatsLoaded(msg SideChatsLoadedMsg) bubbletea.Cmd {
 	keepNew := m.sidebarChoice == 0 && len(m.sidebarChooserChoices()) > 0
 	if msg.Err != nil {
 		m.sidebarDiscovery = SideChatDiscoveryFailed
-		m.sidebarDiscoveryError = "Failed to load saved side chats: " + strings.TrimSpace(msg.Err.Error())
+		// Rust paints Discovery::Failed(error) verbatim in red; the error text
+		// already names the failing request.
+		m.sidebarDiscoveryError = strings.TrimSpace(msg.Err.Error())
 		if len(m.sidebarChooserChoices()) == 0 {
 			m.sidebarChoice = m.sidebarChooserRetryRow()
 		}
@@ -869,20 +1550,40 @@ func (m *Model) applySideOpenResult(msg SideOpenResultMsg) bubbletea.Cmd {
 	if m == nil || m.State == nil {
 		return nil
 	}
-	if msg.RequestID != 0 && msg.RequestID != m.sideOpenRequest {
-		// A newer selection (or a cancelled chooser) owns the sidebar now.
-		return nil
-	}
-	m.sideOpeningThreadID = ""
 	sideThreadID := strings.TrimSpace(msg.SideThreadID)
 	parentThreadID := strings.TrimSpace(msg.ParentThreadID)
-	if msg.Err != nil {
-		m.notice = "Failed to open side conversation: " + strings.TrimSpace(msg.Err.Error())
-		m.refreshTranscript()
+	key := sideOpenKey(parentThreadID, sideThreadID)
+	flight, inFlight := m.sideOpenFlights[key]
+	if !inFlight || (msg.RequestID != 0 && msg.RequestID != flight.request) {
+		// The flight was retired (cancelled or replaced), so its completion
+		// must not touch the pane or free another flight's slot.
 		return nil
 	}
+	delete(m.sideOpenFlights, key)
+	// Rust installs an attach only while the pane still wants that target; a
+	// superseded or cancelled flight is released instead.
+	wanted := !flight.retired && strings.TrimSpace(m.sideOpeningThreadID) == sideThreadID
+	if msg.Err != nil {
+		// Rust sidebar_loading keeps the target with OpenState::Failed so the
+		// chooser row paints "Retry · {error}" and Enter retries it.
+		if wanted && m.sidebarChooserVisible() {
+			m.sideOpenState = sideOpenFailed
+			m.sideOpenError = strings.TrimSpace(msg.Err.Error())
+			m.notice = ""
+		} else if wanted {
+			m.clearSideOpen()
+			m.notice = "Failed to open side conversation: " + strings.TrimSpace(msg.Err.Error())
+		}
+		m.refreshTranscript()
+		return m.startQueuedSideOpen()
+	}
+	if !wanted {
+		m.refreshTranscript()
+		return m.startQueuedSideOpen()
+	}
+	m.clearSideOpen()
 	if sideThreadID == "" || parentThreadID == "" {
-		return nil
+		return m.startQueuedSideOpen()
 	}
 	if side := m.liveSideTab(sideThreadID); side != nil {
 		return batchSideCommands(m.closeSidebarChooser(), m.activateRetainedSideConversation(side, ""))
@@ -970,12 +1671,31 @@ func (m *Model) sidebarChooserIsRetryRow(index int, choices []SideChatChoice) bo
 }
 
 func (m *Model) sidebarChooserChoiceCount() int {
-	choices := m.sidebarChooserChoices()
+	return m.sidebarChooserChoiceCountFor(m.sidebarChooserChoices())
+}
+
+func (m *Model) sidebarChooserChoiceCountFor(choices []SideChatChoice) int {
 	count := len(choices) + 1
 	if m.sidebarChooserRetryVisible(choices) {
 		count++
 	}
 	return count
+}
+
+// sidebarChooserClampedChoice is the selection Rust's choice_rows measures:
+// the stored index clamped into the current choice count.
+func (m *Model) sidebarChooserClampedChoice() int {
+	if m == nil {
+		return 0
+	}
+	count := m.sidebarChooserChoiceCount()
+	switch {
+	case count <= 0 || m.sidebarChoice < 0:
+		return 0
+	case m.sidebarChoice >= count:
+		return count - 1
+	}
+	return m.sidebarChoice
 }
 
 func (m *Model) sidebarChooserChat(index int) (SideChatChoice, bool) {
@@ -1086,101 +1806,169 @@ func (m *Model) handleSidebarChooserMouseRow(screenY int) (bool, bubbletea.Cmd, 
 	return true, m.acceptSidebarChooser(), true
 }
 
-// sidebarChooserChoiceAtRow resolves one painted chooser row to a choice index,
-// reusing the same header, group header, and preview-row geometry as
-// renderSidebarChooser.
-func (m *Model) sidebarChooserChoiceAtRow(row int) (int, bool) {
-	if m == nil || row < 4 {
-		return 0, false
+// Rust sidebar_chooser.rs geometry: the new-chat entry starts at
+// FIRST_CHOICE_ROW and the footer hint owns the pane's last row.
+const sidebarChooserFirstChoiceRow = 4
+
+// sidebarChooserSpan is a half-open range of painted chooser rows.
+type sidebarChooserSpan struct{ start, end int }
+
+func (s sidebarChooserSpan) len() int {
+	if s.end <= s.start {
+		return 0
+	}
+	return s.end - s.start
+}
+
+func (s sidebarChooserSpan) contains(row int) bool {
+	return row >= s.start && row < s.end
+}
+
+// sidebarChooserVisibleChat is one chat row the pane paints: its choice index
+// and the rows it occupies (a title row plus an optional prompt preview).
+type sidebarChooserVisibleChat struct {
+	index int
+	rows  sidebarChooserSpan
+}
+
+// sidebarChooserLayout mirrors Rust sidebar_chooser::ChoiceRows. The renderer
+// and the pointer hit test share it, so a click always lands on the row the
+// pane painted (Rust choice_rows / choice_at).
+type sidebarChooserLayout struct {
+	wide    bool
+	newChat sidebarChooserSpan
+	group   int
+	chats   sidebarChooserSpan
+	visible []sidebarChooserVisibleChat
+}
+
+// sidebarChooserBodyWidth is Rust body_row: one leading inset column and two
+// reserved trailing columns.
+func sidebarChooserBodyWidth(width int) int {
+	return max(width-3, 1)
+}
+
+func (m *Model) sidebarChooserLayoutFor(width int, height int) sidebarChooserLayout {
+	if m == nil {
+		return sidebarChooserLayout{group: -1}
 	}
 	choices := m.sidebarChooserChoices()
-	groupHeader := len(choices) > 1
-	line := 4
-	for _, index := range m.sidebarChooserWindow(m.sidebarChooserPanelHeight()) {
-		if groupHeader && index == 1 {
-			if line == row {
-				return 0, false
-			}
-			line++
+	count := m.sidebarChooserChoiceCountFor(choices)
+	choice := m.sidebarChooserClampedChoice()
+	layout := sidebarChooserLayout{
+		wide:  sidebarChooserBodyWidth(width) >= sidebarChooserWideWidth,
+		group: -1,
+	}
+	newHeight := 1
+	if !layout.wide {
+		newHeight = 2
+	}
+	footer := sidebarChooserLayoutFooter(height, newHeight, count)
+	newEnd := min(sidebarChooserFirstChoiceRow+newHeight, footer)
+	afterGroup := 1
+	if len(choices) > 0 {
+		afterGroup = 2
+	}
+	if count > 1 && footer >= newEnd+1+afterGroup+m.sidebarChooserRowHeight(choice, choices) {
+		layout.group = newEnd + 1
+	}
+	newChatEnd := sidebarChooserFirstChoiceRow
+	if choice == 0 || layout.group >= 0 {
+		newChatEnd = max(newEnd, sidebarChooserFirstChoiceRow)
+	}
+	layout.newChat = sidebarChooserSpan{start: sidebarChooserFirstChoiceRow, end: newChatEnd}
+	chatStart := newChatEnd
+	if layout.group >= 0 {
+		chatStart = layout.group + afterGroup
+	}
+	layout.chats = sidebarChooserSpan{start: chatStart, end: footer}
+	layout.visible = m.sidebarChooserVisibleChats(layout, choice, count, choices)
+	return layout
+}
+
+// sidebarChooserLayoutFooter is Rust's footer row: the pane's last row, or an
+// unclipped row when the caller has no pane height yet.
+func sidebarChooserLayoutFooter(height int, newHeight int, count int) int {
+	if height > 0 {
+		return height - 1
+	}
+	return sidebarChooserFirstChoiceRow + newHeight + 2 + 2*count + 4
+}
+
+// sidebarChooserVisibleChats mirrors Rust ChoiceRows::visible_chats: the chat
+// window scrolls just far enough to keep the selection (and its prompt preview)
+// inside the painted rows.
+func (m *Model) sidebarChooserVisibleChats(layout sidebarChooserLayout, choice int, count int, choices []SideChatChoice) []sidebarChooserVisibleChat {
+	chatRows := layout.chats.len()
+	selected := max(choice, 1)
+	spare := max(chatRows-m.sidebarChooserRowHeight(selected, choices), 0)
+	indices := make([]int, 0, selected)
+	for index := selected - 1; index >= 1; index-- {
+		indices = append(indices, index)
+	}
+	first := selected - m.fittingSidebarChooserRows(indices, spare, choices)
+	cursor := layout.chats.start
+	visible := make([]sidebarChooserVisibleChat, 0, count)
+	for index := first; index < count; index++ {
+		if cursor >= layout.chats.end {
+			break
 		}
-		height := m.sidebarChooserRowHeight(index, choices)
-		if row >= line && row < line+height {
-			return index, true
+		start := cursor
+		cursor++
+		if index >= 1 && index <= len(choices) && m.sidebarChooserPrompt(choices[index-1]) != "" {
+			cursor = min(cursor+1, layout.chats.end)
 		}
-		line += height
+		visible = append(visible, sidebarChooserVisibleChat{
+			index: index,
+			rows:  sidebarChooserSpan{start: start, end: cursor},
+		})
+	}
+	return visible
+}
+
+// sidebarChooserChoiceAtRow resolves one painted chooser row to a choice index
+// using the same layout the pane painted (Rust sidebar_chooser::choice_at).
+func (m *Model) sidebarChooserChoiceAtRow(row int) (int, bool) {
+	if m == nil {
+		return 0, false
+	}
+	layout := m.sidebarChooserLayoutFor(m.sidebarTabStripWidth(), m.sidebarChooserPanelHeight())
+	if layout.newChat.contains(row) {
+		return 0, true
+	}
+	for _, visible := range layout.visible {
+		if visible.rows.contains(row) {
+			return visible.index, true
+		}
 	}
 	return 0, false
 }
 
+// sidebarChooserRowHeight reports the painted rows of one choice row: prompt
+// previews give chats a second row (Rust ChatTabs::row_height).
 func (m *Model) sidebarChooserRowHeight(index int, choices []SideChatChoice) int {
-	if index == 0 {
+	if m == nil || index < 1 || index > len(choices) {
 		return 1
 	}
-	if m.sidebarChooserIsRetryRow(index, choices) {
-		return 1
-	}
-	if choice, ok := m.sidebarChooserChat(index); ok && m.sidebarChooserPrompt(choice) != "" {
+	if m.sidebarChooserPrompt(choices[index-1]) != "" {
 		return 2
 	}
 	return 1
 }
 
-// sidebarChooserWindow returns the choice indexes the panel paints, keeping the
-// selection visible and accounting for prompt preview rows (Rust #60319
-// choice_rows / visible_chats).
+// sidebarChooserWindow returns the chat indexes the panel paints for a pane
+// height, sharing the layout with the renderer.
 func (m *Model) sidebarChooserWindow(height int) []int {
 	if m == nil {
 		return nil
 	}
-	choices := m.sidebarChooserChoices()
-	count := len(choices) + 1
-	if m.sidebarChooserRetryVisible(choices) {
-		count++
-	}
-	if count <= 0 {
-		return nil
-	}
-	available := height - 5
-	if height <= 0 {
-		available = count * 2
-	}
-	if available < 1 {
-		available = 1
-	}
-	if len(choices) > 1 && available > 1 {
-		available--
-	}
-	choice := m.sidebarChoice
-	if choice < 0 {
-		choice = 0
-	}
-	if choice >= count {
-		choice = count - 1
-	}
-	first := 0
-	for first < choice {
-		used := 0
-		for index := first; index <= choice; index++ {
-			used += m.sidebarChooserRowHeight(index, choices)
-		}
-		if used <= available {
-			break
-		}
-		first++
-	}
-	window := make([]int, 0, count)
-	used := 0
-	for index := first; index < count; index++ {
-		rowHeight := m.sidebarChooserRowHeight(index, choices)
-		if used+rowHeight > available && len(window) > 0 {
-			break
-		}
-		used += rowHeight
-		window = append(window, index)
+	layout := m.sidebarChooserLayoutFor(m.sidebarTabStripWidth(), height)
+	window := make([]int, 0, len(layout.visible))
+	for _, visible := range layout.visible {
+		window = append(window, visible.index)
 	}
 	return window
 }
-
 func sideChatChoiceLabel(choice SideChatChoice, index int, total int) string {
 	if name := firstLineText(choice.Name); name != "" {
 		return name

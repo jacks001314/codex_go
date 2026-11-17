@@ -1020,10 +1020,22 @@ func (r *Router) applyIndexedThreadName(record *session.Record) {
 	}
 }
 
+// compactItemsFromSessionItems converts the record's items into the history the
+// model actually sees.
+//
+// Rust keeps display projections (TurnItems) out of ContextManager entirely;
+// Go stores them in Record.Items next to the response items, so every caller
+// that estimates, summarizes or replays history must filter them the same way
+// session.InputItemsFromRecord does. Otherwise a commandExecution carrying its
+// aggregated output is charged (and compacted) as if the model had received it
+// twice.
 func compactItemsFromSessionItems(items []session.Item) []compact.Item {
 	out := make([]compact.Item, 0, len(items))
 	for i := range items {
 		item := items[i]
+		if !session.ModelVisibleHistoryItem(&item) {
+			continue
+		}
 		compactItem := compact.Item{
 			ID:                     item.ID,
 			Type:                   item.Type,
@@ -2569,6 +2581,12 @@ func (r *Router) handleThreadRead(request *Request) (*ThreadReadResponse, error)
 	}
 	path := r.threadRolloutPath(record)
 	response := &ThreadReadResponse{Thread: BuildThread(record, path, params.IncludeTurns)}
+	if response.Thread != nil && r.threadManager().LiveThread(session.ThreadID(params.ThreadID)) != nil {
+		// Rust #61837: a loaded thread reuses the metadata it already read, so
+		// its stored title is trimmed there instead of being re-read, and a
+		// legacy thread never promotes a preview-equal title into a name.
+		response.Thread.Name = displayThreadTitle(response.Thread.HistoryMode, response.Thread.Preview, response.Thread.Name)
+	}
 	if paginatedRead && response.Thread != nil {
 		response.Thread.Turns = paginatedTurns
 	}
@@ -2932,10 +2950,33 @@ func applyThreadForkOverrides(record *session.Record, params *ThreadForkParams) 
 	if params.Config != nil {
 		record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
 		record.Metadata.Extra["config"] = threadConfigWithoutUnloadDelay(params.Config)
+		// Rust side_fork_config (#60319) hands the fork the new thread's Config,
+		// so a `daybreak` override is that thread's saved preference too.
+		if enabled, ok := threadConfigBoolValue(params.Config, "daybreak"); ok {
+			record.Metadata.DaybreakEnabled = &enabled
+		}
 	}
 	if params.ServiceTierSet || params.ServiceTier != nil {
 		record.Metadata.ServiceTier = threadLifecycleServiceTierForModel(nil, params.ServiceTierSet, params.ServiceTier, record.Metadata.Model)
 	}
+}
+
+// threadConfigBoolValue reads one boolean fork config override. The config map
+// arrives decoded from JSON, so the value is either a bool or its string form.
+func threadConfigBoolValue(values map[string]any, key string) (bool, bool) {
+	if len(values) == 0 {
+		return false, false
+	}
+	switch value := values[key].(type) {
+	case bool:
+		return value, true
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+		if err == nil {
+			return parsed, true
+		}
+	}
+	return false, false
 }
 
 func cloneSessionBaseInstructionsProvenance(value *session.BaseInstructionsProvenance) *session.BaseInstructionsProvenance {
@@ -3733,7 +3774,11 @@ func (r *Router) handleThreadCompactStart(request *Request) (*ThreadCompactStart
 	// the compaction summary. Capture it before the replacement overwrites the
 	// history (the runtime compaction path does the same).
 	declarationPrefix := incrementalDeclarationPrefixItems(record.Items)
-	record.Items = sessionItemsFromCompactItems(compacted.NewHistory, now)
+	compactedItems := sessionItemsFromCompactItems(compacted.NewHistory, now)
+	// Rust `Session::checkpoint_sampling`: the replacement acknowledges the
+	// sampling prefix of the history it replaces before it is installed.
+	session.CheckpointSampling(compactedItems, record.Items)
+	record.Items = compactedItems
 	record.UpdatedAt = now
 	record.RecencyAt = now
 	if record.Metadata.Extra == nil {

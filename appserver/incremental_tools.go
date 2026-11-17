@@ -154,14 +154,34 @@ func (r *RuntimeRouter) incrementalToolCatalogForTurnWithModelMessages(threadID 
 	if err != nil {
 		return incrementalToolCatalogResult{}, err
 	}
-	previousHashes, previousKnown := session.TopLevelToolsSnapshotForWindow(state.TopLevelTools, windowNumber)
+	// Rust's top_level_tools snapshot carries no window number; Go keeps the
+	// recorded window in thread metadata and treats a snapshot from another
+	// window as absent, so a replacement re-declares the full catalog.
+	var recordedWindow *uint64
+	if storedWindow, storedKnown := model.ToolDeclarationWindowNumberFromStored(extra); storedKnown {
+		recordedWindow = &storedWindow
+	}
+	previousHashes, previousKnown := session.TopLevelToolsSnapshotForWindow(state.TopLevelTools, windowNumber, recordedWindow)
+	if changed {
+		previousKnown = false
+	}
 	if !changed && !previousKnown {
 		// An existing window that never recorded a catalog snapshot (a window
 		// whose declarations were rebuilt on every request, Rust legacy resume)
 		// keeps that shape: only a window boundary starts a recorded catalog.
 		return incrementalToolCatalogResult{}, nil
 	}
-	previousModel, previousBaseHash, baseKnown := session.ModelInstructionsSnapshotForWindow(state.BaseInstructions, windowNumber)
+	previousModel, previousBaseHash, baseKnown, previousHasInstructions := "", "", false, false
+	if !changed {
+		previousModel, previousBaseHash, baseKnown, previousHasInstructions = session.DecodeModelStateSnapshot(state.Model)
+		if !previousHasInstructions {
+			// Migrate the retired Go-only base_instructions section when it still
+			// belongs to this window.
+			if legacyModel, legacyHash, legacyKnown := session.ModelInstructionsSnapshotForWindow(state.BaseInstructions, windowNumber); legacyKnown {
+				previousModel, previousBaseHash, baseKnown, previousHasInstructions = legacyModel, legacyHash, true, true
+			}
+		}
+	}
 
 	var hashes map[string]string
 	var toolUpdates []session.WorldStateUpdate
@@ -185,7 +205,7 @@ func (r *RuntimeRouter) incrementalToolCatalogForTurnWithModelMessages(threadID 
 		// so this is its single call site.
 		session.RecordChangedToolMetrics(definitions, previousHashes, previousKnown, hashes)
 	}
-	baseHash, baseUpdates, advanceModelSnapshot := session.ModelInstructionsUpdate(modelID, instructions, previousModel, previousBaseHash, baseKnown, r.suppressModelChangeAnnouncements())
+	baseHash, baseUpdates, advanceModelSnapshot := session.ModelInstructionsUpdate(modelID, instructions, previousModel, previousBaseHash, baseKnown, previousHasInstructions, r.suppressModelChangeAnnouncements())
 	items := session.MergeWorldStateUpdates(append(toolUpdates, baseUpdates...))
 	for i := range items {
 		if identified, ok := incrementalToolCatalogRequestItem(items[i], threadID); ok {
@@ -202,20 +222,24 @@ func (r *RuntimeRouter) incrementalToolCatalogForTurnWithModelMessages(threadID 
 
 	updated := false
 	if changed || !previousKnown || !sameToolDeclarationHashes(hashes, previousHashes) {
-		snapshot, encodeErr := session.EncodeTopLevelToolsSnapshot(windowNumber, hashes)
+		snapshot, encodeErr := session.EncodeTopLevelToolsSnapshot(hashes)
 		if encodeErr != nil {
 			return incrementalToolCatalogResult{}, encodeErr
 		}
 		state.TopLevelTools = snapshot
 		updated = true
 	}
-	if changed || advanceModelSnapshot {
-		snapshot, encodeErr := session.EncodeModelInstructionsSnapshot(windowNumber, modelID, baseHash)
+	if changed || advanceModelSnapshot || !previousHasInstructions {
+		snapshot, encodeErr := session.EncodeModelStateSnapshot(modelID, baseHash)
 		if encodeErr != nil {
 			return incrementalToolCatalogResult{}, encodeErr
 		}
-		state.BaseInstructions = snapshot
+		state.Model = snapshot
 		updated = true
+	}
+	if updated {
+		// The retired Go-only section must not survive next to `model`.
+		state.BaseInstructions = nil
 	}
 	if changed {
 		// Freeze the window decision so a resumed window keeps its catalog even

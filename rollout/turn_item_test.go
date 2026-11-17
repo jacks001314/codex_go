@@ -44,8 +44,8 @@ func TestPaginatedAppendSessionItemsWritesRustItemCompletedWire(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(rows) != 4 {
-		t.Fatalf("rollout rows = %d, want 4\n%s", len(rows), data)
+	if len(rows) != 5 {
+		t.Fatalf("rollout rows = %d, want 5\n%s", len(rows), data)
 	}
 	var header map[string]any
 	if err := json.Unmarshal([]byte(rows[0]), &header); err != nil {
@@ -53,6 +53,29 @@ func TestPaginatedAppendSessionItemsWritesRustItemCompletedWire(t *testing.T) {
 	}
 	if header["type"] != "session_meta" || header["ordinal"] != float64(0) || header["payload"] == nil || header["meta"] != nil {
 		t.Fatalf("session header = %#v", header)
+	}
+	// Rust records the model-visible item as a response_item line next to the
+	// display-only TurnItem event (RolloutItem::ResponseItem vs EventMsg).
+	var responseItem struct {
+		Type    string `json:"type"`
+		Ordinal uint64 `json:"ordinal"`
+		Payload struct {
+			Type    string `json:"type"`
+			Role    string `json:"role"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal([]byte(rows[2]), &responseItem); err != nil {
+		t.Fatal(err)
+	}
+	if responseItem.Type != "response_item" || responseItem.Ordinal != 2 || responseItem.Payload.Type != "message" || responseItem.Payload.Role != "user" {
+		t.Fatalf("response item = %#v", responseItem)
+	}
+	if len(responseItem.Payload.Content) != 1 || responseItem.Payload.Content[0].Type != "input_text" || responseItem.Payload.Content[0].Text != "hello" {
+		t.Fatalf("response item content = %#v", responseItem.Payload.Content)
 	}
 	var completed struct {
 		Type    string `json:"type"`
@@ -66,10 +89,10 @@ func TestPaginatedAppendSessionItemsWritesRustItemCompletedWire(t *testing.T) {
 			Item          map[string]any `json:"item"`
 		} `json:"payload"`
 	}
-	if err := json.Unmarshal([]byte(rows[2]), &completed); err != nil {
+	if err := json.Unmarshal([]byte(rows[3]), &completed); err != nil {
 		t.Fatal(err)
 	}
-	if completed.Type != "event_msg" || completed.Ordinal != 2 || completed.Payload.Type != "item_completed" || completed.Payload.ThreadID != "thread-rust-wire" || completed.Payload.TurnID != "turn-1" {
+	if completed.Type != "event_msg" || completed.Ordinal != 3 || completed.Payload.Type != "item_completed" || completed.Payload.ThreadID != "thread-rust-wire" || completed.Payload.TurnID != "turn-1" {
 		t.Fatalf("completed event = %#v", completed)
 	}
 	if completed.Payload.StartedAtMS != now.Add(time.Second).UnixMilli() || completed.Payload.CompletedAtMS != now.Add(time.Second).UnixMilli() {

@@ -1878,7 +1878,7 @@ func TestModelAppliesTurnCompleted(t *testing.T) {
 	if state.Status != "error" {
 		t.Fatalf("Status = %q, want error", state.Status)
 	}
-	if !strings.Contains(model.viewString(), "Error: boom") {
+	if !strings.Contains(model.viewString(), "\u25a0 boom") {
 		t.Fatalf("View() missing error:\n%s", model.viewString())
 	}
 }
@@ -2590,12 +2590,12 @@ func TestModelDoesNotMarkUpdatePlanFailedOnTurnFailure(t *testing.T) {
 	model.Update(ThreadEventMsg{Event: protocol.TurnFailed("network boom")})
 
 	view := model.viewString()
-	for _, want := range []string{"Updated Plan", "read Rust TUI", "port behavior", "Error: network boom"} {
+	for _, want := range []string{"Updated Plan", "read Rust TUI", "port behavior", "\u25a0 network boom"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("View() missing %q:\n%s", want, view)
 		}
 	}
-	for _, unwanted := range []string{"Running update_plan", "Ran update_plan", "update_plan {", "Error: network boom\n  └"} {
+	for _, unwanted := range []string{"Running update_plan", "Ran update_plan", "update_plan {", "\u25a0 network boom\n  └"} {
 		if strings.Contains(view, unwanted) {
 			t.Fatalf("update_plan should not be rendered or failed as exec cell %q:\n%s", unwanted, view)
 		}
@@ -2642,7 +2642,7 @@ func TestModelKeepsConfirmedThreadOnTransientTurnFailure(t *testing.T) {
 	if state.ThreadID != "thread-existing" {
 		t.Fatalf("ThreadID after transient failure = %q, want existing thread", state.ThreadID)
 	}
-	if !strings.Contains(model.viewString(), "Error: read tcp: connection reset") {
+	if !strings.Contains(model.viewString(), "\u25a0 read tcp: connection reset") {
 		t.Fatalf("View() missing transient error:\n%s", model.viewString())
 	}
 }
@@ -2657,7 +2657,7 @@ func TestModelClearsThreadNotFoundFailures(t *testing.T) {
 	if state.ThreadID != "" {
 		t.Fatalf("ThreadID after thread-not-found = %q, want cleared", state.ThreadID)
 	}
-	if !strings.Contains(model.viewString(), "Error: thread not found: thread-missing") {
+	if !strings.Contains(model.viewString(), "\u25a0 thread not found: thread-missing") {
 		t.Fatalf("View() missing thread-not-found error:\n%s", model.viewString())
 	}
 }
@@ -2673,7 +2673,7 @@ func TestModelDedupesRepeatedTurnErrors(t *testing.T) {
 
 	count := 0
 	for _, message := range state.Messages {
-		if strings.Contains(message.Text, "Error: network boom") {
+		if strings.Contains(message.Text, "network boom") {
 			count++
 		}
 	}
@@ -6876,11 +6876,34 @@ func TestModelStatusLineSetupModalTogglesAndSaves(t *testing.T) {
 	if view := model.viewString(); !strings.Contains(view, "Status line setup") || !strings.Contains(view, "space toggle · enter save · esc cancel") {
 		t.Fatalf("status line setup modal missing:\n%s", view)
 	}
+	if view := model.viewString(); !strings.Contains(view, "[x] Use theme colors") {
+		t.Fatalf("status line setup must always expose the theme colour option:\n%s", view)
+	}
 
+	// Rust #60027 lists "Use theme colors" first; move to the model item
+	// before toggling it on.
+	model.Update(key(keymsg.KeyDown))
 	model.Update(key(keymsg.KeySpace))
 	model.Update(key(keymsg.KeyEnter))
 	if view := model.viewString(); !strings.Contains(view, "gpt-5") {
 		t.Fatalf("saved status line missing selected model:\n%s", view)
+	}
+}
+
+func TestModelStatusLineSetupTogglesThemeColorsLikeRust(t *testing.T) {
+	state := codextui.NewState(&codextui.Options{Model: "gpt-5"})
+	model := NewModel(state, Options{Width: 100, Height: 24})
+
+	typeText(t, model, "/statusline")
+	model.Update(key(keymsg.KeyEnter))
+	model.Update(key(keymsg.KeySpace))
+	model.Update(key(keymsg.KeyEnter))
+
+	if model.statusLineUseColors {
+		t.Fatal("theme colours stayed enabled after toggling the picker option off")
+	}
+	if model.statusControls == nil || model.statusControls.StatusLineUseThemeColors {
+		t.Fatal("status controls did not receive the theme colour choice")
 	}
 }
 

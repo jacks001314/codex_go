@@ -50,3 +50,37 @@ ok  codex_go/tui/tea     48.321s
 ```
 go test ./appserver -run "SuspendAgentTree|LoadSuspendedAgent" -count=1   # 通过
 ```
+
+## 本轮补齐：挂起前持久化未投递的终端子结果
+
+对应 Rust `save_evicted_parent_results`（`core/src/thread_manager/shutdown.rs:265`）与
+`AgentRuntime::save_results_after_eviction`（`core/src/agent/control/runtime.rs:422`）：
+挂起在等待活动回合离位后，把仍在队列里的终端子结果写入父线程历史与 rollout，
+再消费该投递；写入未确认时上报失败而不是静默丢弃。
+
+- `runtimeAgentMessageIsTerminalResult`：按 Rust `PendingAgentMessage::is_terminal_result`
+  的等价判据识别终端结果——`agent_message` 且首段 `input_text` 以
+  `Message Type: FINAL_ANSWER\n` 开头（与 `compact.isAgentCompletionMessage` 同一约定）。
+- `takeRuntimeAgentTerminalResults`：只摘走终端结果，其余邮件保持原顺序继续排队。
+- `persistSuspendedAgentResults`：对每个仍有队列的线程调用
+  `persistRuntimeAgentCommunicationItems`，写入
+  `inter_agent_communication_metadata(trigger_turn=false)` + `agent_message`
+  （队列邮件本就不触发回合，与 Rust 该分支一致），随后回读记录确认落盘；
+  未确认则返回错误。
+- `SuspendAgentTree` 在等待完所有被取消回合后执行上述持久化，对应 Rust
+  `shutdown_state.members.wait()` 之后调用 `save_results_after_eviction`。
+
+回归（`appserver/agent_suspend_results_like_rust_test.go`）：
+
+- 队列中同时有 `MESSAGE` 与 `FINAL_ANSWER` 时，挂起只持久化终端结果；非终端邮件
+  仍在队列里等待下一回合（与 Rust 只 take 终端结果一致）。
+- 父线程记录与 rollout 都各出现一条终端结果（boundary + item），author/recipient
+  与原始投递一致。
+- 重复挂起不新增任何 rollout 行。
+
+```
+go build ./...
+go vet ./appserver
+go test ./appserver -run "SuspendAgentTree|LoadSuspendedAgent|AgentCommunication|Mailbox" -count=1   # 通过
+python update/ledger_verify_2026_11_08.py   # GATE: PASS（partial 28 → 27）
+```

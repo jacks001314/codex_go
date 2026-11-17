@@ -1,0 +1,82 @@
+2026/11/16 22:17:45 WARN agent tree shutdown failure recorded tree_id=005c400c-a5af-4177-8e1b-6ec4739c1d84 operation=list_descendants phase=list_open_descendants thread_id=01a1e4b8-98d0-7027-8fb2-20b9cf9cfb58 reason=operation_failed error_kind=thread_store_conflict
+2026/11/16 22:17:45 WARN agent tree shutdown failure recorded tree_id=005c400c-a5af-4177-8e1b-6ec4739c1d84 operation=close_spawn_edge phase=set_spawn_edge_closed thread_id=01a1e4b8-98d0-7027-8fb2-20b9cf9cfb58 reason=operation_failed error_kind=operation_error
+2026/11/16 22:17:51 WARN MCP server startup failed server_name=codex_apps error="MCP HTTP tools/list failed: 500 Internal Server Error: catalog unavailable"
+2026/11/16 22:17:52 WARN MCP server startup failed server_name=codex_apps error="MCP HTTP tools/list failed: 500 Internal Server Error: catalog unavailable"
+2026/11/16 22:17:54 WARN Codex local database appears damaged; moving it into a backup folder so the app server can rebuild it from saved data database=C:\Users\huoga\AppData\Local\Temp\TestAttachedThreadForkDiscoveryRestartRecoveryAndDeleteLikeRust3448242148\001\state_5.sqlite
+2026/11/16 22:17:54 WARN moved damaged Codex local database file database=C:\Users\huoga\AppData\Local\Temp\TestAttachedThreadForkDiscoveryRestartRecoveryAndDeleteLikeRust3448242148\001\state_5.sqlite backup=C:\Users\huoga\AppData\Local\Temp\TestAttachedThreadForkDiscoveryRestartRecoveryAndDeleteLikeRust3448242148\001\db-backups\sqlite-1794838674-0\state_5.sqlite
+2026/11/16 22:17:55 WARN MCP server startup failed server_name=codex_apps error="MCP -32000: temporary orchestrator failure: mcp remote error"
+2026/11/16 22:17:55 WARN MCP server startup failed server_name=codex_apps error="MCP -32000: temporary orchestrator failure: mcp remote error"
+2026/11/16 22:18:27 WARN failed to restore saved daemon thread thread_id=thread-a error="daemon recovery resume failed: thread not found: thread-a (code -32004)"
+2026/11/16 22:18:30 ERROR failed to read current time; the clock provider may be stalled thread_id=thread-clock-removal turn_id=turn-2 error=PRIVATE_CLOCK_ERROR
+2026/11/16 22:18:30 ERROR failed to read current time; the clock provider may be stalled thread_id=thread-clock-removal turn_id=turn-3 error=PRIVATE_CLOCK_ERROR
+2026/11/16 22:18:30 ERROR failed to read current time; the clock provider may be stalled thread_id=thread-compact-clock-removal turn_id=turn-compact error=PRIVATE_CLOCK_ERROR
+2026/11/16 22:18:30 ERROR failed to read current time; the clock provider may be stalled thread_id=thread-compact-clock-removal turn_id=turn-after-compact error=PRIVATE_CLOCK_ERROR
+--- FAIL: TestGatewayOAuthDeviceAuthorizationLikeRust (1.02s)
+    gateway_oauth_device_auth_like_rust_test.go:114: correlated notification = &appserver.GatewayOAuthChangedNotification{LoginID:(*string)(0x21730f4c8bd0), AuthURL:(*string)(nil), ProviderID:"gateway", Status:"failed", Error:(*string)(0x21730eafc030)}
+--- FAIL: TestGatewayOAuthLoginForwardsAuthURLAndSucceedsLikeRust (0.02s)
+    gateway_oauth_test.go:187: account/gatewayOAuth/login error = &{Code:-32603 Message:failed to save provider OAuth credentials Data:map[]}
+2026/11/16 22:19:08 INFO codex.exec_server.process_start target=codex_otel.log_only event.name=codex.exec_server.process_start launch.trace_id=27707a0f-3a5d-4954-9f0f-c6fdeeaeb9f6 launch.span_id=1f675cef-8381-44c2-8608-9e331803624c conversation.id="" tool.call_id="" executor.environment_id="" executor.registration_id="" sandbox.type=None
+2026/11/16 22:19:08 INFO codex.exec_server.process_exit target=codex_otel.log_only event.name=codex.exec_server.process_exit launch.trace_id=27707a0f-3a5d-4954-9f0f-c6fdeeaeb9f6 launch.span_id=1f675cef-8381-44c2-8608-9e331803624c conversation.id="" tool.call_id="" executor.environment_id="" executor.registration_id="" sandbox.type=None process.exit_code=0 process.termination_requested=false
+2026/11/16 22:19:08 INFO codex.exec_server.process_start target=codex_otel.log_only event.name=codex.exec_server.process_start launch.trace_id=6b0fafda-4d55-40ec-b922-16039812e723 launch.span_id=9c0abc27-b319-4eb3-85f3-ad74d82e0e1a conversation.id="" tool.call_id="" executor.environment_id="" executor.registration_id="" sandbox.type=None
+2026/11/16 22:19:08 INFO codex.exec_server.process_exit target=codex_otel.log_only event.name=codex.exec_server.process_exit launch.trace_id=6b0fafda-4d55-40ec-b922-16039812e723 launch.span_id=9c0abc27-b319-4eb3-85f3-ad74d82e0e1a conversation.id="" tool.call_id="" executor.environment_id="" executor.registration_id="" sandbox.type=None process.exit_code=0 process.termination_requested=false
+2026/11/16 22:19:08 WARN failed to build managed network proxy error="path is not absolute: .gcode"
+2026/11/16 22:19:08 WARN failed to build managed network proxy error="path is not absolute: .gcode"
+--- FAIL: TestFeedbackUploadAttachesLegacySQLiteLogsLikeRust (20.64s)
+    logs_home_test.go:134: feedback upload error = &{Code:-32603 Message:failed to upload feedback: Sentry rejected feedback upload with HTTP status 0 Data:map[]}
+time=2026-11-16T22:20:10.925+08:00 level=INFO msg="telemetry audit" target=codex_otel.log_only thread_id=thread-1
+time=2026-11-16T22:20:10.981+08:00 level=INFO msg="INFO reloaded telemetry exporters after account change event.name=codex.app_server.otel_reloaded"
+time=2026-11-16T22:20:11.037+08:00 level=INFO msg="INFO reloaded telemetry exporters after account change event.name=codex.app_server.otel_reloaded"
+time=2026-11-16T22:20:11.044+08:00 level=INFO msg="INFO reloaded telemetry exporters after account change event.name=codex.app_server.otel_reloaded"
+time=2026-11-16T22:20:11.059+08:00 level=INFO msg="WARN ignoring invalid inbound request trace carrier rpc_method=thread/list rpc_request_id=1"
+time=2026-11-16T22:20:15.236+08:00 level=INFO msg="WARN MCP server startup failed server_name=staged error=\"exec: \\\"staged-mcp\\\": executable file not found in %PATH%\""
+time=2026-11-16T22:20:15.239+08:00 level=INFO msg="WARN failed to apply MCP configuration error=\"C:\\\\Users\\\\huoga\\\\AppData\\\\Local\\\\Temp\\\\TestRuntimeRouterPluginInstallSurvivesConfigReloadFailureLikeRus3985301499\\\\001\\\\config.toml:1:9: unclosed table, expected `]`\""
+time=2026-11-16T22:20:18.401+08:00 level=INFO msg="INFO installed plugin runtime metadata invalidated change_id=d2f169f3e308a7ba18b6713070957c48 marketplace=openai-curated-remote changes=map[plugins~Plugin_demo:[added]] initial_snapshot=true"
+time=2026-11-16T22:20:18.402+08:00 level=INFO msg="INFO effective plugins changed reason=installed_plugin_metadata change_id=d2f169f3e308a7ba18b6713070957c48"
+time=2026-11-16T22:20:18.404+08:00 level=INFO msg="INFO installed plugin runtime metadata invalidated change_id=d819d7f2ccec5c0b79600dcfc9ae6788 marketplace=openai-curated-remote changes=map[plugins~Plugin_demo:[availability]] initial_snapshot=false"
+time=2026-11-16T22:20:18.404+08:00 level=INFO msg="INFO effective plugins changed reason=installed_plugin_metadata change_id=d819d7f2ccec5c0b79600dcfc9ae6788"
+time=2026-11-16T22:20:18.414+08:00 level=INFO msg="INFO installed plugin runtime metadata invalidated change_id=0607d3d6ecbcd6becf317f66ad042778 marketplace=openai-curated-remote changes=map[plugins~Plugin_missing:[added]] initial_snapshot=true"
+time=2026-11-16T22:20:18.415+08:00 level=INFO msg="INFO effective plugins changed reason=installed_plugin_metadata change_id=0607d3d6ecbcd6becf317f66ad042778"
+time=2026-11-16T22:20:18.419+08:00 level=INFO msg="INFO installed plugin runtime metadata invalidated change_id=24064ec6a52ebcb73389d6895f93d61b marketplace=openai-curated-remote changes=map[plugins~Plugin_old_account:[added]] initial_snapshot=true"
+time=2026-11-16T22:20:18.419+08:00 level=INFO msg="INFO installed plugin runtime metadata invalidated change_id=9f15e750d8e043ae5b48ea9d04ea0a99 marketplace=openai-curated-remote changes=map[plugins~Plugin_old_account:[removed]] initial_snapshot=false"
+time=2026-11-16T22:20:18.423+08:00 level=INFO msg="INFO installed plugin runtime metadata invalidated change_id=2b150ee80a4bd0fe87a11011880e9e07 marketplace=openai-curated-remote changes=map[plugins~Plugin_retry:[added]] initial_snapshot=true"
+time=2026-11-16T22:20:18.424+08:00 level=INFO msg="INFO effective plugins changed reason=installed_plugin_metadata change_id=2b150ee80a4bd0fe87a11011880e9e07"
+time=2026-11-16T22:20:21.246+08:00 level=INFO msg="WARN previous-model compaction failed; retried with current model previous_model=gpt-previous current_model=gpt-current reason=comp_hash_changed outcome=succeeded error=<nil>"
+time=2026-11-16T22:20:22.730+08:00 level=INFO msg="WARN ignoring project_doc_fallback_filenames entry that is not a filename"
+time=2026-11-16T22:20:22.730+08:00 level=INFO msg="WARN ignoring project_doc_fallback_filenames entry that is not a filename"
+time=2026-11-16T22:20:22.730+08:00 level=INFO msg="WARN ignoring project_doc_fallback_filenames entry that is not a filename"
+time=2026-11-16T22:20:22.730+08:00 level=INFO msg="WARN ignoring project_doc_fallback_filenames entry that is not a filename"
+time=2026-11-16T22:20:22.730+08:00 level=INFO msg="WARN ignoring project_doc_fallback_filenames entry that is not a filename"
+--- FAIL: TestRuntimeRouterSDKContractSmoke (0.56s)
+    runtime_router_test.go:8605: MCP methods = []string{"initialize", "notifications/initialized", "tools/list", "tools/call"}
+time=2026-11-16T22:22:39.917+08:00 level=WARN msg="MCP server startup failed" server_name=docs error="io: read/write on closed pipe"
+time=2026-11-16T22:22:58.712+08:00 level=ERROR msg="sqlite quick check detected corruption" database=C:\Users\huoga\AppData\Local\Temp\TestRuntimeRouterReusesStartupCorruptionMetricsLikeRust3592884401\001\state_5.sqlite label="state DB"
+time=2026-11-16T22:22:58.728+08:00 level=WARN msg="preserved corrupt sqlite database before rebuilding" database=C:\Users\huoga\AppData\Local\Temp\TestRuntimeRouterReusesStartupCorruptionMetricsLikeRust3592884401\001\state_5.sqlite backup=C:\Users\huoga\AppData\Local\Temp\TestRuntimeRouterReusesStartupCorruptionMetricsLikeRust3592884401\001\db-backups\sqlite-1794838978-0\state_5.sqlite
+time=2026-11-16T22:22:58.979+08:00 level=ERROR msg="sqlite quick check detected corruption" database=C:\Users\huoga\AppData\Local\Temp\TestRuntimeRouterRecoversWithoutMetricsLikeRust2611247493\001\state_5.sqlite label="state DB"
+time=2026-11-16T22:22:58.980+08:00 level=WARN msg="preserved corrupt sqlite database before rebuilding" database=C:\Users\huoga\AppData\Local\Temp\TestRuntimeRouterRecoversWithoutMetricsLikeRust2611247493\001\state_5.sqlite backup=C:\Users\huoga\AppData\Local\Temp\TestRuntimeRouterRecoversWithoutMetricsLikeRust2611247493\001\db-backups\sqlite-1794838978-0\state_5.sqlite
+time=2026-11-16T22:22:59.720+08:00 level=ERROR msg="sqlite quick check detected corruption" database=C:\Users\huoga\AppData\Local\Temp\TestStartupReportsSharedAndFallbackRecoveryLikeRust806730948\001\logs_2.sqlite label="log DB"
+time=2026-11-16T22:22:59.721+08:00 level=WARN msg="preserved corrupt sqlite database before rebuilding" database=C:\Users\huoga\AppData\Local\Temp\TestStartupReportsSharedAndFallbackRecoveryLikeRust806730948\001\logs_2.sqlite backup=C:\Users\huoga\AppData\Local\Temp\TestStartupReportsSharedAndFallbackRecoveryLikeRust806730948\001\db-backups\sqlite-1794838979-0\logs_2.sqlite
+time=2026-11-16T22:22:59.764+08:00 level=WARN msg="Codex local database appears damaged; moving it into a backup folder so the app server can rebuild it from saved data" database=C:\Users\huoga\AppData\Local\Temp\TestStartupReportsSharedAndFallbackRecoveryLikeRust806730948\001\goals_1.sqlite
+time=2026-11-16T22:22:59.767+08:00 level=WARN msg="moved damaged Codex local database file" database=C:\Users\huoga\AppData\Local\Temp\TestStartupReportsSharedAndFallbackRecoveryLikeRust806730948\001\goals_1.sqlite backup=C:\Users\huoga\AppData\Local\Temp\TestStartupReportsSharedAndFallbackRecoveryLikeRust806730948\001\db-backups\sqlite-1794838979-1\goals_1.sqlite
+time=2026-11-16T22:23:00.632+08:00 level=INFO msg="persisted app-server log" target=test thread_id=stdio-log-thread
+time=2026-11-16T22:23:06.326+08:00 level=WARN msg="Codex local database appears damaged; moving it into a backup folder so the app server can rebuild it from saved data" database=C:\Users\huoga\AppData\Local\Temp\TestStateRuntimeStartupRecoversOnlyCorruptDatabase1805301660\001\logs_2.sqlite
+time=2026-11-16T22:23:06.327+08:00 level=WARN msg="moved damaged Codex local database file" database=C:\Users\huoga\AppData\Local\Temp\TestStateRuntimeStartupRecoversOnlyCorruptDatabase1805301660\001\logs_2.sqlite backup=C:\Users\huoga\AppData\Local\Temp\TestStateRuntimeStartupRecoversOnlyCorruptDatabase1805301660\001\db-backups\sqlite-1794838986-0\logs_2.sqlite
+time=2026-11-16T22:23:34.632+08:00 level=WARN msg="MCP server startup failed" server_name=codex_apps error="MCP HTTP initialize failed: 404 Not Found: 404 page not found"
+time=2026-11-16T22:23:34.667+08:00 level=WARN msg="MCP server startup failed" server_name=codex_apps error="MCP HTTP initialize failed: 404 Not Found: 404 page not found"
+time=2026-11-16T22:23:35.049+08:00 level=WARN msg="MCP server startup failed" server_name=codex_apps error="MCP HTTP initialize failed: 404 Not Found: 404 page not found"
+time=2026-11-16T22:23:35.090+08:00 level=WARN msg="MCP server startup failed" server_name=codex_apps error="MCP HTTP initialize failed: 404 Not Found: 404 page not found"
+time=2026-11-16T22:23:37.847+08:00 level=INFO msg="app-server WebSocket compression payload totals" connection_id=2 connection_kind=listener direction=rx report=final uncompressed_bytes=227 compressed_bytes=161 messages=3 saved_percent=29.074889867841414
+time=2026-11-16T22:23:37.847+08:00 level=INFO msg="app-server WebSocket compression payload totals" connection_id=2 connection_kind=listener direction=tx report=final uncompressed_bytes=3320 compressed_bytes=1107 messages=4 saved_percent=66.6566265060241
+time=2026-11-16T22:23:37.912+08:00 level=INFO msg="app-server WebSocket compression payload totals" connection_id=4 connection_kind=listener direction=rx report=final uncompressed_bytes=0 compressed_bytes=0 messages=0 saved_percent=<nil>
+time=2026-11-16T22:23:37.913+08:00 level=INFO msg="app-server WebSocket compression payload totals" connection_id=4 connection_kind=listener direction=tx report=final uncompressed_bytes=0 compressed_bytes=0 messages=0 saved_percent=<nil>
+time=2026-11-16T22:23:37.920+08:00 level=WARN msg="failed to decode compressed websocket message" error="invalid input: magic number mismatch"
+time=2026-11-16T22:23:37.920+08:00 level=INFO msg="app-server WebSocket compression payload totals" connection_id=5 connection_kind=listener direction=rx report=final uncompressed_bytes=0 compressed_bytes=0 messages=0 saved_percent=<nil>
+time=2026-11-16T22:23:37.920+08:00 level=INFO msg="app-server WebSocket compression payload totals" connection_id=5 connection_kind=listener direction=tx report=final uncompressed_bytes=0 compressed_bytes=0 messages=0 saved_percent=<nil>
+time=2026-11-16T22:23:37.932+08:00 level=INFO msg="app-server WebSocket compression payload totals" connection_id=42 connection_kind=listener direction=rx report=final uncompressed_bytes=384 compressed_bytes=57 messages=2 saved_percent=85.15625
+time=2026-11-16T22:23:37.932+08:00 level=INFO msg="app-server WebSocket compression payload totals" connection_id=42 connection_kind=listener direction=tx report=final uncompressed_bytes=384 compressed_bytes=57 messages=2 saved_percent=85.15625
+time=2026-11-16T22:23:37.933+08:00 level=INFO msg="app-server WebSocket compression payload totals" connection_id=1 connection_kind=native_client direction=rx report=final uncompressed_bytes=0 compressed_bytes=0 messages=0 saved_percent=<nil>
+time=2026-11-16T22:23:37.933+08:00 level=INFO msg="app-server WebSocket compression payload totals" connection_id=1 connection_kind=native_client direction=tx report=final uncompressed_bytes=128 compressed_bytes=26 messages=1 saved_percent=79.6875
+time=2026-11-16T22:23:40.478+08:00 level=WARN msg="could not register desktop uninstall ownership" error="service unavailable"
+time=2026-11-16T22:23:40.493+08:00 level=WARN msg="registered Core startup refresh requires manual setup" error="service unavailable"
+FAIL
+FAIL	codex_go/appserver	366.767s
+FAIL

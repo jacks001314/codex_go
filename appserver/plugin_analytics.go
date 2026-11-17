@@ -5,8 +5,10 @@ import (
 	"errors"
 	"strings"
 
+	"codex_go/config"
 	"codex_go/plugin"
 	"codex_go/telemetry"
+	"codex_go/turn"
 )
 
 func (r *RuntimeRouter) emitPluginStateAnalyticsEvent(ctx context.Context, connectionID string, eventType string, detail *plugin.PluginDetail) {
@@ -52,6 +54,94 @@ func (r *RuntimeRouter) emitPluginInstallFailedAnalyticsEvent(ctx context.Contex
 		pluginAnalyticsInstallErrorType(installErr),
 	)
 	sink.TrackCodexPluginInstallFailedEvent(ctx, event)
+}
+
+// rememberExplicitPluginMentions reports each plugin the turn's input named
+// explicitly. Rust core/src/session/turn.rs walks the mentioned plugin
+// summaries, resolves telemetry metadata for each and calls track_plugin_used;
+// the analytics client drops repeats of the same plugin within a turn.
+func (r *RuntimeRouter) rememberExplicitPluginMentions(ctx context.Context, threadID string, turnID string, connectionID string, params *turn.TurnStartParams, cfg *config.Config, modelSlug string) {
+	if r == nil || r.services.Plugins == nil || r.services.Analytics == nil || r.threadAnalyticsDisabled(threadID) {
+		return
+	}
+	sink, ok := r.services.Analytics.(telemetry.PluginUsedEventSink)
+	if !ok {
+		return
+	}
+	mentioned := plugin.CollectExplicitPluginMentions(pluginUserInputFromTurn(params), r.pluginCapabilitiesForThread(threadID))
+	if len(mentioned) == 0 {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	productClientID := r.analyticsProductClientID(connectionID)
+	turnTrigger := r.analyticsTurnTriggerForTurn(threadID, turnID)
+	for _, capability := range mentioned {
+		metadata, pluginKey, reportable := pluginUsedAnalyticsMetadata(capability, productClientID, turnTrigger, threadID, turnID, modelSlug)
+		if !reportable || !r.claimPluginUsedKey(turnID, pluginKey) {
+			continue
+		}
+		sink.TrackCodexPluginUsedEvent(ctx, telemetry.NewCodexPluginUsedEvent(metadata))
+	}
+}
+
+// pluginUsedAnalyticsMetadata builds Rust's codex_plugin_used_metadata from a
+// capability summary. The plugin identity is parsed from the capability's
+// config name, exactly like telemetry_metadata_for_capability_summary; a
+// config name that is not a `<plugin>@<marketplace>` key makes the plugin
+// unreportable.
+func pluginUsedAnalyticsMetadata(capability plugin.CapabilitySummary, productClientID string, turnTrigger *string, threadID string, turnID string, modelSlug string) (telemetry.CodexPluginUsedMetadata, string, bool) {
+	pluginID, err := plugin.ParsePluginId(capability.ConfigName)
+	if err != nil {
+		return telemetry.CodexPluginUsedMetadata{}, "", false
+	}
+	pluginKey := pluginID.Key()
+	hasSkills := capability.HasSkills
+	mcpServerCount := len(capability.MCPServers)
+	metadata := telemetry.CodexPluginUsedMetadata{
+		TurnTrigger: turnTrigger,
+		CodexPluginMetadata: telemetry.CodexPluginMetadata{
+			PluginID:        stringPtrIfNotEmpty(pluginKey),
+			RemotePluginID:  stringPtrIfNotEmpty(strings.TrimSpace(capability.RemotePluginID)),
+			PluginName:      stringPtrIfNotEmpty(pluginID.PluginName),
+			MarketplaceName: stringPtrIfNotEmpty(pluginID.MarketplaceName),
+			HasSkills:       &hasSkills,
+			MCPServerCount:  &mcpServerCount,
+			ConnectorIDs:    append([]string{}, capability.AppConnectors...),
+			ProductClientID: stringPtrIfNotEmpty(strings.TrimSpace(productClientID)),
+		},
+		MCPServerNames: append([]string{}, capability.MCPServers...),
+		ThreadID:       stringPtrIfNotEmpty(threadID),
+		TurnID:         stringPtrIfNotEmpty(turnID),
+		ModelSlug:      stringPtrIfNotEmpty(strings.TrimSpace(modelSlug)),
+	}
+	return metadata, pluginKey, true
+}
+
+// claimPluginUsedKey reports whether this is the first use of the plugin in the
+// turn, mirroring Rust's should_enqueue_plugin_used. The dedupe set shares the
+// analytics key cap and is cleared when it is full.
+func (r *RuntimeRouter) claimPluginUsedKey(turnID string, pluginKey string) bool {
+	turnID = strings.TrimSpace(turnID)
+	pluginKey = strings.TrimSpace(pluginKey)
+	if turnID == "" || pluginKey == "" {
+		return true
+	}
+	r.pluginUsedMu.Lock()
+	defer r.pluginUsedMu.Unlock()
+	if r.pluginUsedEmittedKeys == nil {
+		r.pluginUsedEmittedKeys = map[string]bool{}
+	}
+	if len(r.pluginUsedEmittedKeys) >= maxAppUsedEmittedKeys {
+		r.pluginUsedEmittedKeys = map[string]bool{}
+	}
+	key := turnID + "\x00" + pluginKey
+	if r.pluginUsedEmittedKeys[key] {
+		return false
+	}
+	r.pluginUsedEmittedKeys[key] = true
+	return true
 }
 
 func (r *RuntimeRouter) analyticsProductClientID(connectionID string) string {

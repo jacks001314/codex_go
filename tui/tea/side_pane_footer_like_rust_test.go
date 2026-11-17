@@ -51,7 +51,7 @@ func TestSidePaneDraftPreviewFrameLikeRust(t *testing.T) {
 		t.Fatalf("draft row %d leaves no hint row: %#v", draftRow, rows)
 	}
 
-	joined := zipSidePanes(rows, rows, 20, 12)
+	joined := model.zipSidePanes(rows, rows, 20, 12)
 	if got := len(strings.Split(joined, "\n")); got != 12 {
 		t.Fatalf("joined rows = %d, want 12", got)
 	}

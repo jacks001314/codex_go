@@ -432,6 +432,7 @@ func (m *Model) openStatusLineSetup() {
 		selected:       map[string]bool{},
 		useThemeColors: view.UseThemeColors,
 	}
+	setup.selected[chatwidget.StatusLineUseThemeColorsItemID] = view.UseThemeColors
 	for _, item := range selections.StatusLineItems {
 		setup.selected[chatwidget.StatusLineItemID(item)] = true
 	}
@@ -497,7 +498,12 @@ func (m *Model) toggleStatusSetupSelection() bubbletea.Cmd {
 	option := m.modal.options[m.modal.selected]
 	if m.modal.statusLineSetup != nil {
 		setup := m.modal.statusLineSetup
-		setup.selected[option.ID] = !setup.selected[option.ID]
+		if option.ID == chatwidget.StatusLineUseThemeColorsItemID {
+			setup.useThemeColors = !setup.useThemeColors
+			setup.selected[option.ID] = setup.useThemeColors
+		} else {
+			setup.selected[option.ID] = !setup.selected[option.ID]
+		}
 		preview := m.statusLinePreviewStyled(m.statusControls.StatusSurfacePreviewData(), selectedStatusLineItems(setup), setup.useThemeColors)
 		m.modal.body = statusLineSetupBody(preview)
 		return nil
@@ -519,7 +525,12 @@ func (m *Model) commitStatusLineSetup(setup *statusLineSetupModal) bubbletea.Cmd
 		return nil
 	}
 	m.ensureStatusControls()
-	result := m.statusControls.SetupStatusLine(selectedStatusLineItems(setup), setup.useThemeColors)
+	useThemeColors := setup.useThemeColors
+	if selected, ok := setup.selected[chatwidget.StatusLineUseThemeColorsItemID]; ok {
+		useThemeColors = selected
+	}
+	result := m.statusControls.SetupStatusLine(selectedStatusLineItems(setup), useThemeColors)
+	m.applyStatusLineThemeColors(useThemeColors)
 	m.statusLineConfiguredByUser = true
 	// Rust #54387 (chatwidget/status_controls.rs:136-137): a saved editor
 	// selection supersedes the session-only override.
@@ -905,19 +916,31 @@ func (m *Model) renderStatusHeader() string {
 // surface: an idle, editable composer keeps the mode's cycle hint at the far
 // right while it fits, then degrades to the compact "Plan mode" label.
 func (m *Model) attachPlanModeStatusIndicator(base string) string {
-	if m == nil || m.State == nil || !m.State.PlanMode {
+	labels := m.planStatusIndicatorLabels()
+	if len(labels) == 0 {
 		return base
+	}
+	return rightAlignStatusLine(base, labels, m.width)
+}
+
+// planStatusIndicatorLabels returns the full cycle hint and its compact
+// fallback in Rust's preference order. The slice is empty when the status
+// surface must not show the plan-mode indicator.
+func (m *Model) planStatusIndicatorLabels() []string {
+	if m == nil || m.State == nil || !m.State.PlanMode {
+		return nil
 	}
 	if !features.Enabled(m.featureSettings, "collaboration_modes") {
-		return base
+		return nil
 	}
+	compact := bottompane.CollaborationModeLabel(bottompane.CollaborationModePlan, false)
 	if !m.planModeCycleHintAvailable() {
-		return rightAlignStatusLine(base, []string{bottompane.CollaborationModeLabel(bottompane.CollaborationModePlan, false)}, m.width)
+		return []string{compact}
 	}
-	return rightAlignStatusLine(base, []string{
+	return []string{
 		bottompane.CollaborationModeLabel(bottompane.CollaborationModePlan, true),
-		bottompane.CollaborationModeLabel(bottompane.CollaborationModePlan, false),
-	}, m.width)
+		compact,
+	}
 }
 
 func (m *Model) planModeCycleHintAvailable() bool {

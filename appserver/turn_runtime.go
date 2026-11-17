@@ -457,6 +457,7 @@ func (r *RuntimeRouter) emitArtifactOperationForCommandItem(threadID string, tur
 		occurredAtMS = uint64(time.Now().UTC().UnixMilli())
 	}
 	sink.TrackArtifactOperationEvent(context.Background(), telemetry.NewArtifactOperationEvent(telemetry.ArtifactOperationEventParams{
+		TurnTrigger:         r.analyticsTurnTriggerForTurn(threadID, turnID),
 		ThreadID:            threadID,
 		TurnID:              turnID,
 		ItemID:              strings.TrimSpace(item.ID),
@@ -883,6 +884,12 @@ type collaborationModeWorldStateSnapshot struct {
 	Instructions string `json:"instructions,omitempty"`
 }
 
+// Rust protocol COLLABORATION_MODE_OPEN_TAG / COLLABORATION_MODE_CLOSE_TAG.
+const (
+	collaborationModeOpenTag  = "<collaboration_mode>"
+	collaborationModeCloseTag = "</collaboration_mode>"
+)
+
 func collaborationModeInstructions(params *turn.TurnStartParams, info *model.ModelInfo, updatePlanEnabled bool) (string, bool) {
 	if params == nil || params.CollaborationMode == nil {
 		return "", false
@@ -942,8 +949,11 @@ func collaborationModeSnapshot(params *turn.TurnStartParams, info *model.ModelIn
 	// guidance (e.g. after a model catalog refresh) refreshes retained history
 	// even when the mode and model are unchanged. An empty-state hash makes
 	// removal clear retained instructions exactly once.
-	hash := sha256.Sum256([]byte(instructions))
-	value := hex.EncodeToString(hash[:16])
+	//
+	// The fingerprint is Rust's `WorldStateHash::from_fragment` over the
+	// rendered fragment (markers included), so persisted snapshots stay
+	// readable across implementations.
+	value := session.TextWorldStateFragmentHash(contextfrag.RoleDeveloper, collaborationModeOpenTag+instructions+collaborationModeCloseTag)
 	return collaborationModeWorldStateSnapshot{Mode: mode, Model: modelID, Instructions: value}, true
 }
 
@@ -1798,7 +1808,11 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	if warning != "" {
 		r.notify(NotificationWarning, &WarningNotification{ThreadID: stringPtrIfNotEmpty(threadID), Message: warning})
 	}
-	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnStarted(threadID))
+	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnStartedForTurn(threadID, turnID))
+	// Rust aborts the thread's pending server requests on TurnStarted, so work a
+	// previous turn left waiting (a late command approval, for example) cannot
+	// outlive the turn that replaced it (#61801/#61841).
+	r.abortThreadPendingServerRequests(threadID)
 	r.notify(NotificationTurnStarted, &TurnStartedNotification{ThreadID: threadID, Turn: appTurn})
 	// Rust #61356: a deferred MCP reprojection is claimed after the turn is
 	// visible and before tools are bound, so the first model request of this
@@ -1815,7 +1829,11 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	// can be suspended, so recovery restores the original trigger instead of
 	// substituting `retry`.
 	rootTurnID := rootTurnIDForTurn(params, turnID)
-	_ = r.appendRuntimeTurnStartedWithAttribution(threadID, turnID, rootTurnID, turnAttributionForParams(params, turnID, rootTurnID), startedAt)
+	turnAttribution := turnAttributionForParams(params, turnID, rootTurnID)
+	// Rust #60018: the trigger is retained with the turn so tool, artifact,
+	// skill, app and hook events still report it when they finish later.
+	r.recordAnalyticsTurnTrigger(threadID, turnID, turnAttribution.TurnTriggerValue())
+	_ = r.appendRuntimeTurnStartedWithAttribution(threadID, turnID, rootTurnID, turnAttribution, startedAt)
 	// Rust #59234: uploaded audio is accepted when the selected model declares
 	// audio input. A model without it still accepts the turn, records the
 	// accompanying text, and then fails with the unsupported-operation error
@@ -1911,6 +1929,10 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		preparedUserItem, preparedUserNotice = r.preparedUserMessageInputItem(turnID, params)
 	}
 	promptPersisted = r.persistRuntimeTurnPrompt(threadID, turnID, params, startedAt)
+	// Rust records an accepted inter-agent communication as soon as the turn
+	// takes it, so the rollout carries the delivery boundary before the first
+	// sampling request.
+	r.persistRuntimeAgentCommunications(threadID, turnID, params, startedAt)
 	agentPrompt := promptFromTurnStart(params)
 	inputItems := append([]any(nil), runConfig.InputItems...)
 	// Configuration updates are carried as post-prompt items so they follow the
@@ -2060,6 +2082,12 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		// Rust #59234: a steer that carries uploaded audio fails the running turn
 		// after the accompanying text is recorded only when the model has no audio
 		// input; an audio-capable model accepts it into the next request.
+		// Rust's hook runtime records an admitted `TurnInput::InterAgentCommunication`
+		// before the next sampling request, so steered mail reaches the thread
+		// history and rollout at the same point.
+		OnSteerInputItems: func(items []any) {
+			r.persistRuntimeSteerAgentCommunications(threadID, turnID, items, time.Now().UTC())
+		},
 		ValidateSteerInput: func(items []any) error {
 			if modelSupportsAudioInput(runConfig.ModelInfo) {
 				return nil
@@ -2386,7 +2414,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		r.scheduleExecutorCleanupHooks(threadID, executorStepCapabilities, executorEvent, executorInput)
 	}
 	r.notifyTurnCompletedOnce(&TurnCompletedNotification{ThreadID: threadID, Turn: completedTurn})
-	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompleted(threadID))
+	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompletedForTurn(threadID, turnID))
 	r.maybeDispatchNextQueuedSubmission(threadID)
 	r.deliverRuntimeAgentCompletion(threadID, agent.AgentMessageStatus{Kind: agent.AgentMessageStatusCompleted, Message: lastAgentMessageFromThreadItems(threadItems)})
 	r.maybeWakeRootForPendingAgentMessages(threadID)
@@ -2848,7 +2876,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 	r.completeTurnRecord(threadID, turnID, TurnStatusCompleted)
 	completedTurn := completedTurnNotificationTurn(turnID, rootTurnIDForTurn(params, turnID), TurnStatusCompleted, nil, &record.StartedAt, &completedAtUnix, &durationMS)
 	r.notifyTurnCompletedOnce(&TurnCompletedNotification{ThreadID: threadID, Turn: completedTurn})
-	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompleted(threadID))
+	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompletedForTurn(threadID, turnID))
 	r.deliverRuntimeAgentCompletion(threadID, agent.AgentMessageStatus{Kind: agent.AgentMessageStatusCompleted, Message: reviewFinalAgentMessage(result)})
 	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, usedDictation, nil, nil, nil, nil, nil, nil)
 	r.clearActiveDiffTracker(threadID, turnID)
@@ -3018,6 +3046,18 @@ func completedTurnNotificationTurn(turnID string, rootTurnID string, status Turn
 		CompletedAt: completedAt,
 		DurationMS:  durationMS,
 	}
+}
+
+// turnStartedAtSeconds converts the millisecond start time the runtime carries
+// into the seconds-based `Turn.startedAt` Rust reports on every terminal turn.
+// A turn that never recorded a start keeps the field null instead of inventing
+// one (Rust #61817: completed turns include the start timestamp).
+func turnStartedAtSeconds(startedAtMS int64) *int64 {
+	if startedAtMS <= 0 {
+		return nil
+	}
+	seconds := startedAtMS / 1000
+	return &seconds
 }
 
 func finalAgentMessageSummary(items []ThreadItem) []ThreadItem {
@@ -4251,7 +4291,11 @@ func (r *RuntimeRouter) registerTrackedActiveRuntimeTurn(threadID string, turnID
 		}
 		return fmt.Errorf("%w: runtime router is nil", ErrInvalidRequest)
 	}
-	return r.threads.RegisterTrackedTurn(threadID, turnID, cancel, startedAtMS, params)
+	if err := r.threads.RegisterTrackedTurn(threadID, turnID, cancel, startedAtMS, params); err != nil {
+		return err
+	}
+	r.refreshTurnDiffDisplayRoots(threadID, turnID)
+	return nil
 }
 
 func (r *RuntimeRouter) updateActiveRuntimeTurnAnalytics(threadID string, turnID string, connectionID string, runConfig *appTurnRunConfig) {
@@ -5051,7 +5095,7 @@ func (r *RuntimeRouter) finishTurnWithErrorAnalytics(threadID string, turnID str
 	})
 	r.notifyTurnCompletedOnce(&TurnCompletedNotification{
 		ThreadID: threadID,
-		Turn:     completedTurnNotificationTurn(turnID, analyticsRootTurnID(analytics, turnID), TurnStatusFailed, appErr, nil, &completedAt, &durationMS),
+		Turn:     completedTurnNotificationTurn(turnID, analyticsRootTurnID(analytics, turnID), TurnStatusFailed, appErr, turnStartedAtSeconds(startedAtMS), &completedAt, &durationMS),
 	})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteSystemError(threadID))
 	r.maybeDispatchNextQueuedSubmission(threadID)
@@ -5108,9 +5152,9 @@ func (r *RuntimeRouter) finishTurnInterruptedAnalyticsWithError(threadID string,
 	r.emitTurnE2EDurationMetric(r.services.TurnMetrics, durationMS)
 	r.notifyTurnCompletedOnce(&TurnCompletedNotification{
 		ThreadID: threadID,
-		Turn:     completedTurnNotificationTurn(turnID, analyticsRootTurnID(analytics, turnID), TurnStatusInterrupted, appErr, nil, &completedAt, &durationMS),
+		Turn:     completedTurnNotificationTurn(turnID, analyticsRootTurnID(analytics, turnID), TurnStatusInterrupted, appErr, turnStartedAtSeconds(startedAtMS), &completedAt, &durationMS),
 	})
-	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnInterrupted(threadID))
+	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnInterruptedForTurn(threadID, turnID))
 	r.deliverRuntimeAgentCompletion(threadID, agent.AgentMessageStatus{Kind: agent.AgentMessageStatusInterrupted})
 	r.maybeWakeRootForPendingAgentMessages(threadID)
 	r.emitTurnCompletionAnalytics(context.Background(), analytics, turnID, TurnStatusInterrupted, startedAtMS, now, durationMS)
@@ -5137,9 +5181,9 @@ func (r *RuntimeRouter) finishReviewRuntimeInterrupted(threadID string, turnID s
 	r.completeTurnRecord(threadID, turnID, TurnStatusInterrupted)
 	r.notifyTurnCompletedOnce(&TurnCompletedNotification{
 		ThreadID: threadID,
-		Turn:     completedTurnNotificationTurn(turnID, analyticsRootTurnID(analytics, turnID), TurnStatusInterrupted, nil, nil, &completedAt, &durationMS),
+		Turn:     completedTurnNotificationTurn(turnID, analyticsRootTurnID(analytics, turnID), TurnStatusInterrupted, nil, turnStartedAtSeconds(startedAtMS), &completedAt, &durationMS),
 	})
-	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnInterrupted(threadID))
+	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnInterruptedForTurn(threadID, turnID))
 	r.emitTurnCompletionAnalytics(context.Background(), analytics, turnID, TurnStatusInterrupted, startedAtMS, now, durationMS)
 	r.clearActiveDiffTracker(threadID, turnID)
 }
@@ -5191,7 +5235,7 @@ func (r *RuntimeRouter) finishReviewRuntimeFallbackCompleted(threadID string, tu
 		ThreadID: threadID,
 		Turn:     completedTurn,
 	})
-	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompleted(threadID))
+	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompletedForTurn(threadID, turnID))
 	r.emitTurnCompletionAnalytics(context.Background(), analytics, turnID, TurnStatusCompleted, startedAtMS, now, durationMS)
 	r.clearActiveDiffTracker(threadID, turnID)
 }
@@ -5583,6 +5627,7 @@ func (r *RuntimeRouter) notifyTurnDiffFromSessionItem(threadID string, turnID st
 	if tracker == nil {
 		return
 	}
+	tracker.UpdateDisplayRoots(r.turnDiffDisplayRoots(threadID))
 	hadDiff := tracker.UnifiedDiff() != nil
 	tracker.Track(runtimeFileChangeEnvironmentID(item), changes, true)
 	diff := tracker.UnifiedDiff()
@@ -5598,6 +5643,53 @@ func (r *RuntimeRouter) notifyTurnDiffFromSessionItem(threadID string, turnID st
 		TurnID:   turnID,
 		Diff:     unifiedDiff,
 	})
+}
+
+// turnDiffDisplayRoots mirrors Rust #61820: the turn's environments contribute
+// their display roots so published diff paths stay relative to the environment
+// they were measured in. The tracker keeps the first root it saw per
+// environment, so a steer that changes the working directory cannot rewrite an
+// already published header.
+func (r *RuntimeRouter) turnDiffDisplayRoots(threadID string) map[string]string {
+	if r == nil {
+		return nil
+	}
+	params := r.activeTurnParams(threadID)
+	if params == nil {
+		return nil
+	}
+	environments := r.unifiedExecEnvironmentsForTurn(params)
+	roots := make(map[string]string, len(environments))
+	for _, environment := range environments {
+		id := strings.TrimSpace(environment.ID)
+		root := strings.TrimSpace(firstNonEmpty(environment.CWD, turnCWD(params), r.services.DefaultCWD))
+		if id == "" || root == "" {
+			continue
+		}
+		roots[id] = root
+	}
+	if len(environments) == 0 {
+		// Rust's TurnContext always carries the primary local environment, even
+		// when the turn selects none, so relative paths still resolve.
+		if root := strings.TrimSpace(firstNonEmpty(turnCWD(params), r.services.DefaultCWD)); root != "" {
+			roots[localEnvironmentID] = root
+		}
+	}
+	if len(roots) == 0 {
+		return nil
+	}
+	return roots
+}
+
+func (r *RuntimeRouter) refreshTurnDiffDisplayRoots(threadID string, turnID string) {
+	if r == nil {
+		return
+	}
+	tracker := r.activeDiffTracker(threadID, turnID)
+	if tracker == nil {
+		return
+	}
+	tracker.UpdateDisplayRoots(r.turnDiffDisplayRoots(threadID))
 }
 
 func sessionItemHasSuccessfulFileChange(item *session.Item) bool {
@@ -6738,7 +6830,9 @@ func (r *RuntimeRouter) persistCompactTokenStatus(threadID string, modelID strin
 	// own response, so the record length is Rust's `max(last model output item,
 	// request input item count)`. Later reads estimate only the items added after
 	// it, keeping failed or usage-less output in the estimate.
-	extra["token_usage_boundary"] = len(record.Items)
+	// The boundary indexes the model-visible history, not Record.Items: display
+	// projections are never sent and therefore never covered by a usage report.
+	extra["token_usage_boundary"] = len(compactItemsFromSessionItems(record.Items))
 	// Rust #55991 seeds the reasoning-inclusion state from the model's Responses
 	// Lite setting before the request and lets a server event override it. A
 	// later compaction check reads this value so lite usage is not charged twice.
@@ -6772,6 +6866,86 @@ func (r *RuntimeRouter) persistCompactTokenStatus(threadID string, modelID strin
 		return nil, nil, err
 	}
 	return &status, info, nil
+}
+
+// recomputeCompactedTokenUsage mirrors Rust `Session::recompute_token_usage`
+// (core/src/session/mod.rs): installing a compacted history replaces the
+// context baseline with a local estimate of the replacement, because the last
+// server-reported usage describes the pre-compaction request. Without this the
+// next pre-turn check keeps reading the old high-water mark and compacts again
+// on every turn.
+func (r *RuntimeRouter) recomputeCompactedTokenUsage(record *session.Record, extra map[string]any, modelID string, params *turn.TurnStartParams, baseInstructions string) compact.TokenStatus {
+	if record == nil {
+		return compact.TokenStatus{}
+	}
+	if extra == nil {
+		extra = map[string]any{}
+	}
+	if params == nil {
+		// A standalone/manual compaction has no replacement turn in flight; the
+		// model policy still has to resolve against the thread's own config.
+		params = &turn.TurnStartParams{ThreadID: string(record.ID), CWD: record.Metadata.CWD, Model: modelID}
+	}
+	items := compactItemsFromSessionItems(record.Items)
+	baseTokens := 0
+	if !compactedHistoryHasRecordedInstructions(record.Items) {
+		baseTokens = compact.EstimateTextTokens(strings.TrimSpace(baseInstructions))
+	}
+	estimated := compact.EstimateTokens(items) + baseTokens
+	if estimated < 0 {
+		estimated = 0
+	}
+	lastUsage := tokenUsageMetadataMap(model.AgentUsage{TotalTokens: int64(estimated)})
+	extra["last_token_usage"] = lastUsage
+	// Rust records the boundary at the replacement's length and marks the local
+	// estimate as already covering every retained reasoning item.
+	extra["token_usage_boundary"] = len(items)
+	extra["server_reasoning_included"] = true
+	totalUsage := extra["total_token_usage"]
+	window := extra["model_context_window"]
+	if modelID = firstNonEmpty(strings.TrimSpace(modelID), record.Metadata.Model); modelID != "" {
+		if resolved := r.effectiveModelContextWindowForModel(modelID, params); resolved > 0 {
+			window = resolved
+			extra["model_context_window"] = resolved
+		}
+	}
+	extra["token_usage_info"] = map[string]any{
+		"total_token_usage":             totalUsage,
+		"last_token_usage":              lastUsage,
+		"model_context_window":          window,
+		"last_usage_includes_reasoning": true,
+	}
+	policy := r.compactPolicyForTurn(modelID, params, extra)
+	status := compact.Evaluate(policy, estimated)
+	extra["token_status"] = compactTokenStatusMap(status)
+	return status
+}
+
+// compactedHistoryHasRecordedInstructions mirrors Rust
+// `History::estimate_token_count_with_base_instructions`: a window that already
+// recorded its tool declarations or base-instruction fragment carries the
+// prompt in history, so recomputing must not charge base_instructions again.
+func compactedHistoryHasRecordedInstructions(items []session.Item) bool {
+	for i := range items {
+		item := &items[i]
+		if !session.ModelVisibleHistoryItem(item) {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(item.Type), "additional_tools") {
+			return true
+		}
+		for _, object := range sessionItemObjects(item) {
+			if strings.EqualFold(strings.TrimSpace(stringFromMap(object, "type")), "additional_tools") {
+				return true
+			}
+		}
+		for _, kind := range sessionItemContentItemKinds(item) {
+			if kind == session.BaseInstructionsContentKind {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // recordIncompleteResponseUsage mirrors Rust #53670's
@@ -7107,11 +7281,21 @@ func midTurnActiveContextTokensLikeRust(history []compact.Item, result *turn.Age
 		// No usable usage report exists yet, so every retained item is estimated.
 		return compact.EstimateTokens(history)
 	}
+	return compact.EstimateActiveContextTokensWithUsageBoundary(history, lastTotal, includesReasoning, usageBoundaryForHistory(extra, history))
+}
+
+// usageBoundaryForHistory translates a persisted usage boundary onto the
+// model-visible history. Builds before the display-item filter recorded the
+// boundary as a raw Record.Items index; when it exceeds the filtered length the
+// two indexes cannot be reconciled, so fall back to Rust's restored-history
+// approximation (estimate everything after the last model-generated item)
+// instead of treating every item as already covered by the usage report.
+func usageBoundaryForHistory(extra map[string]any, history []compact.Item) int {
 	boundary := tokenUsageBoundaryFromMetadata(extra)
 	if boundary > len(history) {
-		boundary = len(history)
+		return -1
 	}
-	return compact.EstimateActiveContextTokensWithUsageBoundary(history, lastTotal, includesReasoning, boundary)
+	return boundary
 }
 
 func (r *RuntimeRouter) compactTokenStatusForThread(threadID string) compact.TokenStatus {
@@ -7153,9 +7337,10 @@ func (r *RuntimeRouter) compactTokenStatusForTurnWithPolicy(threadID string, mod
 		// interrupted turn). Retained reasoning is only re-estimated when the
 		// last sampling request did not report that the server already includes
 		// it (Rust #55991).
+		history := compactItemsFromSessionItems(record.Items)
 		active = compact.EstimateActiveContextTokensWithUsageBoundary(
-			compactItemsFromSessionItems(record.Items), active, tokenUsageIncludesReasoning(extra),
-			tokenUsageBoundaryFromMetadata(extra))
+			history, active, tokenUsageIncludesReasoning(extra),
+			usageBoundaryForHistory(extra, history))
 	}
 	policy := r.compactPolicyForTurn(modelID, params, extra)
 	if adjust != nil {
@@ -7440,6 +7625,12 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 		return nil, nil, err
 	}
 	startedAt := time.Now().UTC()
+	activeContextTokensBefore := params.ActiveContextTokensBefore
+	if activeContextTokensBefore <= 0 {
+		// Capture the pre-replacement baseline before recompute_token_usage
+		// installs the compacted estimate on the record.
+		activeContextTokensBefore = compactionAnalyticsActiveContextTokensFromRecord(record)
+	}
 	history := historyOverride
 	if len(history) == 0 {
 		history = compactItemsFromSessionItems(record.Items)
@@ -7483,7 +7674,7 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	request.MaxHistoryTokens = r.compactionHistoryTokenBudget(record, params)
 	replacementContext, err := r.buildCompactionReplacementContext(ctx, params, record)
 	if err != nil {
-		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, nil, err, startedAt, time.Now().UTC(), params.ActiveContextTokensBefore)
+		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, nil, err, startedAt, time.Now().UTC(), activeContextTokensBefore)
 		return nil, nil, err
 	}
 	if replacementContext != nil && replacementContext.Record != nil {
@@ -7501,7 +7692,7 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	hookCtx := r.compactHookContext(record, request)
 	initialContext, err := r.runPreCompactHooks(ctx, hookCtx)
 	if err != nil {
-		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, nil, err, startedAt, time.Now().UTC(), params.ActiveContextTokensBefore)
+		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, nil, err, startedAt, time.Now().UTC(), activeContextTokensBefore)
 		return nil, nil, err
 	}
 	if replacementContext != nil {
@@ -7564,7 +7755,7 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 		// request still reports usage. Charge it (budget-only for background
 		// auto compaction) before the original error is returned.
 		r.recordIncompleteCompactionUsage(record, request, params, err)
-		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, nil, err, startedAt, time.Now().UTC(), params.ActiveContextTokensBefore)
+		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, nil, err, startedAt, time.Now().UTC(), activeContextTokensBefore)
 		return nil, nil, err
 	}
 	if compacted == nil {
@@ -7607,7 +7798,7 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 		compacted.CompactionModelHash = r.modelCompHash(firstNonEmpty(strings.TrimSpace(params.Model), strings.TrimSpace(record.Metadata.Model)))
 	}
 	if err := r.runPostCompactHooks(ctx, hookCtx); err != nil {
-		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, compacted, err, startedAt, time.Now().UTC(), params.ActiveContextTokensBefore)
+		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, compacted, err, startedAt, time.Now().UTC(), activeContextTokensBefore)
 		return nil, nil, err
 	}
 	now := time.Now().UTC()
@@ -7635,6 +7826,10 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 		}
 	}
 	r.captureGuardianReviewHistory(request.ThreadID, record.Items)
+	// Rust `Session::checkpoint_sampling`: the replacement is annotated against
+	// the history it replaces, so its first item acknowledges the live sampling
+	// prefix and any item without an append identity records one before install.
+	session.CheckpointSampling(compactedItems, record.Items)
 	record.Items = compactedItems
 	compactionItem.CreatedAt = now
 	record.Items = append(record.Items, compactionItem)
@@ -7676,11 +7871,11 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	r.advanceContextWindowID(request.ThreadID)
 	// A successful compaction replaces the overflowing history regardless of
 	// phase, so the persisted overflow/token-limit marker no longer applies.
-	status := compactTokenStatusFromMetadata(extra)
-	status.ShouldCompact = false
-	status.NewContextWindowRequired = false
-	status.Reason = ""
-	extra["token_status"] = compactTokenStatusMap(status)
+	baseInstructions := ""
+	if params.BaseInstructions != nil {
+		baseInstructions = *params.BaseInstructions
+	}
+	r.recomputeCompactedTokenUsage(record, extra, params.WindowModel, params.ReplacementParams, baseInstructions)
 	if compacted.Source != "" {
 		extra["compaction_source"] = string(compacted.Source)
 	}
@@ -7743,7 +7938,7 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 		_ = r.appendRuntimeCompactionBaseline(request.ThreadID, record.Metadata.WorldState, replacementContext.TurnContext, replacementContext.TurnContextPayload, now)
 	}
 	r.notifyContextCompactionItemCompleted(request.ThreadID, request.TurnID, compactionItem)
-	r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, compacted, nil, startedAt, now, params.ActiveContextTokensBefore)
+	r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, compacted, nil, startedAt, now, activeContextTokensBefore)
 	// Rust c2bcb9a26b: restart Guardian review sessions after parent history
 	// rewrites, seeding them with the latest reusable compaction when the
 	// guardian_reuse_parent_compaction feature is enabled.
@@ -7894,22 +8089,22 @@ func (r *RuntimeRouter) compactEnvironmentContext(ctx context.Context, record *s
 			})
 		}
 	}
-	currentDate := ""
-	if current != nil {
-		currentDate = current.In(time.Local).Format("2006-01-02")
-	}
-	// Rust renders the whole world state for a compaction window (render_full),
-	// so a value that disappeared is already explicit and no unavailable marker
-	// is emitted; the snapshot still records what the model will see.
-	if _, err := r.recordEnvironmentWorldState(record, currentDate, "", false, false); err != nil {
-		return nil, err
-	}
 	perEnvironment := cfg != nil && features.Enabled(cfg.FeatureSettings(), "per_environment_context")
 	var managedNetwork *config.NetworkRequirements
 	if cfg != nil && cfg.Requirements != nil {
 		managedNetwork = cfg.Requirements.Network
 	}
-	text := r.turnEnvironmentContextTextWithOptions(ctx, r.environmentContextParams(request.ThreadID, params), current, localTimezoneName(), "", cfg.IncludeEnvironmentContextTime(), environmentWorldStateRemovals{}, perEnvironment, managedNetwork)
+	contextParams := r.environmentContextParams(request.ThreadID, params)
+	// Rust renders the whole world state for a compaction window (render_full),
+	// so a value that disappeared is already explicit and no unavailable marker
+	// is emitted; the snapshot still records what the model will see.
+	section := r.environmentWorldStateSectionForTurn(ctx, contextParams, current, localTimezoneName(), "", cfg.IncludeEnvironmentContextTime(), perEnvironment, managedNetwork)
+	// No diff is rendered here, so the host roster is not read (Rust resolves it
+	// only for an emitted environment fragment).
+	if _, err := r.recordEnvironmentWorldState(record, section, false, false, nil); err != nil {
+		return nil, err
+	}
+	text := r.turnEnvironmentContextTextWithOptions(ctx, contextParams, current, localTimezoneName(), "", cfg.IncludeEnvironmentContextTime(), environmentWorldStateRemovals{}, perEnvironment, managedNetwork)
 	return append(items, compact.Item{
 		ID: "environment-context-" + safeIdentifier(request.TurnID), Type: "message", Role: "user", Kind: "environment_context", Text: text, Created: created,
 	}), nil
@@ -8653,6 +8848,9 @@ func sessionItemForAppToolCall(turnID string, execution *turn.ToolExecutionResul
 		if toolName := stringFromMap(execution.Output.Data, "tool"); toolName != "" {
 			callData["tool"] = toolName
 		}
+		if environmentID := stringFromMap(execution.Output.Data, "environmentId"); environmentID != "" {
+			callData["environmentId"] = environmentID
+		}
 		markMCPToolData(callData, execution.Invocation.ToolName)
 		applyMCPAppMetadata(callData, execution.Output.Data)
 	}
@@ -9102,7 +9300,7 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 	}
 	inputItems := append([]any(nil), historyItems...)
 	historyInputItemCount := len(historyItems)
-	modelWorldStateItems, err := r.modelWorldStateInputItems(threadID, modelInfo, instructions)
+	modelWorldStateItems, err := r.modelWorldStateInputItems(threadID, cfg, modelInfo, instructions, modelProviderConfig.ProviderID, historyItems)
 	if err != nil {
 		return nil, err
 	}
@@ -9198,12 +9396,12 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 			persistentModeSessionItems = append(persistentModeSessionItems, persisted)
 		}
 	}
-	if item, err := r.multiAgentModeInputItem(threadID, params); err != nil {
+	if item, err := r.multiAgentUsageHintInputItem(threadID, cfg); err != nil {
 		return nil, err
 	} else if item != nil {
 		inputItems = append(inputItems, item)
 	}
-	if item, err := r.multiAgentUsageHintInputItem(threadID, cfg); err != nil {
+	if item, err := r.multiAgentModeInputItem(threadID, cfg, params); err != nil {
 		return nil, err
 	} else if item != nil {
 		inputItems = append(inputItems, item)
@@ -9250,7 +9448,14 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 	// (which decides whether a later app call is explicit or implicit) and each
 	// mention is reported.
 	r.rememberExplicitAppMentions(ctx, threadID, turnID, connectionID, params, cfg, modelProviderConfig.Model)
+	// Rust reports each explicitly mentioned plugin once per turn (the same
+	// turn-input walk that tracks app mentions).
+	r.rememberExplicitPluginMentions(ctx, threadID, turnID, connectionID, params, cfg, modelProviderConfig.Model)
 	currentTimeState := r.newCurrentTimeReminderTurnState(threadID)
+	// Rust records the accepted user input (or standalone tool output) before
+	// the first sampling request, so this inference follows a user or
+	// tool-output boundary.
+	currentTimeState.noteUserOrToolOutputBoundary()
 	currentTimeInputItems, currentTimeSessionItems, err := r.currentTimeReminderInputItems(ctx, threadID, turnID, cfg, params, time.UnixMilli(startedAtMS).UTC(), currentTimeState)
 	if err != nil {
 		return nil, err
@@ -9586,23 +9791,38 @@ func (r *RuntimeRouter) turnEnvironmentContextInputItemForTurn(ctx context.Conte
 	}
 	params = r.environmentContextParams(threadID, params)
 	shellVersion := r.powershellShellVersionForTurn(ctx, cfg, params)
-	currentDate := ""
-	if current != nil {
-		currentDate = current.In(time.Local).Format("2006-01-02")
-	}
-	removals := environmentWorldStateRemovals{}
-	if record, recordErr := r.threadRecord(session.ThreadID(threadID), true, true); recordErr == nil && record != nil {
-		removals, err = r.recordEnvironmentWorldState(record, currentDate, shellVersion, true, true)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
 	perEnvironment := cfg != nil && features.Enabled(cfg.FeatureSettings(), "per_environment_context")
 	var managedNetwork *config.NetworkRequirements
 	if cfg != nil && cfg.Requirements != nil {
 		managedNetwork = cfg.Requirements.Network
 	}
-	text := r.turnEnvironmentContextTextWithOptions(ctx, params, current, localTimezoneName(), shellVersion, cfg.IncludeEnvironmentContextTime(), removals, perEnvironment, managedNetwork)
+	section := r.environmentWorldStateSectionForTurn(ctx, params, current, localTimezoneName(), shellVersion, cfg.IncludeEnvironmentContextTime(), perEnvironment, managedNetwork)
+	// Rust reads the host roster only after the environment diff selected its
+	// updates (WorldState::resolve_host_roster), so a turn whose environment
+	// context did not change must not consult the agent session reader.
+	subagents := ""
+	subagentsLoaded := false
+	loadSubagents := func() string {
+		if !subagentsLoaded {
+			subagentsLoaded = true
+			subagents = r.environmentWorldStateSubagents(ctx, threadID)
+		}
+		return subagents
+	}
+	text := ""
+	if record, recordErr := r.threadRecord(session.ThreadID(threadID), true, true); recordErr == nil && record != nil {
+		transition, transitionErr := r.recordEnvironmentWorldState(record, section, true, true, loadSubagents)
+		if transitionErr != nil {
+			return nil, nil, transitionErr
+		}
+		if transition.Fragment != "" {
+			text = wrapEnvironmentContext(transition.Fragment)
+		}
+	} else {
+		// Without a persisted snapshot the section has no previous state, so
+		// Rust renders it in full (PreviousSectionState::Absent).
+		text = wrapEnvironmentContext(section.renderFull(environmentWorldStateRemovals{}, loadSubagents()))
+	}
 	items := []any{}
 	sessionItems := []session.Item{}
 	if emitNotice {
@@ -9610,7 +9830,10 @@ func (r *RuntimeRouter) turnEnvironmentContextInputItemForTurn(ctx context.Conte
 		items = append(items, noticeInput...)
 		sessionItems = append(sessionItems, noticeSessionItems...)
 	}
-	return append(items, model.UserMessageInputItem(text)), sessionItems, nil
+	if text != "" {
+		items = append(items, model.UserMessageInputItem(text))
+	}
+	return items, sessionItems, nil
 }
 
 // environmentClockForTurn mirrors Rust's environment-date clock read: an
@@ -9726,97 +9949,12 @@ func (r *RuntimeRouter) turnEnvironmentContextTextWithContext(ctx context.Contex
 // <thread_network_requirements> so they are not mistaken for an environment's
 // own domains.
 func (r *RuntimeRouter) turnEnvironmentContextTextWithOptions(ctx context.Context, params *turn.TurnStartParams, date *time.Time, timezone string, shellVersion string, includeTime bool, removals environmentWorldStateRemovals, perEnvironment bool, networkRequirements *config.NetworkRequirements) string {
-	environments := r.unifiedExecEnvironmentsForTurn(params)
-	defaultShellName := r.defaultEnvironmentShellName()
-	var b strings.Builder
-	b.WriteString("<environment_context>\n")
-	if perEnvironment {
-		b.WriteString("  <environments>\n")
-		for i, environment := range environments {
-			b.WriteString("    <environment id=\"")
-			b.WriteString(escapeEnvironmentXML(environment.ID))
-			b.WriteString("\"")
-			if len(environments) > 1 {
-				fmt.Fprintf(&b, " primary=\"%t\"", i == 0)
-			}
-			b.WriteString(">\n")
-			cwd := strings.TrimSpace(firstNonEmpty(environment.CWD, turnCWD(params), r.services.DefaultCWD, "."))
-			fmt.Fprintf(&b, "      <cwd>%s</cwd>\n", escapeEnvironmentXML(cwd))
-			if shellName := unifiedEnvironmentShellName(environment, ""); shellName != "" {
-				fmt.Fprintf(&b, "      <shell>%s</shell>\n", escapeEnvironmentXML(shellName))
-			} else {
-				b.WriteString("      <status>starting</status>\n")
-			}
-			if environment.PermissionProfile != nil {
-				access := "restricted"
-				if environment.PermissionProfile.AllowsNetwork() {
-					access = "enabled"
-				}
-				fmt.Fprintf(&b, "      <network access=\"%s\" />\n", access)
-				roots := environment.WorkspaceRoots
-				if len(roots) == 0 {
-					roots = []string{cwd}
-				}
-				if filesystem, err := sandbox.RenderFileSystemContext(environment.PermissionProfile, cwd, roots); err == nil && strings.TrimSpace(filesystem) != "" {
-					b.WriteString("      ")
-					b.WriteString(filesystem)
-					b.WriteByte('\n')
-				}
-			}
-			b.WriteString("    </environment>\n")
-		}
-		b.WriteString("  </environments>\n")
-	} else if len(environments) <= 1 {
-		var environment tool.UnifiedExecEnvironment
-		if len(environments) == 1 {
-			environment = environments[0]
-		}
-		cwd := strings.TrimSpace(firstNonEmpty(environment.CWD, turnCWD(params), r.services.DefaultCWD, "."))
-		shellName := unifiedEnvironmentShellName(environment, defaultShellName)
-		fmt.Fprintf(&b, "  <cwd>%s</cwd>\n", escapeEnvironmentXML(cwd))
-		fmt.Fprintf(&b, "  <shell>%s</shell>\n", escapeEnvironmentXML(shellName))
-	} else {
-		b.WriteString("  <environments>\n")
-		for i, environment := range environments {
-			fmt.Fprintf(&b, "    <environment id=\"%s\" primary=\"%t\">\n", escapeEnvironmentXML(environment.ID), i == 0)
-			fmt.Fprintf(&b, "      <cwd>%s</cwd>\n", escapeEnvironmentXML(strings.TrimSpace(environment.CWD)))
-			if shellName := unifiedEnvironmentShellName(environment, ""); shellName != "" {
-				fmt.Fprintf(&b, "      <shell>%s</shell>\n", escapeEnvironmentXML(shellName))
-			} else {
-				b.WriteString("      <status>starting</status>\n")
-			}
-			b.WriteString("    </environment>\n")
-		}
-		b.WriteString("  </environments>\n")
+	section := r.environmentWorldStateSectionForTurn(ctx, params, date, timezone, shellVersion, includeTime, perEnvironment, networkRequirements)
+	threadID := ""
+	if params != nil {
+		threadID = strings.TrimSpace(params.ThreadID)
 	}
-	if strings.TrimSpace(shellVersion) != "" {
-		fmt.Fprintf(&b, "  <shell_version>%s</shell_version>\n", escapeEnvironmentXML(shellVersion))
-	} else if removals.ShellVersion {
-		b.WriteString("  <shell_version status=\"unavailable\" />\n")
-	}
-	if removals.CurrentDate {
-		b.WriteString("  <current_date status=\"unavailable\" />\n")
-	}
-	if includeTime {
-		if date != nil {
-			fmt.Fprintf(&b, "  <current_date>%s</current_date>\n", escapeEnvironmentXML(date.In(time.Local).Format("2006-01-02")))
-		}
-		fmt.Fprintf(&b, "  <timezone>%s</timezone>\n", escapeEnvironmentXML(timezone))
-	}
-	if perEnvironment && networkRequirements != nil {
-		b.WriteString(renderThreadNetworkRequirements(networkRequirements))
-	}
-	if lines := r.environmentContextSubagentLines(ctx, strings.TrimSpace(params.ThreadID)); len(lines) > 0 {
-		b.WriteString("  <subagents>\n")
-		for _, line := range lines {
-			b.WriteString("    ")
-			b.WriteString(line)
-			b.WriteByte('\n')
-		}
-		b.WriteString("  </subagents>\n")
-	}
-	b.WriteString("</environment_context>")
-	return b.String()
+	return wrapEnvironmentContext(section.renderFull(removals, r.environmentWorldStateSubagents(ctx, threadID)))
 }
 
 // renderThreadNetworkRequirements ports Rust's NetworkContext::render behind
@@ -10514,7 +10652,7 @@ func (r *RuntimeRouter) turnStepInputItemsProvider(threadID string, turnID strin
 			return nil, nil
 		}
 		info := r.modelInfoForRuntimeWithConfig(modelID, runConfig.Config)
-		items, err := r.modelWorldStateInputItems(threadID, info, runConfig.Instructions)
+		items, err := r.modelWorldStateInputItems(threadID, runConfig.Config, info, runConfig.Instructions, runConfig.ProviderID, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -10592,13 +10730,13 @@ func (r *RuntimeRouter) turnStepInputItemsProvider(threadID string, turnID strin
 		// model catalog and effective reasoning effort. Without a live turn the
 		// step has no stored settings to diff against, so the sections stay put.
 		if params != nil {
-			if item, modeErr := r.multiAgentModeInputItemForModel(threadID, params, info); modeErr != nil {
-				return nil, modeErr
+			if item, hintErr := r.multiAgentUsageHintInputItemForModel(threadID, runConfig.Config, info); hintErr != nil {
+				return nil, hintErr
 			} else if item != nil {
 				items = append(items, item)
 			}
-			if item, hintErr := r.multiAgentUsageHintInputItemForModel(threadID, runConfig.Config, info); hintErr != nil {
-				return nil, hintErr
+			if item, modeErr := r.multiAgentModeInputItemForModel(threadID, runConfig.Config, params, info); modeErr != nil {
+				return nil, modeErr
 			} else if item != nil {
 				items = append(items, item)
 			}
@@ -11306,44 +11444,152 @@ func applyRuntimeConfigOverrides(cfg *config.Config, overrides map[string]any) {
 	cfg.ApplyOverrides(configOverrides)
 }
 
+// currentTimeReminderTurnState mirrors Rust's CurrentTimeReminderState
+// (core/src/session/time_reminder.rs). It keeps delivery bookkeeping only and
+// lives on the router for the thread's lifetime, like Rust's per-session state.
 type currentTimeReminderTurnState struct {
-	mu          sync.Mutex
-	hasLast     bool
-	lastTimeUTC time.Time
+	mu                              sync.Mutex
+	hasLast                         bool
+	lastTimeUTC                     time.Time
+	lastWindowID                    string
+	pendingUserOrToolOutputBoundary bool
 }
 
+// newCurrentTimeReminderTurnState returns the thread's shared reminder state.
+// Unlike Rust's SessionState the state is not persisted: a fresh app-server
+// starts with no delivered reminder, exactly like a resumed Rust session.
 func (r *RuntimeRouter) newCurrentTimeReminderTurnState(threadID string) *currentTimeReminderTurnState {
-	state := &currentTimeReminderTurnState{}
-	if last, ok := r.lastCurrentTimeReminderTime(threadID); ok {
-		state.hasLast = true
-		state.lastTimeUTC = last.UTC()
+	threadID = strings.TrimSpace(threadID)
+	if r == nil || threadID == "" {
+		return &currentTimeReminderTurnState{}
+	}
+	r.currentTimeReminderMu.Lock()
+	defer r.currentTimeReminderMu.Unlock()
+	if r.currentTimeReminderStates == nil {
+		r.currentTimeReminderStates = map[string]*currentTimeReminderTurnState{}
+	}
+	state := r.currentTimeReminderStates[threadID]
+	if state == nil {
+		state = &currentTimeReminderTurnState{}
+		r.currentTimeReminderStates[threadID] = state
 	}
 	return state
 }
 
-func (s *currentTimeReminderTurnState) due(now time.Time, intervalSeconds uint64) bool {
-	if s == nil {
-		return true
+// noteCurrentTimeReminderRecordedItems marks a pending user or tool-output
+// boundary when one of the recorded items closes a turn (Rust
+// CurrentTimeReminderState::note_recorded_items). Agent mail participates
+// because Rust records it through the same history path.
+func (r *RuntimeRouter) noteCurrentTimeReminderRecordedItems(threadID string, items []session.Item) {
+	if r == nil || len(items) == 0 {
+		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.hasLast {
-		return true
+	boundary := false
+	for i := range items {
+		if sessionItemIsUserOrToolOutputBoundary(&items[i]) {
+			boundary = true
+			break
+		}
 	}
-	if intervalSeconds == 0 {
-		return true
+	if !boundary {
+		return
 	}
-	return now.UTC().Sub(s.lastTimeUTC) >= time.Duration(intervalSeconds)*time.Second
+	r.newCurrentTimeReminderTurnState(threadID).noteUserOrToolOutputBoundary()
 }
 
-func (s *currentTimeReminderTurnState) noteDelivered(now time.Time) {
+// sessionItemIsUserOrToolOutputBoundary mirrors Rust is_user_turn_boundary plus
+// the tool-output arm of note_recorded_items. Contextual user fragments
+// (environment, skills, ...) and compaction summaries are not real user turns.
+func sessionItemIsUserOrToolOutputBoundary(item *session.Item) bool {
+	if item == nil {
+		return false
+	}
+	switch strings.TrimSpace(item.Type) {
+	case "function_call_output", "custom_tool_call_output", "tool_search_output":
+		return true
+	case "agent_message":
+		return true
+	case "message", "user_message", "assistant_message":
+	default:
+		return false
+	}
+	role := strings.ToLower(strings.TrimSpace(item.Role))
+	if role == "" && item.Type == "user_message" {
+		role = "user"
+	}
+	switch role {
+	case "user":
+		content := sessionItemBoundaryContent(item)
+		if eventmap.IsContextualUserMessageContent(content) {
+			return false
+		}
+		for _, part := range content {
+			if strings.HasPrefix(part.Text, compact.SummaryPrefix+"\n") {
+				return false
+			}
+		}
+		return len(content) > 0
+	case "assistant":
+		for _, part := range sessionItemBoundaryContent(item) {
+			if part.Kind == eventmap.ContentInputText && part.Text == `<inter_agent trigger_turn="true"/>` {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func sessionItemBoundaryContent(item *session.Item) []eventmap.ContentItem {
+	if item == nil {
+		return nil
+	}
+	if len(item.Content) > 0 {
+		content := make([]eventmap.ContentItem, 0, len(item.Content))
+		for _, part := range item.Content {
+			content = append(content, eventmap.ContentItem{Kind: eventmap.ContentInputText, Text: part.Text})
+		}
+		return content
+	}
+	text := strings.TrimSpace(firstNonEmpty(item.Text, stringValueFromMap(item.Data, "text")))
+	if text == "" {
+		return nil
+	}
+	return []eventmap.ContentItem{{Kind: eventmap.ContentInputText, Text: text}}
+}
+
+func (s *currentTimeReminderTurnState) noteUserOrToolOutputBoundary() {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.hasLast = true
-	s.lastTimeUTC = now.UTC()
+	s.pendingUserOrToolOutputBoundary = true
+}
+
+// takeReminderDue mirrors Rust take_reminder_due: a new context window always
+// forces delivery, after_user_or_tool_output requires a boundary unless the
+// window changed, and the boundary is consumed even when the interval
+// suppresses the reminder.
+func (s *currentTimeReminderTurnState) takeReminderDue(windowID string, now time.Time, intervalSeconds uint64, deliveryMode config.CurrentTimeReminderDeliveryMode) bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	isNewWindow := s.lastWindowID != windowID
+	followsUserOrToolOutput := s.pendingUserOrToolOutputBoundary
+	s.pendingUserOrToolOutputBoundary = false
+	if deliveryMode == config.CurrentTimeReminderAfterUserOrToolOutput && !isNewWindow && !followsUserOrToolOutput {
+		return false
+	}
+	reminderIsDue := isNewWindow || intervalSeconds == 0 || !s.hasLast ||
+		now.UTC().Sub(s.lastTimeUTC) >= time.Duration(intervalSeconds)*time.Second
+	if reminderIsDue {
+		s.hasLast = true
+		s.lastTimeUTC = now.UTC()
+		s.lastWindowID = windowID
+	}
+	return reminderIsDue
 }
 
 func (r *RuntimeRouter) currentTimeReminderInputItems(ctx context.Context, threadID string, turnID string, cfg *config.Config, params *turn.TurnStartParams, createdAt time.Time, state *currentTimeReminderTurnState) ([]any, []session.Item, error) {
@@ -11373,14 +11619,14 @@ func (r *RuntimeRouter) currentTimeReminderInputItems(ctx context.Context, threa
 		now = *current
 		location = "external"
 	}
-	if !state.due(now, reminder.ReminderIntervalSeconds) {
+	windowID := r.contextWindowIDForThread(threadID)
+	if !state.takeReminderDue(windowID, now, reminder.ReminderIntervalSeconds, reminder.DeliveryMode) {
 		return nil, nil, nil
 	}
 	rendered := contextfrag.Render(&contextfrag.CurrentTimeReminder{Now: now, Location: location})
 	if rendered == nil || strings.TrimSpace(rendered.Content) == "" {
 		return nil, nil, nil
 	}
-	state.noteDelivered(now)
 	sessionItem := currentTimeReminderSessionItem(turnID, rendered, now, location, createdAt)
 	return []any{modelInputTextMessage(rendered.Role, rendered.Content)}, []session.Item{sessionItem}, nil
 }
@@ -11474,6 +11720,11 @@ func (r *RuntimeRouter) currentTimePostToolInputItems(threadID string, turnID st
 		if output != nil && !output.CompletedAt.IsZero() {
 			createdAt = output.CompletedAt.UTC()
 		}
+		if output != nil {
+			// The tool output itself is the user/tool-output boundary Rust notes
+			// when it records the FunctionCallOutput item.
+			state.noteUserOrToolOutputBoundary()
+		}
 		currentInputItems, currentSessionItems, err := r.currentTimeReminderInputItems(ctx, threadID, turnID, cfg, params, createdAt, state)
 		if err != nil {
 			return items
@@ -11483,33 +11734,6 @@ func (r *RuntimeRouter) currentTimePostToolInputItems(threadID string, turnID st
 		}
 		return append(items, currentInputItems...)
 	}
-}
-
-func (r *RuntimeRouter) lastCurrentTimeReminderTime(threadID string) (time.Time, bool) {
-	if r == nil || r.services.ThreadRouter == nil || strings.TrimSpace(threadID) == "" {
-		return time.Time{}, false
-	}
-	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
-	if err != nil || record == nil {
-		return time.Time{}, false
-	}
-	for i := len(record.Items) - 1; i >= 0; i-- {
-		if deliveredAt, ok := currentTimeReminderSessionItemTime(&record.Items[i]); ok {
-			return deliveredAt, true
-		}
-	}
-	return time.Time{}, false
-}
-
-func currentTimeReminderSessionItemTime(item *session.Item) (time.Time, bool) {
-	if item == nil || !sessionItemIsCurrentTimeReminder(item) {
-		return time.Time{}, false
-	}
-	unixSeconds := int64FromAnyValue(firstMapValue(item.Data, "current_time_at", "currentTimeAt"))
-	if unixSeconds <= 0 {
-		return time.Time{}, false
-	}
-	return time.Unix(unixSeconds, 0).UTC(), true
 }
 
 func sessionItemIsCurrentTimeReminder(item *session.Item) bool {
@@ -11793,6 +12017,10 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 	skillCatalogDeltas := cfg != nil && features.Enabled(cfg.FeatureSettings(), "skill_catalog_deltas")
 	skillBudget := skillMetadataBudgetForConfig(cfg, r.skillContextWindowForTurn(cfg, params))
 	executorMetadata := append(append(append([]promptctx.InstructionsSkillMetadata(nil), orchestratorMetadata...), selectedCapabilitySkillMetadata...), customMetadata...)
+	// Rust world_state_catalogs::render_world_state_sections: the first turn
+	// environment is the primary one, and every turn environment holding a
+	// filesystem grant marks its rows as grant-dependent.
+	primaryEnvironment, grantedEnvironmentIDs := r.skillFilesystemGrantsForTurn(threadID, turnID, params)
 	hostAvailable, executorAvailable := promptctx.RenderCombinedAvailableSkills(
 		hostSkillMetadata,
 		executorMetadata,
@@ -11802,6 +12030,8 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 			AliasScope:               threadID,
 			CloudSkillsComplete:      orchestratorComplete,
 			OmitDescriptions:         omitSkillDescriptions,
+			PrimaryEnvironment:       primaryEnvironment,
+			GrantedEnvironmentIDs:    grantedEnvironmentIDs,
 		},
 	)
 	r.recordSkillCatalogRender(skillCatalogSurfaceTurnInput, skillRenderReportOf(hostAvailable))
@@ -12596,6 +12826,7 @@ func promptSkillMetadataFromEntriesWithPolicy(entries []SkillsListEntry, preferS
 				AuthorityID:             entry.AuthorityID,
 				PackageID:               entry.PackageID,
 				ResourceID:              entry.ResourceID,
+				EnvironmentID:           entry.EnvironmentID,
 				Dependencies:            promptDependenciesFromSkillEntry(entry.Dependencies),
 			})
 		}
@@ -13343,6 +13574,7 @@ func (r *RuntimeRouter) trackSkillInvocationEvent(ctx context.Context, threadID 
 		SkillID:   resourceOrHostSkillInvocationID(skill, repoURL, repoRoot),
 		SkillName: skill.Name,
 		EventParams: telemetry.SkillInvocationEventParams{
+			TurnTrigger:     r.analyticsTurnTriggerForTurn(threadID, turnID),
 			ProductClientID: stringPtrIfNotEmpty(productClientID),
 			SkillScope:      stringPtrIfNotEmpty(scope),
 			PluginID:        stringPtrIfNotEmpty(skill.PluginID),
@@ -14862,6 +15094,7 @@ func cloneTurnStartParams(params *turn.TurnStartParams) *turn.TurnStartParams {
 	clone.AdditionalContext = cloneAdditionalContext(params.AdditionalContext)
 	clone.DynamicTools = append([]turn.DynamicToolSpec(nil), params.DynamicTools...)
 	clone.AdditionalInputItems = append([]any(nil), params.AdditionalInputItems...)
+	clone.AgentCommunicationTriggerTurns = append([]bool(nil), params.AgentCommunicationTriggerTurns...)
 	if params.Trace != nil {
 		trace := *params.Trace
 		clone.Trace = &trace
@@ -15257,9 +15490,12 @@ func (r *RuntimeRouter) collaborationModeWorldStateInputItem(threadID string, pa
 	case "legacy":
 		emit = currentValid
 	case "current":
-		if !currentValid || previous != current {
+		switch {
+		case !currentValid:
 			emit = true
-		} else if hasInstructions && !recordHasRetainedCollaborationMode(record) && firstNonEmpty(record.Metadata.LastResponseID, record.Metadata.PreviousResponseID) != "" {
+		case previous != current:
+			emit = !collaborationModeEmptyInstructionsUnchanged(previous, current, instructions)
+		case hasInstructions && !recordHasRetainedCollaborationMode(record) && firstNonEmpty(record.Metadata.LastResponseID, record.Metadata.PreviousResponseID) != "":
 			emit = true
 		}
 	case "unknown":
@@ -15291,11 +15527,23 @@ func (r *RuntimeRouter) collaborationModeWorldStateInputItem(threadID string, pa
 	}
 	rendered := contextfrag.RenderStandalone(contextfrag.NewSimpleFragment(
 		contextfrag.RoleDeveloper,
-		"<collaboration_mode>",
-		"</collaboration_mode>",
+		collaborationModeOpenTag,
+		collaborationModeCloseTag,
 		instructions,
 	))
 	return buildRenderedMessage(rendered), nil
+}
+
+// collaborationModeEmptyInstructionsUnchanged mirrors Rust's
+// `CollaborationModeState::render_diff` special case
+// (core/src/context/world_state/collaboration_mode.rs): removing the guidance
+// is a no-op when the recorded snapshot already carries the same hash, so a
+// mode or model switch without instructions emits nothing.
+func collaborationModeEmptyInstructionsUnchanged(previous collaborationModeWorldStateSnapshot, current collaborationModeWorldStateSnapshot, instructions string) bool {
+	if strings.TrimSpace(instructions) != "" {
+		return false
+	}
+	return previous.Instructions != "" && previous.Instructions == current.Instructions
 }
 
 func recordHasRetainedCollaborationMode(record *session.Record) bool {
@@ -15489,13 +15737,20 @@ func (r *RuntimeRouter) realtimeWorldStateInputItem(threadID string, cfg *config
 // modelWorldStateInputItems emits the model-switch world-state instruction when
 // the thread moves to a different model. Rust #44946 removed the
 // `<personality_spec>` world-state section entirely.
-func (r *RuntimeRouter) modelWorldStateInputItems(threadID string, info *model.ModelInfo, baseInstructions string) ([]any, error) {
+func (r *RuntimeRouter) modelWorldStateInputItems(threadID string, cfg *config.Config, info *model.ModelInfo, baseInstructions string, providerID string, historyItems []any) ([]any, error) {
 	if info == nil || strings.TrimSpace(info.Slug) == "" {
 		return nil, nil
 	}
 	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
 	if err != nil {
 		return nil, err
+	}
+	if r.incrementalToolsWindowControlsModel(record, cfg, info, providerID, historyItems) {
+		// Rust #53872: an incremental-tool window records model identity and
+		// instructions in the same `model` section and refreshes them through
+		// model_instructions fragments, so the ordinary model-switch path must
+		// not replace that snapshot with ModelOnly.
+		return nil, nil
 	}
 	state, err := session.DecodeWorldState(record.Metadata.WorldState)
 	if err != nil {
@@ -15533,6 +15788,18 @@ func (r *RuntimeRouter) modelWorldStateInputItems(threadID string, info *model.M
 		return nil, err
 	}
 	return items, nil
+}
+
+// incrementalToolsWindowControlsModel reports whether this turn's window is a
+// recorded incremental-tool window, whose model section is owned by the tool
+// catalog diff (Rust #53872 `ModelInstructionsState::for_incremental_tools`).
+func (r *RuntimeRouter) incrementalToolsWindowControlsModel(record *session.Record, cfg *config.Config, info *model.ModelInfo, providerID string, historyItems []any) bool {
+	if r == nil || record == nil || !incrementalToolsEnabledForTurn(cfg, info, providerID) {
+		return false
+	}
+	window := r.windowNumberForThread(string(record.ID))
+	mode, _, _ := model.ResolveToolDeclarationWindow(cloneAnyMap(record.Metadata.Extra), historyItems, window, true, true)
+	return mode == model.ToolDeclarationIncremental
 }
 
 func modelTokenBudgetDefaults(info *model.ModelInfo) *config.TokenBudgetDefaults {
@@ -15702,95 +15969,72 @@ func worldStateOptionalString(value string) *string {
 	return &value
 }
 
-func (r *RuntimeRouter) multiAgentModeInputItem(threadID string, params *turn.TurnStartParams) (any, error) {
-	return r.multiAgentModeInputItemForModel(threadID, params, nil)
+func (r *RuntimeRouter) multiAgentModeInputItem(threadID string, cfg *config.Config, params *turn.TurnStartParams) (any, error) {
+	return r.multiAgentModeInputItemForModel(threadID, cfg, params, nil)
 }
 
 // multiAgentModeInputItemForModel is multiAgentModeInputItem with the model
 // catalog captured for the sampling step. Rust #44200 resolves the multi-agent
 // mode from the step's model info, so a mid-turn model switch also switches the
 // catalog-provided mode text.
-func (r *RuntimeRouter) multiAgentModeInputItemForModel(threadID string, params *turn.TurnStartParams, info *model.ModelInfo) (any, error) {
-	mode := string(MultiAgentModeExplicitRequestOnly)
-	if params != nil && params.MultiAgentMode != nil {
-		candidate := strings.TrimSpace(*params.MultiAgentMode)
-		if candidate == string(MultiAgentModeProactive) || candidate == string(MultiAgentModeExplicitRequestOnly) {
-			mode = candidate
-		}
-	}
-	// Rust's effective_multi_agent_mode uses a configured
-	// multi_agent_mode_hint_text as a custom mode when present.
-	customModeText := ""
-	suppressMode := false
-	if cfg, err := r.effectiveConfigForTurn(params); err == nil && cfg != nil {
-		if agentsConfig, agentsErr := cfg.AgentsConfig(r.configBaseDirForAgents()); agentsErr == nil {
-			if v2Config, v2Err := cfg.MultiAgentV2Config(agentsConfig.MaxConcurrentThreadsPerSession); v2Err == nil && v2Config.MultiAgentModeHintText != nil {
-				customModeText = strings.TrimSpace(*v2Config.MultiAgentModeHintText)
-			}
-		}
-		if customModeText == "" {
-			// Rust #38619: catalog multi-agent mode messages provide the
-			// explicit-delegation and hint text when no configuration override
-			// is present.
-			if info == nil {
-				modelID := ""
-				if params != nil {
-					modelID = strings.TrimSpace(params.Model)
-				}
-				info = r.modelInfoForRuntimeWithConfig(modelID, cfg)
-			}
-			if info != nil && info.ModelMessages != nil && info.ModelMessages.MultiAgent != nil && info.ModelMessages.MultiAgent.Mode != nil {
-				if text, suppress := multiAgentModeCatalogText(mode, info.ModelMessages.MultiAgent.Mode); suppress {
-					suppressMode = true
-				} else if text != "" {
-					customModeText = text
-				}
-			}
-		}
-	}
-	if suppressMode {
+func (r *RuntimeRouter) multiAgentModeInputItemForModel(threadID string, cfg *config.Config, params *turn.TurnStartParams, info *model.ModelInfo) (any, error) {
+	if r == nil {
 		return nil, nil
 	}
 	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
-	if err != nil {
+	if err != nil || record == nil {
 		return nil, err
+	}
+	var agentsConfig *config.AgentsConfig
+	var v2Config *config.MultiAgentV2Config
+	version := agent.MultiAgentVersion("")
+	if cfg != nil {
+		if agents, agentsErr := cfg.AgentsConfig(r.configBaseDirForAgents()); agentsErr == nil {
+			agentsConfig = agents
+			version = r.runtimeMultiAgentVersionForThread(threadID, cfg, agentsConfig)
+			if v2, v2Err := cfg.MultiAgentV2Config(agents.MaxConcurrentThreadsPerSession); v2Err == nil {
+				v2Config = v2
+			}
+		}
+	}
+	v2Enabled := v2Config != nil && version == agent.VersionV2
+	mode := multiAgentModeValue{Kind: "none"}
+	if v2Enabled {
+		if info == nil {
+			modelID := ""
+			if params != nil {
+				modelID = strings.TrimSpace(params.Model)
+			}
+			info = r.modelInfoForRuntimeWithConfig(modelID, cfg)
+		}
+		mode = r.effectiveMultiAgentMode(record, params, info, cfg, v2Config)
+	}
+	usageHintHash := ""
+	// Rust only attaches the usage-hint hash to the mode snapshot when the
+	// usage hint itself is part of this window (V2 sessions).
+	if v2Enabled {
+		if hint, ok := r.multiAgentUsageHintForStep(record, cfg, info, v2Config); ok {
+			usageHintHash = hint.fingerprint()
+		}
 	}
 	state, err := session.DecodeWorldState(record.Metadata.WorldState)
 	if err != nil {
 		return nil, err
 	}
-	previous := ""
-	previousText := ""
-	if len(state.MultiAgentMode) > 0 {
-		var snapshot struct {
-			Mode string `json:"mode"`
-			Text string `json:"text"`
+	previous := decodeMultiAgentModeSnapshot(state.MultiAgentMode)
+	fragmentText := ""
+	switch {
+	case mode.Kind != "none":
+		if previous.State == worldStateKnown && previous.Kind == mode.Kind && previous.Text == mode.Text && previous.UsageHintHash == usageHintHash {
+			return nil, nil
 		}
-		if err := json.Unmarshal(state.MultiAgentMode, &snapshot); err != nil {
-			return nil, err
-		}
-		previous = strings.TrimSpace(snapshot.Mode)
-		previousText = strings.TrimSpace(snapshot.Text)
+		fragmentText = mode.instructionsBody()
+	case previous.State == worldStateUnknown:
+		fragmentText = explicitRequestOnlyMultiAgentModeText
+	case previous.State == worldStateKnown && (previous.Kind == "proactive" || (previous.Kind == "custom" && previous.Text != "")):
+		fragmentText = explicitRequestOnlyMultiAgentModeText
 	}
-	modeSnapshot := mode
-	if customModeText != "" {
-		modeSnapshot = "custom"
-	}
-	// Rust's MultiAgentModeState snapshots a custom policy's text, so a model
-	// switch that changes the catalog-provided mode message refreshes the
-	// section instead of looking unchanged (#44200).
-	unchanged := previous == modeSnapshot
-	if unchanged && modeSnapshot == "custom" {
-		unchanged = previousText == customModeText
-	}
-	if unchanged {
-		return nil, nil
-	}
-	snapshotValue := map[string]string{"mode": modeSnapshot}
-	if modeSnapshot == "custom" {
-		snapshotValue["text"] = customModeText
-	}
-	snapshot, err := json.Marshal(snapshotValue)
+	snapshot, err := json.Marshal(multiAgentModeSnapshot{Mode: mode.rawMessage(), UsageHintHash: usageHintHash})
 	if err != nil {
 		return nil, err
 	}
@@ -15802,13 +16046,10 @@ func (r *RuntimeRouter) multiAgentModeInputItemForModel(threadID string, params 
 	if err := r.runtimeSaveThreadRecord(record); err != nil {
 		return nil, err
 	}
-	body := explicitRequestOnlyMultiAgentModeText
-	if customModeText != "" {
-		body = customModeText
-	} else if mode == string(MultiAgentModeProactive) {
-		body = proactiveMultiAgentModeText
+	if fragmentText == "" {
+		return nil, nil
 	}
-	rendered := contextfrag.Render(contextfrag.NewSimpleFragment(contextfrag.RoleDeveloper, "<multi_agent_mode>", "</multi_agent_mode>", body))
+	rendered := contextfrag.Render(contextfrag.NewSimpleFragmentWithKind(contextfrag.RoleDeveloper, multiAgentModeOpenMarker, multiAgentModeCloseMarker, fragmentText, multiAgentModeInstructionsKind))
 	return buildRenderedMessage(rendered), nil
 }
 
@@ -15863,30 +16104,19 @@ func (r *RuntimeRouter) multiAgentUsageHintInputItemForModel(threadID string, cf
 		return nil, nil
 	}
 	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
-	if err != nil {
+	if err != nil || record == nil {
 		return nil, err
 	}
 	v2Config, err := cfg.MultiAgentV2Config(agentsConfig.MaxConcurrentThreadsPerSession)
 	if err != nil {
 		return nil, err
 	}
-	rootCatalogHintText, subagentCatalogHintText := r.multiAgentCatalogRoleInstructionsForModel(cfg, nil, info)
-	hint := agent.MultiAgentV2UsageHint(agent.MultiAgentV2UsageHintOptions{
-		IsSubagent:                     strings.TrimSpace(record.Metadata.AgentPath) != "" || record.Metadata.AgentDepth > 0,
-		MaxConcurrency:                 v2Config.MaxConcurrentThreadsPerSession,
-		WaitAgentEnabled:               v2Config.WaitAgentEnabled,
-		ExposeSpawnAgentModelOverrides: v2Config.ExposeSpawnAgentModelOverrides,
-		RootUsageHintText:              v2Config.RootAgentUsageHintText,
-		SubagentUsageHintText:          v2Config.SubagentUsageHintText,
-		RootCatalogHintText:            rootCatalogHintText,
-		SubagentCatalogHintText:        subagentCatalogHintText,
-		OmitUpdatePlanInstructions:     !cfg.UpdatePlanEnabled() && rootCatalogHintText == nil && subagentCatalogHintText == nil,
-		OmitBundledRole:                v2Config.DisableNativeTools,
-	})
-	if strings.TrimSpace(hint) == "" {
+	role, ok := r.multiAgentUsageHintForStep(record, cfg, info, v2Config)
+	if !ok {
 		return nil, nil
 	}
-	hintData, err := json.Marshal(hint)
+	fingerprint := role.fingerprint()
+	fingerprintData, err := json.Marshal(fingerprint)
 	if err != nil {
 		return nil, err
 	}
@@ -15894,10 +16124,11 @@ func (r *RuntimeRouter) multiAgentUsageHintInputItemForModel(threadID string, cf
 	if err != nil {
 		return nil, err
 	}
-	if string(state.MultiAgentUsageHint) == string(hintData) {
+	previous, previousState := decodeMultiAgentUsageHintSnapshot(state.MultiAgentUsageHint)
+	if previousState == worldStateKnown && previous == fingerprint {
 		return nil, nil
 	}
-	state.MultiAgentUsageHint = json.RawMessage(hintData)
+	state.MultiAgentUsageHint = json.RawMessage(fingerprintData)
 	record.Metadata.WorldState, err = session.EncodeWorldState(state)
 	if err != nil {
 		return nil, err
@@ -15905,7 +16136,15 @@ func (r *RuntimeRouter) multiAgentUsageHintInputItemForModel(threadID string, cf
 	if err := r.runtimeSaveThreadRecord(record); err != nil {
 		return nil, err
 	}
-	rendered := contextfrag.Render(contextfrag.NewSimpleFragment(contextfrag.RoleDeveloper, "<multi_agent_usage_hint>", "</multi_agent_usage_hint>", hint))
+	if previousState == worldStateUnknown {
+		// Rust records an unrecognized previous snapshot without re-emitting it.
+		return nil, nil
+	}
+	kind := multiAgentUsageHintKind
+	if role.Marked {
+		kind = multiAgentRoleInstructionsKind
+	}
+	rendered := contextfrag.Render(contextfrag.NewSimpleFragmentWithKind(contextfrag.RoleDeveloper, "", "", role.render(), kind))
 	return buildRenderedMessage(rendered), nil
 }
 

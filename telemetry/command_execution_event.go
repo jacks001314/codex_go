@@ -82,7 +82,13 @@ type ImageGenerationEventSink interface {
 }
 
 type CodexToolItemEventBase struct {
-	ThreadID string `json:"thread_id"`
+	// TurnTrigger is the trigger that started the turn this item belongs to
+	// (Rust analytics CodexToolItemEventBase::turn_trigger: `user`,
+	// `automation`, `queue`, ...). It is captured when the event is built so a
+	// background completion still reports the source after the turn ended.
+	// Rust skips the field when absent, so nil stays off the wire.
+	TurnTrigger *string `json:"turn_trigger,omitempty"`
+	ThreadID    string  `json:"thread_id"`
 	// SessionID is the identity shared by the root thread and its descendants
 	// (Rust CodexToolItemEventBase::session_id).
 	SessionID string `json:"session_id"`

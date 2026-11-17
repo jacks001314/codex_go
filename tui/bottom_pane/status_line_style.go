@@ -94,6 +94,12 @@ type StatusLineSpan struct {
 
 type StatusLine struct {
 	Spans []StatusLineSpan
+	// prepared carries extension status content (Rust StatusContent::Extension).
+	// A nil prepared tree keeps the native span renderer.
+	prepared *tui.PreparedUITree
+	// layoutCache holds the prepared tree's last layout, keyed by viewport.
+	// Copies share it because the prepared content is immutable.
+	layoutCache *statusLineLayoutCache
 }
 
 func StatusLineFromSegments(segments []StatusLineSegment, useThemeColors bool) (StatusLine, bool) {
@@ -119,26 +125,6 @@ func StatusLineFromSegments(segments []StatusLineSegment, useThemeColors bool) (
 		spans = append(spans, span)
 	}
 	return StatusLine{Spans: spans}, true
-}
-
-// StatusLineRenderer selects how the configured status line is materialized
-// (Rust #57970 StatusLineRenderer).
-type StatusLineRenderer string
-
-const (
-	// StatusLineRendererNative renders the span-based status line.
-	StatusLineRendererNative StatusLineRenderer = "native"
-	// StatusLineRendererExtension renders through the shared UI tree.
-	StatusLineRendererExtension StatusLineRenderer = "extension"
-)
-
-// StatusLineRendererFromFeature maps the tui_extensions_statusline feature to
-// its renderer.
-func StatusLineRendererFromFeature(extensionEnabled bool) StatusLineRenderer {
-	if extensionEnabled {
-		return StatusLineRendererExtension
-	}
-	return StatusLineRendererNative
 }
 
 // FitToWidth renders the plain status line truncated to width, keeping the
@@ -211,35 +197,62 @@ func StatusLineFallbackSGR(accent StatusLineAccent) string {
 func (l StatusLine) RenderStyled(threadColorSGR string, accentColorSGR func(StatusLineAccent) string, bold bool) string {
 	var out strings.Builder
 	for _, span := range l.Spans {
-		color := ""
-		switch {
-		case span.ThreadIdentity && threadColorSGR != "":
-			color = threadColorSGR
-		case span.Accent != "" && span.Accent != StatusLineAccentNone:
-			if accentColorSGR != nil {
-				color = accentColorSGR(span.Accent)
-			}
-			if color == "" {
-				color = StatusLineFallbackSGR(span.Accent)
-			}
+		out.WriteString(renderStatusLineSpan(span, threadColorSGR, accentColorSGR, bold))
+	}
+	return out.String()
+}
+
+// RenderStyledWithHyperlinks is RenderStyled with the pull-request span wrapped
+// in an OSC-8 hyperlink. Rust paints a native HyperlinkLine into the terminal
+// buffer, which emits the link next to the span styles, and configured status
+// lines plus their picker previews use that renderer regardless of the
+// extensions feature flag (#60027).
+func (l StatusLine) RenderStyledWithHyperlinks(pullRequestURL string, threadColorSGR string, accentColorSGR func(StatusLineAccent) string, bold bool) string {
+	link := ""
+	if _, err := tui.NewLinkHref(pullRequestURL); err == nil {
+		link = pullRequestURL
+	}
+	var out strings.Builder
+	for _, span := range l.Spans {
+		styled := renderStatusLineSpan(span, threadColorSGR, accentColorSGR, bold)
+		if link != "" && span.Underline && !span.Separator {
+			styled = tui.OSC8Hyperlink(link, styled)
 		}
-		styled := span.Dim || span.Underline || color != ""
-		if bold {
-			out.WriteString(statusLineBoldSGR)
+		out.WriteString(styled)
+	}
+	return out.String()
+}
+
+func renderStatusLineSpan(span StatusLineSpan, threadColorSGR string, accentColorSGR func(StatusLineAccent) string, bold bool) string {
+	var out strings.Builder
+	color := ""
+	switch {
+	case span.ThreadIdentity && threadColorSGR != "":
+		color = threadColorSGR
+	case span.Accent != "" && span.Accent != StatusLineAccentNone:
+		if accentColorSGR != nil {
+			color = accentColorSGR(span.Accent)
 		}
-		if span.Dim {
-			out.WriteString(statusLineDimSGR)
+		if color == "" {
+			color = StatusLineFallbackSGR(span.Accent)
 		}
-		if color != "" {
-			out.WriteString(color)
-		}
-		if span.Underline {
-			out.WriteString(statusLineUnderlineSGR)
-		}
-		out.WriteString(span.Text)
-		if styled || bold {
-			out.WriteString(statusLineResetSGR)
-		}
+	}
+	styled := span.Dim || span.Underline || color != ""
+	if bold {
+		out.WriteString(statusLineBoldSGR)
+	}
+	if span.Dim {
+		out.WriteString(statusLineDimSGR)
+	}
+	if color != "" {
+		out.WriteString(color)
+	}
+	if span.Underline {
+		out.WriteString(statusLineUnderlineSGR)
+	}
+	out.WriteString(span.Text)
+	if styled || bold {
+		out.WriteString(statusLineResetSGR)
 	}
 	return out.String()
 }

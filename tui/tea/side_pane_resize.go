@@ -2,7 +2,6 @@ package tea
 
 import (
 	bubbletea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/x/ansi"
 
 	"codex_go/tui/keymsg"
 )
@@ -66,8 +65,9 @@ func (m *Model) setFocusedPaneWidth(focusedPercent int) bubbletea.Cmd {
 	if !sideFocused {
 		sidePercent = 100 - focusedPercent
 	}
-	available := max(m.width-ansi.StringWidth(sideWorkspaceDivider), 1)
-	preferred := (available*clampModalInt(sidePercent, 0, 100) + 99) / 100
+	// Rust preferred_width takes the preset share of the whole terminal before
+	// clamping the sidebar to its 36/64 column limits.
+	preferred := (m.width*clampModalInt(sidePercent, 0, 100) + 50) / 100
 	width := sidebarColumns(preferred, m.width)
 	percent := widthPercent(width, m.width)
 	m.sideZoomed = false

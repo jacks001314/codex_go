@@ -25,7 +25,15 @@ func stepWorldStateCatalog(t *testing.T, models ...model.ModelInfo) *config.Conf
 	if err := os.WriteFile(catalogPath, data, 0o600); err != nil {
 		t.Fatalf("WriteFile catalog error = %v", err)
 	}
-	return &config.Config{Values: map[string]any{"model_catalog_json": catalogPath}}
+	// Rust resolves the model-owned multi-agent sections only for V2 sessions
+	// (effective_multi_agent_mode returns None below V2), so the captured-model
+	// test runs with the V2 feature enabled.
+	return &config.Config{Values: map[string]any{
+		"model_catalog_json": catalogPath,
+		"features": map[string]any{
+			"multi_agent_v2": map[string]any{"enabled": true},
+		},
+	}}
 }
 
 func stepWorldStateModel(slug string, window int64) model.ModelInfo {

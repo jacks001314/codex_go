@@ -173,9 +173,9 @@ func TestCompactionInstallsLatestIncrementalInstructionsLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	modelID, hash, ok := session.ModelInstructionsSnapshotForWindow(state.BaseInstructions, 1)
-	if !ok || modelID != "gpt-next" || hash != session.BaseInstructionsHash(latest) {
-		t.Fatalf("model instruction snapshot = %q/%q/%v", modelID, hash, ok)
+	modelID, hash, ok, hasInstructions := session.DecodeModelStateSnapshot(state.Model)
+	if !ok || !hasInstructions || modelID != "gpt-next" || hash != session.BaseInstructionsHash(latest) {
+		t.Fatalf("model instruction snapshot = %q/%q/%v/%v", modelID, hash, ok, hasInstructions)
 	}
 
 	empty := ""
@@ -193,9 +193,9 @@ func TestCompactionInstallsLatestIncrementalInstructionsLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	modelID, hash, ok = session.ModelInstructionsSnapshotForWindow(state.BaseInstructions, 1)
-	if !ok || modelID != "gpt-next" || hash != session.BaseInstructionsHash("") {
-		t.Fatalf("empty model instruction snapshot = %q/%q/%v", modelID, hash, ok)
+	modelID, hash, ok, hasInstructions = session.DecodeModelStateSnapshot(state.Model)
+	if !ok || !hasInstructions || modelID != "gpt-next" || hash != session.BaseInstructionsHash("") {
+		t.Fatalf("empty model instruction snapshot = %q/%q/%v/%v", modelID, hash, ok, hasInstructions)
 	}
 }
 

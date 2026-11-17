@@ -279,7 +279,15 @@ func (p *AvailablePluginsInstructions) Body() string {
 		"### How to use plugins",
 		usage,
 	}
-	return strings.Join(lines, "\n")
+	// Rust's AvailablePluginsInstructions body owns the newlines inside the
+	// markers (core/src/context/available_plugins_instructions.rs).
+	return "\n" + strings.Join(lines, "\n") + "\n"
+}
+
+// PluginBundledGuidanceBody renders the bundled generic plugin guidance body,
+// matching Rust's `AvailablePluginsInstructions::default()`.
+func PluginBundledGuidanceBody() string {
+	return (&AvailablePluginsInstructions{}).Body()
 }
 
 type PluginInstructions struct {

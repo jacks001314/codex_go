@@ -49,7 +49,8 @@ func TestSidebarChooserOffersNewSideChatLikeRust(t *testing.T) {
 		t.Fatalf("chooser layout = %d/%d focused=%t ok=%t", left, right, sideFocused, ok)
 	}
 	rendered := model.renderSidebarChooser(40, 20)
-	for _, want := range []string{sidebarChooserTitle, sidebarNewChatTitle, "Esc back"} {
+	back := codextui.KeybindingDisplayLabel("esc") + " back"
+	for _, want := range []string{sidebarChooserTitle, sidebarNewChatTitle, back} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("chooser missing %q:\n%s", want, rendered)
 		}

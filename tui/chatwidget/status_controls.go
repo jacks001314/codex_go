@@ -1271,7 +1271,14 @@ type StatusLineSetupItem struct {
 	Description string
 	Preview     string
 	Selected    bool
+	// ThemeColors marks the synthetic "Use theme colors" row, which is not a
+	// configured status-line item (Rust STATUS_LINE_USE_THEME_COLORS_ITEM_ID).
+	ThemeColors bool
 }
+
+// StatusLineUseThemeColorsItemID is the picker row that toggles the
+// `tui.status_line_use_colors` behavior (Rust #60027).
+const StatusLineUseThemeColorsItemID = "status-line-use-theme-colors"
 
 type StatusLineSetupView struct {
 	Title          string
@@ -1285,7 +1292,16 @@ func NewStatusLineSetupView(configured []bottompane.StatusLineItem, useThemeColo
 	if configured == nil {
 		configured = NewStatusSurfaceSelections(nil, nil).StatusLineItems
 	}
-	items := make([]StatusLineSetupItem, 0, len(AllStatusLineItems()))
+	// Rust #60027 always exposes the theme-colour option; the extensions flag
+	// only enables experimental MCP status line providers.
+	items := make([]StatusLineSetupItem, 0, len(AllStatusLineItems())+1)
+	items = append(items, StatusLineSetupItem{
+		ID:          StatusLineUseThemeColorsItemID,
+		Name:        "Use theme colors",
+		Description: "Apply colors from the active /theme",
+		Selected:    useThemeColors,
+		ThemeColors: true,
+	})
 	for _, item := range AllStatusLineItems() {
 		id := StatusLineItemID(item)
 		preview := ""

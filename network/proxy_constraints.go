@@ -11,9 +11,12 @@ import (
 
 // ProxyRequirements is the transport-neutral form of managed network constraints.
 type ProxyRequirements struct {
-	Enabled                          *bool
-	HTTPPort                         *uint16
-	SOCKSPort                        *uint16
+	Enabled   *bool
+	HTTPPort  *uint16
+	SOCKSPort *uint16
+	// TransparentTCP overrides the controller's capture switch from managed
+	// requirements (Rust #61851).
+	TransparentTCP                   *bool
 	AllowUpstreamProxy               *bool
 	DangerouslyAllowNonLoopbackProxy *bool
 	DangerouslyAllowAllUnixSockets   *bool
@@ -145,6 +148,11 @@ func NewProxySpecForPlatformWithLocalBinding(config ProxyConfig, requirements *P
 	if requirements != nil {
 		config, constraints = applyProxyRequirements(config, requirements, managedSandboxActive, hardDeny)
 	}
+	// Rust #61851 build_config_state: transparent capture needs a managed
+	// SOCKS5 proxy to relay the intercepted connections.
+	if config.Network.TransparentTCP && !(config.Network.Enabled && config.Network.EnableSocks5) {
+		return nil, fmt.Errorf("transparent_tcp requires an enabled managed SOCKS5 proxy")
+	}
 	if !config.Network.AllowLocalBindingSet {
 		resolved := localBinding == LocalBindingRequireTrue
 		config.Network.AllowLocalBinding = resolved
@@ -210,6 +218,9 @@ func applyProxyRequirements(config ProxyConfig, requirements *ProxyRequirements,
 	}
 	if requirements.SOCKSPort != nil {
 		settings.SocksURL = fmt.Sprintf("http://127.0.0.1:%d", *requirements.SOCKSPort)
+	}
+	if requirements.TransparentTCP != nil {
+		settings.TransparentTCP = *requirements.TransparentTCP
 	}
 	if requirements.AllowUpstreamProxy != nil {
 		settings.AllowUpstreamProxy = *requirements.AllowUpstreamProxy

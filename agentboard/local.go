@@ -148,6 +148,16 @@ func (b *LocalAgentMessageBoard) Identity() string {
 	return b.identity
 }
 
+// StorageNamespace is the storage namespace this handle was opened in
+// (Rust AgentMessageBoard::storage_namespace). Guardian retrieval only accepts
+// the guardian namespace, so an ordinary board never qualifies.
+func (b *LocalAgentMessageBoard) StorageNamespace() string {
+	if b == nil {
+		return ""
+	}
+	return b.namespace
+}
+
 func localBoardDatabasePath(sqlite state.SqliteConfig, options LocalBoardOptions) (string, error) {
 	home := strings.TrimSpace(sqlite.Home())
 	if home == "" {
@@ -1198,16 +1208,32 @@ func (b *LocalAgentMessageBoard) searchPostsAt(ctx context.Context, caller strin
 		statement += " AND author=?"
 		args = append(args, string(*query.Author))
 	}
+	needle := ""
 	if query.Query != nil {
+		needle = foldCase(*query.Query)
+	}
+	jsonPointer := ""
+	if scope != nil {
+		jsonPointer = scope.jsonSearchPointer
+	}
+	// A JSON-enabled capture also matches decoded JSON literals, which the
+	// folded body_search column cannot express (Rust local/json_search.rs). The
+	// rows are filtered in Go, so the offset and the one-item lookahead move
+	// into jsonSearchPostPage.
+	jsonSearch := jsonPointer != "" && needle != ""
+	if query.Query != nil && !jsonSearch {
 		statement += " AND instr(body_search, ?)>0"
-		args = append(args, foldCase(*query.Query))
+		args = append(args, needle)
 	}
 	if after != nil {
 		statement += " AND (timestamp,seq)>(?,?)"
 		args = append(args, after[0], after[1])
 	}
-	statement += " ORDER BY timestamp DESC,seq DESC LIMIT ? OFFSET ?"
-	args = append(args, int64(limit+1), int64(offset))
+	statement += " ORDER BY timestamp DESC,seq DESC"
+	if !jsonSearch {
+		statement += " LIMIT ? OFFSET ?"
+		args = append(args, int64(limit+1), int64(offset))
+	}
 	rows, err := b.db.QueryContext(ctx, statement, args...)
 	if err != nil {
 		return nil, err
@@ -1215,6 +1241,9 @@ func (b *LocalAgentMessageBoard) searchPostsAt(ctx context.Context, caller strin
 	posts, err := decodeStoredPosts(rows)
 	if err != nil {
 		return nil, err
+	}
+	if jsonSearch {
+		posts = jsonSearchPostPage(posts, jsonPointer, needle, offset, limit)
 	}
 	chars := searchPreviewChars(query.MaxCharsPerPost, minInt(len(posts), limit))
 	previews := make([]PostPreview, 0, len(posts))
@@ -1613,3 +1642,4 @@ func minInt(left int, right int) int {
 }
 
 var _ Board = (*LocalAgentMessageBoard)(nil)
+var _ AgentMessageBoard = (*LocalAgentMessageBoard)(nil)

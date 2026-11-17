@@ -430,8 +430,9 @@ var Registry = []Spec{
 	// setup wizard is stable but disabled by default; users opt in with
 	// features.gcp_setup_wizard = true.
 	{Key: "gcp_setup_wizard", Stage: StageStable, DefaultEnabled: false},
-	// Rust #57970 (codex-rs/features/src/lib.rs): the shared UI tree renderer for
-	// the status line is under development and disabled by default.
+	// Rust #60027 (codex-rs/features/src/lib.rs): enables experimental MCP
+	// status line providers. Configured status lines and their picker previews
+	// always stay on the native renderer, so this flag no longer changes them.
 	{Key: "tui_extensions_statusline", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "step_model_switching", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs 307ce6cda9): write_stdin_approval

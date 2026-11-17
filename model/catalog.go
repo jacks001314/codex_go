@@ -920,7 +920,12 @@ type ModelInfo struct {
 	MultiAgentVersion         string           `json:"multi_agent_version"`
 	// MultiAgentReasoningEffort mirrors Rust ModelInfo.multi_agent_reasoning_effort
 	// (the reasoning effort used for multi-agent work when the user selects Ultra).
-	MultiAgentReasoningEffort     *string  `json:"multi_agent_reasoning_effort,omitempty"`
+	MultiAgentReasoningEffort *string `json:"multi_agent_reasoning_effort,omitempty"`
+	// MultiAgentToolsInCodeMode mirrors Rust ModelInfo.multi_agent_tools_in_code_mode:
+	// whether native multi-agent tools follow the model's tool mode instead of
+	// staying direct-only. Absent keeps the runtime's
+	// `multi_agent_v2.non_code_mode_only` setting in charge.
+	MultiAgentToolsInCodeMode     *bool    `json:"multi_agent_tools_in_code_mode,omitempty"`
 	SupportsImageDetailOriginal   bool     `json:"supports_image_detail_original"`
 	ContextWindow                 int64    `json:"context_window"`
 	MaxContextWindow              int64    `json:"max_context_window"`
@@ -1157,6 +1162,8 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		SupportsParallelToolCalls         bool                  `json:"supports_parallel_tool_calls"`
 		ToolMode                          any                   `json:"tool_mode"`
 		MultiAgentVersion                 any                   `json:"multi_agent_version"`
+		MultiAgentReasoningEffort         *string               `json:"multi_agent_reasoning_effort"`
+		MultiAgentToolsInCodeMode         *bool                 `json:"multi_agent_tools_in_code_mode"`
 		SupportsImageDetailOriginal       bool                  `json:"supports_image_detail_original"`
 		ContextWindow                     int64                 `json:"context_window"`
 		MaxContextWindow                  int64                 `json:"max_context_window"`
@@ -1212,6 +1219,8 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		SupportsParallelToolCalls:      raw.SupportsParallelToolCalls,
 		ToolMode:                       knownToolMode(stringFromJSONValue(raw.ToolMode)),
 		MultiAgentVersion:              knownMultiAgentVersion(stringFromJSONValue(raw.MultiAgentVersion)),
+		MultiAgentReasoningEffort:      raw.MultiAgentReasoningEffort,
+		MultiAgentToolsInCodeMode:      raw.MultiAgentToolsInCodeMode,
 		SupportsImageDetailOriginal:    raw.SupportsImageDetailOriginal,
 		ContextWindow:                  raw.ContextWindow,
 		MaxContextWindow:               raw.MaxContextWindow,

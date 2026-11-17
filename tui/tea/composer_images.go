@@ -189,6 +189,7 @@ func (m *Model) publishComposerImageOverlays() []transcriptImageOverlay {
 		return nil
 	}
 	baseRow := m.composerTopRow + 1
+	originX, originY := m.insetRenderOriginX, m.insetRenderOriginY
 	overlays := make([]transcriptImageOverlay, 0, len(m.composerImageTiles))
 	for index, tile := range m.composerImageTiles {
 		if tile.image == nil {
@@ -196,8 +197,8 @@ func (m *Model) publishComposerImageOverlays() []transcriptImageOverlay {
 		}
 		overlays = append(overlays, transcriptImageOverlay{
 			image: tile.image,
-			x:     index * (int(transcript_image.ComposerTileColumns) + 1),
-			row:   baseRow,
+			x:     index*(int(transcript_image.ComposerTileColumns)+1) + originX,
+			row:   baseRow + originY,
 		})
 	}
 	return overlays

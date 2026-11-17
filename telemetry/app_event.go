@@ -20,6 +20,10 @@ const (
 // CodexAppMetadata is the identity a codex_app_* event reports (Rust's
 // CodexAppMetadata).
 type CodexAppMetadata struct {
+	// TurnTrigger is the trigger that started the turn the app was used in
+	// (Rust analytics CodexAppMetadata::turn_trigger); absent stays off the
+	// wire.
+	TurnTrigger     *string `json:"turn_trigger,omitempty"`
 	ConnectorID     *string `json:"connector_id"`
 	ThreadID        *string `json:"thread_id"`
 	TurnID          *string `json:"turn_id"`

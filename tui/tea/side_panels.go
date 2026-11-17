@@ -23,9 +23,13 @@ const (
 	// sideWorkspaceMinWidth mirrors Rust's 100-column threshold: narrower
 	// terminals fall back to the single focused transcript.
 	sideWorkspaceMinWidth = 100
-	sideWorkspaceDivider  = " │ "
+	// Rust side_pane.rs GAP: the panes are separated by a single column and the
+	// divider glyph is painted in that column (paint_divider), so the side pane
+	// starts immediately after it instead of behind padding columns.
+	sideWorkspaceDivider      = "│"
+	sideWorkspaceDividerWidth = 1
 	// Rust #59595 keeps the sidebar between 36 columns and the remaining space
-	// after reserving 64 columns for the parent transcript.
+	// after reserving 64 columns for the parent transcript plus the gap.
 	sideWorkspaceMinSideWidth   = 36
 	sideWorkspaceMinParentWidth = 64
 	sideWorkspaceDefaultPercent = 33
@@ -54,10 +58,10 @@ func widthPercent(width int, total int) int {
 }
 
 // sidebarColumns mirrors Rust sidebar_width: clamp the sidebar to at least 36
-// columns and leave the parent at least 64 columns when the terminal allows it.
+// columns and leave the parent at least 64 columns plus the one-column gap when
+// the terminal allows it.
 func sidebarColumns(width int, total int) int {
-	available := total - ansi.StringWidth(sideWorkspaceDivider)
-	maxSide := max(available-sideWorkspaceMinParentWidth, sideWorkspaceMinSideWidth)
+	maxSide := max(total-sideWorkspaceDividerWidth-sideWorkspaceMinParentWidth, sideWorkspaceMinSideWidth)
 	return clampModalInt(width, sideWorkspaceMinSideWidth, maxSide)
 }
 
@@ -74,12 +78,15 @@ func sideWorkspaceWidthsForPercent(width int, percent int, exact sideExactWidth)
 	if width < sideWorkspaceMinWidth {
 		return 0, 0, false
 	}
-	available := width - ansi.StringWidth(sideWorkspaceDivider)
+	available := width - sideWorkspaceDividerWidth
 	if available < 2 {
 		return 0, 0, false
 	}
-	sideWidth := sidebarColumns((available*clampModalInt(percent, 1, 99)+50)/100, width)
-	if exact.valid && exact.total == width && widthPercent(exact.width, width) == clampModalInt(percent, 1, 99) {
+	percent = clampModalInt(percent, 1, 99)
+	// Rust preferred_width takes the saved percentage of the whole terminal and
+	// then clamps it (side_pane.rs preferred_width/sidebar_width).
+	sideWidth := sidebarColumns((width*percent+50)/100, width)
+	if exact.valid && exact.total == width && widthPercent(exact.width, width) == percent {
 		sideWidth = sidebarColumns(exact.width, width)
 	}
 	leftWidth = available - sideWidth
@@ -182,7 +189,7 @@ func (m *Model) renderSideWorkspace(width int, height int) (string, bool) {
 		if m.sidebarTabStripVisible() {
 			m.sidebarTabStripTop = 0
 		}
-		rendered := zipSidePanes(left, right, leftWidth, height)
+		rendered := m.zipSidePanes(left, right, leftWidth, height)
 		if resizing {
 			rendered += "\n" + m.sideResizeHint(rightWidth)
 		}
@@ -227,7 +234,7 @@ func (m *Model) renderSideWorkspace(width int, height int) (string, bool) {
 		rightLines = append([]string{stripRow}, rightLines...)
 		m.sidebarTabStripTop = 0
 	}
-	rendered := zipSidePanes(leftLines, rightLines, leftWidth, height)
+	rendered := m.zipSidePanes(leftLines, rightLines, leftWidth, height)
 	if resizing {
 		rendered += "\n" + m.sideResizeHint(rightWidth)
 	}
@@ -330,13 +337,6 @@ func (m *Model) offsetFocusedPanePointer(x int, y int) {
 		return
 	}
 	m.offsetConversationPointerRows(x, y)
-	if m.composerTextLeft >= 0 {
-		m.composerTextLeft += x
-	}
-	if m.composerCaretVisible {
-		m.composerCaretX += x
-		m.composerCaretRow += y
-	}
 	if m.transcriptSelectionRegion.h > 0 {
 		m.transcriptSelectionRegion.x += x
 		m.transcriptSelectionRegion.y += y
@@ -584,10 +584,11 @@ func (m *Model) renderDimmedPaneDraft(draft string, width int, maxRows int) []st
 
 // zipSidePanes joins two already-composed panes row by row, padding the left
 // column to the divider.
-func zipSidePanes(left []string, right []string, leftWidth int, height int) string {
+func (m *Model) zipSidePanes(left []string, right []string, leftWidth int, height int) string {
 	if height <= 0 {
 		return ""
 	}
+	divider := m.sideDividerCell()
 	rows := make([]string, 0, height)
 	for index := 0; index < height; index++ {
 		line := ""
@@ -598,9 +599,19 @@ func zipSidePanes(left []string, right []string, leftWidth int, height int) stri
 		if index < len(right) {
 			content = right[index]
 		}
-		rows = append(rows, padSidePaneLine(line, leftWidth)+sideWorkspaceDivider+content)
+		rows = append(rows, padSidePaneLine(line, leftWidth)+divider+content)
 	}
 	return strings.Join(rows, "\n")
+}
+
+// sideDividerCell paints the divider the way Rust side_pane::paint_divider does:
+// dim unless the pointer hovers it or a width preview (drag or keyboard resize)
+// is active, which switches it to the theme accent.
+func (m *Model) sideDividerCell() string {
+	if m != nil && (m.sideDividerHover || m.sideResize != nil || m.sideDrag != nil) {
+		return transcriptDisclosureAccentSGR() + sideWorkspaceDivider + "\x1b[0m"
+	}
+	return "\x1b[2m" + sideWorkspaceDivider + "\x1b[22m"
 }
 
 // prependSidePaneRow paints the sibling tab strip above the side transcript,

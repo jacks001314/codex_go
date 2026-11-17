@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"strings"
 	"sync"
 )
 
@@ -95,19 +96,43 @@ func (m *ThreadStatusManager) RunningTurnCount() int {
 }
 
 func (m *ThreadStatusManager) NoteTurnStarted(threadID string) *ThreadStatusNotification {
+	return m.NoteTurnStartedForTurn(threadID, "")
+}
+
+// NoteTurnStartedForTurn records the thread's latest started turn. Rust #61801:
+// a terminal event from an earlier turn can arrive after this one started, so
+// the thread keeps the id that may still finish the turn.
+func (m *ThreadStatusManager) NoteTurnStartedForTurn(threadID string, turnID string) *ThreadStatusNotification {
+	turnID = strings.TrimSpace(turnID)
 	return m.mutate(threadID, true, func(runtime *runtimeFacts) {
 		runtime.isLoaded = true
 		runtime.running = true
 		runtime.hasSystemError = false
+		if turnID != "" {
+			runtime.lastStartedTurnID = turnID
+		}
 	})
 }
 
 func (m *ThreadStatusManager) NoteTurnCompleted(threadID string) *ThreadStatusNotification {
-	return m.clearActiveState(threadID)
+	return m.NoteTurnCompletedForTurn(threadID, "")
+}
+
+// NoteTurnCompletedForTurn ignores a completion for a turn that is no longer
+// the latest one, preserving the newer turn's running state and pending
+// requests (Rust #61801).
+func (m *ThreadStatusManager) NoteTurnCompletedForTurn(threadID string, turnID string) *ThreadStatusNotification {
+	return m.finishTurn(threadID, turnID)
 }
 
 func (m *ThreadStatusManager) NoteTurnInterrupted(threadID string) *ThreadStatusNotification {
-	return m.clearActiveState(threadID)
+	return m.NoteTurnInterruptedForTurn(threadID, "")
+}
+
+// NoteTurnInterruptedForTurn mirrors NoteTurnCompletedForTurn for aborts
+// (Rust #61801).
+func (m *ThreadStatusManager) NoteTurnInterruptedForTurn(threadID string, turnID string) *ThreadStatusNotification {
+	return m.finishTurn(threadID, turnID)
 }
 
 func (m *ThreadStatusManager) NoteThreadShutdown(threadID string) *ThreadStatusNotification {
@@ -116,6 +141,7 @@ func (m *ThreadStatusManager) NoteThreadShutdown(threadID string) *ThreadStatusN
 		runtime.pendingPermissionRequests = 0
 		runtime.pendingUserInputRequests = 0
 		runtime.isLoaded = false
+		runtime.lastStartedTurnID = ""
 	})
 }
 
@@ -125,6 +151,7 @@ func (m *ThreadStatusManager) NoteSystemError(threadID string) *ThreadStatusNoti
 		runtime.pendingPermissionRequests = 0
 		runtime.pendingUserInputRequests = 0
 		runtime.hasSystemError = true
+		runtime.lastStartedTurnID = ""
 	})
 }
 
@@ -148,12 +175,38 @@ func (m *ThreadStatusManager) NoteUserInputRequestedWithNotification(threadID st
 	return &ThreadStatusActiveGuard{manager: m, threadID: threadID, guardType: guardUserInput}, notification
 }
 
-func (m *ThreadStatusManager) clearActiveState(threadID string) *ThreadStatusNotification {
-	return m.mutate(threadID, true, func(runtime *runtimeFacts) {
+// finishTurn clears the active state only when the event belongs to the latest
+// started turn. With no recorded turn, behavior is unchanged (Rust
+// `last_started_turn_id.is_none_or(...)`).
+func (m *ThreadStatusManager) finishTurn(threadID string, turnID string) *ThreadStatusNotification {
+	turnID = strings.TrimSpace(turnID)
+	return m.mutateGuarded(threadID, true, func(runtime *runtimeFacts) bool {
+		return runtime.lastStartedTurnID == "" || turnID == "" || turnID == runtime.lastStartedTurnID
+	}, func(runtime *runtimeFacts) {
 		runtime.running = false
 		runtime.pendingPermissionRequests = 0
 		runtime.pendingUserInputRequests = 0
+		runtime.lastStartedTurnID = ""
 	})
+}
+
+// IsLatestStartedTurn reports whether turnID is the most recently started turn
+// for the thread. Rust guards turn-transition cancellation with the same
+// ThreadState::last_started_turn_id check, so a late terminal event from an
+// older turn cannot cancel the newer turn's requests.
+func (m *ThreadStatusManager) IsLatestStartedTurn(threadID string, turnID string) bool {
+	if m == nil {
+		return true
+	}
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	runtime := m.runtimes[threadID]
+	if runtime == nil || runtime.lastStartedTurnID == "" || turnID == "" {
+		return true
+	}
+	return runtime.lastStartedTurnID == turnID
 }
 
 func (m *ThreadStatusManager) notePendingRequest(threadID string, guardType activeGuardType) *ThreadStatusNotification {
@@ -174,13 +227,20 @@ func (m *ThreadStatusManager) noteActiveGuardReleased(threadID string, guardType
 }
 
 func (m *ThreadStatusManager) mutate(threadID string, emit bool, apply func(*runtimeFacts)) *ThreadStatusNotification {
+	return m.mutateGuarded(threadID, emit, nil, apply)
+}
+
+func (m *ThreadStatusManager) mutateGuarded(threadID string, emit bool, allow func(*runtimeFacts) bool, apply func(*runtimeFacts)) *ThreadStatusNotification {
 	if m == nil || threadID == "" {
 		return nil
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	previous, hadPrevious := m.statusForLocked(threadID)
 	runtime := m.runtimes[threadID]
+	if runtime != nil && allow != nil && !allow(runtime) {
+		return nil
+	}
+	previous, hadPrevious := m.statusForLocked(threadID)
 	if runtime == nil {
 		runtime = &runtimeFacts{}
 		m.runtimes[threadID] = runtime
@@ -239,6 +299,7 @@ type runtimeFacts struct {
 	pendingPermissionRequests uint32
 	pendingUserInputRequests  uint32
 	hasSystemError            bool
+	lastStartedTurnID         string
 }
 
 func loadedThreadStatus(runtime *runtimeFacts) ThreadStatus {

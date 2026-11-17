@@ -21,6 +21,10 @@ type SkillInvocationEventRequest struct {
 }
 
 type SkillInvocationEventParams struct {
+	// TurnTrigger is the trigger that started the turn the skill was invoked in
+	// (Rust analytics SkillInvocationEventParams::turn_trigger); absent stays
+	// off the wire.
+	TurnTrigger     *string `json:"turn_trigger,omitempty"`
 	ProductClientID *string `json:"product_client_id"`
 	SkillScope      *string `json:"skill_scope"`
 	PluginID        *string `json:"plugin_id"`

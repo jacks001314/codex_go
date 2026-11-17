@@ -362,6 +362,11 @@ type RuntimeRouter struct {
 	// (Rust #55270). They are not persisted, so a cold resume uses the default.
 	threadUnloadDelayMu sync.Mutex
 	threadUnloadDelays  map[string]time.Duration
+	// currentTimeReminderMu guards currentTimeReminderStates, the per-thread
+	// current-time reminder bookkeeping (Rust SessionState::current_time_reminder).
+	// The state is runtime-only, so a reload starts with no delivered reminder.
+	currentTimeReminderMu     sync.Mutex
+	currentTimeReminderStates map[string]*currentTimeReminderTurnState
 	// timeProviderMu guards timeProvider, the host-supplied external clock.
 	timeProviderMu sync.RWMutex
 	timeProvider   runtimeutil.TimeProvider
@@ -420,6 +425,11 @@ type RuntimeRouter struct {
 	// same startedAtMs (Rust #57172 turn timing state).
 	itemStartedTimesMu sync.Mutex
 	itemStartedTimes   map[string]int64
+	// completedCommandItems remembers command items that already reported a
+	// terminal status. A turn transition can complete an approval-opened item
+	// before the tool result arrives, and the later result must not publish a
+	// second item/completed (Rust #61841).
+	completedCommandItems map[string]bool
 	// emaState remembers enterprise MCP account grants a registration rejected,
 	// shared by every thread this router serves (Rust McpConfig::ema_state,
 	// #55859). It holds revision digests, never credentials.
@@ -737,6 +747,10 @@ type RuntimeRouter struct {
 	retainedAnalyticsTurnsMu sync.Mutex
 	retainedAnalyticsTurns   []string
 	analyticsTurnKnown       map[string]struct{}
+	// analyticsTurnTriggers retains the trigger that started each turn so tool,
+	// artifact, skill, app and hook events still report it after the turn ended
+	// (Rust keeps the same value on its per-turn analytics metadata).
+	analyticsTurnTriggers map[string]*string
 	// pendingMCPElicitations queues MCP call classifications (auth_or_link,
 	// approval) before the items they belong to complete (Rust #45649).
 	mcpElicitationsMu      sync.Mutex
@@ -748,8 +762,12 @@ type RuntimeRouter struct {
 	connectorSelections  map[string]*state.SessionState
 	// appUsedEmittedKeys deduplicates app-use events per turn and connector
 	// (Rust's `app_used_emitted_keys`).
-	appUsedMu               sync.Mutex
-	appUsedEmittedKeys      map[string]bool
+	appUsedMu          sync.Mutex
+	appUsedEmittedKeys map[string]bool
+	// pluginUsedEmittedKeys deduplicates plugin-use events per turn and plugin
+	// (Rust's `should_enqueue_plugin_used`).
+	pluginUsedMu            sync.Mutex
+	pluginUsedEmittedKeys   map[string]bool
 	networkApproval         *networkApprovalService
 	execPolicySaved         *execPolicySavedState
 	managedNetworkReloadMu  sync.Mutex
@@ -1207,8 +1225,10 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		codeModeCells:              map[string]map[string]codeModeCellState{},
 		pendingToolEvents:          map[string][]pendingToolEvent{},
 		analyticsTurnKnown:         map[string]struct{}{},
+		analyticsTurnTriggers:      map[string]*string{},
 		connectorSelections:        map[string]*state.SessionState{},
 		appUsedEmittedKeys:         map[string]bool{},
+		pluginUsedEmittedKeys:      map[string]bool{},
 		managedNetworks:            map[string]*network.PreparedProxyManagedNetwork{},
 		managedNetworkInputs:       map[string]managedNetworkReloadInput{},
 		goalAccountingTurns:        map[string]stateGoalTurnSnapshot{},
@@ -1342,6 +1362,12 @@ func (r *RuntimeRouter) notify(method NotificationMethod, params any) {
 	if r == nil {
 		return
 	}
+	// Rust keeps the first command start and drops the duplicate core item, and
+	// a turn transition can close an approval-opened item before the tool result
+	// arrives (Rust #61841). Both dedupes live here so every emitter agrees.
+	if r.dropDuplicateCommandItemStarted(method, params) || r.dropDuplicateCommandItemCompleted(method, params) {
+		return
+	}
 	params = r.withItemLifecycleTimestamps(method, params)
 	if r.isInternalMemoryNotification(params) {
 		return
@@ -1384,6 +1410,17 @@ func (r *RuntimeRouter) notifyTurnCompletedOnce(notification *TurnCompletedNotif
 	if !r.threads.ClaimTerminal(notification.ThreadID, notification.Turn.ID) {
 		return false
 	}
+	// Rust finishes a turn by aborting every server request the thread still has
+	// pending, so a late approval from an earlier turn is resolved instead of
+	// waiting forever (#61801/#61841). A late terminal event from an older turn
+	// must preserve the newer turn's requests.
+	if r.requireThreadStatus().IsLatestStartedTurn(notification.ThreadID, notification.Turn.ID) {
+		r.abortThreadPendingServerRequests(notification.ThreadID)
+	}
+	// Rust #61820 emits the turn's aggregate TurnDiff right before TurnComplete,
+	// so the final diff survives a steer that restarted sampling without any new
+	// patch and cannot be overwritten by the next turn.
+	r.emitFinalTurnDiff(notification.ThreadID, notification.Turn.ID)
 	r.finishSkillTurnMetrics(notification.ThreadID, notification.Turn.ID, notification.Turn.Status)
 	// Rust #55591: turn stop exports the blocking sample as `completed`, turn
 	// abort as `aborted` (ext/guardian-v2/src/sync_reviewer/mod.rs). A failed
@@ -1399,6 +1436,21 @@ func (r *RuntimeRouter) notifyTurnCompletedOnce(notification *TurnCompletedNotif
 	r.notify(NotificationTurnCompleted, notification)
 	r.observeTurnCostCompletion(notification.ThreadID, notification.Turn.ID, notification.Turn.Status == TurnStatusInterrupted)
 	return true
+}
+
+func (r *RuntimeRouter) emitFinalTurnDiff(threadID string, turnID string) {
+	if r == nil {
+		return
+	}
+	diff := r.activeUnifiedDiffSnapshot(threadID, turnID)
+	if strings.TrimSpace(diff) == "" {
+		return
+	}
+	r.notify(NotificationTurnDiffUpdated, &TurnDiffUpdatedNotification{
+		ThreadID: strings.TrimSpace(threadID),
+		TurnID:   strings.TrimSpace(turnID),
+		Diff:     diff,
+	})
 }
 
 func (r *RuntimeRouter) notifyToConnection(connectionID string, method NotificationMethod, params any) {
@@ -4646,20 +4698,28 @@ func (r *RuntimeRouter) handleThreadCompactStartRuntime(request *Request) (*Thre
 	appTurn := appTurnFromTurnRecord(turnRecord, nil, TurnStatusInProgress, nil, nil)
 	appTurn.Items = []ThreadItem{}
 	appTurn.ItemsView = TurnItemsNotLoaded
-	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnStarted(params.ThreadID))
+	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnStartedForTurn(params.ThreadID, turnID))
 	r.notify(NotificationTurnStarted, &TurnStartedNotification{ThreadID: params.ThreadID, Turn: appTurn})
 	r.beginGuardianTurn(params.ThreadID, turnID)
 	_ = r.appendRuntimeTurnStarted(params.ThreadID, turnID, rootTurnIDForTurn(nil, turnID), startedAt)
 	// Rust #49262: the compaction task runs in its own `codex.compaction`
 	// phase span (core/src/tasks/compact.rs).
 	compactionSpan := r.startCompactionSpan(r.openRequestSpan(request), params.ThreadID, turnID)
+	// Capture the pre-compaction window before the replacement rewrites the
+	// record: Rust reports the context the compaction started from, and a
+	// successful compaction now recomputes token_status immediately.
+	activeContextTokensBefore := int64(0)
+	if preCompact, readErr := r.threadRecord(session.ThreadID(params.ThreadID), true, true); readErr == nil && preCompact != nil {
+		activeContextTokensBefore = compactionAnalyticsActiveContextTokensFromRecord(preCompact)
+	}
 	_, err = r.compactThread(context.Background(), &runtimeCompactRequest{
-		ThreadID:     params.ThreadID,
-		TurnID:       turnID,
-		ConnectionID: request.normalizedConnectionID(),
-		Trigger:      compact.TriggerManual,
-		Reason:       compact.ReasonUserRequested,
-		Phase:        compact.PhaseStandaloneTurn,
+		ThreadID:                  params.ThreadID,
+		TurnID:                    turnID,
+		ConnectionID:              request.normalizedConnectionID(),
+		Trigger:                   compact.TriggerManual,
+		Reason:                    compact.ReasonUserRequested,
+		Phase:                     compact.PhaseStandaloneTurn,
+		ActiveContextTokensBefore: activeContextTokensBefore,
 	})
 	if compactionSpan != nil {
 		compactionSpan.End()
@@ -4685,7 +4745,7 @@ func (r *RuntimeRouter) handleThreadCompactStartRuntime(request *Request) (*Thre
 			&durationMS,
 		),
 	})
-	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompleted(params.ThreadID))
+	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompletedForTurn(params.ThreadID, turnID))
 	return &ThreadCompactStartResponse{}, nil
 }
 
@@ -10449,6 +10509,11 @@ func (r *RuntimeRouter) handleTurnSettingsUpdate(request *Request) (*turn.TurnSe
 	status := turn.TurnSettingsUpdateStatusTargetUnavailable
 	if applied {
 		status = turn.TurnSettingsUpdateStatusApplied
+		if params.Environments != nil {
+			// Rust #61820 refreshes the tracker's environment display roots when
+			// the turn's environments change, before the next diff is published.
+			r.refreshTurnDiffDisplayRoots(params.ThreadID, params.TurnID)
+		}
 	}
 	return &turn.TurnSettingsUpdateResponse{Status: status}, nil
 }
@@ -12727,8 +12792,13 @@ func (r *RuntimeRouter) runtimeAppendItem(threadID session.ThreadID, item sessio
 
 func (r *RuntimeRouter) runtimeAppendItems(threadID session.ThreadID, items []session.Item) (*session.Record, error) {
 	r.markThreadMemoryPollutedOnExternalContext(string(threadID), items)
+	// Rust notes the current-time reminder boundary on every recorded batch
+	// (record_conversation_items and record_inter_agent_communication), before
+	// the rollout write.
+	r.noteCurrentTimeReminderRecordedItems(string(threadID), items)
 	if record, ok := r.appendEphemeralThreadItems(threadID, items); ok {
 		r.recordGuardianReviewHistoryAppend(string(threadID), items)
+		r.emitRecordedRawResponseItems(threadID, items)
 		return record, nil
 	}
 	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
@@ -12757,6 +12827,7 @@ func (r *RuntimeRouter) runtimeAppendItems(threadID session.ThreadID, items []se
 		}
 		if err == nil {
 			r.recordGuardianReviewHistoryAppend(string(threadID), items)
+			r.emitRecordedRawResponseItems(threadID, items)
 		}
 		return record, err
 	}
@@ -12766,6 +12837,7 @@ func (r *RuntimeRouter) runtimeAppendItems(threadID session.ThreadID, items []se
 	}
 	if err == nil {
 		r.recordGuardianReviewHistoryAppend(string(threadID), items)
+		r.emitRecordedRawResponseItems(threadID, items)
 	}
 	return record, err
 }
@@ -18800,7 +18872,20 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			return nil, err
 		}
 	}
-	catalogEnablesApplyPatch := turnModelInfo == nil || strings.TrimSpace(turnModelInfo.ApplyPatchToolType) != ""
+	// Rust resolves an unset model to the catalog default before reading model
+	// metadata (core/src/session/mod.rs:638 get_default_model), so the turn
+	// always consults a catalog entry instead of assuming a tool surface.
+	catalogModelInfo := turnModelInfo
+	if catalogModelInfo == nil {
+		manager := r.modelsManagerForConfig(cfg)
+		if manager == nil {
+			manager = model.NewStaticModelsManager(model.BundledModelsResponse())
+		}
+		if defaultID := strings.TrimSpace(manager.GetDefaultModel("", true, model.RefreshOffline)); defaultID != "" {
+			catalogModelInfo = r.modelInfoForRuntimeWithConfigAndOriginator(defaultID, cfg, originator)
+		}
+	}
+	catalogEnablesApplyPatch := catalogModelInfo != nil && strings.TrimSpace(catalogModelInfo.ApplyPatchToolType) != ""
 	if allowedTools == nil && catalogEnablesApplyPatch && r != nil && r.services.ToolRouter != nil && turnToolMode != model.ToolModeCodeModeOnly && turn.SupportsLegacyShellCommand(selectedEnvironmentIDs(params)) && executorSkillProviders == nil && r.services.CloudSkills == nil && !requestUserInputDefaultMode && !waitForEnvironmentEnabled && !enableCurrentTimeTool && !enableSleepTool && !disableUpdatePlan && !disableWaitAgent && webSearchOptions == nil && imageGenerationOptions == nil && len(goalToolExecutors) == 0 && (params == nil || len(params.DynamicTools) == 0) && len(candidates) == 0 && len(mcpTools) == 0 && (params == nil || params.DirectOnlyToolNamespaces == nil) {
 		return r.services.ToolRouter, nil
 	}
@@ -18810,11 +18895,10 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	options.ToolMode = turnToolMode
 	options.SafeImageDecoder = cfg != nil && features.Enabled(cfg.FeatureSettings(), "safe_image_decoder")
 	// The model catalog decides whether apply_patch is advertised (Rust
-	// model_info.apply_patch_tool_type). A missing model keeps the legacy
-	// app-server surface.
-	if turnModelInfo != nil {
-		options.EnableApplyPatch = strings.TrimSpace(turnModelInfo.ApplyPatchToolType) != ""
-	}
+	// core/src/tools/spec_plan.rs:1483
+	// `context.model_info.apply_patch_tool_type.is_some()`). The registry
+	// default must not re-enable the tool for a model that does not declare it.
+	options.EnableApplyPatch = catalogEnablesApplyPatch
 	// Rust #46010: the host-owned apps result metadata is exposed only when the
 	// session analytics client is enabled; that state gates the MCP executor's
 	// capture, and the dispatcher's recorder decides whether it is kept.
@@ -19218,13 +19302,13 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 						active.MultiAgentOverrides = store
 					})
 				}
-				if v2Config.NonCodeModeOnly {
-					options.AgentExposure = tool.ExposureDirectModelOnly
-				} else {
-					// Rust exposes V2 collaboration tools with ToolExposure::Direct
-					// when non_code_mode_only is disabled; the Go default of
-					// Discoverable would defer them behind tool search instead.
+				// Rust #61854: model metadata may override the runtime's
+				// non_code_mode_only setting; otherwise V2 collaboration tools are
+				// directly visible instead of deferred behind tool search.
+				if turn.MultiAgentToolsInCodeMode(turnModelInfo, v2Config.NonCodeModeOnly) {
 					options.AgentExposure = tool.ExposureModelVisible
+				} else {
+					options.AgentExposure = tool.ExposureDirectModelOnly
 				}
 				options.DisableWaitAgent = options.DisableWaitAgent || !v2Config.WaitAgentEnabled
 				options.DisableDirectMessage = options.DisableDirectMessage || v2Config.DisableDirectMessage
@@ -20930,10 +21014,22 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ign
 			}
 		}
 		params.AvailableDecisions = commandExecutionAvailableDecisions(params)
+		// Rust #61841: the approval opens the command item when core has not
+		// announced it yet, so a later turn transition can still close it.
+		openedCommandItem := r.openCommandApprovalItem(threadID, turnID, params)
 		userWait := r.startUserWaitTiming(threadID, turnID, userWaitOwner)
 		defer userWait.End()
 		var response CommandExecutionRequestApprovalResponse
 		if err := r.requireServerRequests().Request(ctx, ServerRequestCommandExecutionApproval, params, &response); err != nil {
+			if approvalTurnTransitioned(err) {
+				// The thread moved to another turn, so this late approval no longer
+				// has a client to answer it. Close the item the approval opened
+				// with `declined` instead of leaving it in progress.
+				if openedCommandItem {
+					r.completeCommandApprovalItemDeclined(threadID, turnID, params)
+				}
+				return tool.ShellApprovalDecision{}, tool.ErrApprovalTurnTransition
+			}
 			return tool.ShellApprovalDecision{}, err
 		}
 		// The user's answer is the final resolution
@@ -21001,14 +21097,21 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ign
 			if amendment.Action == NetworkPolicyRuleAllow {
 				return tool.ShellApprovalDecision{Approved: true}, nil
 			}
+			r.completeCommandApprovalItemDeclined(threadID, turnID, params)
 			return tool.ShellApprovalDecision{}, nil
 		case string(CommandExecutionApprovalCancel):
 			// Rust Session::resolve_exec_approval aborts the turn on
 			// ReviewDecision::Abort, which is what the menu's "No, and tell Codex
 			// what to do differently" sends.
+			r.completeCommandApprovalItemDeclined(threadID, turnID, params)
 			if r.hasRuntimeThreadStore() {
 				_, _ = r.interruptRuntimeTurn(threadID, turnID, nil, turnAbortReasonInterrupted)
 			}
+			return tool.ShellApprovalDecision{}, nil
+		case string(CommandExecutionApprovalDecline):
+			// Rust completes the approval-opened command item with Declined as
+			// soon as the user rejects it (#61841).
+			r.completeCommandApprovalItemDeclined(threadID, turnID, params)
 			return tool.ShellApprovalDecision{}, nil
 		default:
 			return tool.ShellApprovalDecision{}, nil

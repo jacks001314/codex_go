@@ -51,6 +51,50 @@ func analyticsTurnKey(threadID string, turnID string) (string, bool) {
 	return threadID + "\x00" + turnID, true
 }
 
+// recordAnalyticsTurnTrigger retains the trigger that started one turn. Rust's
+// per-turn analytics metadata survives the turn, so a tool that reports after
+// it completed still carries the original turn_trigger.
+func (r *RuntimeRouter) recordAnalyticsTurnTrigger(threadID string, turnID string, trigger string) {
+	if r == nil {
+		return
+	}
+	key, ok := analyticsTurnKey(threadID, turnID)
+	trigger = strings.TrimSpace(trigger)
+	if !ok || trigger == "" {
+		return
+	}
+	value := trigger
+	r.retainedAnalyticsTurnsMu.Lock()
+	defer r.retainedAnalyticsTurnsMu.Unlock()
+	if r.analyticsTurnTriggers == nil {
+		r.analyticsTurnTriggers = map[string]*string{}
+	}
+	r.analyticsTurnTriggers[key] = &value
+}
+
+// analyticsTurnTriggerForTurn resolves the trigger reported by a usage event.
+// The retained value wins; a live turn that was never registered falls back to
+// its start parameters. Absent evidence reports no trigger, exactly like Rust's
+// Option<String>.
+func (r *RuntimeRouter) analyticsTurnTriggerForTurn(threadID string, turnID string) *string {
+	if r == nil {
+		return nil
+	}
+	if key, ok := analyticsTurnKey(threadID, turnID); ok {
+		r.retainedAnalyticsTurnsMu.Lock()
+		retained := r.analyticsTurnTriggers[key]
+		r.retainedAnalyticsTurnsMu.Unlock()
+		if retained != nil {
+			value := *retained
+			return &value
+		}
+	}
+	if active := r.activeRuntimeTurnStateSnapshot(threadID, turnID); active != nil && active.Params != nil {
+		return stringPtrIfNotEmpty(strings.TrimSpace(active.Params.TurnTrigger))
+	}
+	return nil
+}
+
 // forgetThreadAnalyticsTurns releases a closing thread's ordering entries so a
 // long-lived process does not accumulate dead turn keys.
 func (r *RuntimeRouter) forgetThreadAnalyticsTurns(threadID string) {
@@ -68,6 +112,7 @@ func (r *RuntimeRouter) forgetThreadAnalyticsTurns(threadID string) {
 	for _, key := range r.retainedAnalyticsTurns {
 		if strings.HasPrefix(key, prefix) {
 			delete(r.analyticsTurnKnown, key)
+			delete(r.analyticsTurnTriggers, key)
 			continue
 		}
 		kept = append(kept, key)
@@ -91,6 +136,9 @@ func (r *RuntimeRouter) discardAnalyticsTurn(threadID string, turnID string) {
 	delete(r.codeModeChildCalls, key)
 	delete(r.pendingToolEvents, key)
 	r.sampledToolCallsMu.Unlock()
+	r.retainedAnalyticsTurnsMu.Lock()
+	delete(r.analyticsTurnTriggers, key)
+	r.retainedAnalyticsTurnsMu.Unlock()
 
 	r.clearToolItemReviewSummaries(threadID, turnID)
 

@@ -119,6 +119,26 @@ func AppendSessionItems(recorder *Recorder, items []session.Item, now time.Time)
 				}
 				continue
 			}
+			// Rust persists every model-visible item as its own `response_item`
+			// line and rebuilds ContextManager from those lines alone; TurnItems
+			// are display-only `EventMsg` lines that replay ignores. Go keeps a
+			// single item list, so the paginated writer emits both streams:
+			// without the response item a Rust session (or a Go replay that
+			// trusts the record) has no conversation to restore.
+			if payload, ok := modelVisibleResponseItemRolloutPayload(&items[i]); ok {
+				createdAt := itemTime(items[i].CreatedAt, now)
+				line := Line{
+					Type:         "response_item",
+					Timestamp:    createdAt.UTC().Format(time.RFC3339Nano),
+					Item:         payload,
+					ItemMetadata: responseItemHarnessMetadata(&items[i]),
+					ItemID:       items[i].ID,
+					TurnID:       sessionItemTurnID(&items[i], i),
+				}
+				if err := recorder.AppendLine(line); err != nil {
+					return fmt.Errorf("append paginated response item %d (%s/%s): %w", i, items[i].Type, items[i].ID, err)
+				}
+			}
 			raw, turnID, err := CoreTurnItemJSONFromSessionItem(&items[i])
 			if err != nil {
 				return fmt.Errorf("encode paginated session item %d (%s/%s): %w", i, items[i].Type, items[i].ID, err)
@@ -168,6 +188,73 @@ func AppendSessionItems(recorder *Recorder, items []session.Item, now time.Time)
 		}
 	}
 	return nil
+}
+
+// modelVisibleResponseItemRolloutPayload renders the Responses API payload of a
+// session item that belongs to the model-visible conversation. Rust persists
+// exactly the ResponseItem it appends to ContextManager
+// (`record_conversation_items` -> `RolloutItem::ResponseItem`), so the writer
+// derives the recorded payload from the same request builder that replays it.
+// Display-only TurnItems (commandExecution, plan, mcpToolCall, ...) and items
+// the request builder drops produce no response item.
+func modelVisibleResponseItemRolloutPayload(item *session.Item) (json.RawMessage, bool) {
+	if item == nil || !session.ModelVisibleHistoryItem(item) {
+		return nil, false
+	}
+	payload := session.InputItemFromItem(item, nil)
+	if payload == nil {
+		return nil, false
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, false
+	}
+	if len(bytes.TrimSpace(raw)) == 0 || string(bytes.TrimSpace(raw)) == "null" {
+		return nil, false
+	}
+	return raw, true
+}
+
+// responseItemHarnessMetadata returns the harness sidecar Rust persists beside a
+// recorded response item (`RolloutLine.metadata`, a `CodexHarnessMetadata`).
+// Go keeps the same JSON on the session item's Data, so a resumed rollout keeps
+// the originating truncation budget, retention decision, and history sequence.
+// Rust's `producer_bounded_tool_audio` is a transient field that is never
+// serialized; it is dropped here for the same reason.
+func responseItemHarnessMetadata(item *session.Item) json.RawMessage {
+	if item == nil || item.Data == nil {
+		return nil
+	}
+	value, ok := item.Data["harness_metadata"]
+	if !ok || value == nil {
+		return nil
+	}
+	var raw json.RawMessage
+	switch typed := value.(type) {
+	case json.RawMessage:
+		raw = append(json.RawMessage(nil), typed...)
+	case []byte:
+		raw = append(json.RawMessage(nil), typed...)
+	default:
+		encoded, err := json.Marshal(typed)
+		if err != nil {
+			return nil
+		}
+		raw = encoded
+	}
+	var object map[string]any
+	if err := json.Unmarshal(raw, &object); err != nil || len(object) == 0 {
+		return nil
+	}
+	delete(object, "producer_bounded_tool_audio")
+	if len(object) == 0 {
+		return nil
+	}
+	encoded, err := json.Marshal(object)
+	if err != nil {
+		return nil
+	}
+	return encoded
 }
 
 // AppendSessionItemEvent persists the legacy event mirror consumed by Rust's
@@ -1572,7 +1659,12 @@ func (b *rolloutReplayBuilder) handleTurnAborted(payload rolloutEventPayload, li
 	// Rust #60700: fall back to the active turn only when the abort has no ID or
 	// the active turn was opened with a generated ID. A late abort for an
 	// unrelated turn must not interrupt an explicitly identified turn.
-	if b.current != nil && (turnID == "" || b.current.hasGeneratedID) {
+	if b.current != nil && (turnID == "" || b.current.hasGeneratedID || isSyntheticRolloutTurn(b.current.snapshot.ID)) {
+		if turnID != "" && isSyntheticRolloutTurn(b.current.snapshot.ID) {
+			// Go synthesizes a turn when the rollout never opened one; the abort
+			// is then the only line that names it.
+			b.current.snapshot.ID = turnID
+		}
 		apply(&b.current.snapshot)
 		b.finishCurrentTurn()
 		return
@@ -1810,9 +1902,45 @@ func (b *rolloutReplayBuilder) appendExistingItem(item session.Item) {
 	}
 	item.UpdatedAtOrdinal = b.rolloutOrdinal
 	turnID := sessionItemTurnID(&item, len(b.items))
+	// Rust records a message twice: the response_item that ContextManager
+	// replays and the UserMessage/AgentMessage TurnItem that only feeds the
+	// transcript. User input gets different ids on the two lines, so the twin is
+	// matched by role and text within the turn.
+	if index := b.rolloutMessageTwinIndex(&item, turnID); index >= 0 {
+		existing := &b.items[index]
+		if session.HasResponseItemPayload(existing) {
+			mergeRolloutDisplayProjection(existing, &item)
+			existing.UpdatedAtOrdinal = b.rolloutOrdinal
+			return
+		}
+		// Rust writes AgentMessage before its response item; the recorded model
+		// payload replaces the projection in place.
+		if b.current != nil {
+			replacedTurn := sessionItemTurnID(existing, index)
+			if recorded := rolloutRecordedTurnID(&item); recorded != "" && isSyntheticRolloutTurn(replacedTurn) && b.current.snapshot.ID == replacedTurn {
+				// The rollout never opened this turn; adopt the turn the
+				// recorded item names instead of leaving the synthetic id.
+				b.current.snapshot.ID = recorded
+			}
+		}
+		item.Data = mergeRolloutItemMaps(item.Data, existing.Data)
+		item.Metadata = mergeRolloutItemMaps(item.Metadata, existing.Metadata)
+		item.CreatedAt = existing.CreatedAt
+		item.CreatedAtOrdinal = existing.CreatedAtOrdinal
+		b.items[index] = item
+		return
+	}
 	for i := range b.items {
 		if b.items[i].ID != item.ID || sessionItemTurnID(&b.items[i], i) != turnID {
 			continue
+		}
+		// Rust writes one conversation item twice: a `response_item` line that
+		// ContextManager replays and an `event_msg` TurnItem that only feeds the
+		// transcript. Go's record is a single list, so the display projection
+		// must never overwrite the recorded model payload.
+		if mergeRolloutDisplayProjection(&b.items[i], &item) {
+			b.items[i].UpdatedAtOrdinal = b.rolloutOrdinal
+			return
 		}
 		item.CreatedAt = b.items[i].CreatedAt
 		item.CreatedAtOrdinal = b.items[i].CreatedAtOrdinal
@@ -1844,6 +1972,135 @@ func (b *rolloutReplayBuilder) appendExistingItem(item session.Item) {
 	if sessionItemTurnID(&item, len(b.items)-1) == b.current.snapshot.ID {
 		b.current.itemCount++
 	}
+}
+
+// rolloutMessageTwinIndex finds the record item that carries the other rollout
+// stream for the same message. Rust user input has a host-assigned id on the
+// response item and a separate turn-item id, so role and text identify the twin.
+func (b *rolloutReplayBuilder) rolloutMessageTwinIndex(item *session.Item, turnID string) int {
+	if item == nil || !rolloutItemIsMessage(item) {
+		return -1
+	}
+	incomingModel := session.HasResponseItemPayload(item)
+	role := rolloutMessageRole(item)
+	text := strings.TrimSpace(item.Text)
+	for i := len(b.items) - 1; i >= 0; i-- {
+		candidate := &b.items[i]
+		if !rolloutItemIsMessage(candidate) {
+			continue
+		}
+		if !rolloutTurnsMayPair(rolloutRecordedTurnID(candidate), rolloutRecordedTurnID(item)) {
+			continue
+		}
+		if session.HasResponseItemPayload(candidate) == incomingModel {
+			continue
+		}
+		if rolloutMessageRole(candidate) != role || strings.TrimSpace(candidate.Text) != text {
+			continue
+		}
+		return i
+	}
+	return -1
+}
+
+// rolloutRecordedTurnID reads the turn a rollout line recorded. Unlike
+// sessionItemTurnID it never synthesizes one from the item index, so two items
+// that never named a turn are still recognized as the same conversation turn.
+func rolloutRecordedTurnID(item *session.Item) string {
+	if item == nil {
+		return ""
+	}
+	for _, key := range []string{"turnId", "turn_id"} {
+		if value, ok := item.Metadata[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+		if value, ok := item.Data[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+// rolloutTurnsMayPair relaxes the turn match for the two rollout streams: a
+// response item written before turn_started (or inside a fork prefix) carries
+// no turn id, and the replay builder synthesizes one for turns the rollout never
+// opened.
+func rolloutTurnsMayPair(left string, right string) bool {
+	if left == right {
+		return true
+	}
+	if left == "" || right == "" {
+		return true
+	}
+	return isSyntheticRolloutTurn(left) || isSyntheticRolloutTurn(right)
+}
+
+func rolloutItemIsMessage(item *session.Item) bool {
+	if item == nil {
+		return false
+	}
+	switch normalizeRolloutItemType(item.Type) {
+	case "message", "agent_message", "assistant_message", "user_message":
+		return true
+	}
+	return false
+}
+
+// rolloutMessageRole resolves the message role for both streams: record items
+// carry it explicitly, while Rust TurnItems encode it in the type.
+func rolloutMessageRole(item *session.Item) string {
+	if item == nil {
+		return ""
+	}
+	if role := strings.ToLower(strings.TrimSpace(item.Role)); role != "" {
+		return role
+	}
+	switch normalizeRolloutItemType(item.Type) {
+	case "agent_message", "assistant_message":
+		return "assistant"
+	case "user_message", "message":
+		return "user"
+	}
+	return ""
+}
+
+// mergeRolloutDisplayProjection folds a TurnItem display projection into the
+// recorded model payload for the same item. Rust keeps the two streams apart
+// (`RolloutItem::ResponseItem` is replayed by ContextManager, `EventMsg`
+// TurnItems only drive the transcript); Go's record is one list, so the
+// projection may add display fields but must never replace the model payload.
+func mergeRolloutDisplayProjection(existing *session.Item, incoming *session.Item) bool {
+	if existing == nil || incoming == nil || len(incoming.Raw) == 0 {
+		return false
+	}
+	if !session.HasResponseItemPayload(existing) || session.HasResponseItemPayload(incoming) {
+		return false
+	}
+	// Keep the recorded model payload (raw item, ids, text) and only adopt the
+	// display fields the TurnItem projection adds: attachment references,
+	// aggregated output, lifecycle metadata.
+	existing.Data = mergeRolloutItemMaps(existing.Data, incoming.Data)
+	existing.Metadata = mergeRolloutItemMaps(existing.Metadata, incoming.Metadata)
+	return true
+}
+
+// mergeRolloutItemMaps returns base with the keys only extra defines. Values the
+// recorded model payload set always win.
+func mergeRolloutItemMaps(base map[string]any, extra map[string]any) map[string]any {
+	if len(extra) == 0 {
+		return base
+	}
+	merged := cloneAnyMap(base)
+	if merged == nil {
+		merged = map[string]any{}
+	}
+	for key, value := range extra {
+		if _, ok := merged[key]; ok {
+			continue
+		}
+		merged[key] = value
+	}
+	return merged
 }
 
 func (b *rolloutReplayBuilder) hasCanonicalEventMirror(item session.Item, kind string) bool {
@@ -2273,6 +2530,7 @@ func markRolloutMCPItem(out *session.Item, raw map[string]any) {
 	out.Data["mcpToolCall"] = true
 	copyFirstRolloutValue(out.Data, raw, "server", "server")
 	copyFirstRolloutValue(out.Data, raw, "tool", "tool")
+	copyFirstRolloutValue(out.Data, raw, "environmentId", "environmentId", "environment_id")
 	copyFirstRolloutValue(out.Data, raw, "arguments", "arguments")
 	copyFirstRolloutValue(out.Data, raw, "appContext", "appContext", "app_context")
 	copyFirstRolloutValue(out.Data, raw, "mcpAppResourceUri", "mcpAppResourceUri", "mcp_app_resource_uri")

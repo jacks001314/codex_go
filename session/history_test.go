@@ -140,12 +140,211 @@ func TestInputItemsFromRecordOmitsNonModelVisibleThreadItemsLikeRust(t *testing.
 		if !ok {
 			t.Fatalf("item = %#v", item)
 		}
-		if nonModelVisibleHistoryItemType(raw["type"].(string)) {
+		if !modelVisibleResponseItem(raw) {
 			t.Fatalf("non-model-visible item was replayed: %#v", raw)
 		}
 	}
 	if got := items[1].(map[string]any)["type"]; got != "reasoning" {
 		t.Fatalf("raw reasoning type = %v, want reasoning", got)
+	}
+}
+
+// Rust keeps TurnItem display projections out of the model history, but Go's
+// record stores them next to the response items using the public camelCase
+// names. Replay must drop those too: a recorded commandExecution carries the
+// full aggregated output, and treating it as a user message inflates a resumed
+// turn (or a forked side conversation) past the model context window.
+func TestInputItemsFromRecordOmitsCamelCaseDisplayItemsLikeRust(t *testing.T) {
+	hugeOutput := strings.Repeat("command output line\n", 50000)
+	record := &Record{Items: []Item{
+		{ID: "u1", Type: "message", Role: "user", Text: "keep user text"},
+		{ID: "cmd-1", Type: "commandExecution", Text: hugeOutput},
+		{ID: "patch-1", Type: "fileChange", Text: "changed files"},
+		{ID: "mcp-1", Type: "mcpToolCall", Text: "tool result"},
+		{ID: "dyn-1", Type: "dynamicToolCall", Text: "dynamic result"},
+		{ID: "collab-1", Type: "collabAgentToolCall", Text: "spawned child"},
+		{ID: "sub-1", Type: "subAgentActivity", Text: "child progress"},
+		{ID: "todo-1", Type: "todoList", Text: "done"},
+		{ID: "plan-1", Type: "plan", Text: "- step"},
+		{ID: "search-1", Type: "webSearch", Text: "query"},
+		{ID: "view-1", Type: "imageView", Text: "image"},
+		{ID: "sleep-1", Type: "sleep", Text: "slept"},
+		{ID: "err-1", Type: "error", Text: "boom"},
+		{ID: "cmd-raw", Type: "commandExecution", Raw: json.RawMessage(`{"type":"commandExecution","id":"cmd-raw","command":"rg","aggregatedOutput":"workspace"}`)},
+		{ID: "cmd-1-call", Type: "function_call", CallID: "call-1", Name: "shell", Text: `{"cmd":"rg"}`},
+		{ID: "cmd-1-out", Type: "tool_output", CallID: "call-1", Text: "keep tool output"},
+		{ID: "a1", Type: "agent_message", Role: "assistant", Text: "keep assistant text"},
+	}}
+
+	items := InputItemsFromRecord(record, &HistoryBuildOptions{IncludeToolOutputs: true})
+
+	if len(items) != 4 {
+		t.Fatalf("items len = %d, want 4: %#v", len(items), items)
+	}
+	for _, item := range items {
+		raw, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("item = %#v", item)
+		}
+		if !modelVisibleResponseItem(raw) {
+			t.Fatalf("non-model-visible item was replayed: %#v", raw)
+		}
+	}
+	encoded, err := json.Marshal(items)
+	if err != nil {
+		t.Fatalf("marshal items: %v", err)
+	}
+	if len(encoded) > 4096 {
+		t.Fatalf("replayed history is %d bytes; display items leaked into the request", len(encoded))
+	}
+	if strings.Contains(string(encoded), "command output line") {
+		t.Fatalf("commandExecution output leaked into the request: %s", encoded[:200])
+	}
+}
+
+// Rust's `is_api_message` (core/src/context_manager/history.rs) is a whitelist
+// over response-item types. Go keeps TurnItem display projections in the same
+// record, so replay accepts exactly the response-item vocabulary and drops
+// everything else, including display-only renderings that reuse a type name.
+func TestModelVisibleHistoryItemMatchesRustAPIMessage(t *testing.T) {
+	visible := []Item{
+		{ID: "u1", Type: "message", Role: "user", Text: "prompt"},
+		{ID: "a1", Type: "agent_message", Role: "assistant", Text: "answer"},
+		{ID: "c1", Type: "function_call", CallID: "c1", Name: "shell", Text: "{}"},
+		{ID: "o1", Type: "tool_output", CallID: "c1", Text: "ok"},
+		{ID: "cc1", Type: "custom_tool_call", CallID: "cc1", Name: "apply_patch", Text: "x"},
+		{ID: "co1", Type: "custom_tool_call_output", CallID: "cc1", Text: "ok"},
+		{ID: "ts1", Type: "tool_search_call", CallID: "ts1"},
+		{ID: "tso1", Type: "tool_search_output", CallID: "ts1"},
+		{ID: "at1", Type: "additional_tools", Role: "developer", Data: map[string]any{"tools": []any{map[string]any{"name": "x"}}}},
+		{ID: "cfg-trusted", Type: "configuration_update", Data: map[string]any{
+			"reasoning":        map[string]any{"effort": "high"},
+			"harness_metadata": map[string]any{"harness_authored_configuration": true},
+		}},
+		{ID: "r1", Type: "reasoning", Raw: json.RawMessage(`{"type":"reasoning","id":"r1","summary":[],"encrypted_content":"enc"}`)},
+		{ID: "ws1", Type: "webSearch", Raw: json.RawMessage(`{"type":"web_search_call","id":"ws1","status":"completed"}`)},
+		{ID: "img1", Type: "imageGeneration", Raw: json.RawMessage(`{"type":"image_generation_call","id":"img1","status":"completed","result":"aGk="}`)},
+		{ID: "cmp1", Type: "contextCompaction", Raw: json.RawMessage(`{"type":"context_compaction","id":"cmp1","encrypted_content":"abc"}`)},
+		{ID: "a-turn", Type: "agent_message", Role: "assistant", Text: "answer", Raw: json.RawMessage(`{"type":"AgentMessage","id":"msg_1","content":[{"type":"Text","text":"answer"}]}`)},
+		{ID: "a-comm", Type: "agent_message", Raw: json.RawMessage(`{"type":"agent_message","author":"/root","recipient":"/root/w","content":[{"type":"input_text","text":"task"}]}`)},
+	}
+	hidden := []Item{
+		{ID: "sys1", Type: "message", Role: "system", Text: "internal"},
+		{ID: "sys2", Type: "message", Role: "system", Raw: json.RawMessage(`{"type":"message","role":"system","content":[{"type":"input_text","text":"internal"}]}`)},
+		{ID: "cmd1", Type: "commandExecution", Text: "output"},
+		{ID: "patch1", Type: "fileChange", Text: "changes"},
+		{ID: "mcp1", Type: "mcpToolCall", Text: "result"},
+		{ID: "dyn1", Type: "dynamicToolCall", Text: "result"},
+		{ID: "collab1", Type: "collabAgentToolCall", Text: "child"},
+		{ID: "sub1", Type: "subAgentActivity", Text: "child progress"},
+		{ID: "todo1", Type: "todoList", Text: "done"},
+		{ID: "plan1", Type: "plan", Text: "- step"},
+		{ID: "hook1", Type: "hookPrompt", Text: "hook text"},
+		{ID: "sleep1", Type: "sleep", Text: "slept"},
+		{ID: "err1", Type: "error", Text: "boom"},
+		{ID: "syserr1", Type: "systemError", Text: "status"},
+		{ID: "view1", Type: "imageView", Text: "image"},
+		{ID: "marker1", Type: "externalSessionImportMarker", Text: "imported"},
+		{ID: "cmp2", Type: "contextCompaction", Text: "checkpoint"},
+		{ID: "ws-tool", Type: "webSearch", Text: "web.run result"},
+		{ID: "trigger", Type: "compaction_trigger"},
+		{ID: "cfg", Type: "configuration_update", Data: map[string]any{"reasoning": map[string]any{"effort": "high"}}},
+		{ID: "other", Type: "other", Text: "unknown"},
+	}
+	for i := range visible {
+		if !ModelVisibleHistoryItem(&visible[i]) {
+			t.Fatalf("ModelVisibleHistoryItem(%s/%s) = false, want true", visible[i].Type, visible[i].ID)
+		}
+	}
+	for i := range hidden {
+		if ModelVisibleHistoryItem(&hidden[i]) {
+			t.Fatalf("ModelVisibleHistoryItem(%s/%s) = true, want false", hidden[i].Type, hidden[i].ID)
+		}
+	}
+}
+
+func TestAdditionalToolsHistoryItemKeepsModelPayload(t *testing.T) {
+	record := &Record{Items: []Item{{
+		ID:   "at-1",
+		Type: "additional_tools",
+		Role: "developer",
+		Data: map[string]any{"tools": []any{map[string]any{"name": "list", "description": "list files"}}},
+	}}}
+	items := InputItemsFromRecord(record, &HistoryBuildOptions{IncludeToolOutputs: true})
+	if len(items) != 1 {
+		t.Fatalf("items = %#v, want one additional_tools item", items)
+	}
+	item := items[0].(map[string]any)
+	if item["type"] != "additional_tools" || item["role"] != "developer" || item["id"] != "at-1" {
+		t.Fatalf("item = %#v", item)
+	}
+	if tools, _ := item["tools"].([]any); len(tools) != 1 {
+		t.Fatalf("tools = %#v", item["tools"])
+	}
+}
+
+// Go's rollout replays TUI-facing TurnItems from `event_msg item_completed`
+// lines next to the canonical response items. Rust never sends those shapes to
+// the model, so the raw fast path must rebuild `UserMessage`/`AgentMessage`
+// into Responses `message` items instead of forwarding their wire payload.
+func TestInputItemsFromRecordRebuildsTurnItemMessagesLikeRust(t *testing.T) {
+	rawUser := json.RawMessage(`{"client_id":"2cfe2c5d-de67-497d-a247-6757a3a92f84","content":[{"text":"hello","text_elements":[],"type":"text"}],"id":"user-turn-1","type":"UserMessage"}`)
+	rawAgent := json.RawMessage(`{"content":[{"text":"hi there","type":"Text"}],"id":"msg_123","type":"AgentMessage"}`)
+	record := &Record{Items: []Item{
+		{ID: "user-turn-1", Type: "message", Role: "user", Raw: rawUser},
+		{ID: "msg_123", Type: "agent_message", Role: "assistant", Raw: rawAgent},
+	}}
+
+	items := InputItemsFromRecord(record, &HistoryBuildOptions{IncludeToolOutputs: true})
+
+	if len(items) != 2 {
+		t.Fatalf("items len = %d, want 2: %#v", len(items), items)
+	}
+	user := items[0].(map[string]any)
+	if user["type"] != "message" || user["role"] != "user" {
+		t.Fatalf("user item = %#v, want message/user", user)
+	}
+	userContent := user["content"].([]map[string]any)
+	if userContent[0]["type"] != "input_text" || userContent[0]["text"] != "hello" {
+		t.Fatalf("user content = %#v, want input_text", userContent[0])
+	}
+	agent := items[1].(map[string]any)
+	if agent["type"] != "message" || agent["role"] != "assistant" {
+		t.Fatalf("agent item = %#v, want message/assistant", agent)
+	}
+	agentContent := agent["content"].([]map[string]any)
+	if agentContent[0]["type"] != "output_text" || agentContent[0]["text"] != "hi there" {
+		t.Fatalf("agent content = %#v, want output_text", agentContent[0])
+	}
+	encoded, err := json.Marshal(items)
+	if err != nil {
+		t.Fatalf("marshal items: %v", err)
+	}
+	for _, leaked := range []string{`"UserMessage"`, `"AgentMessage"`, `"Text"`, "client_id", "text_elements"} {
+		if strings.Contains(string(encoded), leaked) {
+			t.Fatalf("TurnItem payload leaked %s: %s", leaked, encoded)
+		}
+	}
+}
+
+// TurnItem::Reasoning carries display-only `raw_content`/`summary_text`; the
+// model-visible reasoning item is persisted separately as a lowercase
+// `response_item`. Replaying the TurnItem shape fails provider validation.
+func TestInputItemsFromRecordOmitsTurnItemReasoningLikeRust(t *testing.T) {
+	rawReasoning := json.RawMessage(`{"id":"rs_1","raw_content":["think"],"summary_text":["think"],"type":"Reasoning"}`)
+	record := &Record{Items: []Item{
+		{ID: "u1", Type: "message", Role: "user", Text: "keep"},
+		{ID: "rs_1", Type: "reasoning", Raw: rawReasoning},
+	}}
+
+	items := InputItemsFromRecord(record, &HistoryBuildOptions{IncludeToolOutputs: true})
+
+	if len(items) != 1 {
+		t.Fatalf("items len = %d, want 1: %#v", len(items), items)
+	}
+	got := items[0].(map[string]any)
+	if got["type"] != "message" || got["role"] != "user" {
+		t.Fatalf("item = %#v, want only the user message", got)
 	}
 }
 
@@ -181,6 +380,23 @@ func TestHarnessAuthoredConfigurationUpdateHistoryItemsAreReplayed(t *testing.T)
 	reasoning, _ := item["reasoning"].(map[string]any)
 	if reasoning["effort"] != "high" {
 		t.Fatalf("reasoning = %#v", reasoning)
+	}
+}
+
+// `agent_message` is a Responses item used for subagent communication; only
+// the capitalized `AgentMessage` TurnItem projection is rebuilt.
+func TestInputItemsFromRecordKeepsAgentCommunicationResponseItemLikeRust(t *testing.T) {
+	raw := json.RawMessage(`{"type":"agent_message","author":"/root","recipient":"/root/worker","content":[{"type":"input_text","text":"task"}]}`)
+	record := &Record{Items: []Item{{ID: "agent-task", Type: "agent_message", Raw: raw}}}
+
+	items := InputItemsFromRecord(record, &HistoryBuildOptions{IncludeToolOutputs: true})
+
+	if len(items) != 1 {
+		t.Fatalf("items len = %d, want 1: %#v", len(items), items)
+	}
+	got := items[0].(map[string]any)
+	if got["type"] != "agent_message" || got["author"] != "/root" || got["recipient"] != "/root/worker" {
+		t.Fatalf("item = %#v, want the agent_message response item", got)
 	}
 }
 

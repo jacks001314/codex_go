@@ -32860,7 +32860,10 @@
    "evidence": [
     "Round 115 (lead): completed. eventmap.ContentItem carries FileID/AudioURL with Wire()/RustJSON()/ContentItemsRustJSON() in Rust's serde shape; context.ToolOutputParts preserves file ids, URLs, detail and audio and context.ToolOutputText mirrors content_items_to_code_mode_result; session.WorldStateUpdate.ContentItems carries typed world-state contributions and MergeWorldStateUpdates emits the typed parts; session/sandbox TypedWorldStateFragmentHash implement the v2 domain (single InputText keeps v1; otherwise role + serialized content with an 8-byte length) pinned by independent digests 59ed86b1/811a17a9/9a648382/208a4f0f; tool/codeModeToolResult routes typed content_items through context.ToolOutputText. RC: removing the typed merge, v2 hash or code-mode branch fails their tests. Gates: go build ./...; ./eventmap ./context ./session ./sandbox ./turn ./appserver green; ./tool only the two known login-shell baseline reds.",
     "Round 108 (lead): typed-content layer landed in context/fragments.go - BodyItems() provider, RenderedFragment.ContentItems, RenderItems() (markers wrap only InputText; every other item passes through unchanged), ToolOutputParts() preserving image URL/detail and audio; tests context/typed_fragment_content_like_rust_test.go (3 cases) + fragments_test.go expectation updated; go test ./context ok. Remaining drift: extension prompt/world-state contributions still pass strings (appserver turn_runtime world-state hashing is text-only) and code-mode output conversion is not routed through ToolOutputPa",
-    "Downgraded from complete: upstream #54776 introduced estimate_original_image_bytes (original-detail image token estimation), but Go has no counterpart. context/history.go:596 and compact/compact.go:1347 count every inline image as a fixed 7373 bytes, and no patch-based estimate exists (rg 'patches' over context/*.go has no image/token hit). Effect: detail:original images are systematically under-counted, so compaction and budget decisions fire later than Rust. Fix path: in context.EstimateItemTokens, when detail==original and dimensions decode via image.DecodeConfig (no full decode; pattern already in session/history.go:769, exec/exec.go:2616, tui/transcript_image/transcript_image.go:76), estimate patches capped at 10000."
+    "Round 320 (audit correction): the estimate_original_image_bytes counterpart does exist. context/history.go EstimateImageReferenceBytes/estimateOriginalImageBytes parse base64 image data URLs, decode dimensions with image.DecodeConfig, count 32px patches (10,000 cap) and cache the result; compact/compact.go shares the same estimator through contextfrag.EstimateImageReferenceBytes. The earlier 'fixed 7373 bytes' downgrade note was stale. Context budget decisions therefore match Rust for detail:original images; verified by context/history_test.go and compact estimator tests.",
+    "Round 320 (world-state hashing): the remaining text-only hashing drift is closed for collaboration_mode, plugins_instructions and model_catalog. Collaboration snapshots now store Rust's WorldStateHash::from_fragment (v1, markers included) and follow collaboration_mode.rs's empty-instructions/equal-hash unchanged rule; plugin snapshots store {\"instructions\": sha1(from_json(body)), \"catalog\"} and accept Rust's legacy bare bool; model catalog stores the fragment hash with Rust's body framing and budget. appserver/world_state_snapshot_like_rust_test.go pins Rust snapshot fingerprints 90f8f667 (default), bc50ed41 (plan) and d3f660b0 (plugins bundled body). Remaining open: typed ContentItems from extension prompt/world-state contributions and the per-section snapshot value shapes listed in update/plan_2026_11_16.md batch 13.",
+      "Round 321 (world-state section shapes): top_level_tools now persists Rust's untagged snapshot exactly: a bare {name: hash} map for ToolsOnly (and {tools, exec} accepted for WithExec), with the context window kept in Record.Metadata.Extra; the retired Go {window, hashes} wrapper is decode-only. The model section persists Rust's ModelInstructionsSnapshot: {model, instructions} for incremental windows and a bare string for ModelOnly, and ModelInstructionsUpdate takes previousHasInstructions so legacy ModelOnly snapshots refresh instructions only on a model change. Rust #53872's base_instructions section is decode-only and never written again, and the ordinary model-switch path is suppressed inside incremental windows so it cannot overwrite the WithInstructions snapshot. appserver/top_level_tools_world_state_like_rust_test.go pins the first-turn ToolsOnly/WithInstructions shapes without base_instructions, a model switch that keeps WithInstructions plus a model_instructions fragment, and compaction rewriting the model section with the new window's hash.",
+      "Round 322 (multi-agent and command-session snapshots): command_sessions now stores Rust CommandSessionsState's nested BTreeMap snapshot keyed by session id with session_id/status/in_use plus omitted and polling_unavailable; statuses persist the serde variant names Running/Exited while the rendered body stays lowercase, the lowest 16 ids are kept, and the retired Go array shape and lowercase statuses remain decode-only migrations. multi_agent_usage_hint now stores the bare WorldStateHash string of the resolved MultiAgentRoleInstructions fragment: configured text is verbatim and unmarked, catalog text carries <multi_agent_role> markers, bundled text is composed with Rust's shared/wait/concurrency/model-override body, and an Unknown previous snapshot is rewritten without re-emitting. multi_agent_mode now stores Rust MultiAgentModeState ({mode, usage_hint_hash?}) with camelCase variants and {\"custom\": text}, emits only when the mode or usage-hint hash changes, follows Rust's Absent/Unknown/proactive-downgrade render_diff rules, and is gated to MultiAgentVersion::V2 (non-V2 writes {\"mode\":null} and emits nothing). appserver/multi_agent_world_state_like_rust_test.go pins role fingerprints, all four mode wire shapes, Rust/legacy decoding, configured/bare-hash usage hints, mode re-emission after a usage-hint migration, and command_sessions line format."
    ]
   },
   {
@@ -37027,7 +37030,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "Round 1254: features/features.go registers `skill_catalog_deltas`, and appserver/skill_catalog_delta.go publishes snapshot plus delta skill catalogs wired through appserver/turn_runtime.go. Tests: appserver/skill_catalog_deltas_like_rust_test.go TestSkillCatalogDeltaInitialListingLikeRust, TestSkillCatalogDeltaPublishesOnlyNewAndEditedSkillsLikeRust, TestSkillCatalogDeltaRemovalIsSilentAndKeepsBudgetLikeRust, plus appserver/skill_catalog_deltas_wiring_like_rust_test.go."
+    "Round 1254: features/features.go registers `skill_catalog_deltas`, and appserver/skill_catalog_delta.go publishes snapshot plus delta skill catalogs wired through appserver/turn_runtime.go. Tests: appserver/skill_catalog_deltas_like_rust_test.go TestSkillCatalogDeltaInitialListingLikeRust, TestSkillCatalogDeltaPublishesOnlyNewAndEditedSkillsLikeRust, TestSkillCatalogDeltaRemovalIsSilentAndKeepsBudgetLikeRust, plus appserver/skill_catalog_deltas_wiring_like_rust_test.go.",
+    "Round 1313: the snapshot now carries Rust's `grant`/`tracksGrants` fields: appserver/skill_catalog_delta.go withdraws grant-gated rows with REVALIDATE_SKILLS, announces RESTORED_SKILLS once, treats an unavailable catalog as an update instead of a reset, and revalidates every missing row once for snapshots written before grant tracking. Contract: `world-state-skill-catalog-delta-grants` in parity/contracts/manifest.json."
    ]
   },
   {
@@ -40450,9 +40454,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "update/plan_2026_11_02.md: tracked: needs an inset viewport in the Go transcript renderer"
+    "Text conversations paint inside the supplied rectangle: tui/tea/conversation_inset.go lays the transcript, composer, footer and inline pickers out at the inset size (so wrapping and suggestion overlays use the bounds), blanks the surrounding cells for the host, and restores the full layout afterwards. Tests: go test ./tui/tea -run 'TestConversationInsetPadsToRectLikeRust|TestConversationInsetReflowsAndRestoresLayoutLikeRust' -count=1",
+    "Viewport coordinates move with the inset: composer caret/text origin, follow control, selection regions and pointer hit testing are offset by the rectangle origin, and centered dialogs still own the full viewport and restore the inset after dismissal. Tests: TestConversationInsetOffsetsComposerCursorLikeRust, TestConversationInsetPreservesTranscriptScrollLikeRust, TestConversationInsetComposerClickSelectsPaintedTextLikeRust, TestConversationInsetRestoresAfterDialogDismissalLikeRust, TestConversationInsetLeavesCenteredDialogFullScreenLikeRust",
+    "Image previews are inset-aware: tui/tea/transcript_images.go centers transcript graphics in the inset width and offsets them by the rectangle origin, and tui/tea/composer_images.go does the same for composer thumbnails, so a host surface around the rectangle is never overpainted. Test: TestConversationInsetPlacesImageInsideRectLikeRust",
+    "Link hit testing has no Go model-side equivalent: the terminal owns OSC-8 activation for rendered links, so only their cells/hyperlink spans are produced by the inset renderer.",
+    "Contract: conversation-inset-rendering."
    ]
   },
   {
@@ -42144,7 +42152,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_11_04.md: ported: `discover`/`walkSkillRoot`/`entryFromPath`/`loadSkillMetadata` read roots, directories and `SKILL.md` frontmatter through the accessor, and the root-service and turn accessor keys (`fs:`/`turnfs:`) participate in the listing cache key so a permission change rebuilds discovery instead of reusing a broader snapshot."
+    "update/plan_2026_11_04.md: ported: `discover`/`walkSkillRoot`/`entryFromPath`/`loadSkillMetadata` read roots, directories and `SKILL.md` frontmatter through the accessor, and the root-service and turn accessor keys (`fs:`/`turnfs:`) participate in the listing cache key so a permission change rebuilds discovery instead of reusing a broader snapshot.",
+    "Round 1313: ported the grant half of this commit. prompt/skills_render.go computes Rust `entries_for_render` grants (executor rows follow their main-prompt environment, repository host rows follow the primary environment) and prompt/skills_catalog_policy.go resolves them; appserver/permission_grants.go adds `skillFilesystemGrantsForTurn`/`turnGrantedPermissionsForEnvironment`, which mirror `TurnContext::turn_skill_filesystem_grants` (turn-scope approvals only, non-empty read or write filesystem) instead of the session-plus-turn discovery view. appserver/turn_runtime.go feeds `PrimaryEnvironment`/`GrantedEnvironmentIDs` into RenderCombinedAvailableSkills and now forwards `SkillsListEntry.EnvironmentID` into the skill metadata. Tests: appserver/skill_catalog_delta_grants_like_rust_test.go (TestSkillCatalogDeltaGrantWithdrawalAndRestorationLikeRust, TestSkillCatalogDeltaLegacyFilesystemRevalidatesMissingRowsOnceLikeRust, TestSkillCatalogDeltaUnavailableCatalogWithdrawsGrantsLikeRust, TestSkillCatalogDeltaGrantNotAppliedToPreviouslyShownUngrantedLikeRust, TestSkillFilesystemGrantsForTurnLikeRust) and prompt/skills_grants_like_rust_test.go (TestSkillCatalogGrantMarksExecutorAndRepoHostRowsLikeRust)."
    ]
   },
   {
@@ -42768,7 +42777,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_11_05.md: ported: `RuntimeServices.AgentSessionReader` exposes host-owned V2 membership (`Root`/`Parent`/`Children`), environment context renders its direct children in provider order under the existing 8-agent/1KiB limits, a failed read omits the roster instead of falling back to controller spawn edges, compaction rebuilds pick up membership changes, the roster read resolves before the compaction window advances, and a history replacement accepted while that read is outstanding rejects a stale prepared compaction candidate. Two Rust-only details have no Go counterpart: the world-state cache that skips roster reads when the environment fragment is unchanged (Go renders the full environment context every turn) and `pending_initial_input` recovery while a host admission or suspension waits on the roster (Go has no turn-suspension surface)."
+    "update/plan_2026_11_05.md: ported: `RuntimeServices.AgentSessionReader` exposes host-owned V2 membership (`Root`/`Parent`/`Children`), environment context renders its direct children in provider order under the existing 8-agent/1KiB limits, a failed read omits the roster instead of falling back to controller spawn edges, compaction rebuilds pick up membership changes, the roster read resolves before the compaction window advances, and a history replacement accepted while that read is outstanding rejects a stale prepared compaction candidate. update/plan_2026_11_16.md batch 18 closed the render gap: the `environments` world-state section now persists Rust's full `EnvironmentsSnapshot` and renders only the diff, so an unchanged roster produces no environment fragment. Rust's remaining roster-read cache (skipping the read itself when the section is unchanged) and `pending_initial_input` recovery while a host admission or suspension waits on the roster (Go has no turn-suspension surface) have no Go counterpart."
    ]
   },
   {
@@ -44088,11 +44097,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "缺 UI tree 的继承样式：tui/ui_tree.go:93 UINode 只有 Kind/Text/Href/Title/Gap/Children，:155/:173/:222/:318 对样式字段一律报错，:516 只渲染首行",
-    "Go 锚点：tui/ui_tree.go",
-    "plan: update/plan_2026_11_08_ui_tree.md（#59988）"
+    "Aligned the inherited styling lane: UINode now carries UITextProps/Background/Wrap and prepareUINode threads foreground, background, bold, italic, underline and href down the tree; RenderStyled emits per-span SGR. Tests: go test ./tui -run TestUITreePreparedRendersInheritedStylesLikeRust -count=1"
    ]
   },
   {
@@ -44134,11 +44141,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "缺 Guardian 只读证据检索工具集：Go 有 agentboard.Board 与 guardian 命名空间，但没有捕获视图/固定截止点、没有检索工具",
-    "Go 锚点：agentboard/（api.go、guardian.go、tools.go）",
-    "plan: update/plan_2026_11_08_guardian.md（#59994）"
+    "agentboard/guardian_retrieval.go installs Rust RetrievalBinding: NewGuardianRetrievalBinding rejects every non-Guardian namespace, pins the capture with WithJSONSearchPointer(\"/original/payload/arguments\"), and exposes get_channels/list_threads/search_posts/read_thread/read_post in the guardian_board namespace against the fixed cutoff.",
+    "Go agentboard/read_view.go implements Rust with_json_search: the capture clones its catalog/cutoff with a JSON pointer, and agentboard/json_search.go plus local.searchPostsAt match decoded JSON strings, keys, scalars and the nested arguments payload, preserving cursor offsets and the one-item lookahead.",
+    "Tests: go test ./agentboard -run TestGuardianRetrievalSearchesUnsubscribedPostsThroughCutoffLikeRust -count=1 covers unsubscribed-channel search, escaped Windows paths, Unicode escapes, quoted argument JSON, a non-matching tab, and a post appended after the capture staying invisible."
    ]
   },
   {
@@ -44148,11 +44155,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "缺 Guardian 订阅工具：Go 的 Board.SetSubscription 允许改他人订阅、不限捕获目录、不回传 captured post IDs",
-    "Go 锚点：agentboard/api.go、agentboard/guardian.go",
-    "plan: update/plan_2026_11_08_guardian.md（#59995）"
+    "agentboard/guardian_subscriptions.go ports Rust ReviewerSubscriptions and subscription_tools: capture requires the Guardian namespace, Channels reads live membership but keeps only the captured catalog, Replace validates unique catalog names and writes the membership atomically, and the subscribe/unsubscribe tools decode only channel_name, reject target_agent, return the captured last_message_id, and change only the caller.",
+    "agentboard/api.go adds the AgentMessageBoard surface (storage namespace, capture, subscribed channels, bulk replacement) so Guardian retrieval is decoupled from the concrete local handle; agentboard/local.go exposes StorageNamespace and asserts the interface.",
+    "Tests: go test ./agentboard -run TestGuardianSubscriptionToolsUseCapturedCatalogLikeRust -count=1 covers caller-only writes, captured post IDs, a channel created after capture, unknown catalog entries, target_agent rejection, bulk replacement validation, and ordinary-board rejection for both subscription capture and retrieval binding."
    ]
   },
   {
@@ -44176,9 +44183,11 @@
    ],
    "status": "partial",
    "evidence": [
-    "缺模型驱动的 Guardian 频道选择：agentboard 无 sampling、无 OperationResult、无「校验频道名唯一后原子替换订阅」",
-    "Go 锚点：agentboard/、model/（采样调用）",
-    "plan: update/plan_2026_11_08_guardian.md（#59999）"
+    "Partial: agentboard/guardian_selection.go ports ReviewerSubscriptions::prepare's planner: the selection turn receives the captured catalog with descriptions, the caller's current catalog membership and the review task as bounded JSON (utils.TruncationPolicy byte budget) under Rust's guardian_channel_selection_input name/schema; the answer must carry unique names from the captured catalog with no unknown fields, and the returned SessionDisposition is honored (reusable/rollback/discard: a started turn that fails never reuses). Membership is written atomically, and channels outside the captured catalog keep their subscriptions and opt-outs (set_subscriptions only touches named channels), which also fixes Replace's previous bulk-replace behavior.",
+    "Tests: TestGuardianChannelSelectionReplacesCatalogMembershipLikeRust, TestGuardianChannelSelectionPreservesLaterChannelsLikeRust, TestGuardianChannelSelectionEmptySetUnsubscribesCatalogLikeRust, TestGuardianChannelSelectionRejectsCatalogEscapeLikeRust, TestGuardianChannelSelectionRejectsDuplicateChannelsLikeRust, TestGuardianChannelSelectionRejectsUnknownFieldsLikeRust, TestGuardianChannelSelectionHonorsCancellationLikeRust, TestGuardianChannelSelectionHonorsDeadlineLikeRust, TestGuardianChannelSelectionEnforcesInputBudgetLikeRust, TestGuardianChannelSelectionFailedSamplingRollsBackLikeRust, TestGuardianChannelSelectionKeepsOtherCallersLikeRust, TestGuardianSubscriptionsReplacePreservesOutsideChannelsLikeRust.",
+    "Residual: Go has no isolated reviewer runtime that can run a model-driven sampling turn. agentboard.Prepare accepts a GuardianChannelSampler, but no production host supplies one yet; the sampling/disposition wiring stays outstanding, so #59999 remains partial.",
+    "Go anchor: agentboard/guardian_selection.go, agentboard/guardian_subscriptions.go",
+    "plan: update/plan_2026_11_16.md batch 21 (#59999); contract guardian-channel-selection."
    ]
   },
   {
@@ -44188,11 +44197,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "缺证据投递规划器：Go 只有分页读取，没有「按插入序跨频道去重、按源顺序、拒绝超出 cutoff 的证据」",
-    "Go 锚点：agentboard/local.go（SearchPosts/ReadThread）",
-    "plan: update/plan_2026_11_08_guardian.md（#60000）"
+    "agentboard/guardian_delivery.go ports Guardian DeliveryState::plan: originals are deduplicated across selected channels by source ordinal, read by insertion sequence from the captured board view (AppendedRequestIDs paging), ordered by ordinal, limited to selected channels and captured posts, and rejected when evidence is at or beyond the review's source-history cutoff (GuardianEvidenceCutoff.EndOrdinalExclusive) or when the cutoff predates delivered evidence. Evidence request IDs use the shared [ordinal, channel] encoding.",
+    "Tests: TestGuardianDeliveryKeepsOrderedOriginalsOnceLikeRust (dedup across channels, source ordering across storage pages, unselected and later posts excluded, cutoff older than delivered evidence), TestGuardianDeliveryRejectsEvidenceBeyondCutoffLikeRust, TestGuardianEvidenceRequestIDMatchesRustShape.",
+    "Go anchor: agentboard/guardian_delivery.go, agentboard/guardian_retrieval.go",
+    "plan: update/plan_2026_11_16.md batch 21 (#60000)."
    ]
   },
   {
@@ -44202,11 +44212,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "缺有界原始证据投递执行：无 guardian_original_evidence 上下文通道、无按预算分批/超限拒绝、无 admission 成功后记 ordinal 的账本",
-    "Go 锚点：agentboard/、guardiancontext/",
-    "plan: update/plan_2026_11_08_guardian.md（#60001）"
+    "agentboard/guardian_delivery.go ports DeliveryPlan::deliver: whole posts are read one board page at a time through GuardianEvidenceView.ReadPostTexts, admitted in source order under the tool-output byte budget, oversized originals are rejected intact and retried with a larger budget, delivered ordinals and channel positions advance only after the admission callback succeeds, and successful admissions survive partial plans so retries and overlapping channel selections never duplicate evidence. ReadPostTexts enforces the captured board boundary.",
+    "Tests: TestGuardianDeliveryKeepsOrderedOriginalsOnceLikeRust (failed admission leaves state untouched, one paged read for repeated deliveries, oversized retry, captured-view boundary, cross-selection dedup).",
+    "Go anchor: agentboard/guardian_delivery.go, agentboard/read_view.go",
+    "plan: update/plan_2026_11_16.md batch 21 (#60001)."
    ]
   },
   {
@@ -44216,11 +44227,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "缺 Guardian 检索与本地 message-board 句柄解耦：Go 的 Board 接口没有 namespace/read-view/subscription 捕获方法，LocalAgentMessageBoard 是具体类型",
-    "Go 锚点：agentboard/api.go",
-    "plan: update/plan_2026_11_08_guardian.md（#60002）"
+    "AgentMessageBoard in agentboard/api.go is the trait-equivalent surface Guardian takes: Board plus StorageNamespace, CaptureReadView, SubscribedChannels and SetSubscriptions. NewGuardianRetrievalBinding and CaptureReviewerSubscriptions accept the interface, not LocalAgentMessageBoard, and both reject ordinary boards before any read or write.",
+    "BoardReadView.WithJSONSearchPointer returns an independent capture handle sharing only the frozen catalog and cutoff, mirroring Rust board.with_json_search cloning the local handle without opening storage.",
+    "Tests: go test ./agentboard -run 'TestGuardianRetrievalSearchesUnsubscribedPostsThroughCutoffLikeRust|TestGuardianSubscriptionToolsUseCapturedCatalogLikeRust' -count=1 and go test ./agentboard -count=1."
    ]
   },
   {
@@ -44375,11 +44386,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "缺 usage 分析事件的 turn_trigger：Go 只有 telemetry/turn_event.go 的 turn 级事件带 turn_trigger，tool/artifact/skill/app/plugin/hook 六类 usage 事件（telemetry/tool_result.go、artifact_operation_event.go、skill_invocation_event.go、app_event.go、plugin_event.go、hook_run_event.go）都没有该字段",
-    "缺：从 session/turn_attribution.go（TurnTriggerValue）注入，并让 MCP 工具事件在 turn 完成后仍保留触发源",
-    "Rust: analytics/src/events.rs + reducer.rs（record_tool_event 改收 turn_metadata）"
+    "Round 1313: ported turn_trigger for the five usage families Go emits. telemetry/command_execution_event.go::CodexToolItemEventBase (shared by command-execution, file-change, MCP, dynamic, collab, web-search and image-generation events), telemetry/artifact_operation_event.go, telemetry/skill_invocation_event.go, telemetry/app_event.go::CodexAppMetadata (mentioned and used) and telemetry/hook_run_event.go carry `turn_trigger` first with `omitempty`, matching Rust's `#[serde(skip_serializing_if = \"Option::is_none\")]` placement in analytics/src/events.rs.",
+    "Round 1313: appserver/analytics_retained_turns.go adds recordAnalyticsTurnTrigger/analyticsTurnTriggerForTurn. The trigger is retained per turn (bounded by the existing MAX_PENDING_TURNS eviction and dropped by discardAnalyticsTurn/forgetThreadAnalyticsTurns), recorded from the turn's persisted attribution at turn start in appserver/turn_runtime.go, and read by appserver/tool_event_origin.go::enrichToolEventBase plus the artifact, skill, app and hook emitters, so a tool that completes after its turn still reports the source trigger like Rust's retained turn_metadata.",
+    "Round 1313: tests telemetry/turn_trigger_events_like_rust_test.go (TestUsageEventParamsCarryTurnTriggerLikeRust, TestUsageEventParamsOmitAbsentTurnTriggerLikeRust) and appserver/turn_trigger_usage_events_like_rust_test.go (TestAnalyticsTurnTriggerRetainedForUsageEventsLikeRust).",
+    "Round 1314: added the missing `codex_plugin_used` family. telemetry/plugin_used_event.go defines CodexPluginUsedMetadata (turn_trigger first with omitempty, the flattened CodexPluginMetadata identity, mcp_server_names, thread_id, turn_id, model_slug - the shape pinned by analytics/src/tests/suite/plugins_tests.rs::plugin_used_event_serializes_expected_shape), the event request and the client/exporter sink methods. appserver/plugin_analytics.go::rememberExplicitPluginMentions runs next to the app-mention walk at turn start, resolves `<plugin>@<marketplace>` from the capability config name like telemetry_metadata_for_capability_summary (unparsable keys report nothing), and deduplicates per (turn, plugin) like should_enqueue_plugin_used. Tests telemetry/plugin_used_event_like_rust_test.go and appserver/plugin_used_analytics_like_rust_test.go. Rust's CodexCuaToolCallStartedEventParams also carries the field, but Go has no CUA call event to extend."
    ]
   },
   {
@@ -44389,11 +44401,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "缺 UI tree 的语义颜色：UINode 无 color/background 字段；主题侧 tui/theme_scope_foreground.go、theme_accent.go、syntax_theme.go 只服务 native span 渲染，ui_tree 无入口",
-    "Go 锚点：tui/ui_tree.go、tui/theme_*.go",
-    "plan: update/plan_2026_11_08_ui_tree.md（#60019）"
+    "Aligned theme-aware semantic colours in tui/ui_tree_style.go: named ANSI slots, primary/surface/accent, status accent scope lookup with fallback slots, and literal #rrggbb gated by the terminal colour level; unsupported tokens fail decode. Tests: go test ./tui -run TestUITreeThemeColorResolutionLikeRust -count=1"
    ]
   },
   {
@@ -44403,11 +44413,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "缺 UI tree 字符串的完整终端序列清洗：tui/ui_tree.go:614 sanitizeUITreeText 只处理 CSI（:641），非 '[ ' 的 ESC 会丢掉 ESC 保留后续字节，OSC-8 链接会以可见文本渲染",
-    "Go 锚点：tui/ui_tree.go:614-660",
-    "plan: update/plan_2026_11_08_ui_tree.md（#60020）"
+    "Aligned terminal-command stripping: every leaf is sanitized (CSI, OSC-8, control strings) before inline preparation, so hidden commands cannot survive as visible text while tabs/newlines stay legal breaks. Tests: go test ./tui -run TestUITreePreparedSanitizesTerminalCommandsLikeRust -count=1"
    ]
   },
   {
@@ -44417,11 +44425,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "缺跨节点内联文本规范化：tui/ui_tree.go:544 uiRowLine 直接拼接子行，无跨节点空白折叠/字素合并；:509/:516 对 string 只取首行",
-    "Go 锚点：tui/ui_tree.go",
-    "plan: update/plan_2026_11_08_ui_tree.md（#60021）"
+    "Aligned inline text normalization across styled leaves: whitespace/tabs collapse across boundaries, authored breaks survive, and a grapheme spanning leaves keeps the first style while links require unanimous destinations. Tests: go test ./tui -run TestUITreePreparedCollapsesWhitespaceLikeRust|TestUITreePreparedSplitsGraphemesLikeRust -count=1"
    ]
   },
   {
@@ -44431,11 +44437,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "缺 prepare/render 分离与自然/受限宽度测量：Go 只有 tui/ui_tree.go:496 RenderLine(width)，宽度仅在裁剪时用",
-    "Go 锚点：tui/ui_tree.go",
-    "plan: update/plan_2026_11_08_ui_tree.md（#60022）"
+    "Aligned the preparation/render split: UINode.Prepare builds a measured PreparedUITree and layout/render live in ui_tree_render.go, mirroring Rust PreparedNode vs layout. Tests: go test ./tui -run TestUITreePreparedMeasuresViewportLikeRust -count=1"
    ]
   },
   {
@@ -44445,11 +44449,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "缺多行布局与 row 换行：无 wrap prop（:318 未知名报错）、:516 只渲染首行、无高度概念",
-    "Go 锚点：tui/ui_tree.go",
-    "plan: update/plan_2026_11_08_ui_tree.md（#60026）"
+    "Aligned multiline layout and row wrapping: authored line breaks, row wrap with non-breaking labels, hyphen breaks, width reservation for siblings and overflow ellipsis match the Rust layout tests. Tests: go test ./tui -run TestUITreePreparedWrapsNonBreakingLabelLikeRust|TestUITreePreparedWrappedLinkOffsetsLikeRust -count=1"
    ]
   },
   {
@@ -44459,12 +44461,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "缺「配置状态行及其实时预览始终走 native、扩展旗标只启用 MCP 状态行提供方」：Go 的预览路径仍按旗标切换 —— tui/tea/status_surface_preview_color.go:26 在 tui_extensions_statusline 开启时改走 chatwidget.StatusLineExtensionsTree（纯文本树渲染），关闭时才 StatusLineFromSegments",
-    "live footer 恒为 native（tui/bottom_pane/status_line_style.go:99 StatusLineFromSegments；StatusLineRendererFromFeature 无生产调用方），于是旗标开启时预览与 footer 渲染器不一致——正是 Rust 本条要消除的偏差",
-    "Rust: bottom_pane/status_line_setup.rs、status_surface_preview.rs、chatwidget/status_surfaces.rs（并删除 status_line_content.rs 65 行）",
-    "plan: update/plan_2026_11_08_ui_tree.md（#60027）；本条由先前判定 aligned 更正为 partial，原因见 plan 与本文件 §更正"
+    "Configured status lines and their picker previews now stay on the native renderer: tui/tea/status_surface_preview_color.go always builds StatusLineFromSegments and renders with StatusLine.RenderStyledWithHyperlinks, while tui_extensions_statusline only enables experimental MCP status line providers (features/features.go). The status line picker always exposes the 'Use theme colors' row (tui/chatwidget/status_controls.go, tui/tea/status_controls.go), and the native preview keeps theme SGR plus the pull-request OSC-8 link. The former StatusLineRenderer/StatusLineExtensionsTree divergence is removed.",
+    "Tests: go test ./tui/bottom_pane ./tui/chatwidget ./tui/tea -run 'StatusLine|StatusSetup|ModelStatusLine' -count=1"
    ]
   },
   {
@@ -44487,11 +44487,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "缺 terminal buffer 直绘与尺寸测量：Go 输出 tui.UILine{Text,Hyperlinks}（tui/ui_tree.go:437-482），OSC-8 在输出时贴，无 natural/viewport 约束测量",
-    "Go 锚点：tui/ui_tree.go",
-    "plan: update/plan_2026_11_08_ui_tree.md（#60029）"
+    "Aligned terminal-cell rendering: RenderLines emits one UILine per measured row with styled spans plus OSC-8 column ranges, and RenderStyled writes the styled cells, which is the Go equivalent of Rust drawing into a ratatui Buffer without adopting that buffer type. Tests: go test ./tui -run TestUITreePrepared -count=1"
    ]
   },
   {
@@ -44501,11 +44499,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "缺扩展状态内容进入 live footer：StatusLineExtensionsTree 的唯一生产调用点是配置预览（tui/tea/status_surface_preview_color.go:29，且需 tui_extensions_statusline 开启），live footer 仍是单行 native 拼接（tui/bottom_pane/footer.go:159 FooterHeight、tui/bottom_pane/status_line_style.go:99）",
-    "Go 锚点：tui/bottom_pane/footer.go、tui/chatwidget/status_surfaces.go",
-    "plan: update/plan_2026_11_08_ui_tree.md（#60031）"
+    "Extension status content now shares the native status line surface: tui/bottom_pane/status_line.go models native spans and prepared UI-tree content behind Height/RenderRows, the live tea footer measures that surface at the available width and reflows it beside the plan-mode indicator (tui/tea/status_surface_extension.go, tui/tea/model.go), and unfocused rows keep the layout with a dim plain style. Tests: go test ./tui/bottom_pane ./tui/tea -run 'StatusLineExtension|StatusLineNative|ExtensionStatus' -count=1"
    ]
   },
   {
@@ -44515,11 +44511,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "缺 footer 多行：FooterHeight = len(FooterLines(props))（tui/bottom_pane/footer.go:159 FooterHeight）与单字符串返回、chat_composer.go:232 单行截断",
-    "Go 锚点：tui/bottom_pane/footer.go、tui/bottom_pane/chat_composer.go",
-    "plan: update/plan_2026_11_08_ui_tree.md（#60032）"
+    "Extension status rows are measured and reserved up to the footer row budget instead of being clipped to one row: StatusLine.Height reports PreparedUITree layout height, RenderRows caps the viewport and paints an unlinked overflow ellipsis, statusLineSectionRows reserves the same rows the renderer paints, and short terminals keep one row while tall owned screens use up to four. Tests: go test ./tui/bottom_pane ./tui/tea -run 'StatusLineExtension|ExtensionStatusUsesFooterRowBudget' -count=1"
    ]
   },
   {
@@ -44652,11 +44646,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "缺插件起始提示词长度阈值放开（128→512）：Go 的 manifest 校验仍按旧上限，随 manifest 校验落地即可，不单独占契约位",
-    "Go 锚点：plugin/（manifest 校验）",
-    "plan: update/plan_2026_11_08_misc_1.md（#60048）"
+    "Round 1313: plugin/manifest.go already normalizes starter prompts with the raised limit: maxPluginDefaultPromptRunes = 512, at most three entries, empty or over-limit entries dropped after whitespace collapsing (Rust core-plugins/src/manifest.rs). The earlier note that Go still enforced 128 was stale.",
+    "Round 1313: plugin/manifest_default_prompt_like_rust_test.go pins the boundary with a 512-character multibyte prompt that survives, a 513-character entry that is dropped, and the three-entry cap (the 512-character entry, `third`, and `fourth` survive; the over-limit entry and `fifth` are dropped)."
    ]
   },
   {
@@ -47394,9 +47387,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "plan_2026_11_13.md records: 部分：已实现 Go 等价 suspend_agent_tree/load_suspended_agent——取消并等待根与开放后代的活动回合、返回 turn id，加载恢复身份不启动回合，线程记录/环境/排队邮件保留，重复挂起为空，调用方取消时如实报错；未覆盖 Rust 挂起前把未投递子结果写入父历史（Go 仍在进程内队列，跨进程会丢失）。上游这两个 API 仅由 core 集成测试调用。见 agent_tree_suspend_audit_2026_11_14.md"
+    "Go 等价 suspend_agent_tree/load_suspended_agent 已完整覆盖 Rust #61198：取消并等待根与开放后代的活动回合、返回 turn id，加载恢复身份不启动回合，线程记录/环境/排队邮件保留，重复挂起为空，调用方取消时如实报错；挂起前按 Rust save_evicted_parent_results 把仍在队列中的终端子结果（Message Type: FINAL_ANSWER，对应 PendingAgentMessage::is_terminal_result）以 boundary(trigger_turn=false)+agent_message 写入父线程历史与 rollout 并出队，未确认落盘时报错而不是静默丢失，非终态邮件保持排队。Tests: go test ./appserver -run 'SuspendAgentTree|LoadSuspendedAgent' -count=1; go build ./...; go vet ./appserver. 见 update/agent_tree_suspend_audit_2026_11_14.md"
    ]
   },
   {

@@ -59,6 +59,34 @@ func NewDiffTrackerWithDisplayRoots(roots map[string]string) *DiffTracker {
 	return tracker
 }
 
+// UpdateDisplayRoots keeps each environment's first display root for the whole
+// turn (Rust #61820 `TurnDiffTracker::update_environment_display_roots`). A
+// steer can restart sampling with a different working directory, but an
+// already published relative path has to keep referring to the same root.
+// Adding a previously unseen environment can add an id prefix to every header,
+// so the cached unified diff is rebuilt from scratch.
+func (t *DiffTracker) UpdateDisplayRoots(roots map[string]string) {
+	if t == nil || len(roots) == 0 {
+		return
+	}
+	if t.displayRoots == nil {
+		t.displayRoots = map[string]string{}
+	}
+	previous := len(t.displayRoots)
+	for environmentID, root := range roots {
+		if strings.TrimSpace(root) == "" {
+			continue
+		}
+		if _, ok := t.displayRoots[environmentID]; ok {
+			continue
+		}
+		t.displayRoots[environmentID] = filepath.Clean(root)
+	}
+	if len(t.displayRoots) != previous && t.unified != nil {
+		t.refresh()
+	}
+}
+
 func (t *DiffTracker) Track(environmentID string, changes []FileChange, exact bool) {
 	if !t.valid {
 		return

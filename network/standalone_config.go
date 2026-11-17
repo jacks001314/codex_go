@@ -25,6 +25,7 @@ type standaloneNetworkSettings struct {
 	Enabled                                      *bool                      `json:"enabled,omitempty"`
 	ProxyURL                                     *string                    `json:"proxy_url,omitempty"`
 	EnableSocks5                                 *bool                      `json:"enable_socks5,omitempty"`
+	TransparentTCP                               *bool                      `json:"transparent_tcp,omitempty"`
 	SocksURL                                     *string                    `json:"socks_url,omitempty"`
 	EnableSocks5UDP                              *bool                      `json:"enable_socks5_udp,omitempty"`
 	AllowUpstreamProxy                           *bool                      `json:"allow_upstream_proxy,omitempty"`

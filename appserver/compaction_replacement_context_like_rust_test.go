@@ -119,8 +119,8 @@ func TestCompactionInstallsFullReplacementContextLikeRust(t *testing.T) {
 			lines[compactedIndex+1].Type, lines[compactedIndex+2].Type)
 	}
 	var worldState struct {
-		Full  bool               `json:"full"`
-		State session.WorldState `json:"state"`
+		Full  bool            `json:"full"`
+		State json.RawMessage `json:"state"`
 	}
 	if err := json.Unmarshal(lines[compactedIndex+1].WorldState, &worldState); err != nil {
 		t.Fatalf("decode world_state: %v", err)
@@ -128,11 +128,25 @@ func TestCompactionInstallsFullReplacementContextLikeRust(t *testing.T) {
 	if !worldState.Full {
 		t.Fatalf("world_state baseline is not marked full: %s", lines[compactedIndex+1].WorldState)
 	}
-	if got, ok := decodeWorldStateModel(worldState.State.Model); !ok || got != "gpt-current" {
-		t.Fatalf("world_state model = %q,%v, want the replacement model gpt-current", got, ok)
+	state, err := session.DecodeWorldState(worldState.State)
+	if err != nil {
+		t.Fatalf("decode world_state sections: %v", err)
 	}
-	if len(worldState.State.TopLevelTools) == 0 || len(worldState.State.BaseInstructions) == 0 {
+	// Rust #53872 records the replacement window's model and base-instruction
+	// hash together in the `model` section and no longer keeps a separate
+	// `base_instructions` section.
+	modelID, instructionsHash, modelKnown, hasInstructions := session.DecodeModelStateSnapshot(state.Model)
+	if !modelKnown || modelID != "gpt-current" {
+		t.Fatalf("world_state model = %q,%v, want the replacement model gpt-current", modelID, modelKnown)
+	}
+	if !hasInstructions || instructionsHash != session.BaseInstructionsHash(refreshedInstructions) {
+		t.Fatalf("world_state instructions = %q,%v, want the refreshed base instructions", instructionsHash, hasInstructions)
+	}
+	if len(state.TopLevelTools) == 0 {
 		t.Fatalf("world_state baseline is incomplete: %s", lines[compactedIndex+1].WorldState)
+	}
+	if len(state.BaseInstructions) != 0 {
+		t.Fatalf("world_state kept the retired base_instructions section: %s", lines[compactedIndex+1].WorldState)
 	}
 	var turnContext rollout.TurnContextRecord
 	if err := json.Unmarshal(lines[compactedIndex+2].TurnContext, &turnContext); err != nil {

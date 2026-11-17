@@ -47,8 +47,9 @@ func TestSavedChatOpenSupersedesStaleCompletionLikeRust(t *testing.T) {
 	}
 }
 
-// Rust #60599: Esc cancels the pending attach; its late completion must not
-// switch conversations.
+// Rust #60599 + app/side_focus.rs: Esc cancels the pending attach and keeps the
+// chooser open (the footer reads "cancel opening"); its late completion must
+// not switch conversations. A second Esc leaves the chooser.
 func TestSavedChatOpenCancelIgnoresLateCompletionLikeRust(t *testing.T) {
 	model, _ := newSidebarTabsModel(t)
 	model.onListSideChats = func(string) ([]SideChatChoice, error) {
@@ -67,14 +68,18 @@ func TestSavedChatOpenCancelIgnoresLateCompletionLikeRust(t *testing.T) {
 	}
 	late := cmd()
 	model.Update(key(keymsg.KeyEsc))
-	if model.sidebarChooserVisible() {
-		t.Fatal("Esc did not close the chooser")
+	if !model.sidebarChooserVisible() {
+		t.Fatal("Esc cancelled the attach but also closed the chooser")
+	}
+	if model.sideOpeningThreadID != "" {
+		t.Fatalf("cancel left opening state %q", model.sideOpeningThreadID)
 	}
 	model.Update(late)
 	if model.State.ThreadID != "parent-a" || model.activeSide != nil {
 		t.Fatalf("cancelled open landed: thread=%q side=%#v", model.State.ThreadID, model.activeSide)
 	}
-	if model.sideOpeningThreadID != "" {
-		t.Fatalf("cancel left opening state %q", model.sideOpeningThreadID)
+	model.Update(key(keymsg.KeyEsc))
+	if model.sidebarChooserVisible() {
+		t.Fatal("second Esc did not leave the chooser")
 	}
 }

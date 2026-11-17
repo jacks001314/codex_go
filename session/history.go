@@ -376,6 +376,9 @@ func InputItemFromItem(item *Item, options *HistoryBuildOptions) any {
 	if len(item.Raw) > 0 {
 		var raw any
 		if err := json.Unmarshal(item.Raw, &raw); err == nil {
+			if object, ok := raw.(map[string]any); ok && messageTurnItemPayload(object) {
+				return turnItemMessageInputItem(item, object, options)
+			}
 			if object, ok := raw.(map[string]any); !ok || !legacyRolloutItemWrapper(object) {
 				if object, ok := raw.(map[string]any); ok {
 					if limit, ok := historyToolOutputTruncationLimit(item, options); ok && historyToolOutputType(historyString(object["type"])) {
@@ -390,7 +393,7 @@ func InputItemFromItem(item *Item, options *HistoryBuildOptions) any {
 			}
 		}
 	}
-	if nonModelVisibleHistoryItemType(item.Type) || item.Type == "reasoning" {
+	if !ModelVisibleHistoryItem(item) {
 		return nil
 	}
 	switch item.Type {
@@ -398,19 +401,112 @@ func InputItemFromItem(item *Item, options *HistoryBuildOptions) any {
 		return messageInputItem(item, options)
 	case "imageGeneration", "image_generation", "image_generation_call":
 		return imageGenerationInputItem(item)
+	case "additional_tools":
+		return additionalToolsInputItem(item)
 	case "function_call", "custom_tool_call", "tool_search_call":
 		return toolCallInputItem(item)
+	case "local_shell_call":
+		// The shell action only survives in the recorded payload; the display
+		// fields cannot rebuild a LocalShellCall response item.
+		return nil
 	case "function_call_output", "custom_tool_call_output", "tool_search_output", "tool_output":
 		if options != nil && !options.IncludeToolOutputs {
 			return nil
 		}
 		return toolOutputInputItem(item, options)
+	case "reasoning":
+		// Rust replays a Reasoning response item, but the record only keeps the
+		// sent payload in Raw. Without it there is no encrypted content to send,
+		// and the summary text must never be replayed as a user message.
+		return nil
 	default:
 		if strings.TrimSpace(item.Text) == "" {
 			return nil
 		}
 		return messageInputItem(item, options)
 	}
+}
+
+// messageTurnItemPayload reports whether a recorded payload is a TurnItem
+// message projection (`UserMessage`/`AgentMessage`) whose Responses form must be
+// rebuilt from the recorded session fields. The match is exact: `agent_message`
+// (snake_case) is a model-visible Responses item used for subagent
+// communication, not a TurnItem projection, and must keep its payload.
+func messageTurnItemPayload(object map[string]any) bool {
+	switch historyString(object["type"]) {
+	case "UserMessage", "userMessage", "user_message",
+		"AgentMessage", "agentMessage", "assistantMessage", "assistant_message":
+		return true
+	default:
+		return false
+	}
+}
+
+// turnItemMessageInputItem rebuilds a Responses message from a persisted TurnItem
+// message. The TurnItem payload stores content as `text`/`Text` blocks with
+// `text_elements`, which the Responses API rejects, so only the text survives.
+func turnItemMessageInputItem(item *Item, raw map[string]any, options *HistoryBuildOptions) map[string]any {
+	role := firstNonEmpty(item.Role, roleForSessionItemType(item.Type), stringValue(raw, "role"), "user")
+	content := contentBlocksFromSessionItem(item, role, options)
+	if len(content) == 0 {
+		content = contentBlocksFromTurnItemMessage(raw["content"], role)
+	}
+	if len(content) == 0 {
+		return nil
+	}
+	input := map[string]any{
+		"type":    "message",
+		"role":    role,
+		"content": content,
+	}
+	if id := strings.TrimSpace(item.ResponseItemID); id != "" {
+		input["id"] = id
+	}
+	return input
+}
+
+// contentBlocksFromTurnItemMessage converts a TurnItem message `content` array
+// into Responses content blocks.
+func contentBlocksFromTurnItemMessage(value any, role string) []map[string]any {
+	entries, _ := value.([]any)
+	blocks := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		block, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		text, _ := block["text"].(string)
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		blocks = append(blocks, map[string]any{
+			"type": defaultContentTypeForRole(role),
+			"text": text,
+		})
+	}
+	return blocks
+}
+
+// additionalToolsInputItem rebuilds a model-authored additional_tools response
+// item from a recorded session item (Rust keeps `ResponseItem::AdditionalTools`
+// in history; the protocol has no TurnItem variant for it, #50435).
+func additionalToolsInputItem(item *Item) map[string]any {
+	if item == nil {
+		return nil
+	}
+	tools, ok := item.Data["tools"]
+	if !ok || tools == nil {
+		return nil
+	}
+	out := map[string]any{
+		"type":  "additional_tools",
+		"role":  firstNonEmpty(item.Role, "developer"),
+		"tools": tools,
+	}
+	if id := strings.TrimSpace(item.ID); id != "" {
+		out["id"] = id
+	}
+	return out
 }
 
 // configurationUpdateInputItem reconstructs a trusted, harness-authored
@@ -473,7 +569,21 @@ func legacyRolloutItemWrapper(object map[string]any) bool {
 	}
 	itemType := historyString(object["type"])
 	_, hasText := object["text"]
-	return hasText && (itemType == "message" || itemType == "user_message" || itemType == "agent_message" || itemType == "assistant_message")
+	if hasText && (itemType == "message" || itemType == "user_message" || itemType == "agent_message" || itemType == "assistant_message") {
+		return true
+	}
+	// Persisted TurnItem message payloads (`UserMessage`, `AgentMessage`) are
+	// display projections. Rebuild the Responses message from the recorded
+	// session fields instead of forwarding their wire shape. The match is
+	// case-sensitive: snake_case `agent_message` is a model-visible Responses
+	// item used for subagent communication, not a TurnItem projection.
+	switch itemType {
+	case "UserMessage", "userMessage", "user_message",
+		"AgentMessage", "agentMessage", "AssistantMessage", "assistantMessage", "assistant_message":
+		return true
+	default:
+		return false
+	}
 }
 
 func imageGenerationInputItem(item *Item) map[string]any {
@@ -565,7 +675,7 @@ func sanitizeHistoryInputItem(input any) any {
 	switch typed := input.(type) {
 	case map[string]any:
 		itemType, _ := typed["type"].(string)
-		if nonModelVisibleHistoryItemType(itemType) {
+		if !modelVisibleResponseItem(typed) {
 			return nil
 		}
 		// Harness metadata records provenance for storage and compaction; it is
@@ -668,17 +778,116 @@ func normalizeHistoryContentBlock(block map[string]any, role string) {
 	delete(block, "textElements")
 }
 
-func nonModelVisibleHistoryItemType(itemType string) bool {
-	switch strings.TrimSpace(itemType) {
-	case "command_execution", "file_change", "mcp_tool_call", "collab_tool_call", "collab_agent_tool_call", "collabAgentToolCall",
-		"sub_agent_activity", "subAgentActivity", "todo_list", "error",
-		"enteredReviewMode", "entered_review_mode", "exitedReviewMode", "exited_review_mode",
-		"contextCompaction", "context_compaction", "external_session_import_marker",
-		"configuration_update":
+// normalizedHistoryItemType folds the two naming styles Go's record uses for
+// the same vocabulary: response items are snake_case (`function_call`) while
+// public TurnItem names are camelCase (`commandExecution`).
+func normalizedHistoryItemType(itemType string) string {
+	return strings.NewReplacer("_", "", "-", "").Replace(strings.ToLower(strings.TrimSpace(itemType)))
+}
+
+// modelVisibleResponseItem mirrors Rust `is_api_message`
+// (core/src/context_manager/history.rs): the response-item types that make up
+// the model-visible conversation. TUI TurnItems, internal system messages,
+// compaction triggers, configuration updates without harness provenance, and
+// unknown provider items are not part of the request. The caller supplies
+// provenance for configuration updates before they reach this predicate.
+func modelVisibleResponseItem(item map[string]any) bool {
+	// Response items use the lowercase snake_case wire vocabulary while Go's
+	// TurnItem projections are PascalCase or camelCase (`Reasoning`,
+	// `contextCompaction`, `UserMessage`), so the comparison stays exact: a
+	// display payload must never pass for a response item that shares its name.
+	switch strings.TrimSpace(historyString(item["type"])) {
+	case "message":
+		return !strings.EqualFold(historyString(item["role"]), "system")
+	case "additional_tools", "agent_message", "function_call_output", "function_call",
+		"tool_search_call", "tool_search_output", "custom_tool_call",
+		"custom_tool_call_output", "local_shell_call", "reasoning", "web_search_call",
+		"image_generation_call", "compaction", "context_compaction":
 		return true
 	default:
 		return false
 	}
+}
+
+// ModelVisibleHistoryItem reports whether a persisted session item belongs to
+// the model-visible conversation (Rust `is_api_message`).
+//
+// Rust keeps the two vocabularies apart in the rollout: only `response_item`
+// lines enter `ContextManager`, while TurnItems are one-way display events
+// (`RolloutItem::EventMsg`, ignored on replay). Go's record stores both in
+// `Record.Items`, so replay recognizes response items by shape. A recorded
+// payload is authoritative when present: the record keeps the model JSON in
+// Raw even when the thread-item type is the public name (`webSearch` for a
+// `web_search_call`, `imageGeneration` for an `image_generation_call`).
+func ModelVisibleHistoryItem(item *Item) bool {
+	if item == nil {
+		return false
+	}
+	// Rust's `is_api_message` admits a configuration update only when the
+	// harness authored it (trusted provenance). Go's replay path makes the
+	// same decision from the recorded metadata, so the compacted-history
+	// estimate must too; otherwise the model receives items the budget never
+	// charged.
+	if item.Type == "configuration_update" {
+		return harnessAuthoredConfigurationUpdate(item)
+	}
+	if object := historyRawResponseItem(item); object != nil {
+		return modelVisibleResponseItem(object)
+	}
+	if strings.TrimSpace(item.Type) == "" {
+		// Older Go records stored messages with only a role and text. Rust's
+		// typed rollout has no such shape, but replaying the text keeps real
+		// conversation history instead of silently dropping it.
+		role := strings.TrimSpace(item.Role)
+		return role != "" && !strings.EqualFold(role, "system")
+	}
+	switch normalizedHistoryItemType(item.Type) {
+	case "message", "usermessage", "assistantmessage", "agentmessage":
+		return !strings.EqualFold(strings.TrimSpace(item.Role), "system")
+	case "functioncall", "customtoolcall", "toolsearchcall", "localshellcall",
+		"functioncalloutput", "customtoolcalloutput", "toolsearchoutput",
+		"tooloutput", "reasoning", "additionaltools", "compaction",
+		"imagegeneration", "imagegenerationcall":
+		return true
+	default:
+		// TurnItem display projections (commandExecution, fileChange,
+		// mcpToolCall, plan, todoList, webSearch tool results, sleep, error,
+		// hookPrompt, contextCompaction checkpoints, …) carry transcript text
+		// the model never saw. Replaying them would duplicate the real
+		// call/output pair and inflate the request past the context window.
+		return false
+	}
+}
+
+// historyRawResponseItem returns the recorded model payload of an item, or nil
+// when the record carries no response item (display-only projections and
+// legacy rollout wrappers).
+func historyRawResponseItem(item *Item) map[string]any {
+	if item == nil || len(item.Raw) == 0 {
+		return nil
+	}
+	var raw any
+	if err := json.Unmarshal(item.Raw, &raw); err != nil {
+		return nil
+	}
+	object, ok := raw.(map[string]any)
+	if !ok || legacyRolloutItemWrapper(object) {
+		return nil
+	}
+	return object
+}
+
+// HasResponseItemPayload reports whether the item carries a recorded
+// model-visible Responses payload, i.e. the `response_item` half of Rust's
+// rollout. TurnItem display projections (UserMessage/AgentMessage/Reasoning,
+// commandExecution, …) return false even though some of them can be rebuilt
+// into a request item for legacy records that never stored a response item.
+func HasResponseItemPayload(item *Item) bool {
+	object := historyRawResponseItem(item)
+	if object == nil {
+		return false
+	}
+	return modelVisibleResponseItem(object)
 }
 
 func toolOutputInputItem(item *Item, options *HistoryBuildOptions) map[string]any {

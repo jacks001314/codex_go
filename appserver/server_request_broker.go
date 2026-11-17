@@ -19,6 +19,12 @@ import (
 
 var ErrServerRequestNotFound = fmt.Errorf("%w: server request not found", ErrInvalidRequest)
 
+// ErrServerRequestTurnTransition marks pending requests the thread canceled
+// because it moved to another turn. Rust reports the same cancellation with the
+// `turnTransition` reason (app-server/src/server_request_error.rs) and every
+// approval waiter treats it as "the turn is gone, do not answer the client".
+var ErrServerRequestTurnTransition = errors.New("client request resolved because the turn state was changed")
+
 // ErrServerRequestConnectionClosed marks requests rejected because their
 // client connection disappeared before replying.
 var ErrServerRequestConnectionClosed = errors.New("server request failed: connection closed")
@@ -66,7 +72,10 @@ type pendingServerRequest struct {
 	ch           chan *serverRequestResult
 	request      *ServerRequest
 	connectionID string
-	claimed      atomic.Bool
+	// threadID scopes the request to one thread so a turn transition can cancel
+	// everything the previous turn left pending (Rust cancel_requests_for_thread).
+	threadID string
+	claimed  atomic.Bool
 	// humanApproval marks a managed checkpoint; humanApprovalRecipients lists the
 	// capable connections it was delivered to, which are the only ones whose
 	// response may resolve it.
@@ -228,7 +237,12 @@ func (b *ServerRequestBroker) RequestToConnection(ctx context.Context, connectio
 	id := b.nextRequestID()
 	ch := make(chan *serverRequestResult, 1)
 	request := &ServerRequest{ID: StringID(id), Method: method, Params: params}
-	entry := &pendingServerRequest{ch: ch, request: request, connectionID: connectionID}
+	entry := &pendingServerRequest{
+		ch:           ch,
+		request:      request,
+		connectionID: connectionID,
+		threadID:     serverRequestThreadScope(request),
+	}
 	if serverRequestIsUserVerification(request) {
 		// A native verification ceremony belongs to the connection it is
 		// delivered to and to the credential revision that started it
@@ -304,6 +318,69 @@ func (b *ServerRequestBroker) RejectPending(connectionID string, err error) int 
 	return b.rejectPendingEntries(func(entry *pendingServerRequest) bool {
 		return entry.connectionID == connectionID || entry.connectionID == ""
 	}, err)
+}
+
+// CancelThreadPending resolves every request the thread still has pending with
+// a turn-transition error. Rust's ThreadScopedOutgoingMessageSender does the
+// same on TurnStarted and on the latest turn's terminal event, which is how a
+// late approval from a finished turn stops waiting.
+func (b *ServerRequestBroker) CancelThreadPending(threadID string, err error) int {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return 0
+	}
+	return b.rejectPendingEntries(func(entry *pendingServerRequest) bool {
+		return entry.threadID == threadID
+	}, err)
+}
+
+// serverRequestThreadScope reports the thread a pending request belongs to.
+// Approval and elicitation payloads carry the thread id they were created for,
+// including the legacy snake_case maps older clients send.
+func serverRequestThreadScope(request *ServerRequest) string {
+	if request == nil {
+		return ""
+	}
+	switch params := request.Params.(type) {
+	case *CommandExecutionRequestApprovalParams:
+		if params != nil {
+			return strings.TrimSpace(params.ThreadID)
+		}
+	case CommandExecutionRequestApprovalParams:
+		return strings.TrimSpace(params.ThreadID)
+	case *FileChangeRequestApprovalParams:
+		if params != nil {
+			return strings.TrimSpace(params.ThreadID)
+		}
+	case FileChangeRequestApprovalParams:
+		return strings.TrimSpace(params.ThreadID)
+	case *PermissionsRequestApprovalParams:
+		if params != nil {
+			return strings.TrimSpace(params.ThreadID)
+		}
+	case PermissionsRequestApprovalParams:
+		return strings.TrimSpace(params.ThreadID)
+	case *MCPElicitationRequestParams:
+		if params != nil {
+			return strings.TrimSpace(params.ThreadID)
+		}
+	case MCPElicitationRequestParams:
+		return strings.TrimSpace(params.ThreadID)
+	case *ToolRequestUserInputParams:
+		if params != nil {
+			return strings.TrimSpace(params.ThreadID)
+		}
+	case ToolRequestUserInputParams:
+		return strings.TrimSpace(params.ThreadID)
+	case map[string]any:
+		if value, ok := params["threadId"].(string); ok {
+			return strings.TrimSpace(value)
+		}
+		if value, ok := params["conversationId"].(string); ok {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 // CancelVerificationPending cancels the user-verification requests owned by a

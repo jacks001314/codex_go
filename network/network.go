@@ -25,11 +25,14 @@ const (
 )
 
 type Config struct {
-	Enabled                          bool
-	Mode                             Mode
-	ProxyURL                         string
-	SocksURL                         string
-	EnableSocks5                     bool
+	Enabled      bool
+	Mode         Mode
+	ProxyURL     string
+	SocksURL     string
+	EnableSocks5 bool
+	// TransparentTCP routes managed Linux sandbox TCP through the SOCKS5 proxy
+	// (Rust #61851); it requires the proxy and SOCKS5 to be enabled.
+	TransparentTCP                   bool
 	AllowUpstreamProxy               bool
 	DangerouslyAllowNonLoopbackProxy bool
 	// DangerouslyAllowAllUnixSockets mirrors Rust's Option<bool> (#46004): nil
@@ -85,6 +88,7 @@ type Requirements struct {
 	Enabled                          *bool
 	HTTPPort                         int
 	SocksPort                        int
+	TransparentTCP                   *bool
 	AllowUpstreamProxy               *bool
 	DangerouslyAllowNonLoopbackProxy *bool
 	DangerouslyAllowAllUnixSockets   *bool
@@ -134,6 +138,9 @@ func NewSpec(config Config, requirements *Requirements, permissionKind Permissio
 	if requirements != nil {
 		config, constraints = applyRequirements(config, requirements, permissionKind, hardDeny)
 	}
+	if config.TransparentTCP && !(config.Enabled && config.EnableSocks5) {
+		return nil, fmt.Errorf("transparent_tcp requires an enabled managed SOCKS5 proxy")
+	}
 	if err := ValidateAgainstConstraints(&config, &constraints); err != nil {
 		return nil, err
 	}
@@ -155,7 +162,10 @@ type EnvironmentNetworkPolicy struct {
 	// access is restricted. False leaves activation to the controller and the
 	// command's permissions. Rust omits it from the wire when false.
 	RequiresProxy bool `json:"requiresProxy,omitempty"`
-	Domains       map[string]DomainPermission
+	// TransparentTCP lets an attachment enable capture; it never disables a
+	// controller-owned capture (Rust #61851).
+	TransparentTCP bool `json:"transparentTcp,omitempty"`
+	Domains        map[string]DomainPermission
 	// ReviewDomains are managed host selectors inherited by every execution in
 	// this environment (Rust #56154).
 	ReviewDomains                  []string `json:"reviewDomains,omitempty"`
@@ -176,6 +186,7 @@ type EnvironmentNetworkPolicy struct {
 func EnvironmentNetworkPolicyFromConfig(config *Config, managedAllowedDomainsOnly bool) EnvironmentNetworkPolicy {
 	return EnvironmentNetworkPolicy{
 		RequiresProxy:                  config.Enabled,
+		TransparentTCP:                 config.TransparentTCP,
 		Domains:                        copyDomainMapArray(config.Domains),
 		ReviewDomains:                  append([]string(nil), config.ReviewDomains...),
 		UnixSockets:                    copyUnixSocketMap(config.UnixSockets),
@@ -192,6 +203,7 @@ func (p *EnvironmentNetworkPolicy) ApplyTo(config *Config) {
 	if p == nil || config == nil {
 		return
 	}
+	config.TransparentTCP = config.TransparentTCP || p.TransparentTCP
 	// Neither owner nor controller may remove the other's review selectors.
 	for _, pattern := range p.ReviewDomains {
 		if !containsFold(config.ReviewDomains, pattern) {
@@ -505,6 +517,9 @@ func applyRequirements(config Config, requirements *Requirements, permissionKind
 	}
 	if requirements.SocksPort > 0 {
 		config.SocksURL = fmt.Sprintf("http://127.0.0.1:%d", requirements.SocksPort)
+	}
+	if requirements.TransparentTCP != nil {
+		config.TransparentTCP = *requirements.TransparentTCP
 	}
 	if requirements.AllowUpstreamProxy != nil {
 		config.AllowUpstreamProxy = *requirements.AllowUpstreamProxy

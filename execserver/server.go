@@ -681,7 +681,10 @@ type EnvironmentCapabilities struct {
 	// NetworkProxyReviewDomains advertises that executor proxies enforce
 	// managed review domains before ordinary allows (Rust #56154).
 	NetworkProxyReviewDomains bool `json:"networkProxyReviewDomains,omitempty"`
-	CredentialMasking         bool `json:"credentialMasking,omitempty"`
+	// NetworkProxyTransparentTCP advertises that the executor can capture TCP
+	// for a managed Linux sandbox launch (Rust #61851).
+	NetworkProxyTransparentTCP bool `json:"networkProxyTransparentTCP,omitempty"`
+	CredentialMasking          bool `json:"credentialMasking,omitempty"`
 	// CredentialMaskingCustomProviders advertises that masking also accepts
 	// configured provider rules (Rust #56049).
 	CredentialMaskingCustomProviders bool `json:"credentialMaskingCustomProviders,omitempty"`
@@ -757,12 +760,28 @@ type ShellSnapshotRequest struct {
 type ManagedNetworkSandboxContext struct {
 	LoopbackPorts     []uint16 `json:"loopbackPorts"`
 	AllowLocalBinding bool     `json:"allowLocalBinding"`
+	// TransparentTCP captures outbound TCP into the managed SOCKS5 proxy when
+	// the executor is a managed Linux sandbox (Rust #61851).
+	TransparentTCP bool `json:"transparentTcp,omitempty"`
 	// AllowUnixSockets and DangerouslyAllowAllUnixSockets carry the effective
 	// Unix socket policy from the proxy preparation (Rust #45534). The Linux
 	// sandbox helper allows standalone `AF_UNIX` sockets only for the explicit
 	// allow-all grant. Missing fields deserialize to the restrictive values.
 	AllowUnixSockets               []string `json:"allowUnixSockets"`
 	DangerouslyAllowAllUnixSockets bool     `json:"dangerouslyAllowAllUnixSockets"`
+}
+
+// requestsTransparentTCP reports whether the launch asks the executor to
+// capture TCP, either through its own proxy launch or a prepared managed
+// network context (Rust #61851 ExecParams::requests_transparent_tcp).
+func (p *ExecParams) requestsTransparentTCP() bool {
+	if p == nil {
+		return false
+	}
+	if p.NetworkProxy != nil && p.NetworkProxy.Proxy.TransparentTCP {
+		return true
+	}
+	return p.ManagedNetwork != nil && p.ManagedNetwork.TransparentTCP
 }
 
 type FileSystemSandboxContext struct {
@@ -2786,6 +2805,13 @@ func prepareExecProcess(params *ExecParams, allowedSymlinkedCodexHome string) ([
 // TCP switch (Rust #61372 ExecServerRuntimeOptions::linux_sandbox_transparent_tcp).
 func prepareExecProcessWithTransparentTCP(params *ExecParams, allowedSymlinkedCodexHome string, transparentTCP bool) ([]string, string, sandbox.SandboxType, error) {
 	command := append([]string(nil), params.Argv...)
+	// Rust #61851: a network policy can request capture without the executor
+	// startup switch, and capture only exists for managed Linux sandboxes.
+	transparentTCP = transparentTCP || params.requestsTransparentTCP()
+	if transparentTCP && (runtime.GOOS != "linux" || !hasJSONValue(params.Sandbox)) {
+		return nil, "", sandbox.SandboxTypeNone, requestError(-32602, "transparent TCP requires a managed Linux sandbox")
+	}
+	enforceManagedNetwork := params.EnforceManagedNetwork || transparentTCP
 	cwd, err := nativeExecServerPath(params.CWD, "cwd")
 	if err != nil {
 		return nil, "", sandbox.SandboxTypeNone, err
@@ -2852,7 +2878,7 @@ func prepareExecProcessWithTransparentTCP(params *ExecParams, allowedSymlinkedCo
 		// validated managed-network CA bundle the sandboxed child must read.
 		SandboxReadableRoots:      execServerRuntimeReadablePaths(params),
 		UseLegacyLandlock:         sandboxContext.UseLegacyLandlock,
-		AllowNetworkForProxy:      params.EnforceManagedNetwork,
+		AllowNetworkForProxy:      enforceManagedNetwork,
 		ManagedNetworkJSON:        managedNetworkJSON,
 		TransparentTCP:            transparentTCP,
 		AllowedSymlinkedCodexHome: allowedSymlinkedCodexHome,
@@ -2878,7 +2904,7 @@ func prepareExecProcessWithTransparentTCP(params *ExecParams, allowedSymlinkedCo
 			profileJSON,
 			sandboxCWD,
 			sandboxContext.UseLegacyLandlock,
-			params.EnforceManagedNetwork,
+			enforceManagedNetwork,
 			managedNetworkJSON,
 			transparentTCP,
 		)
@@ -4418,8 +4444,10 @@ func localEnvironmentInfo() *EnvironmentInfo {
 		UserHomeDir:          userHomeDir,
 		TemporaryDirectories: localTemporaryDirectories(cwdPath),
 		Capabilities: EnvironmentCapabilities{
-			NetworkProxyLaunch:               true,
-			NetworkProxyReviewDomains:        true,
+			NetworkProxyLaunch:        true,
+			NetworkProxyReviewDomains: true,
+			// Rust #61851: only Linux executors can capture managed sandbox TCP.
+			NetworkProxyTransparentTCP:       runtime.GOOS == "linux",
 			CredentialMasking:                credentialMasking,
 			CredentialMaskingCustomProviders: credentialMasking,
 			CapabilityDiscoverySandbox:       true,

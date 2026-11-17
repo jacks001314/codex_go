@@ -403,6 +403,11 @@ type TurnStartParams struct {
 	// wire (matching Rust, which never sends it in the Responses metadata).
 	InitiatingAgentPath  string `json:"-"`
 	AdditionalInputItems []any  `json:"-"`
+	// AgentCommunicationTriggerTurns mirrors Rust's per-communication
+	// `InterAgentCommunication::trigger_turn`. It is aligned with
+	// AdditionalInputItems, so the accepted agent mail is recorded with the
+	// same boundary flag Rust persists. Harness-owned, never serialized.
+	AgentCommunicationTriggerTurns []bool `json:"-"`
 	// AutomaticWake marks an internal turn started by queue-only inter-agent
 	// mail (Rust `TurnStartKind::Automatic`). The runtime revalidates the
 	// reservation after model discovery before any of its mail is consumed.

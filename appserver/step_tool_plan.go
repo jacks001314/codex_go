@@ -170,10 +170,10 @@ func (r *RuntimeRouter) stepToolRegistryOptions(inputs rememberedTurnToolInputs,
 	options.Model = modelID
 	if info != nil {
 		options.ToolMode = model.ResolveToolMode(info.ToolMode, featureSettings)
-		// Rust model_info.apply_patch_tool_type decides whether the step's
-		// model is offered apply_patch at all.
-		options.EnableApplyPatch = strings.TrimSpace(info.ApplyPatchToolType) != ""
 	}
+	// Rust model_info.apply_patch_tool_type decides whether the step's model is
+	// offered apply_patch at all; a missing entry advertises nothing.
+	options.EnableApplyPatch = info != nil && strings.TrimSpace(info.ApplyPatchToolType) != ""
 	// Rust #41243: the clock and sleep tools follow the step model's declared
 	// capabilities, and the current-time reminder decides the clock provider.
 	if inputs.cfg != nil {

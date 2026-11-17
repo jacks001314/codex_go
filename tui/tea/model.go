@@ -2284,6 +2284,11 @@ type Model struct {
 	// conversationInset, when set, restricts the conversation pane to a
 	// sub-rectangle of the viewport (Rust #58718).
 	conversationInset *ConversationRect
+	// insetRenderOriginX/Y record where the inset frame's origin lands in
+	// viewport coordinates while its body is painted, so absolutely positioned
+	// graphics (transcript previews) are drawn inside the rectangle.
+	insetRenderOriginX int
+	insetRenderOriginY int
 	// ownedScreen records whether this launch paints the alternate screen
 	// itself. Rust's owned transcript, including bounded composer scrolling,
 	// only applies there.
@@ -3111,6 +3116,9 @@ type Model struct {
 	sidebarDiscoveryRetry   bool
 	sidebarDiscoveryError   string
 	sidebarDiscoveryRequest uint64
+	// sidebarDiscoveryStarted anchors the chooser's loading glyph frames so the
+	// spinner matches Rust motion::loading_glyph.
+	sidebarDiscoveryStarted time.Time
 	// sidebarTabHover is the tab index the pointer is over, or -1 (Rust #59928).
 	sidebarTabHover int
 	// pendingSideTabCloseThreadID holds the tab waiting on the close
@@ -3121,6 +3129,19 @@ type Model struct {
 	sideOpenRequest int
 	// sideOpeningThreadID is the saved chat the chooser is preparing.
 	sideOpeningThreadID string
+	// sideOpenState mirrors Rust sidebar_chooser::OpenState: the chooser keeps
+	// the pending target while it waits, loads, or fails so the row can paint
+	// "Waiting to open…" / "Opening…" / "Retry · {error}".
+	sideOpenState   sideOpenState
+	sideOpenError   string
+	sideOpenStarted time.Time
+	// sideOpenFlights are the saved-chat attaches still running, keyed by
+	// parent+child (Rust saved_openings.active). Rust allows two at a time and
+	// parks the next target in OpenState::Waiting.
+	sideOpenFlights map[string]*sideOpenFlight
+	// sideOpenQueued is the target parked in OpenState::Waiting until a flight
+	// releases its slot (Rust waiting_saved_chat -> StartQueuedSavedChat).
+	sideOpenQueued *sideOpenTarget
 	// sidebarAddHover highlights the trailing "+" while the pointer is on it
 	// (Rust #60319 hover target for the add button).
 	sidebarAddHover bool
@@ -3128,13 +3149,20 @@ type Model struct {
 	// -1 when nothing paints one (Rust #59928 sidebar_tab_strip.rs hit). The
 	// strip owns the pane's first row, so the renderer records where that row
 	// landed and the pointer hit test reads it back instead of assuming row 0.
-	sidebarTabStripTop         int
+	sidebarTabStripTop int
+	// sideDividerHover accents the pane divider while the pointer is over it
+	// (Rust app/link_hover.rs PointerShape::Resize -> side_pane::paint_divider).
+	sideDividerHover           bool
 	abandonedSideThreads       map[string]struct{}
 	sideStartPending           bool
 	statusControls             *chatwidget.StatusControlsState
 	statusLineConfiguredByUser bool
 	// statusLineProvider is the live local `tui.status_line_provider` choice.
-	statusLineProvider        *config.StatusLineProviderSelection
+	statusLineProvider *config.StatusLineProviderSelection
+	// statusLineExtension carries prepared provider-supplied status content
+	// (Rust StatusLine extension variant). Native configured status lines stay
+	// on the span renderer when this is nil.
+	statusLineExtension       *bottompane.StatusLine
 	statusSurfaceOverrides    statusSurfaceOverrides
 	lastTerminalTitleSequence string
 	// Time-varying terminal-title animation state (Rust #46832): progress
@@ -6042,6 +6070,17 @@ func (m *Model) statusLineContent() string {
 	if m.readOnlyThread || m.threadUnavailable {
 		return ""
 	}
+	if m.statusLineExtension != nil {
+		rows := m.extensionStatusLineRows(m.extensionStatusLineContentWidth(), m.statusLineRowBudget(), bottompane.StatusLineFocused)
+		if len(rows) == 0 {
+			return m.extensionStatusIndicatorLabel(max(m.width-2, 1))
+		}
+		values := make([]string, 0, len(rows))
+		for _, row := range rows {
+			values = append(values, row.Plain)
+		}
+		return strings.Join(values, "\n")
+	}
 	statusLine := m.renderStatusHeader()
 	if m.renderedSelection.active && m.renderedSelection.region != renderedRegionStatus {
 		// Reuse the existing status row so the selectable footer and tip rows
@@ -6056,6 +6095,16 @@ func (m *Model) statusLineContent() string {
 func (m *Model) statusLineSectionRows() int {
 	if m == nil {
 		return 0
+	}
+	if m.readOnlyThread || m.threadUnavailable {
+		return 0
+	}
+	if m.statusLineExtension != nil {
+		height := m.extensionStatusLineHeight(m.extensionStatusLineContentWidth(), m.statusLineRowBudget())
+		if height == 0 && m.extensionStatusIndicatorLabel(max(m.width-2, 1)) != "" {
+			return 1
+		}
+		return height
 	}
 	status := m.statusLineContent()
 	if strings.TrimSpace(status) == "" {
@@ -6072,6 +6121,9 @@ const minStatusLineTranscriptRows = 4
 // at the same two-column indent Rust uses for the footer hint row. Long status
 // lines wrap within the row budget instead of clipping the trailing items.
 func (m *Model) renderStatusLineSection(status string) string {
+	if m != nil && m.statusLineExtension != nil && !m.readOnlyThread && !m.threadUnavailable {
+		return m.renderExtensionStatusSection()
+	}
 	width := max(m.width-2, 1)
 	rows := wrapStatusLineRows(status, width, m.statusLineRowBudget())
 	if len(rows) == 0 {
@@ -6084,24 +6136,10 @@ func (m *Model) renderStatusLineSection(status string) string {
 }
 
 // wrapStatusLineRows wraps styled status content at the full available width.
-// ansi.Wrap keeps escape sequences intact; a clipped final row carries an
-// ellipsis so truncation remains visible.
+// The native footer and the status-line row budget share the bottom-pane
+// renderer so measurement and painting cannot drift (Rust #60031/#60032).
 func wrapStatusLineRows(status string, width int, maxRows int) []string {
-	if strings.TrimSpace(ansi.Strip(status)) == "" || width < 1 || maxRows < 1 {
-		return nil
-	}
-	var rows []string
-	for _, line := range strings.Split(status, "\n") {
-		wrapped := strings.Split(ansi.Wrap(line, width, ""), "\n")
-		rows = append(rows, wrapped...)
-	}
-	if len(rows) > maxRows {
-		rows = rows[:maxRows]
-		last := rows[maxRows-1]
-		trimmed := ansi.Truncate(last, max(width-1, 0), "")
-		rows[maxRows-1] = trimmed + "\u2026"
-	}
-	return rows
+	return bottompane.WrapStyledStatusRows(status, width, maxRows)
 }
 
 // passiveWarningNoticeApplies mirrors `show_warning_notice`'s reachable gates:
@@ -8453,7 +8491,6 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 		if chatwidget.IsBioPolicyError(errorMessage) {
 			m.applyHistoryCell(historycell.NewSafetyAccessBlockEvent())
 			m.flushDeferredSubAgentActivity()
-			m.notice = errorMessage
 			m.refreshTranscript()
 			m.appendQuestionDrafts(questionDrafts)
 			return m.refreshThreadUsageAfterTurn()
@@ -8461,7 +8498,6 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 		m.clearCurrentThreadAfterFailure(errorMessage)
 		m.addTurnErrorHistoryMessage(errorMessage)
 		m.flushDeferredSubAgentActivity()
-		m.notice = errorMessage
 		m.refreshTranscript()
 		m.appendQuestionDrafts(questionDrafts)
 		return m.refreshThreadUsageAfterTurn()
@@ -14455,7 +14491,7 @@ func richMessageDisplayLines(message codextui.Message, width int, themeID string
 	}
 	switch message.Role {
 	case codextui.RoleHistory:
-		return rawLinesTrimmed(text)
+		return wrapHistoryDisplayLines(text, width)
 	case codextui.RoleUser:
 		// Rust #57292: a desktop reply renders as a shortened `↪ Re:` caption
 		// plus the complete Markdown answer.
@@ -14524,6 +14560,27 @@ func rawLinesTrimmed(text string) []string {
 		return nil
 	}
 	return strings.Split(text, "\n")
+}
+
+// wrapHistoryDisplayLines reflows a prepared history cell to the frame width.
+// Rust keeps history cells and asks each one for display_lines(width) on every
+// draw, so a cell prepared for a wide frame still wraps inside a narrow side
+// pane. Go stored the prepared lines verbatim, which let the split view clip a
+// long provider error at the divider mid-word.
+func wrapHistoryDisplayLines(text string, width int) []string {
+	lines := rawLinesTrimmed(text)
+	if width <= 0 {
+		return lines
+	}
+	wrapped := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if codextui.DisplayWidth(line) <= width {
+			wrapped = append(wrapped, line)
+			continue
+		}
+		wrapped = append(wrapped, strings.Split(ansi.Wrap(line, width, ""), "\n")...)
+	}
+	return wrapped
 }
 
 func trimBlankDisplayEdges(lines []string) []string {

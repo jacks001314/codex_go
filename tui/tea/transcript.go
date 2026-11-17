@@ -762,14 +762,13 @@ func assistantFinalExistsInCurrentTurn(messages []codextui.Message, text string)
 	return false
 }
 
-// normalizedErrorHistoryMessage ensures error messages have "Error: " prefix.
+// normalizedErrorHistoryMessage mirrors Rust's new_error_event: the cell keeps
+// the message verbatim behind a single bullet marker, so no "Error: " prefix is
+// added (Rust history_cell::notices::new_error_event).
 func normalizedErrorHistoryMessage(message string) string {
 	message = strings.TrimSpace(message)
 	if message == "" {
 		message = "Unknown error"
-	}
-	if !strings.HasPrefix(strings.ToLower(message), "error:") {
-		message = "Error: " + message
 	}
 	return message
 }

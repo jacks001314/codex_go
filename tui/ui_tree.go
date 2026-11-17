@@ -50,6 +50,12 @@ const (
 	UINodeLink UINodeKind = "link"
 	// UINodeRow lays its children out horizontally.
 	UINodeRow UINodeKind = "row"
+	// UINodeBold applies the bold modifier to its children.
+	UINodeBold UINodeKind = "bold"
+	// UINodeItalic applies the italic modifier to its children.
+	UINodeItalic UINodeKind = "italic"
+	// UINodeUnderline applies the underline modifier to its children.
+	UINodeUnderline UINodeKind = "underline"
 	// UINodeString is a bare JSON string leaf.
 	UINodeString UINodeKind = "string"
 )
@@ -91,12 +97,15 @@ func (l *LinkHref) UnmarshalJSON(data []byte) error {
 // For UINodeString, Text carries the JSON string leaf. For UINodeText, Children
 // carry all content. Gap is the explicit row spacing in terminal columns.
 type UINode struct {
-	Kind     UINodeKind
-	Text     string
-	Href     LinkHref
-	Title    *string
-	Gap      uint64
-	Children []*UINode
+	Kind       UINodeKind
+	Text       string
+	Href       LinkHref
+	Title      *string
+	Props      UITextProps
+	Background *UIColor
+	Wrap       UIRowWrap
+	Gap        uint64
+	Children   []*UINode
 }
 
 // ParseUITree decodes one whole JSON tree and validates every node, including
@@ -162,16 +171,19 @@ func decodeUINode(data []byte) (*UINode, error) {
 		return nil, err
 	}
 	node := &UINode{Kind: UINodeKind(kind)}
-	props, err := decodeUIProps(fields["props"])
+	propsRaw, hasProps := fields["props"]
+	props, err := decodeUIProps(propsRaw)
 	if err != nil {
 		return nil, err
 	}
 	childrenRaw, hasChildren := fields["children"]
 	switch node.Kind {
 	case UINodeText:
-		if len(props) != 0 {
-			return nil, errors.New("ui text node props must be empty")
+		textProps, err := decodeUITextProps(props)
+		if err != nil {
+			return nil, err
 		}
+		node.Props = textProps
 		children, err := decodeRequiredUIChildren(childrenRaw, hasChildren)
 		if err != nil {
 			return nil, err
@@ -201,17 +213,21 @@ func decodeUINode(data []byte) (*UINode, error) {
 		}
 		node.Children = children
 	case UINodeRow:
-		raw, ok := props["gap"]
-		if !ok {
-			return nil, errors.New("ui row node missing props.gap")
-		}
-		gap, err := decodeUIRowGap(raw)
+		gap, background, wrap, err := decodeUIRowProps(propsRaw, hasProps, props)
 		if err != nil {
 			return nil, err
 		}
 		node.Gap = gap
-		if err := rejectUnknownProps(props, "gap"); err != nil {
+		node.Background = background
+		node.Wrap = wrap
+		children, err := decodeRequiredUIChildren(childrenRaw, hasChildren)
+		if err != nil {
 			return nil, err
+		}
+		node.Children = children
+	case UINodeBold, UINodeItalic, UINodeUnderline:
+		if hasProps {
+			return nil, fmt.Errorf("ui %s node props must be absent", kind)
 		}
 		children, err := decodeRequiredUIChildren(childrenRaw, hasChildren)
 		if err != nil {
@@ -232,6 +248,152 @@ func decodeUIProps(raw json.RawMessage) (map[string]json.RawMessage, error) {
 		return nil, errors.New("ui node props must be an object")
 	}
 	return decodeJSONObject(raw)
+}
+
+func decodeUITextProps(props map[string]json.RawMessage) (UITextProps, error) {
+	var out UITextProps
+	if err := rejectUnknownProps(props, "color", "weight", "italic", "underline"); err != nil {
+		return out, err
+	}
+	if raw, ok := props["color"]; ok {
+		value, present, err := decodeUIStringToken(raw, "color")
+		if err != nil {
+			return out, err
+		}
+		if present {
+			color, err := ParseUIColor(value)
+			if err != nil {
+				return out, err
+			}
+			out.Color = &color
+		}
+	}
+	if raw, ok := props["weight"]; ok {
+		value, present, err := decodeUIStringToken(raw, "weight")
+		if err != nil {
+			return out, err
+		}
+		if present {
+			weight, err := ParseUITextWeight(value)
+			if err != nil {
+				return out, err
+			}
+			out.Weight = &weight
+		}
+	}
+	for name, target := range map[string]**bool{"italic": &out.Italic, "underline": &out.Underline} {
+		raw, ok := props[name]
+		if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			continue
+		}
+		var value bool
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return out, fmt.Errorf("ui text prop %q must be a boolean", name)
+		}
+		copied := value
+		*target = &copied
+	}
+	return out, nil
+}
+
+func decodeUIStringToken(raw json.RawMessage, name string) (string, bool, error) {
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return "", false, nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", false, fmt.Errorf("ui prop %q must be a string", name)
+	}
+	return value, true, nil
+}
+
+func decodeUIRowProps(raw json.RawMessage, present bool, props map[string]json.RawMessage) (uint64, *UIColor, UIRowWrap, error) {
+	if !present {
+		return 0, nil, "", errors.New("ui row node missing props")
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		var entries []json.RawMessage
+		if err := json.Unmarshal(trimmed, &entries); err != nil {
+			return 0, nil, "", err
+		}
+		if len(entries) < 1 || len(entries) > 3 {
+			return 0, nil, "", errors.New("ui row props tuple must carry 1 to 3 entries")
+		}
+		gap, err := decodeUIRowGap(entries[0])
+		if err != nil {
+			return 0, nil, "", err
+		}
+		var background *UIColor
+		if len(entries) >= 2 {
+			value, present, err := decodeUIStringToken(entries[1], "background")
+			if err != nil {
+				return 0, nil, "", err
+			}
+			if present {
+				color, err := ParseUIColor(value)
+				if err != nil {
+					return 0, nil, "", err
+				}
+				background = &color
+			}
+		}
+		wrap := UIRowWrapNowrap
+		if len(entries) == 3 {
+			value, present, err := decodeUIStringToken(entries[2], "wrap")
+			if err != nil {
+				return 0, nil, "", err
+			}
+			if !present {
+				return 0, nil, "", errors.New("ui row wrap must be a string")
+			}
+			wrap, err = ParseUIRowWrap(value)
+			if err != nil {
+				return 0, nil, "", err
+			}
+		}
+		return gap, background, wrap, nil
+	}
+	gapRaw, ok := props["gap"]
+	if !ok {
+		return 0, nil, "", errors.New("ui row node missing props.gap")
+	}
+	gap, err := decodeUIRowGap(gapRaw)
+	if err != nil {
+		return 0, nil, "", err
+	}
+	var background *UIColor
+	if raw, ok := props["background"]; ok {
+		value, present, err := decodeUIStringToken(raw, "background")
+		if err != nil {
+			return 0, nil, "", err
+		}
+		if present {
+			color, err := ParseUIColor(value)
+			if err != nil {
+				return 0, nil, "", err
+			}
+			background = &color
+		}
+	}
+	wrap := UIRowWrapNowrap
+	if raw, ok := props["wrap"]; ok {
+		value, present, err := decodeUIStringToken(raw, "wrap")
+		if err != nil {
+			return 0, nil, "", err
+		}
+		if !present {
+			return 0, nil, "", errors.New("ui row wrap must be a string")
+		}
+		wrap, err = ParseUIRowWrap(value)
+		if err != nil {
+			return 0, nil, "", err
+		}
+	}
+	if err := rejectUnknownProps(props, "gap", "background", "wrap"); err != nil {
+		return 0, nil, "", err
+	}
+	return gap, background, wrap, nil
 }
 
 // decodeJSONObject rejects duplicate keys, which encoding/json's map decoder
@@ -389,6 +551,23 @@ func (n *UINode) MarshalJSON() ([]byte, error) {
 	out["type"], _ = json.Marshal(string(n.Kind))
 	switch n.Kind {
 	case UINodeText:
+		if !n.Props.isZero() {
+			props := map[string]any{}
+			if n.Props.Color != nil {
+				props["color"] = string(*n.Props.Color)
+			}
+			if n.Props.Weight != nil {
+				props["weight"] = string(*n.Props.Weight)
+			}
+			if n.Props.Italic != nil {
+				props["italic"] = *n.Props.Italic
+			}
+			if n.Props.Underline != nil {
+				props["underline"] = *n.Props.Underline
+			}
+			encodedProps, _ := json.Marshal(props)
+			out["props"] = encodedProps
+		}
 		children, err := marshalUIChildren(n.Children)
 		if err != nil {
 			return nil, err
@@ -407,8 +586,21 @@ func (n *UINode) MarshalJSON() ([]byte, error) {
 		}
 		out["children"] = children
 	case UINodeRow:
-		encodedProps, _ := json.Marshal(map[string]any{"gap": n.Gap})
+		props := map[string]any{"gap": n.Gap}
+		if n.Background != nil {
+			props["background"] = string(*n.Background)
+		}
+		if n.Wrap != "" && n.Wrap != UIRowWrapNowrap {
+			props["wrap"] = string(n.Wrap)
+		}
+		encodedProps, _ := json.Marshal(props)
 		out["props"] = encodedProps
+		children, err := marshalUIChildren(n.Children)
+		if err != nil {
+			return nil, err
+		}
+		out["children"] = children
+	case UINodeBold, UINodeItalic, UINodeUnderline:
 		children, err := marshalUIChildren(n.Children)
 		if err != nil {
 			return nil, err
@@ -432,10 +624,12 @@ func marshalUIChildren(children []*UINode) (json.RawMessage, error) {
 	return json.Marshal(encoded)
 }
 
-// UILine is one rendered display row: plain text plus explicit hyperlink
-// column ranges.
+// UILine is one rendered display row: plain text, optional styled spans and
+// explicit hyperlink column ranges. Spans are populated by the prepared
+// multi-line renderer; the single-line RenderLine path leaves them nil.
 type UILine struct {
 	Text       string
+	Spans      []UISpan
 	Hyperlinks []TerminalHyperlink
 }
 

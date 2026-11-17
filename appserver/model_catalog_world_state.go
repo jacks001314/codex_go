@@ -17,6 +17,8 @@ const (
 	modelCatalogMaxRenderedBytes = 1000
 	modelCatalogMaxDescription   = 250
 	modelCatalogOmittedNotice    = "Additional model choices omitted.\n"
+	modelCatalogOpenTag          = "<model_catalog>"
+	modelCatalogCloseTag         = "</model_catalog>"
 )
 
 // modelCatalogWorldStateInputItem keeps spawn_agent model choices in an
@@ -57,6 +59,11 @@ func (r *RuntimeRouter) modelCatalogWorldStateInputItem(threadID string, cfg *co
 	if catalog == "" {
 		catalog = "No picker-visible model overrides are currently loaded.\n"
 	}
+	// Rust's ModelCatalogState body owns the leading newline and hashes the
+	// rendered fragment (markers included), so the persisted snapshot is a
+	// WorldStateHash rather than the catalog text.
+	body := "\n" + catalog
+	fingerprint := session.TextWorldStateFragmentHash(contextfrag.RoleDeveloper, modelCatalogOpenTag+body+modelCatalogCloseTag)
 	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
 	if err != nil {
 		return nil, err
@@ -65,7 +72,7 @@ func (r *RuntimeRouter) modelCatalogWorldStateInputItem(threadID string, cfg *co
 	if err != nil {
 		return nil, err
 	}
-	data, err := json.Marshal(catalog)
+	data, err := json.Marshal(fingerprint)
 	if err != nil {
 		return nil, err
 	}
@@ -83,9 +90,9 @@ func (r *RuntimeRouter) modelCatalogWorldStateInputItem(threadID string, cfg *co
 	}
 	rendered := contextfrag.Render(contextfrag.NewSimpleFragment(
 		contextfrag.RoleDeveloper,
-		"<model_catalog>",
-		"</model_catalog>",
-		catalog,
+		modelCatalogOpenTag,
+		modelCatalogCloseTag,
+		body,
 	))
 	return buildRenderedMessage(rendered), nil
 }
@@ -108,8 +115,11 @@ func renderModelCatalog(models []model.ModelSummary, version agent.MultiAgentVer
 		compatible = compatible[:model.MaxSpawnAgentModelOverrides]
 	}
 	var builder strings.Builder
+	// Rust reserves the marker bytes and separators before fitting each line
+	// (MAX_RENDERED_BYTES minus markers and separators).
+	bodyBudget := modelCatalogMaxRenderedBytes - len(modelCatalogOpenTag) - len(modelCatalogCloseTag) - 2
 	for _, info := range compatible {
-		description := []rune(strings.TrimSpace(info.Description))
+		description := []rune(info.Description)
 		if len(description) > modelCatalogMaxDescription {
 			description = append(description[:modelCatalogMaxDescription], '…')
 		}
@@ -133,7 +143,7 @@ func renderModelCatalog(models []model.ModelSummary, version agent.MultiAgentVer
 			line += " Service tiers: " + strings.Join(tiers, ", ") + "."
 		}
 		line = escapeModelCatalogText(line) + "\n"
-		if builder.Len()+len(line)+len(modelCatalogOmittedNotice) > modelCatalogMaxRenderedBytes {
+		if builder.Len()+len(line)+len(modelCatalogOmittedNotice) > bodyBudget {
 			builder.WriteString(modelCatalogOmittedNotice)
 			break
 		}

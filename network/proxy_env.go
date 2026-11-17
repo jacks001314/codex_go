@@ -113,6 +113,9 @@ func ApplyProxyEnvOverrides(env map[string]string, httpAddr net.TCPAddr, socksAd
 }
 
 type ProxyManagedNetworkSandboxContext struct {
+	// TransparentTCP tells the managed Linux sandbox helper to capture outbound
+	// TCP into the managed SOCKS5 proxy (Rust #61851).
+	TransparentTCP    bool     `json:"transparentTcp,omitempty"`
 	LoopbackPorts     []uint16 `json:"loopbackPorts"`
 	AllowLocalBinding bool     `json:"allowLocalBinding"`
 	// AllowUnixSockets and DangerouslyAllowAllUnixSockets carry the effective
@@ -247,6 +250,7 @@ func (p *PreparedProxyManagedNetwork) SandboxContextSnapshot() ProxyManagedNetwo
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return ProxyManagedNetworkSandboxContext{
+		TransparentTCP:    p.SandboxContext.TransparentTCP,
 		LoopbackPorts:     append([]uint16(nil), p.SandboxContext.LoopbackPorts...),
 		AllowLocalBinding: p.SandboxContext.AllowLocalBinding,
 	}
@@ -326,6 +330,7 @@ func PrepareProxyManagedNetwork(baseEnv map[string]string, httpAddr net.TCPAddr,
 		ports = append(ports, uint16(socksAddr.Port))
 	}
 	sandboxContext := ProxyManagedNetworkSandboxContext{
+		TransparentTCP:    settings.TransparentTCP,
 		LoopbackPorts:     ports,
 		AllowLocalBinding: settings.AllowLocalBinding,
 	}

@@ -1,7 +1,21 @@
 package session
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
+// WorldState is Go's view of the persisted world-state comparison baseline.
+//
+// The persisted form is Rust's `WorldStateItem.state` (protocol.rs): a map
+// keyed by the world-state section ID
+// (core/src/context/world_state/*, `WorldStateSection::ID`), with each value
+// being that section's snapshot. DecodeWorldState and EncodeWorldState
+// translate between that wire shape and these per-section fields so a rollout
+// written by either implementation stays readable by the other.
+//
+// The camelCase struct tags only remain for legacy Go stores written before
+// the wire alignment; the keys actually written are the section IDs below.
 type WorldState struct {
 	AppsInstructions       json.RawMessage `json:"appsInstructions,omitempty"`
 	Model                  json.RawMessage `json:"model,omitempty"`
@@ -24,8 +38,10 @@ type WorldState struct {
 	// (Rust section id `top_level_tools`, #50540): the window it was recorded for
 	// and the stable hash of every declaration.
 	TopLevelTools json.RawMessage `json:"topLevelTools,omitempty"`
-	// BaseInstructions carries the recorded base-instruction snapshot (Rust
-	// section id `base_instructions`, #51188).
+	// BaseInstructions carries the retired Go-only `base_instructions`
+	// snapshot (#51188). Rust replaced that section with `model`'s
+	// WithInstructions form (#53872); the field stays decodable for migration
+	// and is never written again.
 	BaseInstructions json.RawMessage `json:"baseInstructions,omitempty"`
 	// SkillsCatalog carries the incremental selected-environment skill catalog
 	// snapshot (Rust #57262 section id `skills`): the entries the model has
@@ -50,44 +66,100 @@ type WorldState struct {
 	// (Rust section id `plugins_instructions`): the hash of the generic wording
 	// the model has seen and whether it came from the catalog (Rust #58894).
 	PluginsInstructions json.RawMessage `json:"pluginsInstructions,omitempty"`
+	// extra keeps sections Go does not model so writing the state back does not
+	// erase snapshots that only Rust understands (`agents_md`,
+	// `managed_developer_instructions`, `git_attribution`, ...).
+	extra map[string]json.RawMessage
 }
 
+// worldStateSectionIDs maps each Rust world-state section ID onto the field
+// holding its snapshot, plus the legacy Go key that older stores used.
+var worldStateSectionIDs = []struct {
+	id         string
+	legacy     string
+	decodeOnly bool
+	field      func(*WorldState) *json.RawMessage
+}{
+	{"apps_instructions", "appsInstructions", false, func(s *WorldState) *json.RawMessage { return &s.AppsInstructions }},
+	{"model", "model", false, func(s *WorldState) *json.RawMessage { return &s.Model }},
+	{"personality", "personality", false, func(s *WorldState) *json.RawMessage { return &s.Personality }},
+	{"context_window_guidance", "contextWindowGuidance", false, func(s *WorldState) *json.RawMessage { return &s.ContextWindowGuidance }},
+	{"collaboration_mode", "collaborationMode", false, func(s *WorldState) *json.RawMessage { return &s.CollaborationMode }},
+	{"persistent_mode", "persistentMode", false, func(s *WorldState) *json.RawMessage { return &s.PersistentMode }},
+	{"permissions", "permissionInstructions", false, func(s *WorldState) *json.RawMessage { return &s.PermissionInstructions }},
+	{"approved_command_prefixes", "approvedCommandPrefixes", false, func(s *WorldState) *json.RawMessage { return &s.ApprovedCommandPrefixes }},
+	{"realtime", "realtimeConversation", false, func(s *WorldState) *json.RawMessage { return &s.RealtimeConversation }},
+	{"multi_agent_mode", "multiAgentMode", false, func(s *WorldState) *json.RawMessage { return &s.MultiAgentMode }},
+	{"multi_agent_usage_hint", "multiAgentUsageHint", false, func(s *WorldState) *json.RawMessage { return &s.MultiAgentUsageHint }},
+	{"model_catalog", "modelCatalog", false, func(s *WorldState) *json.RawMessage { return &s.ModelCatalog }},
+	{"tools", "tools", false, func(s *WorldState) *json.RawMessage { return &s.Tools }},
+	{"top_level_tools", "topLevelTools", false, func(s *WorldState) *json.RawMessage { return &s.TopLevelTools }},
+	{"base_instructions", "baseInstructions", true, func(s *WorldState) *json.RawMessage { return &s.BaseInstructions }},
+	{"skills", "skillsCatalog", false, func(s *WorldState) *json.RawMessage { return &s.SkillsCatalog }},
+	{"host_skills", "hostSkillsCatalog", false, func(s *WorldState) *json.RawMessage { return &s.HostSkillsCatalog }},
+	{"environments", "environments", false, func(s *WorldState) *json.RawMessage { return &s.Environments }},
+	{"command_sessions", "commandSessions", false, func(s *WorldState) *json.RawMessage { return &s.CommandSessions }},
+	{"plugins_instructions", "pluginsInstructions", false, func(s *WorldState) *json.RawMessage { return &s.PluginsInstructions }},
+}
+
+// DecodeWorldState reads the Rust-shaped section map, accepting the legacy
+// camelCase keys older Go stores used and preserving sections Go does not
+// model.
 func DecodeWorldState(raw json.RawMessage) (*WorldState, error) {
-	if len(raw) == 0 {
-		return &WorldState{}, nil
+	state := &WorldState{}
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
+		return state, nil
 	}
-	var state WorldState
-	if err := json.Unmarshal(raw, &state); err != nil {
+	var sections map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &sections); err != nil {
 		return nil, err
 	}
-	state.Model = append(json.RawMessage(nil), state.Model...)
-	state.Personality = append(json.RawMessage(nil), state.Personality...)
-	state.ContextWindowGuidance = append(json.RawMessage(nil), state.ContextWindowGuidance...)
-	state.CollaborationMode = append(json.RawMessage(nil), state.CollaborationMode...)
-	state.PersistentMode = append(json.RawMessage(nil), state.PersistentMode...)
-	state.PermissionInstructions = append(json.RawMessage(nil), state.PermissionInstructions...)
-	state.ApprovedCommandPrefixes = append(json.RawMessage(nil), state.ApprovedCommandPrefixes...)
-	state.RealtimeConversation = append(json.RawMessage(nil), state.RealtimeConversation...)
-	state.MultiAgentMode = append(json.RawMessage(nil), state.MultiAgentMode...)
-	state.MultiAgentUsageHint = append(json.RawMessage(nil), state.MultiAgentUsageHint...)
-	state.ModelCatalog = append(json.RawMessage(nil), state.ModelCatalog...)
-	state.Tools = append(json.RawMessage(nil), state.Tools...)
-	state.TopLevelTools = append(json.RawMessage(nil), state.TopLevelTools...)
-	state.BaseInstructions = append(json.RawMessage(nil), state.BaseInstructions...)
-	state.SkillsCatalog = append(json.RawMessage(nil), state.SkillsCatalog...)
-	state.HostSkillsCatalog = append(json.RawMessage(nil), state.HostSkillsCatalog...)
-	state.Environments = append(json.RawMessage(nil), state.Environments...)
-	state.CommandSessions = append(json.RawMessage(nil), state.CommandSessions...)
-	return &state, nil
+	known := make(map[string]struct{}, len(worldStateSectionIDs)*2)
+	for _, section := range worldStateSectionIDs {
+		known[section.id] = struct{}{}
+		if section.legacy != section.id {
+			known[section.legacy] = struct{}{}
+		}
+		value, ok := sections[section.id]
+		if !ok {
+			value = sections[section.legacy]
+		}
+		if len(value) > 0 {
+			*section.field(state) = append(json.RawMessage(nil), value...)
+		}
+	}
+	for key, value := range sections {
+		if _, ok := known[key]; ok {
+			continue
+		}
+		if state.extra == nil {
+			state.extra = make(map[string]json.RawMessage, len(sections))
+		}
+		state.extra[key] = append(json.RawMessage(nil), value...)
+	}
+	return state, nil
 }
 
+// EncodeWorldState writes the Rust-shaped section map. Empty sections are
+// omitted (Rust keeps absent entries absent) and unknown sections decoded
+// earlier are written back unchanged.
 func EncodeWorldState(state *WorldState) (json.RawMessage, error) {
 	if state == nil {
 		return nil, nil
 	}
-	data, err := json.Marshal(state)
-	if err != nil {
-		return nil, err
+	sections := make(map[string]json.RawMessage, len(worldStateSectionIDs)+len(state.extra))
+	for key, value := range state.extra {
+		sections[key] = value
 	}
-	return json.RawMessage(data), nil
+	for _, section := range worldStateSectionIDs {
+		if section.decodeOnly {
+			continue
+		}
+		value := *section.field(state)
+		if len(value) == 0 || strings.TrimSpace(string(value)) == "null" {
+			continue
+		}
+		sections[section.id] = value
+	}
+	return json.Marshal(sections)
 }

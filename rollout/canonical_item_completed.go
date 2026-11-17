@@ -1430,6 +1430,7 @@ func canonicalMcpToolCallItemPayload(source json.RawMessage) ([]byte, bool, erro
 	}
 	item.requireStringField("id")
 	item.requireStringField("server")
+	item.optionalStringField("environmentId")
 	item.requireStringField("tool")
 	item.requireRawField("arguments")
 	item.optionalStringField("connectorId")

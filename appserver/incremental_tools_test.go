@@ -271,7 +271,7 @@ func TestIncrementalToolCatalogAppendsChangedCatalogLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hashes, ok := session.TopLevelToolsSnapshotForWindow(state.TopLevelTools, 0)
+	hashes, ok := session.TopLevelToolsSnapshotForWindow(state.TopLevelTools, 0, nil)
 	if !ok || hashes["functions.exec"] == "" {
 		t.Fatalf("catalog snapshot = %s", string(state.TopLevelTools))
 	}
@@ -428,7 +428,7 @@ func TestIncrementalToolCatalogLegacyResumeLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := session.TopLevelToolsSnapshotForWindow(state.TopLevelTools, 0); ok {
+	if _, ok := session.TopLevelToolsSnapshotForWindow(state.TopLevelTools, 0, nil); ok {
 		t.Fatalf("legacy window snapshot = %s, want none", string(state.TopLevelTools))
 	}
 }
@@ -469,10 +469,11 @@ func TestIncrementalToolCatalogWindowReplacementLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := session.TopLevelToolsSnapshotForWindow(state.TopLevelTools, 1); !ok {
+	recordedWindow := router.windowNumberForThread("thread-incremental")
+	if _, ok := session.TopLevelToolsSnapshotForWindow(state.TopLevelTools, 1, &recordedWindow); !ok {
 		t.Fatalf("replacement snapshot = %s, want window 1", string(state.TopLevelTools))
 	}
-	if _, ok := session.TopLevelToolsSnapshotForWindow(state.TopLevelTools, 0); ok {
+	if _, ok := session.TopLevelToolsSnapshotForWindow(state.TopLevelTools, 0, &recordedWindow); ok {
 		t.Fatalf("stale snapshot = %s, want the previous window replaced", string(state.TopLevelTools))
 	}
 }

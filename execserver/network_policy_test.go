@@ -97,7 +97,7 @@ func TestStartRequiresNetworkReviewDomainsCapabilityLikeRust(t *testing.T) {
 	}}
 	legacy := &Client{}
 	legacy.rememberEnvironmentInfo(&EnvironmentInfo{Capabilities: EnvironmentCapabilities{NetworkProxyLaunch: true}})
-	if err := legacy.ensureNetworkReviewCapability(context.Background(), launch); err == nil || !strings.Contains(err.Error(), "does not support managed network review domains") {
+	if err := legacy.ensureNetworkProxyCapabilities(context.Background(), launch); err == nil || !strings.Contains(err.Error(), "does not support managed network review domains") {
 		t.Fatalf("legacy capability error = %v", err)
 	}
 	supported := &Client{}
@@ -105,10 +105,10 @@ func TestStartRequiresNetworkReviewDomainsCapabilityLikeRust(t *testing.T) {
 		NetworkProxyLaunch:        true,
 		NetworkProxyReviewDomains: true,
 	}})
-	if err := supported.ensureNetworkReviewCapability(context.Background(), launch); err != nil {
+	if err := supported.ensureNetworkProxyCapabilities(context.Background(), launch); err != nil {
 		t.Fatalf("supported capability error = %v", err)
 	}
-	if err := legacy.ensureNetworkReviewCapability(context.Background(), &ExecParams{}); err != nil {
+	if err := legacy.ensureNetworkProxyCapabilities(context.Background(), &ExecParams{}); err != nil {
 		t.Fatalf("launch without review domains should not require the capability: %v", err)
 	}
 }

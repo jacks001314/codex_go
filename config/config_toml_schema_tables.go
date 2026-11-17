@@ -288,6 +288,7 @@ var configPermissionsNetworkFields = map[string]configFieldKind{
 	"enabled":                              {kind: configKindBool},
 	"proxy_url":                            {kind: configKindString},
 	"enable_socks5":                        {kind: configKindBool},
+	"transparent_tcp":                      {kind: configKindBool},
 	"socks_url":                            {kind: configKindString},
 	"enable_socks5_udp":                    {kind: configKindBool},
 	"allow_upstream_proxy":                 {kind: configKindBool},

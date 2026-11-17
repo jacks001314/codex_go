@@ -6452,6 +6452,12 @@ func remoteSideThreadForkParamsForMode(mode ThreadParamsMode, root *cli.RootOpti
 	if err != nil {
 		return appserver.ThreadForkParams{}, err
 	}
+	// Rust #60319 side_fork_config: side conversations fork with Daybreak off
+	// even when the parent thread saved it enabled.
+	if configValues == nil {
+		configValues = map[string]any{}
+	}
+	configValues["daybreak"] = false
 	developerInstructions := codextea.SideDeveloperInstructionsFor("", storage)
 	params := appserver.ThreadForkParams{
 		ThreadID:              parentThreadID,

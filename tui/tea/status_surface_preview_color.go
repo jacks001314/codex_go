@@ -3,15 +3,10 @@ package tea
 import (
 	"strings"
 
-	"codex_go/features"
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
 	"codex_go/tui/chatwidget"
 )
-
-// statusLineExtensionPreviewWidth is wide enough that the extension preview
-// never truncates; the modal does the final fitting.
-const statusLineExtensionPreviewWidth = 1 << 20
 
 // Rust parity: codex-rs/tui/src/bottom_pane/status_surface_preview.rs (#44857).
 //
@@ -23,17 +18,18 @@ const statusLineExtensionPreviewWidth = 1 << 20
 // items with the footer's accent resolution and thread identity color.
 func (m *Model) statusLinePreviewStyled(previewData chatwidget.StatusSurfacePreviewData, items []bottompane.StatusLineItem, useThemeColors bool) string {
 	segments := previewData.StatusLineSegmentsForItems(items)
-	if features.Enabled(m.featureSettings, "tui_extensions_statusline") {
-		// Rust #57970: the extension renderer draws plain text through the
-		// shared UI tree; the picker preview drops theme colors.
-		tree := chatwidget.StatusLineExtensionsTree(segments, m.statusControls.StatusLineHyperlink)
-		return tree.RenderLine(statusLineExtensionPreviewWidth).Text
-	}
 	line, ok := bottompane.StatusLineFromSegments(segments, useThemeColors)
 	if !ok {
 		return ""
 	}
-	return line.RenderStyled(m.statusLineThreadColorSGR(), func(accent bottompane.StatusLineAccent) string {
+	// Rust #60027: configured status lines and their live picker previews stay
+	// on the native renderer; the extensions flag only enables experimental MCP
+	// status line providers.
+	hyperlink := ""
+	if m.statusControls != nil {
+		hyperlink = m.statusControls.StatusLineHyperlink
+	}
+	return line.RenderStyledWithHyperlinks(hyperlink, m.statusLineThreadColorSGR(), func(accent bottompane.StatusLineAccent) string {
 		return statusLineAccentSGR(m.tuiTheme, accent)
 	}, false)
 }

@@ -29,6 +29,29 @@ func (m *Model) closeSidebarTab() bubbletea.Cmd {
 	if side == nil {
 		return nil
 	}
+	return m.requestSideTabClose(side)
+}
+
+// closeSidebarTabAtIndex closes the tab painted at a strip position, which is
+// the pointer target of the tab's close glyph (Rust sidebar_close Action).
+func (m *Model) closeSidebarTabAtIndex(index int) bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	tabs := m.sidebarTabsFor(m.sidebarParentThreadID())
+	if index < 0 || index >= len(tabs) || tabs[index] == nil {
+		return nil
+	}
+	return m.requestSideTabClose(tabs[index])
+}
+
+// requestSideTabClose asks first when closing would discard work, then closes
+// the tab. The target is resolved by the caller so a pointer close and the
+// keyboard shortcut share the same confirmation.
+func (m *Model) requestSideTabClose(side *activeSideConversation) bubbletea.Cmd {
+	if side == nil {
+		return nil
+	}
 	if losses := m.sidebarTabCloseLosses(side); len(losses) > 0 {
 		m.pendingSideTabCloseThreadID = strings.TrimSpace(side.SideThreadID)
 		m.openModal(ModalRequestMsg{

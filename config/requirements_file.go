@@ -1074,6 +1074,9 @@ func networkRequirementsFromMap(values map[string]any) *NetworkRequirements {
 	if value, ok := uint16AnyKey(values, "socks_port", "socksPort"); ok {
 		out.SOCKSPort = &value
 	}
+	if value, ok := boolAnyKey(values, "transparent_tcp", "transparentTcp"); ok {
+		out.TransparentTCP = &value
+	}
 	if value, ok := boolAnyKey(values, "allow_upstream_proxy", "allowUpstreamProxy"); ok {
 		out.AllowUpstreamProxy = &value
 	}
@@ -1172,6 +1175,7 @@ func validateNetworkRequirementsTOML(values map[string]any) error {
 
 	for _, key := range []string{
 		"enabled",
+		"transparent_tcp",
 		"allow_upstream_proxy",
 		"dangerously_allow_non_loopback_proxy",
 		"dangerously_allow_all_unix_sockets",

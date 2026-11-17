@@ -114,7 +114,7 @@ func (r *RuntimeRouter) handleThreadSampleRuntime(request *Request) (*ThreadSamp
 	disableMCP := params.DisableMCP && modelInfo != nil && modelInfo.UseResponsesLite && historyInputItemsHaveAdditionalTools(historyItems)
 	preserveParentTools := disableMCP && features.Enabled(cfg.FeatureSettings(), "prediction_preserve_parent_tools")
 	inputItems := append([]any(nil), historyItems...)
-	if worldStateItems, stateErr := r.modelWorldStateInputItems(threadID, modelInfo, instructions); stateErr == nil {
+	if worldStateItems, stateErr := r.modelWorldStateInputItems(threadID, cfg, modelInfo, instructions, providerConfig.ProviderID, historyItems); stateErr == nil {
 		inputItems = append(inputItems, worldStateItems...)
 	}
 	if item, itemErr := r.managedDeveloperInstructionsInputItem(cfg); itemErr == nil && item != nil {

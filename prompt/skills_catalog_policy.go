@@ -33,12 +33,42 @@ type skillCatalogSelection struct {
 	entries    []SkillCatalogEntryRender
 }
 
+// skillGrantContext carries the turn-scoped filesystem grant facts that decide
+// whether a catalog row depends on an approval the model must be told about
+// (Rust PreparedSkillCatalog::entries_for_render).
+type skillGrantContext struct {
+	primaryEnvironment string
+	environmentIDs     map[string]struct{}
+}
+
+// grantFor resolves the grant of one rendered row. Executor rows depend on the
+// environment that owns their main prompt; repository host rows depend on the
+// turn's primary environment. Every other authority and scope is ungated.
+func (g skillGrantContext) grantFor(line skillRenderLine) string {
+	environment := ""
+	switch strings.ToLower(strings.TrimSpace(line.authorityKind)) {
+	case "executor":
+		environment = strings.TrimSpace(line.environmentID)
+	case "host":
+		if strings.EqualFold(strings.TrimSpace(line.scope), "repo") {
+			environment = strings.TrimSpace(g.primaryEnvironment)
+		}
+	}
+	if environment == "" || len(g.environmentIDs) == 0 {
+		return ""
+	}
+	if _, ok := g.environmentIDs[environment]; !ok {
+		return ""
+	}
+	return SkillGrantActive
+}
+
 // renderBestSkillCatalogForScope mirrors Rust #41011/#57262: the aliased
 // catalog is evaluated regardless of budget pressure and selected whenever it
 // preserves skill inclusion and description content while reducing prompt
 // size. The selected layout also determines the comparison metadata.
-func renderBestSkillCatalogForScope(lines []skillRenderLine, budget SkillMetadataBudget, scope string, policy skillCatalogPolicy) skillCatalogSelection {
-	absolute := renderSkillCatalogLines(lines, budget, nil, policy)
+func renderBestSkillCatalogForScope(lines []skillRenderLine, budget SkillMetadataBudget, scope string, policy skillCatalogPolicy, grants skillGrantContext) skillCatalogSelection {
+	absolute := renderSkillCatalogLines(lines, budget, nil, policy, grants)
 
 	plan, ok := buildSkillAliasPlanForScope(lines, budget, scope)
 	if !ok || plan.tableCost >= budget.Limit {
@@ -46,7 +76,7 @@ func renderBestSkillCatalogForScope(lines []skillRenderLine, budget SkillMetadat
 	}
 	adjustedBudget := budget
 	adjustedBudget.Limit -= plan.tableCost
-	aliased := renderSkillCatalogLines(lines, adjustedBudget, plan, policy)
+	aliased := renderSkillCatalogLines(lines, adjustedBudget, plan, policy, grants)
 	if aliasedRenderIsBetterWithPolicy(aliased.skillLines, aliased.report, aliased.rootLines, absolute.skillLines, absolute.report, nil, budget, policy) {
 		return aliased
 	}
@@ -55,7 +85,7 @@ func renderBestSkillCatalogForScope(lines []skillRenderLine, budget SkillMetadat
 
 // renderSkillCatalogLines renders one catalog, applying plan (when non-nil) to
 // the rows and recording which rows were shown.
-func renderSkillCatalogLines(lines []skillRenderLine, budget SkillMetadataBudget, plan *skillAliasPlan, policy skillCatalogPolicy) skillCatalogSelection {
+func renderSkillCatalogLines(lines []skillRenderLine, budget SkillMetadataBudget, plan *skillAliasPlan, policy skillCatalogPolicy, grants skillGrantContext) skillCatalogSelection {
 	applied := applySkillAliases(lines, plan)
 	allocations := allocateSkillLines(applied, budget)
 	rendered, report := renderAllocatedSkillLines(applied, allocations)
@@ -67,14 +97,14 @@ func renderSkillCatalogLines(lines []skillRenderLine, budget SkillMetadataBudget
 		skillLines: rendered,
 		report:     report,
 		rootLines:  rootLines,
-		entries:    skillCatalogEntriesForRender(lines, applied, allocations, plan, policy),
+		entries:    skillCatalogEntriesForRender(lines, applied, allocations, plan, policy, grants),
 	}
 }
 
 // skillCatalogEntriesForRender maps every catalog entry to its comparison
 // metadata (Rust #57262 PreparedSkillCatalog::entries_for_render). original and
 // applied are index-aligned; applied is original with alias rewriting applied.
-func skillCatalogEntriesForRender(original []skillRenderLine, applied []skillRenderLine, allocations []skillLineAllocation, plan *skillAliasPlan, policy skillCatalogPolicy) []SkillCatalogEntryRender {
+func skillCatalogEntriesForRender(original []skillRenderLine, applied []skillRenderLine, allocations []skillLineAllocation, plan *skillAliasPlan, policy skillCatalogPolicy, grants skillGrantContext) []SkillCatalogEntryRender {
 	if len(original) == 0 {
 		return nil
 	}
@@ -94,6 +124,7 @@ func skillCatalogEntriesForRender(original []skillRenderLine, applied []skillRen
 			Fingerprint: skillCatalogEntryFingerprint(line.name, policy.description(line.description), line.mainPrompt, line.path),
 			Line:        rendered,
 			Shown:       !allocation.omitted,
+			Grant:       grants.grantFor(line),
 		}
 		if plan != nil {
 			if rootValue := plan.aliasRootByPath[line.path]; rootValue != "" && row.path != line.path {

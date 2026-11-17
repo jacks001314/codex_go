@@ -957,13 +957,15 @@ func TestMCPOAuthAndContentJSONShape(t *testing.T) {
 
 func TestMCPParamsMarshalRustV2Shape(t *testing.T) {
 	threadID := "thread-live"
+	environmentID := "env-b"
 	timeoutSecs := uint64(30)
 	encodedLogin, err := json.Marshal(MCPServerOauthLoginParams{
-		Name:        "canonical",
-		ServerName:  "legacy",
-		ThreadID:    &threadID,
-		Scopes:      []string{"read"},
-		TimeoutSecs: &timeoutSecs,
+		Name:          "canonical",
+		ServerName:    "legacy",
+		EnvironmentID: &environmentID,
+		ThreadID:      &threadID,
+		Scopes:        []string{"read"},
+		TimeoutSecs:   &timeoutSecs,
 	})
 	if err != nil {
 		t.Fatalf("Marshal oauth params returned error: %v", err)
@@ -972,11 +974,18 @@ func TestMCPParamsMarshalRustV2Shape(t *testing.T) {
 	if err := json.Unmarshal(encodedLogin, &loginPayload); err != nil {
 		t.Fatalf("Unmarshal oauth params returned error: %v", err)
 	}
-	if loginPayload["name"] != "canonical" || loginPayload["threadId"] != "thread-live" || loginPayload["timeoutSecs"] != float64(30) {
+	if loginPayload["name"] != "canonical" || loginPayload["environmentId"] != "env-b" || loginPayload["threadId"] != "thread-live" || loginPayload["timeoutSecs"] != float64(30) {
 		t.Fatalf("oauth params payload = %#v", loginPayload)
 	}
 	if _, ok := loginPayload["serverName"]; ok {
 		t.Fatalf("legacy serverName should not be emitted: %#v", loginPayload)
+	}
+	encodedLocalLogin, err := json.Marshal(MCPServerOauthLoginParams{Name: "canonical"})
+	if err != nil {
+		t.Fatalf("Marshal local oauth params returned error: %v", err)
+	}
+	if strings.Contains(string(encodedLocalLogin), "environmentId") {
+		t.Fatalf("local oauth params gained an environment scope: %s", encodedLocalLogin)
 	}
 	dcr := MCPServerOauthClientRegistrationDcr
 	encodedLoginWithRegistration, err := json.Marshal(MCPServerOauthLoginParams{

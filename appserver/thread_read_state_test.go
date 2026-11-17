@@ -129,11 +129,12 @@ func TestThreadReadStateEligibilityLikeRust(t *testing.T) {
 	}
 }
 
-func TestThreadReadStateChangedNotifiesThreadSubscribersLikeRust(t *testing.T) {
+// Rust #61852: read-state receipts are not thread-scoped. An in-process router
+// has no connection registry, so the notification goes to the broadcast sink.
+func TestThreadReadStateChangedBroadcastsWithoutConnectionRegistryLikeRust(t *testing.T) {
 	router := NewRuntimeRouter(RuntimeServices{})
 	sink := NewNotificationBuffer()
 	router.SetNotificationSink(sink)
-	router.subscribeThreadConnection("thread-read", "conn-read")
 	state := ThreadReadState{
 		FirstUnread: &ThreadUnreadPosition{Type: "turn", TurnID: "turn-1"},
 		Revision:    "revision-1",

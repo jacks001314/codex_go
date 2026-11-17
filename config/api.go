@@ -1130,6 +1130,7 @@ type NetworkRequirements struct {
 	Enabled                          *bool                        `json:"enabled,omitempty"`
 	HTTPPort                         *uint16                      `json:"httpPort,omitempty"`
 	SOCKSPort                        *uint16                      `json:"socksPort,omitempty"`
+	TransparentTCP                   *bool                        `json:"transparentTcp,omitempty"`
 	AllowUpstreamProxy               *bool                        `json:"allowUpstreamProxy,omitempty"`
 	DangerouslyAllowNonLoopbackProxy *bool                        `json:"dangerouslyAllowNonLoopbackProxy,omitempty"`
 	DangerouslyAllowAllUnixSockets   *bool                        `json:"dangerouslyAllowAllUnixSockets,omitempty"`
@@ -1149,6 +1150,7 @@ func (r *NetworkRequirements) MarshalJSON() ([]byte, error) {
 		Enabled                          *bool                        `json:"enabled"`
 		HTTPPort                         *uint16                      `json:"httpPort"`
 		SOCKSPort                        *uint16                      `json:"socksPort"`
+		TransparentTCP                   *bool                        `json:"transparentTcp"`
 		AllowUpstreamProxy               *bool                        `json:"allowUpstreamProxy"`
 		DangerouslyAllowNonLoopbackProxy *bool                        `json:"dangerouslyAllowNonLoopbackProxy"`
 		DangerouslyAllowAllUnixSockets   *bool                        `json:"dangerouslyAllowAllUnixSockets"`
@@ -1165,6 +1167,7 @@ func (r *NetworkRequirements) MarshalJSON() ([]byte, error) {
 		Enabled:                          cloneBoolPtr(r.Enabled),
 		HTTPPort:                         cloneUint16Ptr(r.HTTPPort),
 		SOCKSPort:                        cloneUint16Ptr(r.SOCKSPort),
+		TransparentTCP:                   cloneBoolPtr(r.TransparentTCP),
 		AllowUpstreamProxy:               cloneBoolPtr(r.AllowUpstreamProxy),
 		DangerouslyAllowNonLoopbackProxy: cloneBoolPtr(r.DangerouslyAllowNonLoopbackProxy),
 		DangerouslyAllowAllUnixSockets:   cloneBoolPtr(r.DangerouslyAllowAllUnixSockets),
@@ -4873,6 +4876,7 @@ func cloneNetwork(value *NetworkRequirements) *NetworkRequirements {
 	clone.Enabled = cloneBoolPtr(value.Enabled)
 	clone.HTTPPort = cloneUint16Ptr(value.HTTPPort)
 	clone.SOCKSPort = cloneUint16Ptr(value.SOCKSPort)
+	clone.TransparentTCP = cloneBoolPtr(value.TransparentTCP)
 	clone.AllowUpstreamProxy = cloneBoolPtr(value.AllowUpstreamProxy)
 	clone.DangerouslyAllowNonLoopbackProxy = cloneBoolPtr(value.DangerouslyAllowNonLoopbackProxy)
 	clone.DangerouslyAllowAllUnixSockets = cloneBoolPtr(value.DangerouslyAllowAllUnixSockets)

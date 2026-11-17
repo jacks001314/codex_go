@@ -405,6 +405,10 @@ type InstructionsSkillMetadata struct {
 	AuthorityID             string
 	PackageID               string
 	ResourceID              string
+	// EnvironmentID names the executor installation whose filesystem owns the
+	// skill's main prompt (Rust SkillResourceId::environment_id). It is empty
+	// for host, cloud, and custom authorities.
+	EnvironmentID string
 	Dependencies            []InstructionsSkillDependency
 }
 

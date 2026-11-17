@@ -4106,6 +4106,24 @@ func BuildThread(record *session.Record, path string, includeTurns bool) *Thread
 	return thread
 }
 
+// displayThreadTitle mirrors Rust's `display_thread_title` (#61837): stored
+// names are trimmed and empty names are dropped, and a legacy thread whose
+// stored name repeats its preview keeps using the preview instead of
+// promoting it to an explicit name. Paginated threads own their stored names.
+func displayThreadTitle(mode ThreadHistoryMode, preview string, stored *string) *string {
+	if stored == nil {
+		return nil
+	}
+	title := strings.TrimSpace(*stored)
+	if title == "" {
+		return nil
+	}
+	if mode != ThreadHistoryPaginated && title == strings.TrimSpace(preview) {
+		return nil
+	}
+	return &title
+}
+
 func reasoningEffortFromRecord(record *session.Record) *ReasoningEffort {
 	if record == nil {
 		return nil

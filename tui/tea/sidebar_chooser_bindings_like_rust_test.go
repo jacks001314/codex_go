@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	codextui "codex_go/tui"
 	"codex_go/tui/keymsg"
 )
 
@@ -11,6 +12,12 @@ import (
 // context instead of its own Up/Down/Esc/Enter switch, and the tab strip paints
 // the tab under the pointer.
 func TestSidebarChooserUsesListBindingsAndHoverLikeRust(t *testing.T) {
+	// Pin a palette-less terminal so the strip paints Rust's underline hover
+	// instead of a shaded fill.
+	restoreColors := codextui.SetDefaultTerminalColorsForTest(nil)
+	defer restoreColors()
+	restoreLevel := codextui.SetStdoutColorLevelForTest(codextui.ColorUnknown)
+	defer restoreLevel()
 	model, _ := newSidebarTabsModel(t)
 	model.registerSidebarTab(&activeSideConversation{ParentThreadID: "parent-a", SideThreadID: "side-1"})
 	model.registerSidebarTab(&activeSideConversation{ParentThreadID: "parent-a", SideThreadID: "side-2"})
@@ -69,16 +76,16 @@ func TestSidebarChooserUsesListBindingsAndHoverLikeRust(t *testing.T) {
 		t.Fatalf("hoverSidebarTab() changed=%t hover=%d, want tab 1", changed, model.sidebarTabHover)
 	}
 	strip := model.renderSidebarTabStrip(120)
-	if strings.Count(strip, "\x1b[7m") != 1 {
-		t.Fatalf("strip painted %d hovered cells, want exactly one:\n%q", strings.Count(strip, "\x1b[7m"), strip)
+	if strings.Count(strip, "\x1b[4m") != 1 {
+		t.Fatalf("strip painted %d hovered cells, want exactly one:\n%q", strings.Count(strip, "\x1b[4m"), strip)
 	}
-	if !strings.Contains(strip, "\x1b[7m Side 2 ") {
+	if !strings.Contains(strip, "\x1b[4m Side 2 ") {
 		t.Fatalf("strip did not hover-highlight the second tab:\n%q", strip)
 	}
 	if changed := model.hoverSidebarTab(count * stride); !changed || model.sidebarTabHover != -1 {
 		t.Fatalf("hover over the + button changed=%t hover=%d, want no tab", changed, model.sidebarTabHover)
 	}
-	if strip := model.renderSidebarTabStrip(120); strings.Contains(strip, "\x1b[7m") {
+	if strip := model.renderSidebarTabStrip(120); strings.Contains(strip, "\x1b[4m") {
 		t.Fatalf("strip kept a hover highlight past the tabs:\n%q", strip)
 	}
 }
@@ -86,6 +93,10 @@ func TestSidebarChooserUsesListBindingsAndHoverLikeRust(t *testing.T) {
 // Rust #60319: the add button is its own hover target, while the gap columns
 // between tabs stay inert.
 func TestSidebarTabStripHoverHighlightsAddButtonLikeRust(t *testing.T) {
+	restoreColors := codextui.SetDefaultTerminalColorsForTest(nil)
+	defer restoreColors()
+	restoreLevel := codextui.SetStdoutColorLevelForTest(codextui.ColorUnknown)
+	defer restoreLevel()
 	model, _ := newSidebarTabsModel(t)
 	model.registerSidebarTab(&activeSideConversation{ParentThreadID: "parent-a", SideThreadID: "side-1"})
 	if cmd := model.openSidebarChooser(); cmd != nil {
@@ -100,7 +111,7 @@ func TestSidebarTabStripHoverHighlightsAddButtonLikeRust(t *testing.T) {
 		t.Fatalf("add hover changed=%t add=%t tab=%d", changed, model.sidebarAddHover, model.sidebarTabHover)
 	}
 	strip := model.renderSidebarTabStrip(width)
-	if !strings.Contains(strip, "\x1b[7m + ") {
+	if !strings.Contains(strip, "\x1b[1;4;7m + ") {
 		t.Fatalf("add button was not hover-highlighted:\n%q", strip)
 	}
 	if changed := model.hoverSidebarTab(window.tabWidth); !changed || model.sidebarAddHover || model.sidebarTabHover != -1 {

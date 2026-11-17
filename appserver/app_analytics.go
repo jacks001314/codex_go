@@ -53,6 +53,7 @@ func (r *RuntimeRouter) rememberExplicitAppMentions(ctx context.Context, threadI
 	}
 	for _, connectorID := range connectorIDs {
 		event := telemetry.NewCodexAppMentionedEvent(telemetry.CodexAppMetadata{
+			TurnTrigger:     r.analyticsTurnTriggerForTurn(threadID, turnID),
 			ConnectorID:     stringPtrIfNotEmpty(connectorID),
 			ThreadID:        stringPtrIfNotEmpty(threadID),
 			TurnID:          stringPtrIfNotEmpty(turnID),
@@ -103,6 +104,7 @@ func (r *RuntimeRouter) emitCodexAppUsedEvent(ctx context.Context, threadID stri
 	}
 	sink.TrackCodexAppUsedEvent(ctx, telemetry.NewCodexAppUsedEvent(telemetry.CodexAppUsedEventParams{
 		CodexAppMetadata: telemetry.CodexAppMetadata{
+			TurnTrigger:     r.analyticsTurnTriggerForTurn(threadID, turnID),
 			ConnectorID:     stringPtrIfNotEmpty(connectorID),
 			ThreadID:        stringPtrIfNotEmpty(threadID),
 			TurnID:          stringPtrIfNotEmpty(turnID),
@@ -239,6 +241,7 @@ func (r *RuntimeRouter) rememberSkillDerivedAppMentions(ctx context.Context, thr
 	}
 	for _, connectorID := range sortedBoolKeys(connectorIDs) {
 		sink.TrackCodexAppMentionedEvent(ctx, telemetry.NewCodexAppMentionedEvent(telemetry.CodexAppMetadata{
+			TurnTrigger:     r.analyticsTurnTriggerForTurn(threadID, turnID),
 			ConnectorID:     stringPtrIfNotEmpty(connectorID),
 			ThreadID:        stringPtrIfNotEmpty(threadID),
 			TurnID:          stringPtrIfNotEmpty(turnID),

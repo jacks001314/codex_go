@@ -70,13 +70,124 @@ func ReadableColorOn(preferred TerminalColor, background *RGB, level StdoutColor
 }
 
 func UserMessageBackground(terminalBG RGB, colorLevel StdoutColorLevel) TerminalColor {
+	return BestColorForLevel(UserMessageBackgroundRGB(terminalBG), colorLevel)
+}
+
+// UserMessageBackgroundRGB is Rust's `user_message_bg_rgb`: the terminal
+// background shaded onto itself, so the surface stays one step away from the
+// canvas.
+func UserMessageBackgroundRGB(terminalBG RGB) RGB {
+	return ShadeRGB(terminalBG, terminalBG)
+}
+
+// ShadeRGB lifts a surface toward white by 12% on dark terminals and toward
+// black by 4% on light ones (Rust's `style::shade_rgb`).
+func ShadeRGB(surface RGB, terminalBG RGB) RGB {
 	top := RGB{R: 255, G: 255, B: 255}
 	alpha := 0.12
 	if IsLight(terminalBG) {
 		top = RGB{}
 		alpha = 0.04
 	}
-	return BestColorForLevel(BlendRGB(top, terminalBG, alpha), colorLevel)
+	return BlendRGB(top, surface, alpha)
+}
+
+// SecondaryTextStyle is Rust's `secondary_text_style`: the terminal foreground
+// blended 60% toward the background, contrast-corrected against the canvas and
+// never dimmed.
+func SecondaryTextStyle(level StdoutColorLevel) StyleSpec {
+	preferred := TerminalColor{}
+	if foreground, background, known := defaultTerminalColorsRGB(); known {
+		blended := BlendRGB(foreground, background, 0.6)
+		preferred = TerminalColor{RGB: &blended}
+	}
+	return StyleSpec{Foreground: ReadableColorOn(preferred, nil, level)}
+}
+
+// SecondarySurfaceStyle resolves the quiet chip a tab strip paints before any
+// hover or selection (Rust sidebar_tab_strip.rs `rest`): secondary text patched
+// onto the user-message surface, with the foreground re-resolved readable on
+// that fill.
+func SecondarySurfaceStyle(level StdoutColorLevel) StyleSpec {
+	rest := SecondaryTextStyle(level)
+	terminalBG, known := DefaultBackgroundRGB()
+	if !known {
+		return rest
+	}
+	fill := UserMessageBackground(terminalBG, level)
+	rest.Background = fill
+	if fillRGB, ok := terminalColorRGB(fill); ok {
+		rest.Foreground = ReadableColorOn(rest.Foreground, &fillRGB, level)
+	}
+	return rest
+}
+
+// QuietWorkspaceStyle is Rust's `quiet_workspace_style`: a focusable surface
+// pulled toward the terminal background, or the dim terminal default when the
+// palette is unknown.
+func QuietWorkspaceStyle(level StdoutColorLevel) StyleSpec {
+	foreground, terminalBG, known := defaultTerminalColorsRGB()
+	fill := BestColorForLevel(BlendRGB(UserMessageBackgroundRGB(terminalBG), terminalBG, 0.40), level)
+	fillRGB, ok := terminalColorRGB(fill)
+	if !known || !ok {
+		return StyleSpec{Dim: true}
+	}
+	blended := BestColorForLevel(BlendRGB(foreground, terminalBG, 0.66), level)
+	return StyleSpec{
+		Foreground: ReadableColorOn(blended, &fillRGB, level),
+		Background: fill,
+	}
+}
+
+// HoverStyleFor is Rust's `style::hover_style`: shading the surface twice
+// toward the terminal background strengthens the fill under the pointer. A
+// terminal without a known palette, or a fill that would not move, falls back
+// to an underline so the target still reads as live.
+func HoverStyleFor(spec StyleSpec, level StdoutColorLevel) StyleSpec {
+	terminalBG, known := DefaultBackgroundRGB()
+	return hoverStyleForBackground(spec, terminalBG, known, level)
+}
+
+func hoverStyleForBackground(spec StyleSpec, terminalBG RGB, known bool, level StdoutColorLevel) StyleSpec {
+	if !known {
+		spec.Underlined = true
+		return spec
+	}
+	surface, ok := styleSurfaceRGB(spec.Background, terminalBG)
+	if !ok {
+		spec.Underlined = true
+		return spec
+	}
+	fill := BestColorForLevel(ShadeRGB(ShadeRGB(surface, terminalBG), terminalBG), level)
+	fillRGB, ok := terminalColorRGB(fill)
+	if !ok || sameTerminalColor(fill, spec.Background) {
+		spec.Underlined = true
+		return spec
+	}
+	spec.Background = fill
+	spec.Foreground = ReadableColorOn(spec.Foreground, &fillRGB, level)
+	return spec
+}
+
+// styleSurfaceRGB resolves a style background the way Rust's `background_rgb`
+// does: a concrete colour, the xterm entry for an indexed colour at or above
+// 16, and the terminal's default background for an unset or reset background.
+func styleSurfaceRGB(background TerminalColor, terminalBG RGB) (RGB, bool) {
+	if background.RGB == nil && background.Index == nil {
+		return terminalBG, true
+	}
+	return terminalColorRGB(background)
+}
+
+// sameTerminalColor reports whether two resolved colours are the same paint.
+func sameTerminalColor(a TerminalColor, b TerminalColor) bool {
+	switch {
+	case a.RGB != nil && b.RGB != nil:
+		return *a.RGB == *b.RGB
+	case a.Index != nil && b.Index != nil:
+		return *a.Index == *b.Index
+	}
+	return false
 }
 
 func ProposedPlanBackground(terminalBG RGB, colorLevel StdoutColorLevel) TerminalColor {

@@ -484,38 +484,38 @@ func TestBaseInstructionsUpdateLikeRust(t *testing.T) {
 // instruction content are tracked independently, and a changed window appends
 // one replacement/removal notice without rewriting the existing prefix.
 func TestModelInstructionsUpdateLikeRust(t *testing.T) {
-	hash, updates, _ := ModelInstructionsUpdate("gpt-test", "Base instructions.", "", "", false, false)
+	hash, updates, _ := ModelInstructionsUpdate("gpt-test", "Base instructions.", "", "", false, false, false)
 	if len(updates) != 1 || updates[0].Placement != WorldStatePrefix ||
 		!sameWorldStateJSON(t, []any{liteDeveloperMessage("Base instructions.", BaseInstructionsContentKind)}, MergeWorldStateUpdates(updates)) {
 		t.Fatalf("new window update = %#v", updates)
 	}
 	if updates := func() []WorldStateUpdate {
-		_, out, _ := ModelInstructionsUpdate("gpt-test", "Base instructions.", "gpt-test", hash, true, false)
+		_, out, _ := ModelInstructionsUpdate("gpt-test", "Base instructions.", "gpt-test", hash, true, true, false)
 		return out
 	}(); len(updates) != 0 {
 		t.Fatalf("unchanged update = %#v", updates)
 	}
-	if _, updates, _ := ModelInstructionsUpdate("gpt-test", "Instructions.", "gpt-test", hash, true, false); len(updates) != 1 {
+	if _, updates, _ := ModelInstructionsUpdate("gpt-test", "Instructions.", "gpt-test", hash, true, true, false); len(updates) != 1 {
 		t.Fatalf("replacement update = %#v", updates)
 	} else if !strings.Contains(updates[0].Text, "The following instructions replace the previous base instructions:") ||
 		!strings.Contains(updates[0].Text, "Instructions.") {
 		t.Fatalf("replacement item = %#v", updates[0])
 	}
-	removedHash, removed, _ := ModelInstructionsUpdate("gpt-test", "", "gpt-test", hash, true, false)
+	removedHash, removed, _ := ModelInstructionsUpdate("gpt-test", "", "gpt-test", hash, true, true, false)
 	if removedHash == "" || len(removed) != 1 {
 		t.Fatalf("removal update = %#v", removed)
 	}
 	if !strings.Contains(removed[0].Text, "The previous base instructions no longer apply. No replacement base instructions are active.") {
 		t.Fatalf("removal item = %#v", removed[0])
 	}
-	_, modelOnly, _ := ModelInstructionsUpdate("gpt-next", "Instructions.", "gpt-test", BaseInstructionsHash("Instructions."), true, false)
+	_, modelOnly, _ := ModelInstructionsUpdate("gpt-next", "Instructions.", "gpt-test", BaseInstructionsHash("Instructions."), true, true, false)
 	if len(modelOnly) != 1 || !strings.Contains(modelOnly[0].Text, "The current model is gpt-next.") ||
 		strings.Contains(modelOnly[0].Text, "replace the previous") {
 		t.Fatalf("model-only item = %#v", modelOnly)
 	}
 	// A legacy hash-only snapshot tracks the new model silently with its
 	// unchanged instructions, avoiding an upgrade-time false model change.
-	if _, legacy, _ := ModelInstructionsUpdate("gpt-test", "Base instructions.", "", hash, true, false); len(legacy) != 0 {
+	if _, legacy, _ := ModelInstructionsUpdate("gpt-test", "Base instructions.", "", hash, true, true, false); len(legacy) != 0 {
 		t.Fatalf("legacy snapshot update = %#v", legacy)
 	}
 }
@@ -525,7 +525,7 @@ func TestModelInstructionsUpdateLikeRust(t *testing.T) {
 // repeated turns of the same window stay quiet.
 func TestModelInstructionsUpdateSuppressesModelChangeAnnouncementsLikeRust(t *testing.T) {
 	hash := BaseInstructionsHash("instructions")
-	switched, updates, advance := ModelInstructionsUpdate("gpt-next", "instructions", "gpt-old", hash, true, true)
+	switched, updates, advance := ModelInstructionsUpdate("gpt-next", "instructions", "gpt-old", hash, true, true, true)
 	if switched != hash {
 		t.Fatalf("suppressed model switch hash = %q, want %q", switched, hash)
 	}
@@ -535,10 +535,10 @@ func TestModelInstructionsUpdateSuppressesModelChangeAnnouncementsLikeRust(t *te
 	if !advance {
 		t.Fatal("suppressed model switch must advance the recorded model snapshot")
 	}
-	if _, repeated, repeatedAdvance := ModelInstructionsUpdate("gpt-next", "instructions", "gpt-next", switched, true, true); len(repeated) != 0 || repeatedAdvance {
+	if _, repeated, repeatedAdvance := ModelInstructionsUpdate("gpt-next", "instructions", "gpt-next", switched, true, true, true); len(repeated) != 0 || repeatedAdvance {
 		t.Fatalf("repeated suppressed turn updates = %#v, want none", repeated)
 	}
-	_, changed, _ := ModelInstructionsUpdate("gpt-next", "new instructions", "gpt-old", hash, true, true)
+	_, changed, _ := ModelInstructionsUpdate("gpt-next", "new instructions", "gpt-old", hash, true, true, true)
 	if len(changed) != 1 {
 		t.Fatalf("suppressed model switch with new instructions updates = %#v, want one", changed)
 	}
@@ -585,25 +585,59 @@ func TestMergeWorldStateUpdatesOrderingLikeRust(t *testing.T) {
 	}
 }
 
-// TestWorldStateSnapshotWindowScopingLikeRust covers the window scoping Rust
-// #50540/#51188 rely on when a context window is replaced: a snapshot recorded
-// for another window is absent, so the replacement window re-declares the full
-// catalog and base instructions instead of diffing against the old window.
+// TestWorldStateSnapshotWindowScopingLikeRust covers Rust's wire shapes and the
+// Go-side window scoping used when a context window is replaced: Rust persists
+// a bare tool-hash map, so Go keeps the window number in thread metadata and a
+// snapshot recorded for another window is absent.
 func TestWorldStateSnapshotWindowScopingLikeRust(t *testing.T) {
-	catalog, err := EncodeTopLevelToolsSnapshot(2, map[string]string{"functions.exec": "abc"})
+	catalog, err := EncodeTopLevelToolsSnapshot(map[string]string{"functions.exec": "abc"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	instructions, err := EncodeBaseInstructionsSnapshot(2, "def")
-	if err != nil {
-		t.Fatal(err)
+	if string(catalog) != `{"functions.exec":"abc"}` {
+		t.Fatalf("ToolsOnly snapshot = %s, want a bare hash map", string(catalog))
 	}
-	hashes, ok := TopLevelToolsSnapshotForWindow(catalog, 2)
+	window2 := uint64(2)
+	hashes, ok := TopLevelToolsSnapshotForWindow(catalog, 2, &window2)
 	if !ok || hashes["functions.exec"] != "abc" {
 		t.Fatalf("window 2 snapshot = %#v, %v", hashes, ok)
 	}
-	if _, ok := TopLevelToolsSnapshotForWindow(catalog, 3); ok {
-		t.Fatal("a snapshot for window 2 must be absent for window 3")
+	if _, ok := TopLevelToolsSnapshotForWindow(catalog, 3, &window2); ok {
+		t.Fatal("a snapshot recorded for window 2 must be absent for window 3")
+	}
+	// A Rust-written snapshot has no window of its own: it belongs to whichever
+	// window the Go record says is current.
+	if hashes, ok := TopLevelToolsSnapshotForWindow(catalog, 7, nil); !ok || hashes["functions.exec"] != "abc" {
+		t.Fatalf("Rust snapshot without Go window = %#v, %v", hashes, ok)
+	}
+
+	// Legacy Go snapshots keep their embedded window for in-place upgrades.
+	legacy := json.RawMessage(`{"window":2,"hashes":{"functions.exec":"abc"}}`)
+	if hashes, ok := TopLevelToolsSnapshotForWindow(legacy, 2, nil); !ok || hashes["functions.exec"] != "abc" {
+		t.Fatalf("legacy window 2 snapshot = %#v, %v", hashes, ok)
+	}
+	if _, ok := TopLevelToolsSnapshotForWindow(legacy, 3, nil); ok {
+		t.Fatal("legacy snapshot for window 2 must be absent for window 3")
+	}
+
+	// Rust's WithExec shape shares its `tools` half with the ordinary catalog.
+	withExec := json.RawMessage(`{"tools":{"functions.exec":"abc"},"exec":{"fast":"def"}}`)
+	if hashes, ok := TopLevelToolsSnapshotForWindow(withExec, 4, nil); !ok || hashes["functions.exec"] != "abc" || hashes["fast"] != "" {
+		t.Fatalf("WithExec snapshot = %#v, %v", hashes, ok)
+	}
+
+	// Rust persists an empty catalog as a known baseline.
+	if hashes, ok := TopLevelToolsSnapshotForWindow(json.RawMessage(`{}`), 0, nil); !ok || len(hashes) != 0 {
+		t.Fatalf("empty snapshot = %#v, %v", hashes, ok)
+	}
+	if _, ok := TopLevelToolsSnapshotForWindow(nil, 0, nil); ok {
+		t.Fatal("a missing snapshot must be absent")
+	}
+
+	// The retired base_instructions section stays readable for migration.
+	instructions, err := EncodeBaseInstructionsSnapshot(2, "def")
+	if err != nil {
+		t.Fatal(err)
 	}
 	if hash, ok := BaseInstructionsSnapshotForWindow(instructions, 2); !ok || hash != "def" {
 		t.Fatalf("window 2 base instructions = %q, %v", hash, ok)
@@ -611,29 +645,19 @@ func TestWorldStateSnapshotWindowScopingLikeRust(t *testing.T) {
 	if _, ok := BaseInstructionsSnapshotForWindow(instructions, 3); ok {
 		t.Fatal("base instructions for window 2 must be absent for window 3")
 	}
-	modelSnapshot, err := EncodeModelInstructionsSnapshot(2, "gpt-test", "def")
+
+	modelSnapshot, err := EncodeModelStateSnapshot("gpt-test", "def")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if modelID, hash, ok := ModelInstructionsSnapshotForWindow(modelSnapshot, 2); !ok || modelID != "gpt-test" || hash != "def" {
-		t.Fatalf("window 2 model instructions = %q/%q/%v", modelID, hash, ok)
+	if string(modelSnapshot) != `{"model":"gpt-test","instructions":"def"}` {
+		t.Fatalf("model snapshot = %s, want Rust's WithInstructions shape", string(modelSnapshot))
 	}
-	if _, _, ok := ModelInstructionsSnapshotForWindow(modelSnapshot, 3); ok {
-		t.Fatal("model instructions for window 2 must be absent for window 3")
+	if modelID, hash, known, withInstructions := DecodeModelStateSnapshot(modelSnapshot); !known || !withInstructions || modelID != "gpt-test" || hash != "def" {
+		t.Fatalf("model snapshot decode = %q/%q/%v/%v", modelID, hash, known, withInstructions)
 	}
-	if _, ok := TopLevelToolsSnapshotForWindow(nil, 0); ok {
-		t.Fatal("a missing snapshot must be absent")
-	}
-	// Window zero is a real window (a fresh thread), so it must round-trip.
-	zero, err := EncodeTopLevelToolsSnapshot(0, map[string]string{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := TopLevelToolsSnapshotForWindow(zero, 0); !ok {
-		t.Fatalf("window 0 snapshot = %s, want it recorded", string(zero))
-	}
-	if _, ok := TopLevelToolsSnapshotForWindow(zero, 1); ok {
-		t.Fatal("window 0 must not match window 1")
+	if modelID, hash, known, withInstructions := DecodeModelStateSnapshot(json.RawMessage(`"gpt-test"`)); !known || withInstructions || modelID != "gpt-test" || hash != "" {
+		t.Fatalf("ModelOnly decode = %q/%q/%v/%v", modelID, hash, known, withInstructions)
 	}
 }
 

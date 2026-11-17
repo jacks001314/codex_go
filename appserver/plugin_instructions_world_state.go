@@ -1,8 +1,6 @@
 package appserver
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"strings"
 
@@ -18,9 +16,17 @@ const (
 	pluginInstructionsRemovalBody       = "\nThe previously provided plugin usage instructions no longer apply.\n"
 )
 
-// pluginInstructionsSnapshot mirrors the current Rust snapshot: the hash of the
-// generic wording the model has seen and whether the catalog supplied it.
+// pluginInstructionsSnapshot mirrors Rust's PluginsInstructionsSnapshot::Current:
+// the hash of the generic wording the model has seen and whether the catalog
+// supplied it. Older Go stores used `hash` for the fingerprint; the reader
+// still accepts it.
 type pluginInstructionsSnapshot struct {
+	Instructions string `json:"instructions,omitempty"`
+	Catalog      bool   `json:"catalog"`
+}
+
+// legacyPluginInstructionsSnapshot is the pre-alignment Go wire form.
+type legacyPluginInstructionsSnapshot struct {
 	Hash    string `json:"hash,omitempty"`
 	Catalog bool   `json:"catalog"`
 }
@@ -47,9 +53,47 @@ func (r *RuntimeRouter) pluginGenericGuidanceForThread(threadID string, modelInf
 	return fragment.Body(), catalog
 }
 
+// pluginGuidanceHash mirrors Rust's `WorldStateHash::from_json(Value::String)`:
+// JSON hashing preserves CRLF and every other literal byte of the body.
 func pluginGuidanceHash(body string) string {
-	sum := sha256.Sum256([]byte(body))
-	return hex.EncodeToString(sum[:])
+	return session.WorldStateJSONHash(body)
+}
+
+// pluginBundledGuidanceHash is the slice of Rust's bundled generic plugin
+// wording (`AvailablePluginsInstructions::default()`) that legacy snapshots
+// stand for.
+func pluginBundledGuidanceHash() string {
+	return pluginGuidanceHash(contextfrag.PluginBundledGuidanceBody())
+}
+
+// decodePluginInstructionsSnapshot reads Rust's snapshot wire form: the current
+// object, Rust's legacy bare bool (pre-catalog availability), or the legacy Go
+// object. An unreadable snapshot is treated as `Unknown`, which Rust resolves
+// to the bundled guidance fingerprint.
+func decodePluginInstructionsSnapshot(raw json.RawMessage) pluginInstructionsSnapshot {
+	trimmed := strings.TrimSpace(string(raw))
+	switch {
+	case strings.HasPrefix(trimmed, "{"):
+		var current pluginInstructionsSnapshot
+		if err := json.Unmarshal(raw, &current); err != nil {
+			return pluginInstructionsSnapshot{Instructions: pluginBundledGuidanceHash()}
+		}
+		if current.Instructions != "" {
+			return current
+		}
+		var legacy legacyPluginInstructionsSnapshot
+		if err := json.Unmarshal(raw, &legacy); err == nil && legacy.Hash != "" {
+			return pluginInstructionsSnapshot{Instructions: legacy.Hash, Catalog: legacy.Catalog}
+		}
+		return current
+	case trimmed == "true":
+		return pluginInstructionsSnapshot{Instructions: pluginBundledGuidanceHash()}
+	case trimmed == "false":
+		return pluginInstructionsSnapshot{}
+	default:
+		// Rust resolves unreadable retained state to the bundled guidance.
+		return pluginInstructionsSnapshot{Instructions: pluginBundledGuidanceHash()}
+	}
 }
 
 func pluginInstructionsItem(body string) any {
@@ -74,13 +118,11 @@ func (r *RuntimeRouter) pluginGuidanceWorldStateInputItem(threadID string, model
 	var previous pluginInstructionsSnapshot
 	hadPrevious := len(state.PluginsInstructions) > 0
 	if hadPrevious {
-		if err := json.Unmarshal(state.PluginsInstructions, &previous); err != nil {
-			previous = pluginInstructionsSnapshot{}
-		}
+		previous = decodePluginInstructionsSnapshot(state.PluginsInstructions)
 	}
 	guidance, catalog := r.pluginGenericGuidanceForThread(threadID, modelInfo)
 	if strings.TrimSpace(guidance) == "" {
-		if !hadPrevious || previous.Hash == "" {
+		if !hadPrevious || previous.Instructions == "" {
 			return nil, nil
 		}
 		if !previous.Catalog {
@@ -106,14 +148,14 @@ func (r *RuntimeRouter) pluginGuidanceWorldStateInputItem(threadID string, model
 		return pluginInstructionsItem(pluginInstructionsRemovalBody), nil
 	}
 	hash := pluginGuidanceHash(guidance)
-	if hadPrevious && previous.Hash == hash {
+	if hadPrevious && previous.Instructions == hash {
 		return nil, nil
 	}
 	display := guidance
-	if previous.Hash != "" {
+	if previous.Instructions != "" {
 		display = pluginInstructionsReplacementPrefix + guidance
 	}
-	state.PluginsInstructions, err = json.Marshal(pluginInstructionsSnapshot{Hash: hash, Catalog: catalog})
+	state.PluginsInstructions, err = json.Marshal(pluginInstructionsSnapshot{Instructions: hash, Catalog: catalog})
 	if err != nil {
 		return nil, err
 	}

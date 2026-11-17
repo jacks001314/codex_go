@@ -14,6 +14,9 @@ type CodexHookRunEventRequest struct {
 }
 
 type CodexHookRunMetadataV1 struct {
+	// TurnTrigger is the trigger that started the turn the hook ran in (Rust
+	// analytics CodexHookRunMetadata::turn_trigger); absent stays off the wire.
+	TurnTrigger     *string `json:"turn_trigger,omitempty"`
 	ThreadID        *string `json:"thread_id"`
 	TurnID          *string `json:"turn_id"`
 	ProductClientID *string `json:"product_client_id"`

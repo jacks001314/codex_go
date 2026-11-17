@@ -102,7 +102,8 @@ func TestSidebarChooserDiscoveryFailureRetryLikeRust(t *testing.T) {
 		t.Fatalf("discovery = %q, want failed", model.sidebarDiscovery)
 	}
 	panel := model.renderSidebarChooser(80, 24)
-	for _, want := range []string{"Failed to load saved side chats: boom", sidebarRetryChatsTitle} {
+	// Rust paints Discovery::Failed(error) verbatim.
+	for _, want := range []string{"boom", sidebarRetryChatsTitle} {
 		if !strings.Contains(panel, want) {
 			t.Fatalf("failed chooser missing %q:\n%s", want, panel)
 		}
@@ -296,15 +297,25 @@ func TestSidebarChooserClickActivatesPreviewRowLikeRust(t *testing.T) {
 	}
 	model.transcript.Height = 24
 	model.sidebarTabStripTop = 0
-	// Rows: 0 strip, 1 blank, 2 title, 3 status, 4 new chat, 5 group header,
-	// 6 first title, 7 first preview, 8 second title, 9 second preview.
+	// Rust sidebar_chooser::choice_rows at this pane width: the body is
+	// narrower than WIDE_WIDTH, so New side chat owns rows 4-5, row 6 is the
+	// gap before the group header on row 7, row 8 is blank, and the chats start
+	// on row 9. Each chat owns a title row plus its prompt preview.
+	layout := model.sidebarChooserLayoutFor(model.sidebarTabStripWidth(), model.sidebarChooserPanelHeight())
+	if layout.newChat != (sidebarChooserSpan{start: 4, end: 6}) || layout.group != 7 ||
+		layout.chats != (sidebarChooserSpan{start: 9, end: 23}) {
+		t.Fatalf("chooser rows = newChat %+v group %d chats %+v", layout.newChat, layout.group, layout.chats)
+	}
+	if len(layout.visible) != 2 || layout.visible[1].index != 2 || layout.visible[1].rows.start != 11 {
+		t.Fatalf("visible chats = %+v, want the second chat on row 11", layout.visible)
+	}
 	left, _, _, ok := model.sidePaneLayout(model.width)
 	if !ok {
 		t.Fatal("split layout unavailable")
 	}
 	x := left + ansi.StringWidth(sideWorkspaceDivider)
 	handled, cmd := model.handleSidePaneMouse(mousemsg.MouseMsg{
-		Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft, X: x, Y: 8,
+		Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft, X: x, Y: 11,
 	})
 	if !handled {
 		t.Fatal("click on the second chat row was not handled")

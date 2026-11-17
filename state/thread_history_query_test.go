@@ -230,6 +230,7 @@ type historyFixtureTurn struct {
 	RootTurnID string
 	Items      []historyFixtureItem
 	InProgress bool
+	Aborted    bool
 }
 
 type historyFixtureItem struct {
@@ -271,7 +272,14 @@ func writePaginatedHistoryFixture(t *testing.T, home, threadID string, base *rol
 				t.Fatal(err)
 			}
 		}
-		if !turn.InProgress {
+		switch {
+		case turn.InProgress:
+		case turn.Aborted:
+			completedAt := startedAt.Add(30 * time.Second)
+			if err := recorder.AppendTurnAbortedWithRoot(turn.RootTurnID, turn.ID, "interrupted", completedAt, 30_000); err != nil {
+				t.Fatal(err)
+			}
+		default:
 			completedAt := startedAt.Add(30 * time.Second)
 			if err := recorder.AppendTurnCompleteWithRoot(turn.RootTurnID, turn.ID, completedAt, 30_000); err != nil {
 				t.Fatal(err)

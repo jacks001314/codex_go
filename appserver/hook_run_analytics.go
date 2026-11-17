@@ -33,6 +33,7 @@ func (r *RuntimeRouter) emitHookRunAnalyticsEvent(ctx context.Context, notificat
 		ctx = context.Background()
 	}
 	event := telemetry.NewCodexHookRunEvent(telemetry.CodexHookRunMetadataV1{
+		TurnTrigger:     r.analyticsTurnTriggerForTurn(threadID, turnID),
 		ThreadID:        stringPtrIfNotEmpty(threadID),
 		TurnID:          stringPtrIfNotEmpty(turnID),
 		ProductClientID: stringPtrIfNotEmpty(r.analyticsProductClientID(active.ConnectionID)),

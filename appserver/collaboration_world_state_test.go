@@ -179,7 +179,12 @@ func TestCollaborationModeWorldStatePreservesExplicitEmptyAndClearsMissing(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertCollaborationModeItemText(t, item, "<collaboration_mode></collaboration_mode>")
+	// Rust's CollaborationModeState::render_diff treats an empty instructions
+	// body with a matching hash as unchanged even when the mode changed, so a
+	// mode switch without guidance emits nothing.
+	if item != nil {
+		t.Fatalf("empty-instruction mode switch item = %#v, want nil", item)
+	}
 	record, err = store.Load(threadID)
 	if err != nil {
 		t.Fatal(err)

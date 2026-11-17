@@ -3600,7 +3600,7 @@ func (r *RuntimeRouter) deliverGuardianInterruptionToParent(threadID, reason str
 		return
 	}
 	input := map[string]any{
-		"type": "agent_message", "author": record.Metadata.AgentPath, "recipient": parentPath,
+		"type": "agent_message", "id": "amsg_" + uuid.NewString(), "author": record.Metadata.AgentPath, "recipient": parentPath,
 		"content": []any{map[string]any{"type": "input_text", "text": message}},
 	}
 	parentID := string(record.ParentThreadID)

@@ -168,6 +168,7 @@ type transcriptImageRuntime struct {
 	env    map[string]string
 	plans  []transcriptImagePlan
 	top    int
+	left   int
 	offset int
 	height int
 	width  int
@@ -249,6 +250,18 @@ func (r *transcriptImageRuntime) setFrame(plans []transcriptImagePlan, top int, 
 	r.width = width
 	r.terminalHeight = terminalHeight
 	r.surface = surface
+}
+
+// setLeft records the frame's viewport column. It is non-zero while the
+// conversation is painted inside an inset rectangle (Rust #58718), where the
+// centered previews are relative to the inset, not the whole terminal.
+func (r *transcriptImageRuntime) setLeft(left int) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.left = left
 }
 
 // setOverlays publishes absolutely positioned graphics such as composer
@@ -401,7 +414,7 @@ func (r *transcriptImageRuntime) targetsLocked() []drawnTranscriptImage {
 			continue
 		}
 		visibleStart := max(plan.contentRow, r.offset)
-		x := max((r.width-plan.columns)/2, 0)
+		x := r.left + max((r.width-plan.columns)/2, 0)
 		y := r.top + visibleStart - r.offset
 		if y < 0 {
 			hidden := min(-y, rows)
@@ -440,7 +453,7 @@ func (r *transcriptImageRuntime) targetsLocked() []drawnTranscriptImage {
 		targets = append(targets, drawnTranscriptImage{
 			key: transcriptImageDrawKey{
 				image:    overlay.image,
-				x:        max(overlay.x, 0),
+				x:        max(overlay.x, 0) + r.left,
 				y:        overlay.row,
 				columns:  int(overlay.image.Columns),
 				rows:     rows,
@@ -557,14 +570,19 @@ func (m *Model) publishTranscriptImages() {
 	// Bubble Tea's inline renderer ends the frame on the current console row,
 	// so the frame's first row is height-frameRows rather than row zero.
 	top += m.height - frameRows
+	// An inset paints its frame at the rectangle origin, so graphics move with
+	// it; outside an inset both origins stay zero (Rust #58718).
+	originX, originY := m.insetRenderOriginX, m.insetRenderOriginY
+	top += originY
 	m.transcriptImages.setTmuxBase(m.tmuxImageBase())
+	m.transcriptImages.setLeft(originX)
 	m.transcriptImages.setFrame(
 		m.transcriptImagePlans,
 		top,
 		m.transcript.YOffset,
 		m.transcript.Height,
 		m.transcript.Width,
-		m.height,
+		m.height+originY,
 		true,
 	)
 	// Rust #58261: the composer thumbnail strip is part of the same frame, so

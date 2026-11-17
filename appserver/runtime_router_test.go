@@ -8601,7 +8601,9 @@ func TestRuntimeRouterSDKContractSmoke(t *testing.T) {
 	if len(mcpResult.Content) != 1 || mcpResult.Content[0].Text != "mcp ok" {
 		t.Fatalf("mcpServer/tool/call result = %+v", mcpResult)
 	}
-	if !reflect.DeepEqual(mcpMethods, []string{"initialize", "notifications/initialized", "tools/list", "resources/list", "resources/templates/list", "tools/call"}) {
+	// Turn startup queries Rust's ToolsAndAuthOnly snapshot, which lists tools but
+	// never resources (codex-rs/codex-mcp/src/mcp/mod.rs include_resources).
+	if !reflect.DeepEqual(mcpMethods, []string{"initialize", "notifications/initialized", "tools/list", "tools/call"}) {
 		t.Fatalf("MCP methods = %#v", mcpMethods)
 	}
 }
@@ -14036,20 +14038,20 @@ func TestRuntimeRouterModelSwitchWorldStateDiffs(t *testing.T) {
 
 	// Rust #44946 removed the `<personality_spec>` world-state section entirely,
 	// so only model switches emit contextual instructions.
-	items, err := router.modelWorldStateInputItems(string(threadID), oldModel, "custom base")
+	items, err := router.modelWorldStateInputItems(string(threadID), nil, oldModel, "custom base", "", nil)
 	if err != nil {
 		t.Fatalf("initial world state: %v", err)
 	}
 	if len(items) != 0 {
 		t.Fatalf("initial world-state items = %#v", items)
 	}
-	items, err = router.modelWorldStateInputItems(string(threadID), oldModel, "custom base")
+	items, err = router.modelWorldStateInputItems(string(threadID), nil, oldModel, "custom base", "", nil)
 	if err != nil || len(items) != 0 {
 		t.Fatalf("unchanged world state items = %#v, error = %v", items, err)
 	}
 
 	newModel := &model.ModelInfo{Slug: "gpt-new", ModelMessages: modelMessages}
-	items, err = router.modelWorldStateInputItems(string(threadID), newModel, "custom base")
+	items, err = router.modelWorldStateInputItems(string(threadID), nil, newModel, "custom base", "", nil)
 	if err != nil {
 		t.Fatalf("model change world state: %v", err)
 	}
@@ -14201,6 +14203,10 @@ func TestRuntimeRouterContextWindowGuidanceTransitionsLikeRust(t *testing.T) {
 }
 
 func TestRuntimeRouterTurnStartPersistsMultiAgentModeWorldState(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[features.multi_agent_v2]\nenabled = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	store := session.NewStore(t.TempDir())
 	sink := NewNotificationBuffer()
 	agent := newRecordingRuntimeAgent("ok")
@@ -14212,6 +14218,7 @@ func TestRuntimeRouterTurnStartPersistsMultiAgentModeWorldState(t *testing.T) {
 		Agent:        agent,
 		ThreadStatus: NewThreadStatusManager(),
 		Models:       model.NewModelService(nil),
+		Config:       config.NewConfigService(home),
 	})
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{}))
@@ -28422,7 +28429,7 @@ func TestRuntimeRouterMultiAgentV2InjectsUsageHintWorldState(t *testing.T) {
 	}
 	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
 	request := waitForRuntimeAgentRequest(t, agent)
-	if !inputItemsContainFragment(request.InputItems, "<multi_agent_usage_hint>", "You are `/root`") {
+	if !inputItemsContainKindAndText(request.InputItems, multiAgentUsageHintKind, "You are `/root`") {
 		t.Fatalf("V2 usage hint missing from turn input items: %#v", request.InputItems)
 	}
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
@@ -28444,6 +28451,46 @@ func inputItemsContainFragment(items []any, marker string, identity string) bool
 				if strings.Contains(text, marker) && strings.Contains(text, identity) {
 					return true
 				}
+			}
+		}
+	}
+	return false
+}
+
+func inputItemsContainKindAndText(items []any, kind string, identity string) bool {
+	for _, input := range items {
+		raw, ok := input.(map[string]any)
+		if !ok || !strings.Contains(stringFromAny(raw["role"]), contextfrag.RoleDeveloper) {
+			continue
+		}
+		metadata, _ := raw["internal_chat_message_metadata_passthrough"].(map[string]any)
+		if metadata == nil || !contentItemKindsContain(metadata["content_item_kinds"], kind) {
+			continue
+		}
+		content, ok := raw["content"].([]map[string]any)
+		if !ok {
+			continue
+		}
+		for i := range content {
+			if content[i]["type"] != "input_text" {
+				continue
+			}
+			if text, _ := content[i]["text"].(string); strings.Contains(text, identity) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func contentItemKindsContain(value any, kind string) bool {
+	switch kinds := value.(type) {
+	case []string:
+		return slices.Contains(kinds, kind)
+	case []any:
+		for _, item := range kinds {
+			if stringFromAny(item) == kind {
+				return true
 			}
 		}
 	}

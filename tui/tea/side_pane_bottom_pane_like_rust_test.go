@@ -57,7 +57,7 @@ func TestSideWorkspacePanesOwnTheirBottomPaneLikeRust(t *testing.T) {
 	if !strings.Contains(prompt[divider:], "› Ask Codex to do anything") {
 		t.Fatalf("focused side composer missing from its column: %q", prompt)
 	}
-	if !strings.Contains(ansi.Strip(rows[0])[rightStart():], sidebarSingleTabLabel) {
+	if !strings.Contains(ansi.Strip(rows[0])[rightStart():], sidebarSingleTabCell) {
 		t.Fatalf("side pane tab strip missing from the first row: %q", ansi.Strip(rows[0]))
 	}
 
@@ -76,7 +76,7 @@ func TestSideWorkspacePanesOwnTheirBottomPaneLikeRust(t *testing.T) {
 	if divider < 0 || !strings.Contains(prompt[:divider], "› parent draft") {
 		t.Fatalf("focused parent composer left its column: %q", prompt)
 	}
-	if !strings.Contains(ansi.Strip(rows[0])[rightStart():], sidebarSingleTabLabel) {
+	if !strings.Contains(ansi.Strip(rows[0])[rightStart():], sidebarSingleTabCell) {
 		t.Fatalf("inactive side pane lost its tab strip: %q", ansi.Strip(rows[0]))
 	}
 }

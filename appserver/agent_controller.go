@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -350,7 +351,9 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 			// initiating agent path.
 			params.InitiatingAgentPath = c.scopePath
 			params.AdditionalInputItems = append(params.AdditionalInputItems, runtimeAgentCommunicationInputItem(c.scopePath, agentPath, prompt, true, args.Plaintext))
+			params.AgentCommunicationTriggerTurns = append(params.AgentCommunicationTriggerTurns, true)
 			params.AdditionalInputItems = append(params.AdditionalInputItems, args.Items...)
+			params.AgentCommunicationTriggerTurns = append(params.AgentCommunicationTriggerTurns, make([]bool, len(args.Items))...)
 		} else {
 			params.Prompt = prompt
 			params.AdditionalInputItems = append(params.AdditionalInputItems, args.Items...)
@@ -893,6 +896,12 @@ func (c *runtimeAgentController) SuspendAgentTree(ctx context.Context, target st
 			return suspended, err
 		}
 	}
+	// Rust #61198: suspension persists terminal child results that are still
+	// queued for their parent, so the replacement host replays them from the
+	// recorded conversation instead of losing this process's mailbox.
+	if err := c.router.persistSuspendedAgentResults(time.Now().UTC()); err != nil {
+		return suspended, err
+	}
 	return suspended, nil
 }
 
@@ -1071,6 +1080,10 @@ func (c *runtimeAgentController) FollowupTask(ctx context.Context, args *agent.F
 	// Rust #51402 `tasks/mod.rs`: the triggered inter-agent communication's
 	// author is this turn's initiating agent path.
 	params := turn.TurnStartParams{ThreadID: threadID, CWD: c.cwd, ParentTurnID: c.parentTurnID, RootTurnID: c.rootTurnID, TurnTrigger: c.turnTrigger, CoreCyberAccessProgram: c.cyberAccessProgram, InitiatingAgentPath: c.scopePath, AdditionalInputItems: append(queued, item)}
+	// Queued mail was accepted without triggering a turn; the follow-up task
+	// itself did, matching Rust's per-communication trigger_turn.
+	params.AgentCommunicationTriggerTurns = make([]bool, len(queued)+1)
+	params.AgentCommunicationTriggerTurns[len(queued)] = true
 	_, err = c.router.handleTurnStart(requestWithInternalParams(MethodTurnStart, params))
 	return err
 }
@@ -1205,6 +1218,105 @@ func (r *RuntimeRouter) drainRuntimeAgentMessages(threadID string) []any {
 	items := append([]any(nil), r.agentMessages[threadID]...)
 	delete(r.agentMessages, threadID)
 	return items
+}
+
+// runtimeAgentMessageIsTerminalResult reports whether queued mail is a child's
+// terminal result, Rust's `PendingAgentMessage::is_terminal_result`: only a
+// result delivery awaits a confirmed write to the recipient's history, so a
+// handoff must persist it instead of leaving it in this process's queue.
+func runtimeAgentMessageIsTerminalResult(item any) bool {
+	payload, ok := configurationUpdatePayload(item)
+	if !ok || strings.TrimSpace(stringFromMap(payload, "type")) != "agent_message" {
+		return false
+	}
+	blocks, _ := payload["content"].([]any)
+	for _, block := range blocks {
+		object, ok := block.(map[string]any)
+		if !ok || strings.TrimSpace(stringFromMap(object, "type")) != "input_text" {
+			continue
+		}
+		return strings.HasPrefix(stringFromMap(object, "text"), "Message Type: FINAL_ANSWER\n")
+	}
+	return false
+}
+
+// takeRuntimeAgentTerminalResults removes and returns the queued terminal
+// results for one thread. Other mail keeps its order, so a handoff only takes
+// the deliveries that Rust would flush before shutdown.
+func (r *RuntimeRouter) takeRuntimeAgentTerminalResults(threadID string) []any {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return nil
+	}
+	r.agentMessagesMu.Lock()
+	defer r.agentMessagesMu.Unlock()
+	queued := r.agentMessages[threadID]
+	if len(queued) == 0 {
+		return nil
+	}
+	kept := make([]any, 0, len(queued))
+	var results []any
+	for _, item := range queued {
+		if runtimeAgentMessageIsTerminalResult(item) {
+			results = append(results, item)
+			continue
+		}
+		kept = append(kept, item)
+	}
+	if len(results) == 0 {
+		return nil
+	}
+	if len(kept) == 0 {
+		delete(r.agentMessages, threadID)
+	} else {
+		r.agentMessages[threadID] = kept
+	}
+	return results
+}
+
+// persistSuspendedAgentResults writes every queued terminal child result into
+// its recipient's history and rollout before a tree handoff (Rust #61198
+// `save_evicted_parent_results`). A replacement host therefore replays the
+// result from the recorded conversation instead of depending on this process's
+// mailbox. The mail is consumed only after the append is visible in the
+// recipient's record, so an interrupted handoff surfaces an error instead of
+// silently dropping the result.
+func (r *RuntimeRouter) persistSuspendedAgentResults(now time.Time) error {
+	if r == nil || !r.hasRuntimeThreadStore() {
+		return nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	r.agentMessagesMu.Lock()
+	threadIDs := make([]string, 0, len(r.agentMessages))
+	for threadID := range r.agentMessages {
+		threadIDs = append(threadIDs, threadID)
+	}
+	r.agentMessagesMu.Unlock()
+	sort.Strings(threadIDs)
+	var firstErr error
+	for index, threadID := range threadIDs {
+		results := r.takeRuntimeAgentTerminalResults(threadID)
+		if len(results) == 0 {
+			continue
+		}
+		// Queued results did not start a turn, so their boundary carries
+		// trigger_turn=false exactly like mail drained by the next turn.
+		idPrefix := fmt.Sprintf("agent-result-%s-%d-%d", safeIdentifier(threadID), now.UTC().UnixNano(), index)
+		r.persistRuntimeAgentCommunicationItems(threadID, "", results, nil, idPrefix, now)
+		recorded, _ := r.recordedAgentCommunications(threadID)
+		for _, item := range results {
+			payload, _ := configurationUpdatePayload(item)
+			id := strings.TrimSpace(stringFromMap(payload, "id"))
+			if id == "" || recorded[id] {
+				continue
+			}
+			if firstErr == nil {
+				firstErr = fmt.Errorf("persist suspended agent result for %s: append was not recorded", threadID)
+			}
+		}
+	}
+	return firstErr
 }
 
 // maybeWakeRootForPendingAgentMessages mirrors Rust #54961's
@@ -1666,7 +1778,10 @@ func runtimeAgentCommunicationInputItem(author string, recipient string, message
 	} else if strings.TrimSpace(message) != "" {
 		content = append(content, map[string]any{"type": "encrypted_content", "encrypted_content": strings.TrimSpace(message)})
 	}
-	return map[string]any{"type": "agent_message", "author": author, "recipient": recipient, "content": content}
+	// Rust `ResponseItemId::with_suffix("amsg", ...)`: the communication carries
+	// its response-item identity from creation, so a delivery that outlives its
+	// turn (queued, re-queued, or steered) records exactly one history item.
+	return map[string]any{"type": "agent_message", "id": "amsg_" + uuid.NewString(), "author": author, "recipient": recipient, "content": content}
 }
 
 // publishAgentActivity wakes host input-activity waits without consuming the

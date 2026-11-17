@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"codex_go/sandbox"
+	"codex_go/turn"
 )
 
 type permissionGrantState struct {
@@ -86,6 +87,72 @@ func (r *RuntimeRouter) grantedPermissionsForEnvironment(threadID, turnID, envir
 		return nil
 	}
 	return granted
+}
+
+// turnGrantedPermissionsForEnvironment returns only the turn-scope grants
+// (Rust TurnContext::turn_grants). Skill catalog grant tracking must not count
+// session-scope approvals: those do not expire with the turn, so the catalog
+// would never have to tell the model to revalidate.
+func (r *RuntimeRouter) turnGrantedPermissionsForEnvironment(threadID, turnID, environmentID string) *sandbox.AdditionalPermissionProfile {
+	if r == nil {
+		return nil
+	}
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	if threadID == "" || turnID == "" {
+		return nil
+	}
+	r.permissionGrantsMu.Lock()
+	defer r.permissionGrantsMu.Unlock()
+	turn := r.permissionGrants[threadID]
+	if turn == nil {
+		return nil
+	}
+	profile := turn.turns[turnID][permissionGrantEnvironmentKey(environmentID)]
+	if profile == nil || profile.IsEmpty() {
+		return nil
+	}
+	return sandbox.MergePermissionProfiles(nil, profile)
+}
+
+// skillFilesystemGrantsForTurn mirrors Rust TurnContext::turn_skill_filesystem_grants:
+// the turn environments whose turn-scoped approval carries a non-empty
+// filesystem profile, plus the primary environment (the first one) that
+// repository-scoped host skills inherit their grant from.
+func (r *RuntimeRouter) skillFilesystemGrantsForTurn(threadID, turnID string, params *turn.TurnStartParams) (string, map[string]struct{}) {
+	granted := map[string]struct{}{}
+	environments := r.unifiedExecEnvironmentsForTurn(params)
+	if len(environments) == 0 {
+		// Rust's TurnEnvironmentSnapshot always carries the implicit local
+		// environment, whose grants are keyed "local" here.
+		if permissionsHaveFilesystem(r.turnGrantedPermissionsForEnvironment(threadID, turnID, localEnvironmentID)) {
+			granted[localEnvironmentID] = struct{}{}
+		}
+		return localEnvironmentID, granted
+	}
+	primary := ""
+	for _, environment := range environments {
+		id := strings.TrimSpace(environment.ID)
+		if id == "" {
+			continue
+		}
+		if primary == "" {
+			primary = id
+		}
+		if permissionsHaveFilesystem(r.turnGrantedPermissionsForEnvironment(threadID, turnID, id)) {
+			granted[id] = struct{}{}
+		}
+	}
+	return primary, granted
+}
+
+// permissionsHaveFilesystem reports a non-empty filesystem grant in either
+// direction (Rust AdditionalPermissionProfile::file_system is non-empty).
+func permissionsHaveFilesystem(profile *sandbox.AdditionalPermissionProfile) bool {
+	if profile == nil {
+		return false
+	}
+	return len(profile.FileSystem) > 0 || len(profile.ReadFileSystem) > 0
 }
 
 // sessionGrantedPermissionsForEnvironment returns only the session-scope

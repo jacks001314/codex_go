@@ -106,9 +106,13 @@ type ProxyConfig struct {
 }
 
 type ProxySettings struct {
-	Enabled                          bool
-	ProxyURL                         string
-	EnableSocks5                     bool
+	Enabled      bool
+	ProxyURL     string
+	EnableSocks5 bool
+	// TransparentTCP routes outbound TCP from managed Linux sandbox commands
+	// through the managed SOCKS5 proxy without an executor startup flag (Rust
+	// #61851). It requires an enabled proxy with SOCKS5.
+	TransparentTCP                   bool
 	SocksURL                         string
 	EnableSocks5UDP                  bool
 	AllowUpstreamProxy               bool

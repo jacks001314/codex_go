@@ -334,8 +334,12 @@ func TestStatusSetupViewsExposeRustItemMetadataAndPreviews(t *testing.T) {
 	if statusView.Title != "Status line setup" || !strings.Contains(statusView.PreviewText, "gpt-5") || !strings.Contains(statusView.PreviewText, "5h 42% left") {
 		t.Fatalf("status setup view = %#v", statusView)
 	}
-	if len(statusView.Items) != len(AllStatusLineItems()) {
-		t.Fatalf("status setup item count = %d want %d", len(statusView.Items), len(AllStatusLineItems()))
+	if len(statusView.Items) != len(AllStatusLineItems())+1 {
+		t.Fatalf("status setup item count = %d want %d", len(statusView.Items), len(AllStatusLineItems())+1)
+	}
+	themeColors := findStatusLineSetupItem(statusView.Items, StatusLineUseThemeColorsItemID)
+	if themeColors == nil || !themeColors.ThemeColors || themeColors.Selected {
+		t.Fatalf("theme colors setup item = %#v", themeColors)
 	}
 	fiveHour := findStatusLineSetupItem(statusView.Items, "five-hour-limit")
 	if fiveHour == nil || !strings.Contains(fiveHour.Description, "5-hour usage limit") || !fiveHour.Selected {

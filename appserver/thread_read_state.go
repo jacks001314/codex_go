@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 
 	"codex_go/session"
@@ -169,9 +170,39 @@ func (r *RuntimeRouter) notifyThreadReadStateChanged(threadID string, readState 
 		return
 	}
 	notification := &ThreadReadStateChangedNotification{ThreadID: threadID, ReadState: readState}
-	for _, connectionID := range r.subscribedConnectionIDsForThread(threadID) {
+	// Rust #61852: durable receipts change even for chats a client has not
+	// opened, so this notification is broadcast to every initialized
+	// experimental connection rather than the thread's subscribers. The
+	// transport still drops it for stable connections and per-connection
+	// opt-outs.
+	connections, initialized := r.experimentalConnectionIDs()
+	if !initialized {
+		r.notify(NotificationThreadReadStateChanged, notification)
+		return
+	}
+	for _, connectionID := range connections {
 		r.notifyToConnection(connectionID, NotificationThreadReadStateChanged, notification)
 	}
+}
+
+// experimentalConnectionIDs returns the initialized connections that enabled
+// experimentalApi, plus whether any connection initialized at all. A router
+// without a connection registry is the in-process case, where notifications go
+// to the broadcast sink like Rust's empty connection list.
+func (r *RuntimeRouter) experimentalConnectionIDs() ([]string, bool) {
+	if r == nil {
+		return nil, false
+	}
+	r.clientInfoMu.RLock()
+	defer r.clientInfoMu.RUnlock()
+	connections := make([]string, 0, len(r.clientInfo))
+	for connectionID := range r.clientInfo {
+		if r.experimentalAPI[connectionID] {
+			connections = append(connections, connectionID)
+		}
+	}
+	sort.Strings(connections)
+	return connections, len(r.clientInfo) > 0
 }
 
 // publishThreadReadAttention records visible terminal results before the

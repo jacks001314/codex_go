@@ -60,10 +60,13 @@ func (m *Model) renderConversationInset(rect ConversationRect) string {
 		return body
 	}
 	previous := m.conversationInset
+	previousOriginX, previousOriginY := m.insetRenderOriginX, m.insetRenderOriginY
 	m.conversationInset = nil
+	m.insetRenderOriginX, m.insetRenderOriginY = x, y
 	m.applyLayoutSize(width, height)
 	body := m.viewString()
 	m.conversationInset = previous
+	m.insetRenderOriginX, m.insetRenderOriginY = previousOriginX, previousOriginY
 	m.applyLayoutSize(fullWidth, fullHeight)
 
 	lines := strings.Split(body, "\n")
@@ -100,6 +103,16 @@ func (m *Model) offsetConversationPointerRows(x, y int) {
 		if *row >= 0 {
 			*row += y
 		}
+	}
+	// The composer caret and its text origin were measured inside the inset,
+	// so both axes move with the conversation; the terminal cursor and the
+	// selection hit test read viewport coordinates (Rust #58718).
+	if m.composerTextLeft >= 0 {
+		m.composerTextLeft += x
+	}
+	if m.composerCaretVisible {
+		m.composerCaretX += x
+		m.composerCaretRow += y
 	}
 	if m.followControlRow >= 0 {
 		m.followControlColumn += x

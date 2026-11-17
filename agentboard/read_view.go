@@ -37,14 +37,18 @@ type BoardReadView struct {
 	cutoff  int64
 	catalog []ChannelSummary
 	names   map[string]struct{}
+	// jsonSearchPointer enables decoded-JSON literal search for every read made
+	// through this capture (Rust nested_json_pointer).
+	jsonSearchPointer string
 }
 
 // boardReadScope is the frozen boundary a board query runs against: the post
 // cutoff and the frozen channel roster. Board reads take a nil scope for the
 // live board, which is Rust's `BoardMode::Fixed` carrying a `ReadView`.
 type boardReadScope struct {
-	cutoff   int64
-	channels map[string]struct{}
+	cutoff            int64
+	channels          map[string]struct{}
+	jsonSearchPointer string
 }
 
 // hasChannel reports whether the frozen catalog holds the channel. A nil scope
@@ -140,7 +144,7 @@ func (v *BoardReadView) scope() *boardReadScope {
 	if v == nil {
 		return nil
 	}
-	return &boardReadScope{cutoff: v.cutoff, channels: v.names}
+	return &boardReadScope{cutoff: v.cutoff, channels: v.names, jsonSearchPointer: v.jsonSearchPointer}
 }
 
 // Identity is the board identity the capture belongs to.
@@ -158,6 +162,20 @@ func (v *BoardReadView) StorageNamespace() string {
 		return ""
 	}
 	return v.board.namespace
+}
+
+// WithJSONSearchPointer returns the same capture with decoded-JSON literal
+// search enabled at the given RFC 6901 pointer. Rust
+// BoardReadView::with_json_search keeps the frozen catalog and cutoff and only
+// changes the search mode, so the returned view is an independent handle onto
+// the same boundary.
+func (v *BoardReadView) WithJSONSearchPointer(pointer string) *BoardReadView {
+	if v == nil {
+		return nil
+	}
+	clone := *v
+	clone.jsonSearchPointer = pointer
+	return &clone
 }
 
 // Cutoff is the highest post sequence this view can see.

@@ -471,6 +471,11 @@ func (r *RuntimeRouter) enrichToolEventBase(base *telemetry.CodexToolItemEventBa
 	if root, ok := r.activeAnalyticsRootTurnID(threadID, turnID); ok {
 		base.RootTurnID = root
 	}
+	if base.TurnTrigger == nil {
+		// Captured while the turn is still known: Rust keeps the same value on
+		// its per-turn analytics metadata, so a late completion still reports it.
+		base.TurnTrigger = r.analyticsTurnTriggerForTurn(threadID, turnID)
+	}
 	r.sampledToolCallsMu.Lock()
 	defer r.sampledToolCallsMu.Unlock()
 	r.enrichToolEventBaseLocked(base, threadID, turnID)

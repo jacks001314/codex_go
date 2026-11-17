@@ -124,8 +124,111 @@ func (r *RuntimeRouter) rememberItemStartedTime(threadID string, turnID string, 
 	if r.itemStartedTimes == nil {
 		r.itemStartedTimes = map[string]int64{}
 	}
-	r.itemStartedTimes[key] = startedAtMS
+	// Rust's record_command_start keeps the first observed start so the
+	// approval-opened item and the core item share one timestamp.
+	if _, recorded := r.itemStartedTimes[key]; !recorded {
+		r.itemStartedTimes[key] = startedAtMS
+	}
 	r.itemStartedTimesMu.Unlock()
+}
+
+// commandItemStartedAtMS reports the recorded start time without consuming it.
+func (r *RuntimeRouter) commandItemStartedAtMS(threadID string, turnID string, itemID string) int64 {
+	if r == nil || strings.TrimSpace(itemID) == "" {
+		return 0
+	}
+	key := itemLifecycleKey(threadID, turnID, itemID)
+	r.itemStartedTimesMu.Lock()
+	startedAtMS := r.itemStartedTimes[key]
+	r.itemStartedTimesMu.Unlock()
+	return startedAtMS
+}
+
+// markCommandItemCompleted records that the item already reported a terminal
+// status, so a tool result that arrives after a turn-transition cancel cannot
+// publish a second completion for the same item.
+func (r *RuntimeRouter) markCommandItemCompleted(threadID string, turnID string, itemID string) {
+	if r == nil || strings.TrimSpace(itemID) == "" {
+		return
+	}
+	key := itemLifecycleKey(threadID, turnID, itemID)
+	r.itemStartedTimesMu.Lock()
+	if r.completedCommandItems == nil {
+		r.completedCommandItems = map[string]bool{}
+	}
+	r.completedCommandItems[key] = true
+	r.itemStartedTimesMu.Unlock()
+}
+
+// commandItemCompleted reports whether this item already published a terminal
+// status.
+func (r *RuntimeRouter) commandItemCompleted(threadID string, turnID string, itemID string) bool {
+	if r == nil || strings.TrimSpace(itemID) == "" {
+		return false
+	}
+	key := itemLifecycleKey(threadID, turnID, itemID)
+	r.itemStartedTimesMu.Lock()
+	completed := r.completedCommandItems[key]
+	r.itemStartedTimesMu.Unlock()
+	return completed
+}
+
+// dropDuplicateCommandItemStarted reports whether a command item already
+// published item/started. Rust suppresses the later duplicate core start once
+// an approval opened the item (ThreadState::record_command_start).
+func (r *RuntimeRouter) dropDuplicateCommandItemStarted(method NotificationMethod, params any) bool {
+	if r == nil || method != NotificationItemStarted {
+		return false
+	}
+	var threadID, turnID string
+	var payload ThreadItemPayload
+	switch notification := params.(type) {
+	case *ItemStartedNotification:
+		if notification == nil {
+			return false
+		}
+		threadID, turnID, payload = notification.ThreadID, notification.TurnID, notification.Item
+	case ItemStartedNotification:
+		threadID, turnID, payload = notification.ThreadID, notification.TurnID, notification.Item
+	default:
+		return false
+	}
+	if itemPayloadType(payload) != "commandExecution" {
+		return false
+	}
+	return r.commandItemStartedAtMS(threadID, turnID, itemPayloadID(payload)) != 0
+}
+
+func itemPayloadType(payload ThreadItemPayload) string {
+	value, _ := payload["type"].(string)
+	return strings.TrimSpace(value)
+}
+
+// dropDuplicateCommandItemCompleted reports whether this command item already
+// published its terminal status. A turn transition can complete an
+// approval-opened item before the tool result arrives; that later result must
+// not publish a second item/completed (Rust #61841).
+func (r *RuntimeRouter) dropDuplicateCommandItemCompleted(method NotificationMethod, params any) bool {
+	if r == nil || method != NotificationItemCompleted {
+		return false
+	}
+	var threadID, turnID string
+	var payload ThreadItemPayload
+	switch notification := params.(type) {
+	case *ItemCompletedNotification:
+		if notification == nil {
+			return false
+		}
+		threadID, turnID, payload = notification.ThreadID, notification.TurnID, notification.Item
+	case ItemCompletedNotification:
+		threadID, turnID, payload = notification.ThreadID, notification.TurnID, notification.Item
+	default:
+		return false
+	}
+	if itemPayloadType(payload) != "commandExecution" {
+		return false
+	}
+	return r.commandItemCompleted(threadID, turnID, itemPayloadID(payload))
 }
 
 func (r *RuntimeRouter) takeItemStartedTime(threadID string, turnID string, itemID string) int64 {
@@ -151,6 +254,11 @@ func (r *RuntimeRouter) clearItemStartedTimesForTurn(threadID string, turnID str
 	for key := range r.itemStartedTimes {
 		if strings.HasPrefix(key, prefix) {
 			delete(r.itemStartedTimes, key)
+		}
+	}
+	for key := range r.completedCommandItems {
+		if strings.HasPrefix(key, prefix) {
+			delete(r.completedCommandItems, key)
 		}
 	}
 	r.itemStartedTimesMu.Unlock()

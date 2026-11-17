@@ -6,12 +6,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
 	AgentPluginManifestRelativePath = "plugin.json"
 	AgentPluginSchemaURI            = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
 	agentPluginSchemaPrefix         = "https://agent-plugins.org/schemas/"
+	// Rust core-plugins/src/manifest.rs keeps at most three starter prompts and
+	// drops any prompt longer than 512 characters.
+	maxPluginDefaultPromptCount = 3
+	maxPluginDefaultPromptRunes = 512
 )
 
 var legacyPluginManifestRelativePaths = []string{
@@ -152,6 +157,39 @@ func parsePluginManifestAtRoot(pluginRoot string, cache *manifestCache) (*resolv
 	return cache.parse(pluginRoot, path, data, overlayPath, overlay, parse)
 }
 
+// normalizePluginManifestDefaultPrompts mirrors Rust's
+// RawPluginManifestDefaultPrompt normalization: every prompt collapses its
+// internal whitespace, entries that are empty or longer than 512 characters are
+// dropped, and at most three prompts survive. Only plugin manifests normalize
+// the value; catalog payloads that already carry an interface are passed
+// through unchanged.
+func normalizePluginManifestDefaultPrompts(manifest *pluginManifestFile) {
+	if manifest == nil || manifest.Interface == nil {
+		return
+	}
+	prompts := manifest.Interface.DefaultPrompt
+	if len(prompts) == 0 {
+		manifest.Interface.DefaultPrompt = nil
+		return
+	}
+	normalized := make([]string, 0, min(len(prompts), maxPluginDefaultPromptCount))
+	for _, prompt := range prompts {
+		if len(normalized) >= maxPluginDefaultPromptCount {
+			break
+		}
+		collapsed := strings.Join(strings.Fields(prompt), " ")
+		if collapsed == "" || utf8.RuneCountInString(collapsed) > maxPluginDefaultPromptRunes {
+			continue
+		}
+		normalized = append(normalized, collapsed)
+	}
+	if len(normalized) == 0 {
+		manifest.Interface.DefaultPrompt = nil
+		return
+	}
+	manifest.Interface.DefaultPrompt = normalized
+}
+
 func parseResolvedPluginManifest(pluginRoot string, path string, data []byte, overlayPath string, overlay []byte, isAgentPlugin bool) (*resolvedPluginManifest, error) {
 	if isAgentPlugin {
 		manifest, err := parseAgentPluginManifest(pluginRoot, data, overlayPath, overlay)
@@ -167,6 +205,7 @@ func parseResolvedPluginManifest(pluginRoot string, path string, data []byte, ov
 	manifest.ManifestPath = path
 	manifest.SkillsPath = filepath.Join(pluginRoot, "skills")
 	manifest.MCPServersPath = filepath.Join(pluginRoot, ".mcp.json")
+	normalizePluginManifestDefaultPrompts(&manifest)
 	return &resolvedPluginManifest{Path: path, Kind: pluginManifestLegacy, Manifest: manifest}, nil
 }
 
@@ -245,6 +284,7 @@ func parseAgentPluginManifest(pluginRoot string, data []byte, overlayPath string
 		manifest.AppTemplates = cloneAppTemplateSummaries(firstPluginManifestAppTemplates(extension))
 		manifest.OnboardingSkill = firstNonEmpty(extension.OnboardingSkill, manifest.OnboardingSkill)
 	}
+	normalizePluginManifestDefaultPrompts(&manifest)
 	return manifest, nil
 }
 

@@ -222,18 +222,20 @@ func applyIncrementalCatalogBaseline(record *session.Record, prefix []session.It
 	if err != nil {
 		return err
 	}
-	toolsSnapshot, err := session.EncodeTopLevelToolsSnapshot(windowNumber, hashes)
+	toolsSnapshot, err := session.EncodeTopLevelToolsSnapshot(hashes)
 	if err != nil {
 		return err
 	}
 	state.TopLevelTools = toolsSnapshot
-	if instructions != nil || strings.TrimSpace(recordedInstructions) != "" {
-		baseSnapshot, err := session.EncodeModelInstructionsSnapshot(windowNumber, modelID, session.BaseInstructionsHash(recordedInstructions))
-		if err != nil {
-			return err
-		}
-		state.BaseInstructions = baseSnapshot
+	// Rust #53872: a new incremental window records the current model with the
+	// base-instruction fragment hash in the `model` section.
+	baseSnapshot, err := session.EncodeModelStateSnapshot(modelID, session.BaseInstructionsHash(recordedInstructions))
+	if err != nil {
+		return err
 	}
+	state.Model = baseSnapshot
+	// The retired Go-only section must not survive next to `model`.
+	state.BaseInstructions = nil
 	encoded, err := session.EncodeWorldState(state)
 	if err != nil {
 		return err

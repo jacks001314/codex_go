@@ -16,13 +16,14 @@ func TestSideWorkspaceWidthsRespectMinimumAndSplitLikeRust(t *testing.T) {
 		t.Fatalf("layout enabled below %d columns", sideWorkspaceMinWidth)
 	}
 	// Rust #59527: the sidebar defaults to one third of the terminal, clamped
-	// to its 36-column minimum.
+	// to its 36-column minimum, and the panes are separated by Rust's single
+	// GAP column (side_pane.rs), so the parent keeps total-1-sidebar columns.
 	left, right, ok := sideWorkspaceWidths(100)
-	if !ok || left != 61 || right != 36 {
+	if !ok || left != 63 || right != 36 {
 		t.Fatalf("widths at 100 = %d/%d ok=%t", left, right, ok)
 	}
 	left, right, ok = sideWorkspaceWidths(120)
-	if !ok || left != 78 || right != 39 {
+	if !ok || left != 79 || right != 40 {
 		t.Fatalf("widths at 120 = %d/%d ok=%t", left, right, ok)
 	}
 }
@@ -52,7 +53,7 @@ func TestSidePaneLayoutRequiresFeatureAndOpenSideConversationLikeRust(t *testing
 func TestJoinSidePanesKeepsTailAndPadsLikeRust(t *testing.T) {
 	joined, _, _, _, _ := joinSidePanes("a\nb\nc", "x\ny", 2, 2, sidePaneTail, sidePaneTail)
 	lines := strings.Split(joined, "\n")
-	want := []string{"b  │ x", "c  │ y"}
+	want := []string{"b │x", "c │y"}
 	if len(lines) != len(want) {
 		t.Fatalf("rows = %#v", lines)
 	}
@@ -61,7 +62,7 @@ func TestJoinSidePanesKeepsTailAndPadsLikeRust(t *testing.T) {
 			t.Fatalf("row %d = %q, want %q", index, lines[index], want[index])
 		}
 	}
-	if got := ansi.StringWidth(lines[0]); got != 6 {
+	if got := ansi.StringWidth(lines[0]); got != 4 {
 		t.Fatalf("row width = %d: %q", got, lines[0])
 	}
 }

@@ -145,6 +145,18 @@ func (r *Recorder) appendPaginatedItem(item Item, now time.Time) error {
 		}
 		return r.AppendLine(line)
 	}
+	if payload, ok := modelVisibleResponseItemRolloutPayload(&sessionItem); ok {
+		if err := r.AppendLine(Line{
+			Type:         "response_item",
+			Timestamp:    now.UTC().Format(time.RFC3339Nano),
+			Item:         payload,
+			ItemMetadata: responseItemHarnessMetadata(&sessionItem),
+			ItemID:       item.ID,
+			TurnID:       sessionItemExactTurnID(&sessionItem),
+		}); err != nil {
+			return err
+		}
+	}
 	raw, turnID, err := CoreTurnItemJSONFromSessionItem(&sessionItem)
 	if err != nil || len(raw) == 0 {
 		return err
@@ -626,6 +638,7 @@ func populatePublicFileChange(out, core map[string]any) {
 func populateCoreMCP(core map[string]any, item *session.Item, values map[string]any) {
 	core["server"] = anyString(values, "server")
 	core["tool"] = firstNonEmptyString(anyString(values, "tool"), toolLeaf(item.Name))
+	copyOptional(core, "environmentId", firstAny(values, "environmentId", "environment_id"))
 	core["arguments"] = jsonValue(firstAny(values, "arguments", "input", "rawArguments", "raw_arguments"), nil)
 	appContext := mapFromAny(firstAny(values, "appContext", "app_context"))
 	copyOptional(core, "connectorId", firstNonNil(firstAny(values, "connectorId", "connector_id"), firstAny(appContext, "connectorId", "connector_id")))
@@ -649,6 +662,7 @@ func populateCoreMCP(core map[string]any, item *session.Item, values map[string]
 func populatePublicMCP(out, core map[string]any) {
 	out["server"] = anyString(core, "server")
 	out["tool"] = anyString(core, "tool")
+	out["environmentId"] = nullableAny(core, "environmentId", "environment_id")
 	out["status"] = camelEnum(anyString(core, "status"))
 	out["arguments"] = firstAny(core, "arguments")
 	connector := anyString(core, "connectorId", "connector_id")

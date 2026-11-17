@@ -816,7 +816,9 @@ func TestRouterPaginatedRolloutAutomaticallyMaterializesThreadHistoryLikeRust(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if turnOrdinal != 1 || nextOrdinal != 4 || nextOffset != info.Size() {
+	// session_meta, turn_started, response_item (the model-visible message),
+	// item_completed, turn_complete.
+	if turnOrdinal != 1 || nextOrdinal != 5 || nextOffset != info.Size() {
 		t.Fatalf("projection = turn:%d next:%d offset:%d, file size:%d", turnOrdinal, nextOrdinal, nextOffset, info.Size())
 	}
 }

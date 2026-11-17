@@ -180,8 +180,9 @@ var modelInfoRustOnlyAllowlist = map[string]string{}
 // modelInfoGoOnlyAllowlist documents Go ModelInfo JSON fields absent from
 // Rust's ModelInfo: extensions or naming variants.
 var modelInfoGoOnlyAllowlist = map[string]string{
-	"base_instructions":            "Go extension carrying the model base instructions template",
-	"supports_parallel_tool_calls": "Go extension for parallel tool call support",
+	"base_instructions":              "Go extension carrying the model base instructions template",
+	"supports_parallel_tool_calls":   "Go extension for parallel tool call support",
+	"multi_agent_tools_in_code_mode": "Go tracks upstream #61854 ahead of the pinned a394ff9c anchor",
 }
 
 // TestRustModelInfoFieldSurfaceAgainstGo is the L0 enum-inventory check for
@@ -214,8 +215,8 @@ func TestRustModelInfoFieldSurfaceAgainstGo(t *testing.T) {
 	if len(rustSet) != 47 {
 		t.Fatalf("Rust ModelInfo wire field count = %d, want 47 (pinned baseline)", len(rustSet))
 	}
-	if len(goSet) != 49 {
-		t.Fatalf("Go ModelInfo JSON field count = %d, want 49 (pinned baseline)", len(goSet))
+	if len(goSet) != 50 {
+		t.Fatalf("Go ModelInfo JSON field count = %d, want 50 (pinned baseline)", len(goSet))
 	}
 
 	for field := range rustSet {

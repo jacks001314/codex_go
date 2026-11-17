@@ -314,17 +314,21 @@ func (r *Runner) multiAgentToolsForRun(ctx context.Context, req *Request, cfg *c
 		options.subagentHint = v2Config.SubagentUsageHintText
 		options.usageHintText = v2Config.UsageHintText
 		options.maxConcurrency = v2Config.MaxConcurrentThreadsPerSession
-		if v2Config.NonCodeModeOnly {
-			options.exposure = tool.ExposureDirectModelOnly
-		}
-		// Rust #46505: the active model's catalog supplies per-tool Multi-Agent
-		// V2 description and parameter overrides.
+		// Rust #46505/#61854: the active model's catalog supplies per-tool
+		// Multi-Agent V2 description and parameter overrides, and may override
+		// whether native multi-agent tools follow the model's tool mode.
 		modelID := execMultiAgentModelForRun(req, cfg, modelsManager)
 		catalogManager := modelsManager
 		if catalogManager == nil {
 			catalogManager = model.NewStaticModelsManager(model.BundledModelsResponse())
 		}
-		options.toolOverrides = turn.MultiAgentToolOverridesFromCatalog(catalogManager.GetModelInfo(modelID, nil).ModelMessages)
+		modelInfo := catalogManager.GetModelInfo(modelID, nil)
+		if turn.MultiAgentToolsInCodeMode(&modelInfo, v2Config.NonCodeModeOnly) {
+			options.exposure = tool.ExposureModelVisible
+		} else {
+			options.exposure = tool.ExposureDirectModelOnly
+		}
+		options.toolOverrides = turn.MultiAgentToolOverridesFromCatalog(modelInfo.ModelMessages)
 	}
 
 	controller := agent.ToolController(nil)

@@ -706,7 +706,7 @@
    "kind": "shared-fixtures",
    "phase": "P2",
    "status": "complete",
-   "verifier": "TestProjectStoreLifecycleMirrorsRustProjectsStore;TestProjectCursorValidation;TestRuntimeRouterProjectLifecycleMirrorsRustProjectsProcessor;TestRuntimeRouterProjectValidationMirrorsRustProjectsProcessor;TestRuntimeRouterThreadMetadataProjectUpdateMirrorsRustThreadProcessor"
+   "verifier": "TestProjectStoreLifecycleMirrorsRustProjectsStore;TestProjectCursorValidation;TestRuntimeRouterProjectLifecycleMirrorsRustProjectsProcessor;TestRuntimeRouterProjectValidationMirrorsRustProjectsProcessor;TestRuntimeRouterThreadMetadataProjectUpdateMirrorsRustThreadProcessor;TestRuntimeRouterProjectResponsesOmitPositionLikeRust"
   },
   {
    "id": "skill-shadow-fused-selectors",
@@ -1621,6 +1621,22 @@
    "verifier": "TestManagerRemove;TestAgentTreeShutdownReportFormattingIsPayloadFreeLikeRust;TestAgentTreeIDChangesOnReloadAndIsSharedByChildrenLikeRust"
   },
   {
+   "id": "agent-tree-suspension-results",
+   "kind": "behavior",
+   "rustPaths": [
+    "core/src/agent/control/runtime.rs",
+    "core/src/thread_manager/shutdown.rs",
+    "core/src/agent_communication.rs"
+   ],
+   "goPaths": [
+    "appserver/agent_controller.go",
+    "appserver/agent_suspend_results_like_rust_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestSuspendAgentTreePersistsQueuedTerminalResultsLikeRust;TestSuspendAgentTreeStopsTurnsAndPreservesStateLikeRust;TestLoadSuspendedAgentRestoresIdentityWithoutStartingLikeRust"
+  },
+  {
    "id": "message-board-bulk-subscriptions",
    "kind": "source-surface",
    "rustPaths": [
@@ -2206,6 +2222,461 @@
    "phase": "P1",
    "status": "complete",
    "verifier": "TestToolOutputPartsPreservesFileAudioLikeRust;TestTruncateFunctionOutputItemsTreatsFileAudioLikeRust;TestFileAudioReferencesSurviveHistoryLikeRust"
+  },
+  {
+   "id": "ui-tree-prepared-render-pipeline",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/ui_tree.rs",
+    "tui/src/ui_tree/decode.rs",
+    "tui/src/ui_tree/render.rs",
+    "tui/src/ui_tree/render/prepare.rs",
+    "tui/src/ui_tree/render/text.rs",
+    "tui/src/ui_tree/theme.rs"
+   ],
+   "goPaths": [
+    "tui/ui_tree.go",
+    "tui/ui_tree_prepare.go",
+    "tui/ui_tree_render.go",
+    "tui/ui_tree_style.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestUITreePreparedMeasuresViewportLikeRust;TestUITreePreparedCollapsesWhitespaceLikeRust;TestUITreePreparedSanitizesTerminalCommandsLikeRust;TestUITreePreparedWrapsNonBreakingLabelLikeRust;TestUITreePreparedWrappedLinkOffsetsLikeRust;TestUITreePreparedSplitsGraphemesLikeRust;TestUITreePreparedRendersInheritedStylesLikeRust;TestUITreeThemeColorResolutionLikeRust"
+  },
+  {
+   "id": "model-visible-history-and-compaction-baseline",
+   "kind": "source-surface",
+   "rustPaths": [
+    "core/src/context_manager/history.rs",
+    "core/src/session/mod.rs",
+    "rollout/src/recorder.rs",
+    "protocol/src/models.rs"
+   ],
+   "goPaths": [
+    "session",
+    "rollout",
+    "appserver",
+    "exec"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestModelVisibleHistoryItemMatchesRustAPIMessage;TestInputItemsFromRecordOmitsCamelCaseDisplayItemsLikeRust;TestInputItemsFromRecordRebuildsTurnItemMessagesLikeRust;TestDisplayItemsDoNotInflateResumedContextLikeRust;TestCompactItemsFromSessionItemsExcludesDisplayProjections;TestPaginatedRolloutWritesRustResponseItemStream;TestReplayUsesResponseItemsInsteadOfTurnProjections;TestRecomputeCompactedTokenUsageClearsStaleOverflowBaselineLikeRust"
+  },
+  {
+   "id": "side-workspace-chrome-layout",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/app/side_pane.rs",
+    "tui/src/app/side_focus.rs",
+    "tui/src/app/sidebar_close.rs",
+    "tui/src/sidebar_chooser.rs",
+    "tui/src/sidebar_tab_strip.rs"
+   ],
+   "goPaths": [
+    "tui/tea"
+   ],
+   "phase": "P3",
+   "status": "complete",
+   "verifier": "TestSideWorkspaceDividerUsesRustGapColumnLikeRust;TestSidebarTabStripOverflowArrowsLikeRust;TestSideWorkspaceWidthsUseRustPercentMathLikeRust;TestSidebarTabStripCloseCellClosesTabLikeRust"
+  },
+  {
+   "id": "status-line-content-surface",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/bottom_pane/status_line.rs",
+    "tui/src/bottom_pane/status_line_tests.rs",
+    "tui/src/bottom_pane/chat_composer/status_surface.rs",
+    "tui/src/bottom_pane/chat_composer/status_surface_tests.rs",
+    "tui/src/bottom_pane/chat_composer/composer_layout.rs"
+   ],
+   "goPaths": [
+    "tui/bottom_pane/status_line.go",
+    "tui/bottom_pane/status_line_style.go",
+    "tui/tea/status_surface_extension.go",
+    "tui/tea/model.go"
+   ],
+   "phase": "P3",
+   "status": "complete",
+   "verifier": "TestStatusLineExtensionClipsLinksToFooterLayoutLikeRust;TestStatusLineExtensionUsesNaturalHeightLikeRust;TestStatusLineExtensionClippedViewportKeepsLinkLikeRust;TestStatusLineExtensionUnfocusedRowsAreDimLikeRust;TestStatusLineNativeHeightMatchesPaintLikeRust;TestExtensionStatusUsesFooterRowBudgetLikeRust;TestExtensionStatusKeepsLinksAndMeasuredWidthLikeRust;TestExtensionStatusKeepsPlanIndicatorLikeRust;TestExtensionStatusHonorsReadOnlyAndClearLikeRust"
+  },
+  {
+   "id": "conversation-inset-rendering",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/app/owned_transcript.rs",
+    "tui/src/app.rs",
+    "tui/src/bottom_pane/chat_composer.rs",
+    "tui/src/transcript_image.rs"
+   ],
+   "goPaths": [
+    "tui/tea"
+   ],
+   "phase": "P3",
+   "status": "complete",
+   "verifier": "TestConversationInsetPadsToRectLikeRust;TestConversationInsetReflowsAndRestoresLayoutLikeRust;TestConversationInsetLeavesCenteredDialogFullScreenLikeRust;TestConversationInsetOffsetsComposerCursorLikeRust;TestConversationInsetPreservesTranscriptScrollLikeRust;TestConversationInsetComposerClickSelectsPaintedTextLikeRust;TestConversationInsetRestoresAfterDialogDismissalLikeRust;TestConversationInsetPlacesImageInsideRectLikeRust"
+  },
+  {
+   "id": "world-state-environments-section",
+   "kind": "shared-fixtures",
+   "rustPaths": [
+    "core/src/context/world_state/environment.rs",
+    "core/src/context/world_state/environment_tests.rs",
+    "core/src/context/world_state/environment_render_tests.rs",
+    "core/src/context/world_state/snapshots/codex_core__context__world_state__environment__tests__snapshots.snap"
+   ],
+   "goPaths": [
+    "appserver/environment_world_state.go",
+    "appserver/environment_world_state_snapshot_like_rust_test.go",
+    "appserver/environment_clock_removal_like_rust_test.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestEnvironmentsWorldStateSnapshotMatchesRustLikeRust;TestEnvironmentsWorldStateFullRenderSkipsRemovalsLikeRust;TestDecodeEnvironmentWorldStateLegacyGoShapeLikeRust;TestEnvironmentContextDateRemovalRendersUnavailableOnceLikeRust;TestCompactEnvironmentContextSkipsDateRemovalNoticeLikeRust;TestEnvironmentWorldStateRemovalSnapshotLikeRust"
+  },
+  {
+   "id": "guardian-reviewer-retrieval",
+   "kind": "source-surface",
+   "rustPaths": [
+    "ext/guardian-v3/src/retrieval_tools.rs",
+    "ext/guardian-v3/src/selection.rs",
+    "ext/guardian-v3/src/subscription_tools.rs",
+    "message-board/src/local/json_search.rs",
+    "message-board/src/local/catalog.rs",
+    "message-board/src/read_view.rs"
+   ],
+   "goPaths": [
+    "agentboard"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestGuardianRetrievalSearchesUnsubscribedPostsThroughCutoffLikeRust;TestGuardianSubscriptionToolsUseCapturedCatalogLikeRust;TestLocalBoardFixedReadViewFreezesCatalogAndCutoffLikeRust;TestGuardianChannelSelectionReplacesCatalogMembershipLikeRust;TestGuardianChannelSelectionPreservesLaterChannelsLikeRust;TestGuardianSubscriptionsReplacePreservesOutsideChannelsLikeRust"
+   },
+   {
+    "id": "world-state-skill-catalog-delta-grants",
+    "kind": "shared-fixtures",
+    "rustPaths": [
+     "ext/skills/src/catalog_delta.rs",
+     "ext/skills/src/render_dedup.rs",
+     "ext/skills/src/world_state_catalogs.rs",
+     "ext/skills/tests/skills_extension/catalog_delta_tests.rs",
+     "core/src/session/turn_context.rs"
+    ],
+    "goPaths": [
+     "appserver/skill_catalog_delta.go",
+     "appserver/skill_catalog_delta_grants_like_rust_test.go",
+     "appserver/permission_grants.go",
+     "prompt/skills_render.go",
+     "prompt/skills_catalog_policy.go",
+     "prompt/skills_grants_like_rust_test.go"
+    ],
+    "phase": "P2",
+    "status": "complete",
+    "verifier": "TestSkillCatalogGrantMarksExecutorAndRepoHostRowsLikeRust;TestSkillCatalogDeltaGrantWithdrawalAndRestorationLikeRust;TestSkillCatalogDeltaLegacyFilesystemRevalidatesMissingRowsOnceLikeRust;TestSkillCatalogDeltaUnavailableCatalogWithdrawsGrantsLikeRust;TestSkillCatalogDeltaGrantNotAppliedToPreviouslyShownUngrantedLikeRust;TestSkillFilesystemGrantsForTurnLikeRust"
+  },
+  {
+   "id": "tool-options-apply-patch-catalog-gate",
+   "kind": "source-surface",
+   "rustPaths": [
+    "core/src/tools/spec_plan.rs",
+    "core/src/session/mod.rs"
+   ],
+   "goPaths": [
+    "appserver/runtime_router.go",
+    "appserver/step_tool_plan.go",
+    "appserver/apply_patch_catalog_gate_like_rust_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestRuntimeRouterApplyPatchRequiresModelCatalogMetadataLikeRust"
+  },
+  {
+   "id": "usage-analytics-plugin-used",
+   "kind": "source-surface",
+   "rustPaths": [
+    "analytics/src/events.rs",
+    "analytics/src/client.rs",
+    "analytics/src/reducer.rs",
+    "core/src/session/turn.rs",
+    "plugin/src/lib.rs"
+   ],
+   "goPaths": [
+    "telemetry/plugin_used_event.go",
+    "telemetry/plugin_used_event_like_rust_test.go",
+    "appserver/plugin_analytics.go",
+    "appserver/plugin_used_analytics_like_rust_test.go",
+    "appserver/turn_runtime.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestCodexPluginUsedEventSerializesExpectedRustShape;TestCodexPluginUsedEventCarriesAndOmitsTurnTriggerLikeRust;TestRememberExplicitPluginMentionsTracksPluginUsedLikeRust;TestRememberExplicitPluginMentionsSkipsUnparsablePluginIDLikeRust"
+  },
+  {
+   "id": "usage-analytics-turn-trigger",
+   "kind": "source-surface",
+   "rustPaths": [
+    "analytics/src/events.rs",
+    "analytics/src/reducer.rs"
+   ],
+   "goPaths": [
+    "telemetry/command_execution_event.go",
+    "telemetry/artifact_operation_event.go",
+    "telemetry/skill_invocation_event.go",
+    "telemetry/app_event.go",
+    "telemetry/hook_run_event.go",
+    "appserver/analytics_retained_turns.go",
+    "appserver/tool_event_origin.go"
+   ],
+   "phase": "P2",
+   "status": "partial",
+   "verifier": "TestUsageEventParamsCarryTurnTriggerLikeRust;TestUsageEventParamsOmitAbsentTurnTriggerLikeRust;TestAnalyticsTurnTriggerRetainedForUsageEventsLikeRust"
+  },
+  {
+   "id": "guardian-channel-selection",
+   "kind": "source-surface",
+   "rustPaths": [
+    "ext/guardian-v3/src/selection.rs",
+    "ext/guardian-v3/src/sampling.rs"
+   ],
+   "goPaths": [
+    "agentboard/guardian_selection.go",
+    "agentboard/guardian_subscriptions.go"
+   ],
+   "phase": "P1",
+   "status": "partial",
+   "verifier": "TestGuardianChannelSelectionReplacesCatalogMembershipLikeRust;TestGuardianChannelSelectionPreservesLaterChannelsLikeRust;TestGuardianChannelSelectionEmptySetUnsubscribesCatalogLikeRust;TestGuardianChannelSelectionRejectsCatalogEscapeLikeRust;TestGuardianChannelSelectionRejectsDuplicateChannelsLikeRust;TestGuardianChannelSelectionRejectsUnknownFieldsLikeRust;TestGuardianChannelSelectionHonorsCancellationLikeRust;TestGuardianChannelSelectionHonorsDeadlineLikeRust;TestGuardianChannelSelectionEnforcesInputBudgetLikeRust;TestGuardianChannelSelectionFailedSamplingRollsBackLikeRust;TestGuardianChannelSelectionKeepsOtherCallersLikeRust"
+  },
+  {
+   "id": "world-state-environment-roster-lazy",
+   "kind": "source-surface",
+   "rustPaths": [
+    "core/src/context/world_state/mod.rs",
+    "core/src/session/mod.rs"
+   ],
+   "goPaths": [
+    "appserver/environment_world_state.go",
+    "appserver/turn_runtime.go",
+    "appserver/environment_roster_lazy_like_rust_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestTurnEnvironmentContextReadsHostRosterOnlyWhenRenderingLikeRust"
+  },
+  {
+   "id": "context-manager-merge-world-state-updates",
+   "kind": "source-surface",
+   "rustPaths": [
+    "core/src/context_manager/updates.rs",
+    "core/src/context_manager/updates_tests.rs"
+   ],
+   "goPaths": [
+    "session/top_level_tools.go",
+    "session/merge_world_state_updates_like_rust_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestMergeWorldStateUpdatesPreservesItemBoundariesRolesLikeRust;TestMergeWorldStateUpdatesOrderingLikeRust;TestMergeWorldStateUpdatesCarriesTypedContentLikeRust;TestMergeWorldStateUpdatesSkipsEmptyFragments;TestMergeWorldStateUpdatesPreservesKindsPerTypedContentItemLikeRust"
+  },
+  {
+   "id": "app-server-thread-read-state-broadcast",
+   "kind": "source-surface",
+   "rustPaths": [
+    "app-server/src/request_processors/thread_read_state.rs",
+    "app-server/src/transport.rs"
+   ],
+   "goPaths": [
+    "appserver/thread_read_state.go",
+    "appserver/thread_read_state_broadcast_like_rust_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestThreadReadStateChangedReachesUnsubscribedExperimentalClientsLikeRust;TestThreadReadStateChangedBroadcastsWithoutConnectionRegistryLikeRust"
+  },
+  {
+   "id": "app-server-late-turn-status",
+   "kind": "source-surface",
+   "rustPaths": [
+    "app-server/src/bespoke_event_handling.rs",
+    "app-server/src/thread_state.rs"
+   ],
+   "goPaths": [
+    "appserver/thread_status_manager.go",
+    "appserver/thread_status_late_turn_like_rust_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestLateTurnCompletionPreservesNewerTurnApprovalWaitLikeRust;TestTurnCompletionWithoutRecordedTurnKeepsBehaviorLikeRust"
+  },
+  {
+   "id": "app-server-late-command-approval",
+   "kind": "source-surface",
+   "rustPaths": [
+    "app-server/src/bespoke_event_handling.rs",
+    "app-server/src/request_processors/thread_lifecycle.rs",
+    "app-server/src/thread_state.rs",
+    "app-server/src/outgoing_message.rs"
+   ],
+   "goPaths": [
+    "appserver/late_command_approval.go",
+    "appserver/server_request_broker.go",
+    "appserver/item_lifecycle_times.go",
+    "appserver/late_command_approval_like_rust_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestInterruptClosesLateCommandApprovalFromCompletedTurnLikeRust;TestLateCommandCompletionReachesReplacementSubscriberLikeRust"
+  },
+  {
+   "id": "app-server-turn-metadata-isolation",
+   "kind": "source-surface",
+   "rustPaths": [
+    "app-server/src/thread_state.rs",
+    "app-server/src/bespoke_event_handling.rs",
+    "app-server/src/request_processors/thread_processor_tests.rs"
+   ],
+   "goPaths": [
+    "appserver/item_lifecycle_times.go",
+    "appserver/turn_runtime.go",
+    "appserver/turn_metadata_isolation_like_rust_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+      "verifier": "TestOverlappingTurnsKeepTheirOwnCommandTrackingLikeRust;TestTerminalTurnNotificationsCarryStartTimeLikeRust"
+  },
+  {
+   "id": "app-server-turn-diff-steering",
+   "kind": "source-surface",
+   "rustPaths": [
+    "core/src/turn_diff_tracker.rs",
+    "core/src/session/turn.rs",
+    "core/src/tasks/mod.rs"
+   ],
+   "goPaths": [
+    "runtimeutil/diff_tracker.go",
+    "appserver/turn_runtime.go",
+    "appserver/runtime_router.go",
+    "runtimeutil/diff_tracker_display_roots_test.go",
+    "appserver/turn_diff_steering_like_rust_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestUpdateDisplayRootsKeepsFirstRootLikeRust;TestTurnDiffUsesEnvironmentRootAndClosesBeforeCompletionLikeRust"
+  },
+  {
+   "id": "model-multi-agent-tools-code-mode",
+   "kind": "source-surface",
+   "rustPaths": [
+    "protocol/src/openai_models.rs",
+    "core/src/tools/spec_plan.rs",
+    "models-manager/src/model_info.rs"
+   ],
+   "goPaths": [
+    "model/catalog.go",
+    "turn/tools.go",
+    "appserver/runtime_router.go",
+    "exec/agent_controller.go",
+    "model/multi_agent_code_mode_metadata_like_rust_test.go",
+    "turn/multi_agent_code_mode_like_rust_test.go",
+    "exec/multi_agent_code_mode_metadata_like_rust_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestModelInfoPreservesMultiAgentToolsInCodeModePresenceLikeRust;TestMultiAgentToolsInCodeModeLikeRust;TestExecMultiAgentExposureFollowsModelMetadataLikeRust"
+  },
+  {
+   "id": "side-chat-daybreak-fork",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/app/side.rs",
+    "tui/src/app_server_session.rs"
+   ],
+   "goPaths": [
+    "app/side_tui.go",
+    "app/remote_tui.go",
+    "appserver/router.go",
+    "app/side_chat_daybreak_like_rust_test.go",
+    "app/remote_side_daybreak_like_rust_test.go",
+    "appserver/thread_fork_daybreak_config_like_rust_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestSideChatForkDisablesDaybreakLikeRust;TestRemoteSideForkDisablesDaybreakLikeRust;TestThreadForkConfigDaybreakOverridePersistsLikeRust"
+  },
+  {
+   "id": "network-proxy-transparent-tcp",
+   "kind": "source-surface",
+   "rustPaths": [
+    "network-proxy/src/config.rs",
+    "network-proxy/src/state.rs",
+    "network-proxy/src/proxy.rs",
+    "network-proxy/src/remote_config.rs",
+    "network-proxy/src/environment_policy.rs",
+    "exec-server-protocol/src/protocol.rs",
+    "exec-server/src/process_sandbox.rs",
+    "exec-server/src/client.rs",
+    "core/src/unified_exec/process_manager.rs",
+    "config/src/config_requirements.rs",
+    "config/src/permissions_toml.rs"
+   ],
+   "goPaths": [
+    "network/network.go",
+    "network/proxy_config.go",
+    "network/proxy_config_values.go",
+    "network/proxy_constraints.go",
+    "network/proxy_env.go",
+    "network/standalone_config.go",
+    "config/api.go",
+    "config/requirements_file.go",
+    "appserver/managed_network_constraints.go",
+    "execserver/network_policy.go",
+    "execserver/server.go",
+    "execserver/client.go",
+    "tool/unified_exec.go",
+    "tool/shell.go",
+    "sandbox/linuxsandbox/args.go",
+    "network/network_transparent_tcp_like_rust_test.go",
+    "execserver/transparent_tcp_policy_like_rust_test.go",
+    "tool/unified_exec_transparent_tcp_like_rust_test.go",
+    "sandbox/linuxsandbox/transparent_tcp_context_like_rust_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestProxySettingsParsesTransparentTCPLikeRust;TestProxyRequirementsOverrideTransparentTCPLikeRust;TestTransparentTCPRequiresManagedSOCKS5LikeRust;TestEnvironmentNetworkPolicyTransparentTCPLikeRust;TestEnvironmentCapabilitiesTransparentTCPLikeRust;TestExecParamsRequestsTransparentTCPLikeRust;TestPrepareExecProcessRejectsUnsupportedTransparentTCPLikeRust;TestRemoteNetworkProxyTransparentTCPRoundTripLikeRust;TestUnifiedExecTransparentTCPTrimLikeRust;TestUnifiedExecManagedNetworkContextTransparentTCPLikeRust;TestManagedNetworkContextRequestsTransparentTCPLikeRust"
+  },
+  {
+   "id": "thread-history-lazy-lineage-walk",
+   "kind": "source-surface",
+   "rustPaths": [
+    "thread-store/src/local/rollout_lineage.rs",
+    "thread-store/src/local/rollout_lineage/ancestor_reads.rs",
+    "thread-store/src/local/thread_history.rs",
+    "thread-store/src/local/thread_history/read.rs",
+    "thread-store/src/local/thread_history/segment_paging.rs",
+    "thread-store/src/local/thread_history/turn_lookup.rs"
+   ],
+   "goPaths": [
+    "state/thread_history_lineage_walk.go",
+    "state/thread_history_query.go",
+    "state/thread_history_lazy_lineage_like_rust_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestThreadHistoryNewestPagesSkipUnusedAncestorsLikeRust;TestThreadHistoryDescendingPagesShadowParentTurnsLikeRust"
+  },
+  {
+   "id": "thread-read-loaded-title-display",
+   "kind": "source-surface",
+   "rustPaths": [
+    "app-server/src/request_processors/thread_processor.rs"
+   ],
+   "goPaths": [
+    "appserver/protocol.go",
+    "appserver/router.go",
+    "appserver/thread_read_display_title_like_rust_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestThreadReadTrimsLoadedStoredTitleLikeRust;TestThreadReadDoesNotPromoteLegacyPreviewLikeRust;TestThreadReadKeepsStoredTitleForUnloadedThreadsLikeRust"
   }
- ]
+  ]
 }

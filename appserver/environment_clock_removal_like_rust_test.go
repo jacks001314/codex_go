@@ -131,46 +131,44 @@ func TestEnvironmentContextDateRemovalRendersUnavailableOnceLikeRust(t *testing.
 	params := &turn.TurnStartParams{ThreadID: threadID, CWD: t.TempDir()}
 	wantDate := time.Unix(1781717655, 0).In(time.Local).Format("2006-01-02")
 
-	read := func(turnID string) (string, []session.Item) {
+	read := func(turnID string) ([]string, []session.Item) {
 		t.Helper()
 		items, sessionItems, err := router.turnEnvironmentContextInputItemForTurn(context.Background(), threadID, turnID, params, cfg)
 		if err != nil {
 			t.Fatalf("turn %s environment context error = %v", turnID, err)
 		}
-		texts := messageInputTextsForRole(items, "user")
-		if len(texts) != 1 {
-			t.Fatalf("turn %s environment texts = %#v, want exactly one", turnID, texts)
-		}
-		return texts[0], sessionItems
+		return messageInputTextsForRole(items, "user"), sessionItems
 	}
 
 	first, _ := read("turn-1")
-	if !strings.Contains(first, "<current_date>"+wantDate+"</current_date>") {
-		t.Fatalf("first environment context = %q, want the visible date", first)
+	if len(first) != 1 || !strings.Contains(first[0], "<current_date>"+wantDate+"</current_date>") {
+		t.Fatalf("first environment context = %#v, want the visible date", first)
 	}
 
 	removed, sessionItems := read("turn-2")
-	if !strings.Contains(removed, "  <current_date status=\"unavailable\" />\n") {
-		t.Fatalf("removed environment context = %q, want the unavailable date marker", removed)
+	if len(removed) != 1 || !strings.Contains(removed[0], "  <current_date status=\"unavailable\" />\n") {
+		t.Fatalf("removed environment context = %#v, want the unavailable date marker", removed)
 	}
-	if strings.Contains(removed, "<current_date>") {
-		t.Fatalf("removed environment context = %q, must not still carry a date", removed)
+	if strings.Contains(removed[0], "<current_date>") {
+		t.Fatalf("removed environment context = %q, must not still carry a date", removed[0])
 	}
-	if !strings.Contains(removed, "<timezone>") {
-		t.Fatalf("removed environment context = %q, want the timezone retained", removed)
+	if !strings.Contains(removed[0], "<timezone>") {
+		t.Fatalf("removed environment context = %q, want the timezone retained", removed[0])
 	}
 	if len(sessionItems) != 1 || stringValueFromMap(sessionItems[0].Data, "kind") != "current_time_unavailable" {
 		t.Fatalf("turn-2 session items = %#v, want one current_time_unavailable notice", sessionItems)
 	}
 
 	stillMissing, _ := read("turn-3")
-	if strings.Contains(stillMissing, "<current_date") {
-		t.Fatalf("turn-3 environment context = %q, the cleared date must not be reported twice", stillMissing)
+	// Rust's diff omits the fragment entirely once the model has seen the
+	// cleared value, so the turn carries no environment item at all.
+	if len(stillMissing) != 0 {
+		t.Fatalf("turn-3 environment context = %#v, the cleared date must not be reported twice", stillMissing)
 	}
 
 	recovered, _ := read("turn-4")
-	if !strings.Contains(recovered, "<current_date>"+wantDate+"</current_date>") {
-		t.Fatalf("recovered environment context = %q, want the date restored", recovered)
+	if len(recovered) != 1 || !strings.Contains(recovered[0], "<current_date>"+wantDate+"</current_date>") {
+		t.Fatalf("recovered environment context = %#v, want the date restored", recovered)
 	}
 	if sink.readCount() != 4 {
 		t.Fatalf("clock reads = %d, want one per turn", sink.readCount())
@@ -277,33 +275,38 @@ func TestEnvironmentWorldStateRemovalSnapshotLikeRust(t *testing.T) {
 		t.Fatalf("EncodeWorldState() error = %v", err)
 	}
 
-	removals, err := router.recordEnvironmentWorldState(record, "", "", true, false)
+	empty := environmentWorldStateSection{}
+	transition, err := router.recordEnvironmentWorldState(record, empty, true, false, nil)
 	if err != nil {
 		t.Fatalf("recordEnvironmentWorldState() error = %v", err)
 	}
-	if !removals.CurrentDate || !removals.ShellVersion {
-		t.Fatalf("removals = %#v, want both values reported once", removals)
+	if !transition.Removals.CurrentDate || !transition.Removals.ShellVersion {
+		t.Fatalf("removals = %#v, want both values reported once", transition.Removals)
 	}
-	text := router.turnEnvironmentContextText(&turn.TurnStartParams{CWD: t.TempDir()}, nil, "UTC", "", true, removals)
+	text := router.turnEnvironmentContextText(&turn.TurnStartParams{CWD: t.TempDir()}, nil, "UTC", "", true, transition.Removals)
 	if !strings.Contains(text, "  <shell_version status=\"unavailable\" />\n") ||
 		!strings.Contains(text, "  <current_date status=\"unavailable\" />\n") {
 		t.Fatalf("removed environment context = %q", text)
 	}
 
-	again, err := router.recordEnvironmentWorldState(record, "", "", true, false)
+	again, err := router.recordEnvironmentWorldState(record, empty, true, false, nil)
 	if err != nil {
 		t.Fatalf("second recordEnvironmentWorldState() error = %v", err)
 	}
-	if again.CurrentDate || again.ShellVersion {
-		t.Fatalf("second removals = %#v, want no repeat notice", again)
+	if again.Removals.CurrentDate || again.Removals.ShellVersion || again.Fragment != "" {
+		t.Fatalf("second transition = %#v, want no repeat notice", again)
 	}
 
-	restored, err := router.recordEnvironmentWorldState(record, "2026-06-18", "7.4.1", true, false)
+	restored, err := router.recordEnvironmentWorldState(record, environmentWorldStateSection{CurrentDate: "2026-06-18", ShellVersion: "7.4.1"}, true, false, nil)
 	if err != nil {
 		t.Fatalf("restoring recordEnvironmentWorldState() error = %v", err)
 	}
-	if restored.CurrentDate || restored.ShellVersion {
-		t.Fatalf("restored removals = %#v, want no removal on recovery", restored)
+	if restored.Removals.CurrentDate || restored.Removals.ShellVersion {
+		t.Fatalf("restored removals = %#v, want no removal on recovery", restored.Removals)
+	}
+	if !strings.Contains(restored.Fragment, "<current_date>2026-06-18</current_date>") ||
+		!strings.Contains(restored.Fragment, "<shell_version>7.4.1</shell_version>") {
+		t.Fatalf("restored fragment = %q, want the values restored", restored.Fragment)
 	}
 }
 

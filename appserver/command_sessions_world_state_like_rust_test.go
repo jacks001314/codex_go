@@ -50,6 +50,34 @@ func commandSessionsText(t *testing.T, item any) string {
 	return texts[0]
 }
 
+// Rust's CommandSessionsState serde shape uses snake_case fields, a map keyed
+// by the numeric session id, and capitalised lifecycle variants.
+func TestCommandSessionsSnapshotUsesRustLineFormat(t *testing.T) {
+	snapshot := newCommandSessionsSnapshot([]commandSessionSnapshot{{
+		SessionID: 1000,
+		Status:    commandSessionStatusRunning,
+		InUse:     true,
+	}})
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	const want = `{"sessions":{"1000":{"session_id":1000,"status":"Running","in_use":true}},"omitted":0,"polling_unavailable":false}`
+	if string(encoded) != want {
+		t.Fatalf("snapshot = %s, want %s", encoded, want)
+	}
+
+	// Legacy snapshots wrote lowercase lifecycle values; they stay readable and
+	// normalize to the Rust variant names.
+	decoded, ok := decodeCommandSessionsSnapshot([]byte(`{"sessions":{"1000":{"session_id":1000,"status":"running","in_use":true}},"omitted":0,"polling_unavailable":false}`))
+	if !ok {
+		t.Fatal("legacy lowercase snapshot was not decoded")
+	}
+	if got := decoded.Sessions["1000"].Status; got != commandSessionStatusRunning {
+		t.Fatalf("decoded status = %q, want %q", got, commandSessionStatusRunning)
+	}
+}
+
 func startCommandSessionsBackgroundProcess(t *testing.T, manager *tool.UnifiedExecManager, threadID string, seconds int) int {
 	t.Helper()
 	command := []string{"sh", "-c", fmt.Sprintf("sleep %d", seconds)}
@@ -141,7 +169,9 @@ func TestCommandSessionsWorldStateBodyLimitsLikeRust(t *testing.T) {
 	}
 	sessions[1].InUse = true
 	kept, omitted := boundedCommandSessions(sessions)
-	body := renderCommandSessionsBody(commandSessionsSnapshot{Sessions: kept, Omitted: omitted})
+	snapshot := newCommandSessionsSnapshot(kept)
+	snapshot.Omitted = omitted
+	body := renderCommandSessionsBody(snapshot)
 	if !strings.Contains(body, "1001: running; in use\n") {
 		t.Fatalf("in-use session body = %q", body)
 	}
@@ -199,7 +229,7 @@ func TestCommandSessionsWorldStateClearsStaleHandlesLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeWorldState() error = %v", err)
 	}
-	stale, err := json.Marshal(commandSessionsSnapshot{Sessions: []commandSessionSnapshot{{SessionID: 1000, Status: commandSessionStatusRunning}}})
+	stale, err := json.Marshal(newCommandSessionsSnapshot([]commandSessionSnapshot{{SessionID: 1000, Status: commandSessionStatusRunning}}))
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
 	}

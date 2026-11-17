@@ -440,6 +440,7 @@ type MCPServerOauthLoginParams struct {
 func (p MCPServerOauthLoginParams) MarshalJSON() ([]byte, error) {
 	type payload struct {
 		Name               string                            `json:"name"`
+		EnvironmentID      *string                           `json:"environmentId,omitempty"`
 		ThreadID           *string                           `json:"threadId,omitempty"`
 		ClientRegistration *MCPServerOauthClientRegistration `json:"clientRegistration,omitempty"`
 		Scopes             []string                          `json:"scopes,omitempty"`
@@ -447,6 +448,7 @@ func (p MCPServerOauthLoginParams) MarshalJSON() ([]byte, error) {
 	}
 	return json.Marshal(payload{
 		Name:               firstNonEmptyMCP(p.Name, p.ServerName),
+		EnvironmentID:      cloneStringPtr(p.EnvironmentID),
 		ThreadID:           cloneStringPtr(p.ThreadID),
 		ClientRegistration: p.ClientRegistration,
 		Scopes:             append([]string(nil), p.Scopes...),

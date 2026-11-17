@@ -79,6 +79,35 @@ func historySequenceBounds(items []Item) (uint64, uint64) {
 	return max(last, sampledThrough), sampledThrough
 }
 
+// CheckpointSampling mirrors Rust's `SamplingProgress::checkpoint`, called
+// immediately before a compaction replacement is installed (`Session::
+// checkpoint_sampling`). The replacement is annotated against the history it
+// replaces: items that arrive without an append identity are recorded after the
+// live history's last sequence and carry the live sampling checkpoint, then the
+// first replacement item acknowledges the live prefix so the rebuilt window
+// cannot re-deliver input the replaced window already sampled. Compaction and
+// replay never acknowledge input from the replacement itself.
+func CheckpointSampling(replacement []Item, live []Item) uint64 {
+	last, sampledThrough := historySequenceBounds(live)
+	for i := range replacement {
+		if ItemHistorySequence(&replacement[i]) != 0 {
+			continue
+		}
+		last++
+		sampledThrough = max(sampledThrough, ItemSampledThroughSequence(&replacement[i]))
+		MergeItemHarnessMetadata(&replacement[i], map[string]any{
+			harnessHistorySequenceKey:        last,
+			harnessSampledThroughSequenceKey: sampledThrough,
+		})
+	}
+	if len(replacement) > 0 {
+		MergeItemHarnessMetadata(&replacement[0], map[string]any{
+			harnessSampledThroughSequenceKey: sampledThrough,
+		})
+	}
+	return last
+}
+
 func assignMissingHistorySequences(items []Item, start int, end int, last uint64) uint64 {
 	for i := start; i < end; i++ {
 		if ItemHistorySequence(&items[i]) != 0 {

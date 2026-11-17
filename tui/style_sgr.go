@@ -123,6 +123,38 @@ func SGRForStyle(spec StyleSpec, level StdoutColorLevel) string {
 	return "\x1b[" + strings.Join(codes, ";") + "m"
 }
 
+// SGRForStyleQuiet is SGRForStyle without the terminal-default colour codes: a
+// spec that only carries attributes, or no style at all, leaves the cells
+// around it on the terminal's own colours, the way ratatui writes an unstyled
+// cell. Colours are dropped entirely when the terminal has no colour support.
+func SGRForStyleQuiet(spec StyleSpec, level StdoutColorLevel) string {
+	codes := []string{}
+	if spec.Bold {
+		codes = append(codes, "1")
+	}
+	if spec.Dim {
+		codes = append(codes, "2")
+	}
+	if spec.Underlined {
+		codes = append(codes, "4")
+	}
+	if spec.Reversed {
+		codes = append(codes, "7")
+	}
+	if level > ColorUnknown {
+		if spec.Foreground.RGB != nil || spec.Foreground.Index != nil {
+			codes = append(codes, sgrColorCodes(spec.Foreground, true, level)...)
+		}
+		if spec.Background.RGB != nil || spec.Background.Index != nil {
+			codes = append(codes, sgrColorCodes(spec.Background, false, level)...)
+		}
+	}
+	if len(codes) == 0 {
+		return ""
+	}
+	return "\x1b[" + strings.Join(codes, ";") + "m"
+}
+
 // BackgroundSGR renders a background-only SGR prefix. Rust paints block fills
 // with `Style::default().bg(color)`, which emits no foreground code, so a fill
 // must not also reset the terminal's default foreground. An unresolved colour

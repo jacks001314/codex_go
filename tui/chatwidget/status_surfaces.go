@@ -5,7 +5,6 @@ import (
 	"time"
 	"unicode"
 
-	"codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
 
 	"github.com/rivo/uniseg"
@@ -653,28 +652,6 @@ func (d StatusSurfacePreviewData) StatusLineSegmentsForItems(items []bottompane.
 		}
 	}
 	return segments
-}
-
-// StatusLineExtensionsTree builds the shared UI tree used by the extension
-// status-line renderer (Rust #57970 status_line_content.rs). The pull-request
-// number becomes a link when its URL is a safe absolute HTTP(S) destination;
-// every other segment stays plain text.
-func StatusLineExtensionsTree(segments []bottompane.StatusLineSegment, pullRequestURL string) *tui.UINode {
-	children := make([]*tui.UINode, 0, len(segments)*2)
-	for index, segment := range segments {
-		if index > 0 {
-			children = append(children, &tui.UINode{Kind: tui.UINodeString, Text: bottompane.StatusLineSeparator})
-		}
-		text := &tui.UINode{Kind: tui.UINodeString, Text: segment.Text}
-		if segment.Item == bottompane.StatusLinePullRequestNumber {
-			if href, err := tui.NewLinkHref(pullRequestURL); err == nil {
-				children = append(children, &tui.UINode{Kind: tui.UINodeLink, Href: href, Children: []*tui.UINode{text}})
-				continue
-			}
-		}
-		children = append(children, text)
-	}
-	return &tui.UINode{Kind: tui.UINodeRow, Gap: 0, Children: children}
 }
 
 func (d StatusSurfacePreviewData) RateLimitItemName(item StatusSurfacePreviewItem, fallback string) string {

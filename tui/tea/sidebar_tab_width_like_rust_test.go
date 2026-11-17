@@ -12,8 +12,9 @@ import (
 
 // Rust #59928 sidebar_tab_strip.rs: the tab cell is pinned to " Side chat "
 // (11 columns), the add button reserves min(width-1, 3) columns before the
-// blank last column, and a longer label is clipped at its cell edge instead of
-// widening the cell or running into the neighbour.
+// blank last column, a longer label is clipped at its cell edge instead of
+// widening the cell or running into the neighbour, and the last column of the
+// cell is the close glyph (sidebar_chooser::close_cell).
 func TestSidebarTabStripUsesFixedRustTabWidthLikeRust(t *testing.T) {
 	model, _ := newSidebarTabsModel(t)
 	tabs := make([]*activeSideConversation, 0, 10000)
@@ -28,28 +29,43 @@ func TestSidebarTabStripUsesFixedRustTabWidthLikeRust(t *testing.T) {
 	model.activeSide.ShowingSide = true
 	model.refreshTranscript()
 
-	// Rust #60319: count == (available + gap) / (tab_width + gap), so the
-	// separating columns are part of the strip budget.
+	// Rust TabStrip::strip_targets: count == (space + gap) / (tab_width + gap)
+	// where space drops both overflow gutters, so the separating columns are
+	// part of the strip budget.
 	labels := sidebarTabLabels(len(tabs), false)
 	stride := sidebarTabWidth + sidebarTabGap
 	for _, width := range []int{23, 60, 120, 124} {
 		available := width - 1 - min(width-1, len(sidebarAddLabel))
-		tabWidth, count := sidebarTabLayout(labels, width)
-		if want := (available + sidebarTabGap) / stride; count != want {
-			t.Fatalf("width %d fits %d tabs, want %d (available %d / %d)",
-				width, count, want, available, sidebarTabWidth)
+		overflow := len(labels) > max((available+sidebarTabGap)/stride, 1)
+		gutter := 0
+		if overflow && available >= 7 {
+			gutter = sidebarTabOverflowGutter
 		}
-		if available >= sidebarTabWidth && tabWidth != sidebarTabWidth {
-			t.Fatalf("width %d tab cell = %d, want the fixed %d columns",
-				width, tabWidth, sidebarTabWidth)
+		space := available - 2*gutter
+		wantWidth := min(sidebarTabWidth, space)
+		wantCount := (space + sidebarTabGap) / (wantWidth + sidebarTabGap)
+		tabWidth, count := sidebarTabLayout(labels, width)
+		if count != wantCount {
+			t.Fatalf("width %d fits %d tabs, want %d (space %d / %d)",
+				width, count, wantCount, space, wantWidth)
+		}
+		if tabWidth != wantWidth {
+			t.Fatalf("width %d tab cell = %d, want %d", width, tabWidth, wantWidth)
 		}
 	}
 
 	width := model.sidebarTabStripWidth()
 	window := model.sidebarTabStripWindowWidth(width)
 	available := width - 1 - min(width-1, len(sidebarAddLabel))
-	if want := (available + sidebarTabGap) / stride; window.count != want {
+	space := available - 2*window.gutter
+	if want := (space + sidebarTabGap) / (window.tabWidth + sidebarTabGap); window.count != want {
 		t.Fatalf("strip window fits %d tabs, want %d", window.count, want)
+	}
+	if window.gutter != sidebarTabOverflowGutter || !window.leftArrow {
+		t.Fatalf("overflowing strip gutter = %d left=%t, want %d/true", window.gutter, window.leftArrow, sidebarTabOverflowGutter)
+	}
+	if want := window.first+window.count < len(tabs); window.rightArrow != want {
+		t.Fatalf("trailing arrow = %t, want %t", window.rightArrow, want)
 	}
 	if window.tabWidth != sidebarTabWidth {
 		t.Fatalf("strip tab cell = %d, want %d", window.tabWidth, sidebarTabWidth)
@@ -76,18 +92,23 @@ func TestSidebarTabStripUsesFixedRustTabWidthLikeRust(t *testing.T) {
 	for offset := 0; offset < window.count; offset++ {
 		label := " Side " + strconv.Itoa(window.first+offset+1) + " "
 		want := label
-		if len(want) > window.tabWidth {
-			want = want[:window.tabWidth]
+		if len(want) > window.tabWidth-1 {
+			want = want[:window.tabWidth-1]
 		} else {
-			want += strings.Repeat(" ", window.tabWidth-len(want))
+			want += strings.Repeat(" ", window.tabWidth-1-len(want))
 		}
-		start := offset * window.stride
-		got := strip[start : start+window.tabWidth]
+		want += sidebarTabCloseGlyph
+		start := window.gutter + offset*window.stride
+		got := ansi.Cut(strip, start, start+window.tabWidth)
 		if got != want {
 			t.Fatalf("cell %d = %q, want %q clipped to %d columns", offset, got, want, window.tabWidth)
 		}
 	}
-	if !strings.HasPrefix(strip, firstLabel) {
+	firstTitle := firstLabel
+	if len(firstTitle) > window.tabWidth-1 {
+		firstTitle = firstTitle[:window.tabWidth-1]
+	}
+	if !strings.HasPrefix(strip, sidebarTabOverflowLeft+strings.Repeat(" ", window.gutter-1)+firstTitle) {
 		t.Fatalf("strip starts with %q, want the first cell %q", strip[:min(len(firstLabel), len(strip))], firstLabel)
 	}
 

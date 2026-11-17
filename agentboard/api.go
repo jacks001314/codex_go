@@ -54,6 +54,25 @@ type Board interface {
 	SetSubscription(ctx context.Context, caller string, request SubscriptionRequest) (*SubscriptionState, error)
 }
 
+// AgentMessageBoard is the full backend surface Guardian's reviewer preparation
+// needs: the ordinary board plus its storage namespace, a fixed capture, the
+// caller's subscription listing and one atomic membership replacement.
+//
+// Rust parity: codex-rs/message-board/src/api.rs AgentMessageBoard. Guardian only
+// accepts the namespace returned here, so an ordinary board is rejected before
+// any capture or write happens.
+type AgentMessageBoard interface {
+	Board
+	// StorageNamespace is the durable namespace this board was opened in.
+	StorageNamespace() string
+	// CaptureReadView freezes the channel catalog and the post cutoff.
+	CaptureReadView(ctx context.Context) (*BoardReadView, error)
+	// SubscribedChannels lists the caller's live channel memberships.
+	SubscribedChannels(ctx context.Context, caller string, page PageRequest) (*Page[string], error)
+	// SetSubscriptions atomically replaces one agent's channel memberships.
+	SetSubscriptions(ctx context.Context, caller string, request BulkSubscriptionsRequest) (*BulkSubscriptionsState, error)
+}
+
 // PageRequest is a cursor plus a limit.
 type PageRequest struct {
 	Cursor *string

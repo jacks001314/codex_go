@@ -44,7 +44,6 @@ type Project struct {
 	Name      string            `json:"name"`
 	Roots     []ProjectRoot     `json:"roots"`
 	Metadata  map[string]string `json:"metadata"`
-	Position  int64             `json:"position"`
 	CreatedAt int64             `json:"createdAt"`
 	UpdatedAt int64             `json:"updatedAt"`
 	// RecencyAt is the newest non-archived assigned thread's recency (Unix seconds),
@@ -83,8 +82,10 @@ type ThreadProjectUpdatedNotification struct {
 }
 
 type ProjectListParams struct {
-	Cursor        *string         `json:"cursor,omitempty"`
-	Limit         *uint32         `json:"limit,omitempty"`
+	Cursor *string `json:"cursor,omitempty"`
+	Limit  *uint32 `json:"limit,omitempty"`
+	// SortKey defaults to position. Numeric positions are not exposed in
+	// project responses; clients use the returned order (#61771).
 	SortKey       *ProjectSortKey `json:"sortKey,omitempty"`
 	SortDirection *SortDirection  `json:"sortDirection,omitempty"`
 }
@@ -137,7 +138,9 @@ type ProjectUpdateResponse struct {
 }
 
 type ProjectMoveParams struct {
-	ProjectID       string  `json:"projectId"`
+	ProjectID string `json:"projectId"`
+	// BeforeProjectID places the project before that ID, or appends it when
+	// omitted or null (#61771).
 	BeforeProjectID *string `json:"beforeProjectId,omitempty"`
 }
 
@@ -526,7 +529,6 @@ func apiProjectFromStored(project state.Project) Project {
 		Name:      project.Name,
 		Roots:     storedRootsToAPI(project.Roots),
 		Metadata:  cloneStringToStringMap(project.Metadata),
-		Position:  project.Position,
 		CreatedAt: project.CreatedAt,
 		UpdatedAt: project.UpdatedAt,
 		RecencyAt: recencyAt,

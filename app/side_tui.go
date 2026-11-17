@@ -63,9 +63,9 @@ func (c *interactiveLocalSideCoordinator) Start(params codextea.SideStartParams)
 	if effort := strings.TrimSpace(params.ReasoningEffort); effort != "" {
 		configValues["model_reasoning_effort"] = effort
 	}
-	if len(configValues) == 0 {
-		configValues = nil
-	}
+	// Rust #60319 side_fork_config: a side conversation forks the parent config
+	// with Daybreak disabled, regardless of the parent's saved preference.
+	configValues["daybreak"] = false
 	// Rust #46494 ForkConfigSource::Session: the side conversation forks the
 	// active session, so forward its server-resolved runtime workspace roots
 	// rather than letting the CWD override drop them. The TUI supplies the roots

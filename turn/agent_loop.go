@@ -266,6 +266,11 @@ type AgentLoopRequest struct {
 	StreamHandler                   model.ResponsesStreamHandler
 	ExecutedToolCallMetadataEnabled bool
 	OnSteerCommitted                func(count int)
+	// OnSteerInputItems, when set, receives the items a steer delivered as they
+	// are admitted into the running turn. Rust records admitted input in the
+	// hook runtime before it reaches a sampling request (`hook_runtime`), so the
+	// host persists the same items here.
+	OnSteerInputItems func(items []any)
 	// ValidateSteerInput vets the items a steer delivered before they join the
 	// conversation. Returning an error fails the turn, mirroring Rust
 	// run_hooks_and_record_inputs(...)? on steered input (#58430).
@@ -523,6 +528,9 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			if len(steer.InputItems) > 0 {
 				result.InputItems = append(result.InputItems, steer.InputItems...)
 				result.SteerInputItems = append(result.SteerInputItems, steer.InputItems...)
+				if request.OnSteerInputItems != nil {
+					request.OnSteerInputItems(steer.InputItems)
+				}
 				if count := userMessageInputItemCount(steer.InputItems); count > 0 && request.OnSteerCommitted != nil {
 					request.OnSteerCommitted(count)
 				}
@@ -1034,6 +1042,9 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 				if steer != nil && (len(steer.InputItems) > 0 || len(steer.ClientMetadata) > 0) {
 					result.InputItems = append(result.InputItems, steer.InputItems...)
 					result.SteerInputItems = append(result.SteerInputItems, steer.InputItems...)
+					if len(steer.InputItems) > 0 && request.OnSteerInputItems != nil {
+						request.OnSteerInputItems(steer.InputItems)
+					}
 					if len(steer.ClientMetadata) > 0 {
 						clientMetadata = transformClientMetadata(steer.ClientMetadata, request.ClientMetadataTransform)
 					}

@@ -203,7 +203,7 @@ WHERE thread_id = ? AND rollout_ordinal >= ?`
 }
 
 func (r *StateRuntime) ListThreadHistoryItems(ctx context.Context, params ThreadHistoryListItemsParams) (*ThreadHistoryItemsPage, error) {
-	lineage, db, err := r.prepareThreadHistoryPageRead(ctx, params.ThreadID, "list_items")
+	walk, db, err := r.prepareThreadHistoryPageWalk(ctx, params.ThreadID, "list_items")
 	if err != nil {
 		return nil, err
 	}
@@ -214,25 +214,41 @@ func (r *StateRuntime) ListThreadHistoryItems(ctx context.Context, params Thread
 	if direction == "" {
 		direction = ThreadHistorySortAsc
 	}
-	cursor, err := itemsHistoryCursorForPosition(ctx, db, lineage, &params)
+	// Rust #61840 keeps item anchors eager because they search every segment.
+	var anchorLineage []threadHistoryLineageSegment
+	if params.Position != nil && params.Position.Anchor != nil {
+		anchorLineage, err = walk.resolveAll()
+		if err != nil {
+			return nil, err
+		}
+	}
+	cursor, err := itemsHistoryCursorForPosition(ctx, db, anchorLineage, &params)
 	if err != nil {
 		return nil, err
 	}
-	segments, err := historySegmentsFromCursor(lineage, direction, cursor)
+	segments, err := newThreadHistoryPageSegments(walk, direction, cursor)
 	if err != nil {
 		return nil, err
 	}
 	rows := make([]ThreadHistoryItem, 0, params.PageSize+1)
-	for _, segment := range segments {
+	for {
 		remaining := params.PageSize + 1 - len(rows)
 		if remaining <= 0 {
 			break
 		}
+		selected, nextErr := segments.next()
+		if nextErr != nil {
+			return nil, nextErr
+		}
+		if selected == nil {
+			break
+		}
+		segment := selected.segment
 		query := threadHistoryItemsPageQuery(params.TurnID != nil, len(params.ItemIDs) > 0)
-		args := []any{segment.segment.ThreadID, sqliteInt(segment.segment.Start)}
-		if segment.segment.End != nil {
+		args := []any{segment.ThreadID, sqliteInt(segment.Start)}
+		if segment.End != nil {
 			query += ` AND rollout_ordinal < ?`
-			args = append(args, sqliteInt(segment.segment.End.EndOrdinalExclusive))
+			args = append(args, sqliteInt(segment.End.EndOrdinalExclusive))
 		}
 		if params.TurnID != nil {
 			query += ` AND turn_id = ?`
@@ -252,7 +268,7 @@ func (r *StateRuntime) ListThreadHistoryItems(ctx context.Context, params Thread
 				query += ` AND item_id IN (` + strings.Join(placeholders, ",") + `)`
 			}
 		}
-		query, args = appendHistoryCursorClause(query, args, direction, segment.cursor)
+		query, args = appendHistoryCursorClause(query, args, direction, selected.cursor)
 		query += ` ORDER BY rollout_ordinal ` + historySQLDirection(direction) + ` LIMIT ?`
 		args = append(args, remaining)
 		result, queryErr := db.QueryContext(ctx, query, args...)
@@ -276,7 +292,7 @@ func (r *StateRuntime) ListThreadHistoryItems(ctx context.Context, params Thread
 			item.StartedAtMS = historyNullInt64Ptr(startedAtMS)
 			item.CompletedAtMS = historyNullInt64Ptr(completedAtMS)
 			item.ItemJSON = json.RawMessage(itemJSON)
-			item.physicalThreadID = segment.segment.ThreadID
+			item.physicalThreadID = segment.ThreadID
 			item.physicalRolloutPos = rolloutOrdinal
 			rows = append(rows, item)
 		}
@@ -294,7 +310,7 @@ func (r *StateRuntime) ListThreadHistoryItems(ctx context.Context, params Thread
 }
 
 func (r *StateRuntime) ListThreadHistoryTurns(ctx context.Context, params ThreadHistoryListTurnsParams) (*ThreadHistoryTurnsPage, error) {
-	lineage, db, err := r.prepareThreadHistoryPageRead(ctx, params.ThreadID, "list_turns")
+	walk, db, err := r.prepareThreadHistoryPageWalk(ctx, params.ThreadID, "list_turns")
 	if err != nil {
 		return nil, err
 	}
@@ -309,27 +325,35 @@ func (r *StateRuntime) ListThreadHistoryTurns(ctx context.Context, params Thread
 	if err != nil {
 		return nil, err
 	}
-	segments, err := historySegmentsFromCursor(lineage, direction, cursor)
+	segments, err := newThreadHistoryPageSegments(walk, direction, cursor)
 	if err != nil {
 		return nil, err
 	}
 	rows := make([]ThreadHistoryTurn, 0, params.PageSize+1)
-	for _, selected := range segments {
+	for {
 		remaining := params.PageSize + 1 - len(rows)
 		if remaining <= 0 {
 			break
 		}
+		selected, nextErr := segments.next()
+		if nextErr != nil {
+			return nil, nextErr
+		}
+		if selected == nil {
+			break
+		}
+		segment := selected.segment
 		query := `
 SELECT turn_id, root_turn_id, rollout_ordinal, status, error_json, started_at, completed_at,
        duration_ms, first_user_item_id, final_agent_item_id
 FROM thread_turns
 WHERE thread_id = ? AND rollout_ordinal >= ?`
-		args := []any{selected.segment.ThreadID, sqliteInt(selected.segment.Start)}
-		if selected.segment.End != nil {
+		args := []any{segment.ThreadID, sqliteInt(segment.Start)}
+		if segment.End != nil {
 			query += ` AND rollout_ordinal < ?`
-			args = append(args, sqliteInt(selected.segment.End.EndOrdinalExclusive))
+			args = append(args, sqliteInt(segment.End.EndOrdinalExclusive))
 		}
-		for _, newer := range lineage[selected.index+1:] {
+		for _, newer := range selected.newer {
 			query += ` AND NOT EXISTS (SELECT 1 FROM thread_turns AS newer_turn WHERE newer_turn.thread_id = ? AND newer_turn.turn_id = thread_turns.turn_id AND newer_turn.rollout_ordinal >= ?`
 			args = append(args, newer.ThreadID, sqliteInt(newer.Start))
 			if newer.End != nil {
@@ -372,7 +396,7 @@ WHERE thread_id = ? AND rollout_ordinal >= ?`
 			turn.DurationMS = nullInt64Ptr(durationMS)
 			turn.firstUserID = nullStringPtr(firstUserID)
 			turn.finalAgentID = nullStringPtr(finalAgentID)
-			turn.physicalID = selected.segment.ThreadID
+			turn.physicalID = segment.ThreadID
 			turn.rolloutPos = ordinal
 			turn.ItemsView = params.ItemsView
 			rows = append(rows, turn)
@@ -389,7 +413,7 @@ WHERE thread_id = ? AND rollout_ordinal >= ?`
 	}
 	if params.ItemsView == ThreadHistoryItemsSummary {
 		for i := range rows {
-			items, loadErr := loadThreadHistorySummaryItems(ctx, db, lineage, &rows[i])
+			items, loadErr := loadThreadHistorySummaryItems(ctx, db, walk, &rows[i])
 			if loadErr != nil {
 				return nil, loadErr
 			}
@@ -409,6 +433,31 @@ func (r *StateRuntime) prepareThreadHistoryRead(ctx context.Context, threadID, o
 // #57256 `resolve_rollout_lineage_for_history_page`).
 func (r *StateRuntime) prepareThreadHistoryPageRead(ctx context.Context, threadID, operation string) ([]threadHistoryLineageSegment, *sql.DB, error) {
 	return r.prepareThreadHistoryReadForMode(ctx, threadID, operation, true)
+}
+
+// prepareThreadHistoryPageWalk is the lazy form of
+// prepareThreadHistoryPageRead (Rust #61840): descending pages start at the
+// leaf and resolve ancestors only when a page needs them, so an unused missing
+// ancestor does not fail the read.
+func (r *StateRuntime) prepareThreadHistoryPageWalk(ctx context.Context, threadID, operation string) (*threadHistoryLineageWalk, *sql.DB, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	threadID = strings.TrimSpace(threadID)
+	mode, found, err := r.ThreadHistoryMode(ctx, threadID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !found || !strings.EqualFold(strings.TrimSpace(mode), "paginated") {
+		return nil, nil, &ThreadHistoryError{Kind: ThreadHistoryUnsupported, Operation: operation}
+	}
+	db, err := r.ThreadHistoryDB(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	walk := r.newThreadHistoryLineageWalk(ctx, threadID, true, true)
+	walk.db = db
+	return walk, db, nil
 }
 
 func (r *StateRuntime) prepareThreadHistoryReadForMode(ctx context.Context, threadID, operation string, historyPage bool) ([]threadHistoryLineageSegment, *sql.DB, error) {
@@ -444,64 +493,9 @@ func (r *StateRuntime) prepareThreadHistoryReadForMode(ctx context.Context, thre
 }
 
 func (r *StateRuntime) resolveThreadHistoryLineage(ctx context.Context, requestedThreadID string, historyPage bool) ([]threadHistoryLineageSegment, error) {
-	segments := make([]threadHistoryLineageSegment, 0, 1)
-	seen := map[string]bool{}
-	threadID := requestedThreadID
-	var end *rollout.HistoryPosition
-	for {
-		if seen[threadID] {
-			return nil, invalidPaginatedLineage(requestedThreadID, "cycle detected")
-		}
-		seen[threadID] = true
-		existing, meta, err := r.resolveLineageRolloutCopy(ctx, threadID, requestedThreadID)
-		if err != nil {
-			return nil, err
-		}
-		// History pages read projected rows and only need the ancestor's
-		// metadata for lineage bounds, so an incomplete ancestor tail does not
-		// invalidate the page (Rust #58960). Context loading and fork
-		// preparation still require the cutoff itself to be durable.
-		if end != nil && !historyPage {
-			if end.EndOrdinalExclusive == 0 {
-				return nil, invalidPaginatedLineage(requestedThreadID, "cutoff cannot include source session metadata")
-			}
-			if byteLength, lengthErr := rollout.RolloutByteLength(existing); lengthErr != nil {
-				return nil, lengthErr
-			} else if end.EndByteOffset > byteLength {
-				return nil, invalidPaginatedLineage(requestedThreadID, "cutoff byte offset is past the source rollout")
-			}
-		}
-		start := uint64(1)
-		if meta.HistoryBase != nil {
-			if meta.HistoryBase.EndOrdinalExclusive == ^uint64(0) {
-				return nil, invalidPaginatedLineage(requestedThreadID, "source ordinal overflow")
-			}
-			start = meta.HistoryBase.EndOrdinalExclusive + 1
-		}
-		// Reverts can point to earlier records of the same child. Stop at the
-		// original parent bookmark so views never traverse inherited history.
-		atParent := false
-		if historyPage && meta.AttachedThread && meta.HistoryBase != nil {
-			if forkOrdinal := rollout.ForkedFromOrdinalAtPath(meta, existing); forkOrdinal != nil && meta.HistoryBase.EndOrdinalExclusive <= *forkOrdinal {
-				atParent = true
-				adjusted, adjustErr := rollout.AttachedHistoryStart(existing, start)
-				if adjustErr != nil {
-					return nil, fmt.Errorf("resolve attached history start for %s: %w", threadID, adjustErr)
-				}
-				start = adjusted
-			}
-		}
-		segments = append(segments, threadHistoryLineageSegment{ThreadID: threadID, Path: existing, Start: start, End: cloneRolloutHistoryPosition(end), Meta: meta})
-		if meta.HistoryBase == nil || atParent {
-			break
-		}
-		threadID = meta.HistoryBase.ThreadID
-		end = cloneRolloutHistoryPosition(meta.HistoryBase)
-	}
-	for left, right := 0, len(segments)-1; left < right; left, right = left+1, right-1 {
-		segments[left], segments[right] = segments[right], segments[left]
-	}
-	return segments, nil
+	// Resolution stays pure here; prepareThreadHistoryReadForMode projects the
+	// resolved segments itself, matching Rust's LineageWalk::finish.
+	return r.newThreadHistoryLineageWalk(ctx, requestedThreadID, historyPage, false).resolveAll()
 }
 
 // resolveLineageRolloutCopy picks the rollout copy one lineage segment reads.
@@ -572,54 +566,6 @@ func lineageRolloutCopyMeta(path string, threadID string, requestedThreadID stri
 		return nil, invalidPaginatedLineage(requestedThreadID, "source rollout is not paginated")
 	}
 	return meta, nil
-}
-
-type selectedHistorySegment struct {
-	index   int
-	segment threadHistoryLineageSegment
-	cursor  *historyCursor
-}
-
-func historySegmentsFromCursor(lineage []threadHistoryLineageSegment, direction ThreadHistorySortDirection, cursor *historyCursor) ([]selectedHistorySegment, error) {
-	cursorIndex := -1
-	if cursor != nil {
-		for i, segment := range lineage {
-			if cursor.RolloutOrdinal >= segment.Start && (segment.End == nil || cursor.RolloutOrdinal < segment.End.EndOrdinalExclusive) {
-				cursorIndex = i
-				break
-			}
-		}
-		if cursorIndex < 0 {
-			return nil, invalidThreadHistory("invalid cursor: position outside thread lineage")
-		}
-	}
-	selected := make([]selectedHistorySegment, 0, len(lineage))
-	if direction == ThreadHistorySortDesc {
-		start := len(lineage) - 1
-		if cursorIndex >= 0 {
-			start = cursorIndex
-		}
-		for i := start; i >= 0; i-- {
-			var segmentCursor *historyCursor
-			if i == cursorIndex {
-				segmentCursor = cursor
-			}
-			selected = append(selected, selectedHistorySegment{index: i, segment: lineage[i], cursor: segmentCursor})
-		}
-		return selected, nil
-	}
-	start := 0
-	if cursorIndex >= 0 {
-		start = cursorIndex
-	}
-	for i := start; i < len(lineage); i++ {
-		var segmentCursor *historyCursor
-		if i == cursorIndex {
-			segmentCursor = cursor
-		}
-		selected = append(selected, selectedHistorySegment{index: i, segment: lineage[i], cursor: segmentCursor})
-	}
-	return selected, nil
 }
 
 func parseHistoryCursor(value *string, threadID, scope string) (*historyCursor, error) {
@@ -762,7 +708,12 @@ func finishHistoryTurnPage(threadID string, rows []ThreadHistoryTurn, pageSize i
 	return next, backwards, rows, nil
 }
 
-func loadThreadHistorySummaryItems(ctx context.Context, db *sql.DB, lineage []threadHistoryLineageSegment, turn *ThreadHistoryTurn) ([]ThreadHistoryItem, error) {
+func loadThreadHistorySummaryItems(ctx context.Context, db *sql.DB, walk *threadHistoryLineageWalk, turn *ThreadHistoryTurn) ([]ThreadHistoryItem, error) {
+	// Inherited summaries search every segment, so this stays eager (Rust #61840).
+	lineage, err := walk.resolveAll()
+	if err != nil {
+		return nil, err
+	}
 	owner, firstUserID, finalAgentID := turn.physicalID, turn.firstUserID, turn.finalAgentID
 	if turn.Status == "interrupted" && firstUserID == nil && finalAgentID == nil {
 		for _, segment := range lineage {

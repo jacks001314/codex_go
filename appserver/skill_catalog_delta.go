@@ -18,11 +18,28 @@ const (
 	skillCatalogSnapshotVersion = 1
 	skillCatalogRootsHeading    = "### Skill roots\nThese mappings replace earlier mappings for the same aliases.\n"
 	skillCatalogSkillsHeading   = "### Added or updated skills:\n"
+	// skillCatalogRevalidateNotice tells the model that rows it saw earlier may
+	// have lost their filesystem grant (Rust catalog_delta::REVALIDATE_SKILLS).
+	skillCatalogRevalidateNotice = "Some previously listed skills are no longer available. Verify current access before relying on a skill from this source.\n"
+	// skillCatalogRestoredNotice announces rows whose grant came back (Rust
+	// catalog_delta::RESTORED_SKILLS).
+	skillCatalogRestoredNotice = "Some previously unavailable skills are available again. Verify current access before relying on a skill from this source.\n"
+)
+
+// Skill catalog grant markers (Rust catalog_delta::GrantStatus, which serde
+// renames to camelCase).
+const (
+	skillCatalogGrantActive    = "active"
+	skillCatalogGrantWithdrawn = "withdrawn"
 )
 
 type skillCatalogEntrySnapshot struct {
 	Fingerprint string `json:"fingerprint"`
 	Shown       bool   `json:"shown"`
+	// Grant records that the shown row depends on a turn-scoped filesystem
+	// grant: "active" while the grant holds, "withdrawn" once the row stopped
+	// being listed. Empty marks a row that never depended on a grant.
+	Grant string `json:"grant,omitempty"`
 }
 
 // skillCatalogUsage retains both budget units so switching units cannot refund
@@ -40,8 +57,10 @@ func (u skillCatalogUsage) cost(budget promptctx.SkillMetadataBudget) int {
 }
 
 // skillCatalogSnapshot is the persisted per-surface catalog state. It mirrors
-// Rust CatalogSnapshot, minus the cloud budget allocation Go's fused
-// selected-environment catalog does not have.
+// Rust CatalogSnapshot. Rust also persists the cloud budget allocation, but
+// only the cloud catalog carries one; Go's fused selected-environment catalog
+// has no cloud surface, so the field stays absent exactly as Rust serializes
+// `allocation: null` for the executor and host catalogs.
 type skillCatalogSnapshot struct {
 	Version          int                                  `json:"version"`
 	Entries          map[string]skillCatalogEntrySnapshot `json:"entries"`
@@ -49,6 +68,11 @@ type skillCatalogSnapshot struct {
 	Usage            skillCatalogUsage                    `json:"usage"`
 	InstructionsSent bool                                 `json:"instructionsSent"`
 	OmitDescriptions bool                                 `json:"omitDescriptions"`
+	// TracksGrants marks snapshots written after grant tracking existed. A
+	// snapshot without it cannot tell which shown rows were grant-gated, so the
+	// first update revalidates every missing row once (Rust
+	// `legacy_filesystem`).
+	TracksGrants bool `json:"tracksGrants,omitempty"`
 }
 
 func decodeSkillCatalogSnapshot(raw json.RawMessage) *skillCatalogSnapshot {
@@ -107,7 +131,14 @@ type skillCatalogDeltaResult struct {
 // budget.
 func buildSkillCatalogDelta(source string, available *promptctx.AvailableSkills, includeUsage bool, previous *skillCatalogSnapshot, remaining *int, budget promptctx.SkillMetadataBudget) skillCatalogDeltaResult {
 	if available == nil {
-		return skillCatalogDeltaResult{Snapshot: newSkillCatalogSnapshot()}
+		if previous != nil {
+			// An unavailable catalog still updates a known snapshot: rows that
+			// were grant-gated must be withdrawn so the model revalidates them.
+			return buildSkillCatalogUpdate(source, nil, includeUsage, previous, remaining, budget)
+		}
+		snapshot := newSkillCatalogSnapshot()
+		snapshot.TracksGrants = true
+		return skillCatalogDeltaResult{Snapshot: snapshot}
 	}
 	if previous == nil {
 		return buildInitialSkillCatalogDelta(source, available, includeUsage)
@@ -117,6 +148,7 @@ func buildSkillCatalogDelta(source string, available *promptctx.AvailableSkills,
 
 func buildInitialSkillCatalogDelta(source string, available *promptctx.AvailableSkills, includeUsage bool) skillCatalogDeltaResult {
 	snapshot := newSkillCatalogSnapshot()
+	snapshot.TracksGrants = true
 	snapshot.OmitDescriptions = available.OmitDescriptions
 	usage := measureSkillCatalogUsage(func(budget promptctx.SkillMetadataBudget) int {
 		cost := 0
@@ -131,7 +163,7 @@ func buildInitialSkillCatalogDelta(source string, available *promptctx.Available
 	snapshot.Usage = usage
 	snapshot.InstructionsSent = true
 	for _, entry := range available.Entries {
-		snapshot.Entries[entry.ID] = skillCatalogEntrySnapshot{Fingerprint: entry.Fingerprint, Shown: entry.Shown}
+		snapshot.Entries[entry.ID] = skillCatalogEntrySnapshot{Fingerprint: entry.Fingerprint, Shown: entry.Shown, Grant: entry.Grant}
 		if entry.RootName != "" {
 			snapshot.Roots[entry.RootName] = entry.RootValue
 		}
@@ -144,45 +176,101 @@ func buildInitialSkillCatalogDelta(source string, available *promptctx.Available
 }
 
 func buildSkillCatalogUpdate(source string, available *promptctx.AvailableSkills, includeUsage bool, previous *skillCatalogSnapshot, remaining *int, budget promptctx.SkillMetadataBudget) skillCatalogDeltaResult {
-	refreshUsage := previous.InstructionsSent && includeUsage && previous.OmitDescriptions != available.OmitDescriptions
-	rendered := make([]promptctx.SkillCatalogEntryRender, len(available.Entries))
-	copy(rendered, available.Entries)
+	var entries []promptctx.SkillCatalogEntryRender
+	omitDescriptions := previous.OmitDescriptions
+	if available != nil {
+		entries = available.Entries
+		omitDescriptions = available.OmitDescriptions
+	}
+	refreshUsage := available != nil && previous.InstructionsSent && includeUsage && previous.OmitDescriptions != omitDescriptions
+	rendered := make([]promptctx.SkillCatalogEntryRender, len(entries))
+	copy(rendered, entries)
 	// Rust iterates the rendered catalog's BTreeMap, so updates publish rows in
 	// entry-id order rather than render order.
 	sort.SliceStable(rendered, func(i int, j int) bool { return rendered[i].ID < rendered[j].ID })
 
-	draft := newSkillCatalogUpdateDraft(source, available, previous.InstructionsSent)
+	draft := newSkillCatalogUpdateDraft(source, omitDescriptions, previous.InstructionsSent)
 	report := &promptctx.SkillRenderReport{}
 	nextEntries := make(map[string]skillCatalogEntrySnapshot, len(rendered))
+	// Older snapshots did not record which shown skills depended on a grant, so
+	// the first update after this field appeared revalidates every missing row
+	// (Rust `legacy_filesystem`).
+	// Rust passes tracks_grants for every catalog except the cloud one
+	// (world_state_catalogs::CatalogKind), and Go has no cloud surface.
+	legacyFilesystem := !previous.TracksGrants
+	restored := false
 	for _, entry := range rendered {
 		old, exists := previous.Entries[entry.ID]
+		if exists && old.Grant == skillCatalogGrantWithdrawn {
+			restored = true
+		}
 		shown := exists && old.Shown
+		// A grant does not make a skill temporary if the model already saw it
+		// without one (Rust catalog_delta::build_catalog_update).
+		grant := ""
+		if entry.Grant != "" && (legacyFilesystem || !exists || !old.Shown || old.Grant != "") {
+			grant = entry.Grant
+		}
 		if !exists || (old.Shown && old.Fingerprint != entry.Fingerprint) {
 			report.TotalCount++
-			if draft.appendEntry(entry, previous, remaining, budget, available.OmitDescriptions, includeUsage) {
+			if draft.appendEntry(entry, previous, remaining, budget, omitDescriptions, includeUsage) {
 				shown = true
 				report.IncludedCount++
 			} else {
 				report.OmittedCount++
 			}
 		}
-		nextEntries[entry.ID] = skillCatalogEntrySnapshot{Fingerprint: entry.Fingerprint, Shown: shown}
+		nextEntries[entry.ID] = skillCatalogEntrySnapshot{Fingerprint: entry.Fingerprint, Shown: shown, Grant: grant}
 	}
 
 	body := draft.body()
+	withdrew := false
+	// Keep only withdrawals the model has seen. Their count is bounded by the
+	// listing budget.
+	for id, old := range previous.Entries {
+		if !old.Shown || (old.Grant == "" && !legacyFilesystem) {
+			continue
+		}
+		if _, present := nextEntries[id]; present {
+			continue
+		}
+		if old.Grant != skillCatalogGrantWithdrawn {
+			withdrew = true
+		}
+		old.Grant = skillCatalogGrantWithdrawn
+		nextEntries[id] = old
+	}
+	if withdrew {
+		body = appendSkillCatalogNotice(source, body, skillCatalogRevalidateNotice)
+	}
+	if restored {
+		body = appendSkillCatalogNotice(source, body, skillCatalogRestoredNotice)
+	}
+	previous.TracksGrants = true
 	if refreshUsage {
-		instructions := promptctx.SkillUsageInstructions(len(available.SkillRootLines) > 0, available.OmitDescriptions)
+		instructions := promptctx.SkillUsageInstructions(len(available.SkillRootLines) > 0, omitDescriptions)
 		if body == "" {
 			body = "\n## " + source + " skills update\n"
 		}
 		body += "\n### How to use skills\n" + instructions + "\n"
 	}
-	previous.OmitDescriptions = available.OmitDescriptions
+	if available != nil {
+		previous.OmitDescriptions = omitDescriptions
+	}
 	previous.Entries = nextEntries
 	if body != "" {
 		previous.InstructionsSent = true
 	}
 	return skillCatalogDeltaResult{Body: body, Report: report, Snapshot: previous}
+}
+
+// appendSkillCatalogNotice adds one grant notice to an update body, opening the
+// update heading when the body is otherwise empty.
+func appendSkillCatalogNotice(source string, body string, notice string) string {
+	if body == "" {
+		body = "\n## " + source + " skills update\n"
+	}
+	return body + notice
 }
 
 func measureSkillCatalogUsage(cost func(promptctx.SkillMetadataBudget) int) skillCatalogUsage {
@@ -207,11 +295,11 @@ type skillCatalogUpdateDraft struct {
 	skillLines       []string
 }
 
-func newSkillCatalogUpdateDraft(source string, available *promptctx.AvailableSkills, instructionsSent bool) *skillCatalogUpdateDraft {
+func newSkillCatalogUpdateDraft(source string, omitDescriptions bool, instructionsSent bool) *skillCatalogUpdateDraft {
 	return &skillCatalogUpdateDraft{
 		source:           source,
 		firstListing:     !instructionsSent,
-		omitDescriptions: available.OmitDescriptions,
+		omitDescriptions: omitDescriptions,
 	}
 }
 

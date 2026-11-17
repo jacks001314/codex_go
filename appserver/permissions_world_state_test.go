@@ -260,3 +260,40 @@ func permissionsInputItemText(t *testing.T, item any) string {
 	}
 	return textFromInputItemContent(raw["content"])
 }
+
+// Rust persists the compact permissions snapshot as `BTreeSet<Vec<String>>`
+// (core/src/context/world_state/compact_permissions.rs): a sorted, deduplicated
+// array of prefix arrays, with an empty set written as `[]`.
+func TestCompactPermissionsSnapshotMatchesRustWireShapeLikeRust(t *testing.T) {
+	canonical := canonicalCommandPrefixesOrEmpty([][]string{
+		{"git", "status"},
+		{"npm", "run"},
+		{"git", "status"},
+		{"git", "log"},
+	})
+	encoded, err := json.Marshal(canonical)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if string(encoded) != `[["git","log"],["git","status"],["npm","run"]]` {
+		t.Fatalf("canonical prefixes = %s, want Rust's sorted set", encoded)
+	}
+	if empty, err := json.Marshal(canonicalCommandPrefixesOrEmpty(nil)); err != nil || string(empty) != "[]" {
+		t.Fatalf("empty snapshot = %s, %v; want []", empty, err)
+	}
+
+	decoded, kind := decodeApprovedCommandPrefixes(json.RawMessage(`[["cargo","test"],["cargo","test"],["cargo","build"]]`))
+	if kind != "current" {
+		t.Fatalf("decode kind = %q, want current", kind)
+	}
+	decodedJSON, err := json.Marshal(decoded)
+	if err != nil {
+		t.Fatalf("Marshal(decoded) error = %v", err)
+	}
+	if string(decodedJSON) != `[["cargo","build"],["cargo","test"]]` {
+		t.Fatalf("decoded prefixes = %s, want the canonical set", decodedJSON)
+	}
+	if added := addedCommandPrefixes(decoded, [][]string{{"cargo", "build"}}); len(added) != 1 || added[0][1] != "test" {
+		t.Fatalf("added prefixes = %#v, want only cargo test", added)
+	}
+}

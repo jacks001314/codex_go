@@ -11,23 +11,9 @@ import (
 	mousemsg "codex_go/tui/mousemsg"
 )
 
-// paintedChooserRows counts the choice rows a rendered chooser panel shows.
-func paintedChooserRows(panel string) int {
-	rows := 0
-	for _, line := range strings.Split(panel, "\n") {
-		title := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "›"))
-		title = strings.TrimSpace(title)
-		if strings.HasPrefix(title, "○ ") || strings.HasPrefix(title, sidebarNewChatTitle) ||
-			strings.HasPrefix(title, sidebarRetryChatsTitle) {
-			rows++
-		}
-	}
-	return rows
-}
-
 // Rust #59928: page_up/page_down move the chooser by one painted window of
-// rows instead of a fixed constant, so a tall pane pages further than a short
-// one and the selection lands on the last row the window shows.
+// chat rows (sidebar_chooser::page_size) instead of a fixed constant, so a tall
+// pane pages further than a short one and the selection stays painted.
 func TestSidebarChooserPagesByVisibleRowsLikeRust(t *testing.T) {
 	model, _ := newSidebarTabsModel(t)
 	for index := 1; index <= 60; index++ {
@@ -42,16 +28,14 @@ func TestSidebarChooserPagesByVisibleRowsLikeRust(t *testing.T) {
 	if !model.sidebarChooserVisible() {
 		t.Fatal("chooser did not open")
 	}
-	_, right, _, ok := model.sidePaneLayout(model.width)
-	if !ok || right <= 0 {
-		t.Fatalf("split layout unavailable: right=%d ok=%t", right, ok)
-	}
+	width := model.sidebarTabStripWidth()
 
 	window := map[int]int{}
 	for _, height := range []int{20, 50} {
 		model.transcript.Height = height
 		model.sidebarChoice = 0
-		visible := paintedChooserRows(model.renderSidebarChooser(right, height))
+		layout := model.sidebarChooserLayoutFor(width, height)
+		visible := len(layout.visible)
 		if visible <= 0 {
 			t.Fatalf("panel height %d painted no choice rows", height)
 		}
@@ -62,12 +46,17 @@ func TestSidebarChooserPagesByVisibleRowsLikeRust(t *testing.T) {
 			t.Fatalf("page_down was not handled at panel height %d", height)
 		}
 		if model.sidebarChoice != visible {
-			t.Fatalf("page_down at panel height %d moved to row %d, want one window of %d rows",
+			t.Fatalf("page_down at panel height %d moved to row %d, want one window of %d chat rows",
 				height, model.sidebarChoice, visible)
 		}
-		// The selection stays inside the painted window: it is the last row the
-		// panel shows, exactly like Rust choice_rows keeps the choice visible.
-		if panel := model.renderSidebarChooser(right, height); paintedChooserRows(panel) != visible {
+		// Rust choice_rows keeps the selection inside the painted window.
+		painted := false
+		for _, chat := range model.sidebarChooserLayoutFor(width, height).visible {
+			if chat.index == model.sidebarChoice {
+				painted = true
+			}
+		}
+		if !painted {
 			t.Fatalf("panel height %d painted the selection outside its window", height)
 		}
 		if handled, _ := model.updateSidebarChooserKey(key(keymsg.KeyCtrlB)); !handled || model.sidebarChoice != 0 {
