@@ -101,3 +101,34 @@ func TestSidebarTabActivationRequiresMatchingPressAndReleaseLikeRust(t *testing.
 		t.Fatal("matching click kept the captured press")
 	}
 }
+
+// Rust side_focus.rs hands the chooser's focus back to the main composer when
+// the pointer presses outside the panel: the list stays open with its
+// selection, but typing goes to the main composer again.
+func TestSidebarChooserBackgroundPressReturnsFocusToMainLikeRust(t *testing.T) {
+	model, _ := newSidebarTabsModel(t)
+	if cmd := model.focusSidebarContent(); cmd != nil {
+		runTeaCmd(t, model, cmd)
+	}
+	if !model.sidebarChooserVisible() || !model.sidebarChooserFocused {
+		t.Fatalf("chooser did not open focused: open=%t focused=%t", model.sidebarChooserOpen, model.sidebarChooserFocused)
+	}
+	choice := model.sidebarChoice
+
+	handled, cmd := model.handleSidePaneMouse(mousemsg.MouseMsg{
+		Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft, X: 2, Y: 3,
+	})
+	if !handled {
+		t.Fatal("press in the main pane was not handled")
+	}
+	runTeaCmd(t, model, cmd)
+	if model.sidebarChooserFocused {
+		t.Fatal("press in the main pane left the chooser focused")
+	}
+	if !model.sidebarChooserVisible() {
+		t.Fatal("press in the main pane closed the chooser")
+	}
+	if model.sidebarChoice != choice {
+		t.Fatalf("press in the main pane moved the selection from %d to %d", choice, model.sidebarChoice)
+	}
+}

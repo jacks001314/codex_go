@@ -229,6 +229,9 @@ func (m *Model) renderSideWorkspace(width int, height int) (string, bool) {
 	}
 	var leftLines, rightLines []string
 	if sideFocused {
+		// The focused pane owns the live transcript, so its parked copy never
+		// carries unseen activity (Rust clears the flag once the tail shows).
+		side.SideUnseen = false
 		var parentFirst int
 		leftLines, parentFirst, side.ParentViewMax = m.renderPassiveSidePane(side, false, leftWidth, height)
 		rightLines = m.renderFocusedPane(rightWidth, rightHeight)
@@ -243,6 +246,7 @@ func (m *Model) renderSideWorkspace(width int, height int) (string, bool) {
 		side.ParentScroll = parentFirst
 		side.SideScroll = m.transcript.YOffset
 	} else {
+		side.ParentUnseen = false
 		var sideFirst int
 		leftLines = m.renderFocusedPane(leftWidth, height)
 		rightLines, sideFirst, side.SideViewMax = m.renderPassiveSidePane(side, true, rightWidth, rightHeight)
@@ -341,7 +345,24 @@ func (m *Model) renderPassiveSidePane(side *activeSideConversation, sidePassive 
 	}
 	cache := &transcriptMessageCache{}
 	content := m.renderSidePaneContent(cache, threadID, messages, width)
-	rows, clamped, maxFirst := m.composeSidePane(threadID, content, m.paneStatusForThread(threadID), draft, width, height, first)
+	// Rust TranscriptView tracks unseen activity per pane: output that changes
+	// the parked column's tail while the reader looks elsewhere raises the
+	// "New activity" affordance, which clears once the tail paints again.
+	unseen := &side.ParentUnseen
+	tail := &side.ParentTail
+	if sidePassive {
+		unseen = &side.SideUnseen
+		tail = &side.SideTail
+	}
+	signature := len(messages)*1_000_003 + len(content)
+	if *tail != 0 && *tail != signature {
+		*unseen = true
+	}
+	*tail = signature
+	rows, clamped, maxFirst := m.composeSidePane(threadID, content, m.paneStatusForThread(threadID), draft, width, height, first, *unseen)
+	if clamped == maxFirst {
+		*unseen = false
+	}
 	for index := range rows {
 		// A pane must never paint past the divider, even when a transcript row
 		// (a table or an unbreakable token) is wider than its column.
@@ -543,7 +564,7 @@ func sidePaneFrameFor(height int) sidePaneFrame {
 
 // composeSidePane builds exactly `height` rows: the windowed transcript, the
 // dimmed retained status, the inactive draft preview, and a blank hint row.
-func (m *Model) composeSidePane(threadID string, content string, status string, draft string, width int, height int, first int) ([]string, int, int) {
+func (m *Model) composeSidePane(threadID string, content string, status string, draft string, width int, height int, first int, unseen bool) ([]string, int, int) {
 	frame := sidePaneFrameFor(height)
 	lines, clamped, maxFirst := sidePaneWindow(content, frame.transcript, first)
 	rows := make([]string, 0, height)
@@ -554,7 +575,14 @@ func (m *Model) composeSidePane(threadID string, content string, status string, 
 	// Rust paints the inactive column bottom-up like the live one: one blank
 	// row, the composer (draft preview), the dimmed retained status, then the
 	// blank hint row.
-	rows = append(rows, "")
+	// The row between transcript and composer carries the return-to-latest
+	// affordance while the parked view is above its tail (Rust
+	// transcript_view::follow_control, painted in the composer gap).
+	follow := ""
+	if clamped < maxFirst {
+		follow = centerSidePaneFollow(sidePaneFollowLabel(unseen, width), width)
+	}
+	rows = append(rows, follow)
 	rows = append(rows, m.renderDimmedPaneDraft(draft, width, frame.composer)...)
 	for len(rows) < frame.transcript+1+frame.composer {
 		rows = append(rows, "")
@@ -571,6 +599,51 @@ func (m *Model) composeSidePane(threadID string, content string, status string, 
 		rows = rows[:height]
 	}
 	return rows, clamped, maxFirst
+}
+
+// sidePaneFollowLabel mirrors Rust's TranscriptView::follow_control_label for
+// a parked pane: the same ladder, with the "New activity" prefix once output
+// arrived while the reader was elsewhere.
+func sidePaneFollowLabel(unseen bool, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	labels := []string{
+		" \u2193 Back to bottom \u00b7 esc ",
+		" \u2193 Back to bottom ",
+		" \u2193 Bottom \u00b7 esc ",
+		" \u2193 Bottom ",
+		" \u2193 ",
+	}
+	if unseen {
+		labels = []string{
+			" New activity \u00b7 \u2193 Back to bottom \u00b7 esc ",
+			" New activity \u00b7 \u2193 Bottom ",
+			" New \u00b7 \u2193 Bottom ",
+			" \u2193 Bottom ",
+			" \u2193 ",
+		}
+	}
+	for _, label := range labels {
+		if codextui.DisplayWidth(label) <= width {
+			return label
+		}
+	}
+	return ""
+}
+
+// centerSidePaneFollow centers one-row affordances the way Rust's
+// render_follow_control places its target rect inside the gap row.
+func centerSidePaneFollow(label string, width int) string {
+	if label == "" || width <= 0 {
+		return ""
+	}
+	room := width - codextui.DisplayWidth(label)
+	if room < 0 {
+		return ""
+	}
+	left := room / 2
+	return strings.Repeat(" ", left) + label + strings.Repeat(" ", room-left)
 }
 
 // renderDimmedPaneDraft previews the inactive conversation's draft inside the

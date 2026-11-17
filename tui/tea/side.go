@@ -415,6 +415,15 @@ type activeSideConversation struct {
 	// content (Rust #59527).
 	ParentViewMax int
 	SideViewMax   int
+	// ParentUnseen and SideUnseen mirror Rust TranscriptView::unseen_activity
+	// for the parked pane: output that arrived while this conversation was the
+	// passive column raises the "New activity" affordance until its tail is
+	// painted again. ParentTail and SideTail are the content signatures the
+	// last painted frame saw (Rust last_tail).
+	ParentUnseen bool
+	SideUnseen   bool
+	ParentTail   int
+	SideTail     int
 }
 
 func (m *Model) retainSideConversation(side *activeSideConversation) {

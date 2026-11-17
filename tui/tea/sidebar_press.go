@@ -165,6 +165,13 @@ func (m *Model) handleSidebarPressMouse(msg mousemsg.MouseMsg) (bool, bubbletea.
 	overStrip := m.sidebarTabStripTop >= 0 && m.sidebarTabStripVisible() && msg.Y == m.sidebarTabStripTop
 	overChooser := m.sidebarChooserVisible() && m.sidebarChooserFocused && m.sidebarPointInPane(msg.X, msg.Y)
 	if !overStrip && !overChooser && previous == nil {
+		// Rust side_focus.rs moves the chooser's focus back to the main
+		// composer when a press lands outside the panel; the list stays open
+		// and keeps its selection.
+		if down && msg.Button == mousemsg.MouseButtonLeft && m.sidebarChooserVisible() && m.sidebarChooserFocused {
+			m.sidebarChooserFocused = false
+			return true, nil
+		}
 		return false, nil
 	}
 	var candidate *sidebarPress

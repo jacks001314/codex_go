@@ -19,7 +19,7 @@ func TestSidePaneDraftPreviewFrameLikeRust(t *testing.T) {
 		t.Fatalf("frame = %#v", frame)
 	}
 
-	rows, _, _ := model.composeSidePane("thread-side", "hello\nthere", "model gpt-5", "!echo draft", 40, 12, sidePaneTail)
+	rows, _, _ := model.composeSidePane("thread-side", "hello\nthere", "model gpt-5", "!echo draft", 40, 12, sidePaneTail, false)
 	if len(rows) != 12 {
 		t.Fatalf("rows = %d, want 12: %#v", len(rows), rows)
 	}

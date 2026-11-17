@@ -37,11 +37,11 @@ func TestSidePaneStatusContentLikeRust(t *testing.T) {
 	// The passive pane frame paints the cached status below its transcript;
 	// the focused column paints the live status line through its own bottom
 	// pane instead.
-	paneRows, _, _ := model.composeSidePane("thread-side", "", "side status", "", 20, 12, sidePaneTail)
+	paneRows, _, _ := model.composeSidePane("thread-side", "", "side status", "", 20, 12, sidePaneTail, false)
 	if content := strings.Join(paneRows, "\n"); !strings.Contains(content, "side status") {
 		t.Fatalf("passive pane missing status: %q", content)
 	}
-	paneRows, _, _ = model.composeSidePane("thread-side", "", "", "", 20, 12, sidePaneTail)
+	paneRows, _, _ = model.composeSidePane("thread-side", "", "", "", 20, 12, sidePaneTail, false)
 	if content := strings.Join(paneRows, "\n"); strings.Contains(content, "side status") {
 		t.Fatalf("pane without a cached status rendered one: %q", content)
 	}
