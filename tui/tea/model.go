@@ -3193,6 +3193,9 @@ type Model struct {
 	sidebarDiscoveryStarted time.Time
 	// sidebarTabHover is the tab index the pointer is over, or -1 (Rust #59928).
 	sidebarTabHover int
+	// sidebarChooserHover is the chooser row index the pointer is over, or -1
+	// (Rust sidebar_chooser.rs `SidebarStyle::hovered_choice`).
+	sidebarChooserHover int
 	// pendingSideTabCloseThreadID holds the tab waiting on the close
 	// confirmation, so a replaced dialog cannot close a different chat.
 	pendingSideTabCloseThreadID string

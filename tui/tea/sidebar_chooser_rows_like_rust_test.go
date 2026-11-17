@@ -37,13 +37,16 @@ func TestSidebarChooserLoadingRowsLikeRust(t *testing.T) {
 		t.Fatalf("loading row = %q", rows[3])
 	}
 	newChat := rows[4]
-	if !strings.HasPrefix(newChat, " › + New side chat") || !strings.HasSuffix(newChat, "Start from this conversation") {
+	// Rust paints the selected row's fill across the whole body row, so the
+	// subtitle is followed by the fill's padding cells.
+	if !strings.HasPrefix(newChat, " › + New side chat") ||
+		!strings.HasSuffix(strings.TrimRight(newChat, " "), "Start from this conversation") {
 		t.Fatalf("new-chat row = %q", newChat)
 	}
-	// The inline subtitle ends at the body's last usable column, so the row
-	// fills the body width including its leading inset column.
-	if ansi.StringWidth(newChat) != sidebarChooserBodyWidth(80) {
-		t.Fatalf("new-chat row width = %d, want %d", ansi.StringWidth(newChat), sidebarChooserBodyWidth(80))
+	// The selected row's fill spans the body row, and the pane's leading inset
+	// column makes the painted line one wider.
+	if ansi.StringWidth(newChat) != sidebarChooserBodyWidth(80)+1 {
+		t.Fatalf("new-chat row width = %d, want %d", ansi.StringWidth(newChat), sidebarChooserBodyWidth(80)+1)
 	}
 	footer := rows[23]
 	for _, want := range []string{"enter open", "esc back", "↑/↓ move", "hide pane"} {
@@ -79,7 +82,7 @@ func TestSidebarChooserFailedRetryRowsLikeRust(t *testing.T) {
 	if strings.TrimSpace(rows[6]) != "" || strings.TrimSpace(rows[7]) != "" {
 		t.Fatalf("gap rows = %q / %q, want blanks", rows[6], rows[7])
 	}
-	if rows[8] != " ›   Retry loading side chats" {
+	if strings.TrimRight(rows[8], " ") != " ›   Retry loading side chats" {
 		t.Fatalf("retry row = %q", rows[8])
 	}
 	if footer := rows[19]; !strings.Contains(footer, "enter retry") {

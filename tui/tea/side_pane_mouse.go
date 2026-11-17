@@ -88,6 +88,9 @@ func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd)
 	if handled, cmd := m.handleSidebarTabStripMouse(msg); handled {
 		return true, cmd
 	}
+	if msg.Action == mousemsg.MouseActionMotion {
+		m.updateSidebarChooserHover(msg)
+	}
 	// Rust #61922 side_focus::handle_sidebar_input owns both halves of a
 	// sidebar click, so the press is captured here before any pane treats the
 	// same event as a focus change or a link click.
@@ -275,4 +278,23 @@ func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd)
 		return true, m.saveConfigPanelPreference("tui.sidebar_width_percent", m.sideWidthPercent)
 	}
 	return false, nil
+}
+
+// updateSidebarChooserHover tracks the chooser row under the pointer so the
+// list paints Rust's `hovered_choice` fill. The full-path view and a keyboard
+// resize preview have no hover rows (Rust owned_transcript.rs checks both).
+func (m *Model) updateSidebarChooserHover(msg mousemsg.MouseMsg) {
+	if m == nil {
+		return
+	}
+	hover := -1
+	if m.sidebarChooserVisible() && m.sidebarChooserFocused && !m.sidebarShowingFilePath &&
+		m.sideResize == nil && m.sidebarPointInPane(msg.X, msg.Y) {
+		if row := msg.Y - max(m.sidebarTabStripTop, 0); row >= 0 {
+			if index, ok := m.sidebarChooserChoiceAtRow(row); ok {
+				hover = index
+			}
+		}
+	}
+	m.sidebarChooserHover = hover
 }

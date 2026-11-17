@@ -303,6 +303,7 @@ func (m *Model) openSidebarChooser() bubbletea.Cmd {
 	m.sidebarFilePathScroll = 0
 	m.sidebarTabHover = -1
 	m.sidebarAddHover = false
+	m.sidebarChooserHover = -1
 	// Rust #60319 App::show(Chooser): the selection starts on the chat that is
 	// already showing, falling back to the new-chat row.
 	m.sidebarChoice = 0
@@ -341,6 +342,7 @@ func (m *Model) closeSidebarChooser() bubbletea.Cmd {
 	m.sidebarFilePathScroll = 0
 	m.sidebarTabHover = -1
 	m.sidebarAddHover = false
+	m.sidebarChooserHover = -1
 	m.notice = ""
 	m.refreshTranscript()
 	return m.refreshStatusControlsCmd()
@@ -1338,22 +1340,18 @@ func (m *Model) paintSidebarChooserBody(width int, height int, rows sidebarChoic
 			set(y, text)
 		}
 	}
-	marker := func(index int) string {
-		if index == choice {
-			return "› "
+	level := codextui.DetectStdoutColorLevel()
+	paintFilledAt := func(offset int, text string, spec codextui.StyleSpec) {
+		y := offset - top
+		if y >= sidebarChooserBodyStart && y < sidebarChooserBodyStart+rows.height {
+			set(y, paintSidebarChooserRow(text, bodyWidth, spec, level))
 		}
-		return "  "
-	}
-	markerCell := func(index int) string {
-		if index == choice {
-			return "›"
-		}
-		return " "
 	}
 	// New side chat: Rust paints the subtitle inline when the body is wide and
 	// on its own indented row otherwise.
 	{
-		title := marker(0) + sidebarNewChatTitle
+		newMarker, newFill, newSubtitle := m.sidebarChooserRowStyle(0, level)
+		title := newMarker + " " + sidebarNewChatTitle
 		detail := sidebarNewChatSubtitle
 		if m.sidebarChatCreationAvailable() {
 			detail = sidebarNewChatSubtitleAvailable
@@ -1361,10 +1359,10 @@ func (m *Model) paintSidebarChooserBody(width int, height int, rows sidebarChoic
 		if rows.wide {
 			pad := max(bodyWidth-1-codextui.DisplayWidth(detail), codextui.DisplayWidth(title))
 			title += strings.Repeat(" ", pad-codextui.DisplayWidth(title))
-			paintAt(sidebarChooserFirstChoiceRow, truncateSidebarChooserRow(title+detail, bodyWidth))
+			paintFilledAt(sidebarChooserFirstChoiceRow, truncateSidebarChooserRow(title+detail, bodyWidth), newFill)
 		} else {
-			paintAt(sidebarChooserFirstChoiceRow, truncateSidebarChooserRow(title, bodyWidth))
-			paintAt(sidebarChooserFirstChoiceRow+1, truncateSidebarChooserRow("    "+detail, bodyWidth))
+			paintFilledAt(sidebarChooserFirstChoiceRow, truncateSidebarChooserRow(title, bodyWidth), newFill)
+			paintFilledAt(sidebarChooserFirstChoiceRow+1, truncateSidebarChooserRow("    "+detail, bodyWidth), newSubtitle)
 		}
 	}
 	if rows.chatsHeader >= 0 {
@@ -1386,16 +1384,17 @@ func (m *Model) paintSidebarChooserBody(width int, height int, rows sidebarChoic
 	}
 	for _, visible := range rows.visible(m.sidebarChooserScroll, choice) {
 		index := visible.index
+		marker, fill, subtitle := m.sidebarChooserRowStyle(index, level)
 		if m.sidebarChooserIsRetryRow(index, choices) {
 			label := sidebarRetryChatsTitle
 			if m.sidebarDiscovery == SideChatDiscoveryLoading {
 				label = sidebarRetryingChatsTitle
 			}
-			paintAt(visible.rows.start, truncateSidebarChooserRow(markerCell(index)+"   "+label, bodyWidth))
+			paintFilledAt(visible.rows.start, truncateSidebarChooserRow(marker+"   "+label, bodyWidth), fill)
 			continue
 		}
 		if file, ok := m.sidebarChooserFile(index); ok {
-			m.paintSidebarFileRow(file, markerCell(index), rows.wide, bodyWidth, visible.rows, paintAt)
+			m.paintSidebarFileRow(file, marker, rows.wide, bodyWidth, visible.rows, paintFilledAt, fill, subtitle)
 			continue
 		}
 		chat, ok := m.sidebarChooserChat(index)
@@ -1406,26 +1405,64 @@ func (m *Model) paintSidebarChooserBody(width int, height int, rows sidebarChoic
 		if m.threadLabelCloud(m.sidebarParentThreadID(), m.backendID) {
 			label = codextui.ThreadLabelPrefix(true) + label
 		}
-		row := marker(index) + "○ " + label
+		row := marker + " ○ " + label
 		if status := m.sideOpenStatusLabel(chat.ThreadID); status != "" {
 			// Rust reserves the status width before truncating the title so the
 			// pending state stays visible on narrow panes.
 			budget := max(bodyWidth-6, 1)
 			titleWidth := max(budget-codextui.DisplayWidth(status), budget/3)
-			row = marker(index) + "○ " + truncateSidebarChooserRow(label, max(titleWidth, 1)) + "  " + status
+			row = marker + " ○ " + truncateSidebarChooserRow(label, max(titleWidth, 1)) + "  " + status
 		}
-		paintAt(visible.rows.start, truncateSidebarChooserRow(row, bodyWidth))
+		paintFilledAt(visible.rows.start, truncateSidebarChooserRow(row, bodyWidth), fill)
 		if visible.rows.len() == 2 {
 			if prompt := m.sidebarChooserPrompt(chat); prompt != "" {
-				paintAt(visible.rows.start+1, truncateSidebarChooserRow("    "+prompt, bodyWidth))
+				paintFilledAt(visible.rows.start+1, truncateSidebarChooserRow("    "+prompt, bodyWidth), subtitle)
 			}
 		}
 	}
 }
 
+// sidebarChooserRowStyle resolves Rust sidebar_chooser::paint's row_style: the
+// selected row carries the selection fill while the chooser owns focus (the
+// quiet workspace fill otherwise), a pointer-hovered row carries the stronger
+// hover fill, and every other row stays plain with secondary subtitles.
+func (m *Model) sidebarChooserRowStyle(index int, level codextui.StdoutColorLevel) (string, codextui.StyleSpec, codextui.StyleSpec) {
+	if index == m.sidebarChooserClampedChoice() {
+		selected := selectionNotUnderlined(level)
+		if !m.sidebarChooserFocused {
+			selected = codextui.QuietWorkspaceStyle(level)
+		}
+		subtitle := selected
+		subtitle.Bold = false
+		return "›", selected, subtitle
+	}
+	if index == m.sidebarChooserHover {
+		hover := codextui.HoverStyleFor(codextui.QuietWorkspaceStyle(level), level)
+		subtitle := hover
+		subtitle.Bold = false
+		return " ", hover, subtitle
+	}
+	return " ", codextui.StyleSpec{}, codextui.SecondaryTextStyle(level)
+}
+
+// paintSidebarChooserRow fills one chooser row to the body width with the row's
+// resolved style, like ratatui painting `Line::style(fill)` across the body
+// row. Inner resets re-open the fill so later spans keep the background.
+func paintSidebarChooserRow(text string, width int, spec codextui.StyleSpec, level codextui.StdoutColorLevel) string {
+	prefix := codextui.SGRForStyleQuiet(spec, level)
+	if prefix == "" {
+		return text
+	}
+	if strings.Contains(text, "\x1b[0m") {
+		text = strings.ReplaceAll(text, "\x1b[0m", "\x1b[0m"+prefix)
+	}
+	padding := max(width-codextui.DisplayWidth(text), 0)
+	return prefix + text + strings.Repeat(" ", padding) + "\x1b[0m"
+}
+
 // paintSidebarFileRow is Rust paint's file arm: the relative path split into
 // directory and file name, summarised from both ends when the pane is narrow.
-func (m *Model) paintSidebarFileRow(file markdown.SidebarFileLink, marker string, wide bool, bodyWidth int, lines sidebarChooserSpan, paintAt func(int, string)) {
+func (m *Model) paintSidebarFileRow(file markdown.SidebarFileLink, marker string, wide bool, bodyWidth int, lines sidebarChooserSpan, paintAt func(int, string, codextui.StyleSpec), fill codextui.StyleSpec, subtitle codextui.StyleSpec) {
 	path := sidebarChooserRelativePath(m.sidebarFilesCwd, file.Path)
 	directory, name := splitSidebarFilePath(path)
 	if m.sidebarFilePreviewUnavailable != "" {
@@ -1436,14 +1473,14 @@ func (m *Model) paintSidebarFileRow(file markdown.SidebarFileLink, marker string
 		name = codextui.FilenameLabel(name, max(width-5, 0))
 		directoryWidth := max(width-codextui.DisplayWidth(name)-2, 0)
 		directory = codextui.MiddleLabel(directory, directoryWidth)
-		paintAt(lines.start, truncateSidebarChooserRow(marker+" · "+name+"  "+directory, bodyWidth))
+		paintAt(lines.start, truncateSidebarChooserRow(marker+" · "+name+"  "+directory, bodyWidth), fill)
 		return
 	}
 	name = codextui.FilenameLabel(name, width)
-	paintAt(lines.start, truncateSidebarChooserRow(marker+" · "+name, bodyWidth))
+	paintAt(lines.start, truncateSidebarChooserRow(marker+" · "+name, bodyWidth), fill)
 	if lines.start+1 < lines.end {
 		directory = codextui.MiddleLabel(directory, width)
-		paintAt(lines.start+1, truncateSidebarChooserRow("    "+directory, bodyWidth))
+		paintAt(lines.start+1, truncateSidebarChooserRow("    "+directory, bodyWidth), subtitle)
 	}
 }
 
