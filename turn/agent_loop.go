@@ -49,6 +49,14 @@ type SamplingFollowUpContext struct {
 
 type SamplingFollowUp func(*SamplingFollowUpContext) []any
 
+// SamplingSettlement settles one completed response's accounting before its
+// tool calls are dispatched (Rust #61577/#61958: the terminal response is
+// billed before `SessionBudgetExceeded` can fail the turn). An error is
+// terminal for the reporting turn, but the loop keeps the response's output,
+// usage and tool-call history in its result so the caller can persist them
+// before reporting the failure.
+type SamplingSettlement func(*SamplingFollowUpContext) error
+
 // StepInputItemsProvider supplies request-scoped context that must be rebuilt
 // from the model captured for each sampling step. The returned items join the
 // turn's input history so later steps continue to see the same world-state
@@ -252,6 +260,7 @@ type AgentLoopRequest struct {
 	// root-agent turn (Rust #57201, default-off feature).
 	CriticalPathTiming bool
 	SamplingFollowUp   SamplingFollowUp
+	SamplingSettlement SamplingSettlement
 	SamplingCompaction SamplingCompaction
 	// SamplingCheckpoint returns the highest persisted history identity visible
 	// before a regular inference request. It is captured before dispatch, so
@@ -380,7 +389,19 @@ type AgentLoopResult struct {
 	Iterations        int
 	TimingProfile     *Profile
 	SamplingFollowUps int
-	Compactions       int
+	// SettledResponses counts the completed responses whose bill the sampling
+	// settlement already posted (Rust #61958's posted charge). The caller must
+	// not charge those responses again when the turn ends without a retained
+	// response.
+	SettledResponses int
+	Compactions      int
+	// SamplingError is a terminal accounting failure discovered after a
+	// response completed (Rust #61958 `SessionBudgetExceeded` /
+	// `UsageAccountingFailed` from `record_rollout_budget_usage`). The turn's
+	// output and usage in this result are already settled; the caller persists
+	// them and then fails the turn with this error instead of discarding the
+	// completed response.
+	SamplingError error
 	// SampledThroughSequence is the highest input prefix acknowledged by a
 	// completed regular request during this turn.
 	SampledThroughSequence *uint64
@@ -826,6 +847,16 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			if request.OnTokenUsage != nil {
 				request.OnTokenUsage(result.Usage)
 			}
+			// Rust #61958: a completion observed before the steer still pays its
+			// bill, and a turn-scoped accounting failure keeps the drained items
+			// and usage in the result.
+			if request.SamplingSettlement != nil {
+				result.SettledResponses++
+				if settleErr := request.SamplingSettlement(&SamplingFollowUpContext{Response: response, Usage: response.Usage, Iteration: iteration, HasToolCalls: false}); settleErr != nil {
+					result.SamplingError = settleErr
+					return result, nil
+				}
+			}
 			if responseID := strings.TrimSpace(response.ResponseID); responseID != "" {
 				previousResponseID = responseID
 			}
@@ -908,6 +939,20 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		}
 
 		toolItems := toolAgentItems(response)
+		// Rust #61958: the completed response's bill is settled before any of
+		// its buffered tools may start, and a turn-scoped accounting failure
+		// keeps the response's output and usage in this result.
+		if request.SamplingSettlement != nil {
+			result.SettledResponses++
+			if settleErr := request.SamplingSettlement(&SamplingFollowUpContext{Response: response, Usage: response.Usage, Iteration: iteration, HasToolCalls: len(toolItems) > 0}); settleErr != nil {
+				result.SamplingError = settleErr
+				// Refused calls still publish aborted outputs so the persisted
+				// tool-call history stays complete for the next turn.
+				l.abortPendingToolItems(result, toolItems, "aborted before handler start: usage accounting failed")
+				endSamplingRequestSpan()
+				return result, nil
+			}
+		}
 		// Rust #61577: after_complete_response settles usage and synchronous
 		// post-hooks before releasing the response's tool calls. Go already
 		// holds the completed response here, so the follow-up (usage
@@ -927,27 +972,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		// with SessionBudgetExceeded after its accepted items are persisted.
 		if request.CheckWorkBudget != nil {
 			if err := request.CheckWorkBudget(); err != nil {
-				if len(toolItems) > 0 {
-					for i := range toolItems {
-						result.InputItems = append(result.InputItems, &toolItems[i])
-					}
-					if l.dispatcher != nil {
-						executions := l.dispatcher.AbortToolItems(toolItems, "aborted before handler start: rollout budget exhausted")
-						result.ToolExecutions = append(result.ToolExecutions, executions...)
-						for i := range executions {
-							if executions[i].Response != nil {
-								result.InputItems = append(result.InputItems, executions[i].Response)
-							}
-							if len(executions[i].InputItems) > 0 {
-								result.InputItems = append(result.InputItems, executions[i].InputItems...)
-							}
-						}
-					} else {
-						for i := range toolItems {
-							result.InputItems = append(result.InputItems, abortedToolCallOutputItem(&toolItems[i]))
-						}
-					}
-				}
+				l.abortPendingToolItems(result, toolItems, "aborted before handler start: rollout budget exhausted")
 				endSamplingRequestSpan()
 				return result, nil
 			}
@@ -1417,6 +1442,36 @@ func toolAgentItems(response *model.AgentResponse) []model.AgentItem {
 		}
 	}
 	return out
+}
+
+// abortPendingToolItems records a completed response's tool calls in the turn
+// history and publishes aborted outputs for them without starting a handler.
+// Used when the response's settlement fails or the shared budget refuses new
+// work: the persisted history stays complete and the next request remains
+// valid (Rust #61577/#61582/#61958).
+func (l *AgentLoop) abortPendingToolItems(result *AgentLoopResult, toolItems []model.AgentItem, reason string) {
+	if result == nil || len(toolItems) == 0 {
+		return
+	}
+	for i := range toolItems {
+		result.InputItems = append(result.InputItems, &toolItems[i])
+	}
+	if l.dispatcher != nil {
+		executions := l.dispatcher.AbortToolItems(toolItems, reason)
+		result.ToolExecutions = append(result.ToolExecutions, executions...)
+		for i := range executions {
+			if executions[i].Response != nil {
+				result.InputItems = append(result.InputItems, executions[i].Response)
+			}
+			if len(executions[i].InputItems) > 0 {
+				result.InputItems = append(result.InputItems, executions[i].InputItems...)
+			}
+		}
+		return
+	}
+	for i := range toolItems {
+		result.InputItems = append(result.InputItems, abortedToolCallOutputItem(&toolItems[i]))
+	}
 }
 
 func isToolAgentItem(item *model.AgentItem) bool {

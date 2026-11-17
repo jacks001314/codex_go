@@ -2947,6 +2947,31 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestThreadListLegacyRowsUseListedThreadNameLikeRust;TestThreadListRolloutLegacyNamesUseSessionIndexLikeRust;TestRepeatedLegacyRowsKeepTheirOwnMetadataLikeRust"
+  },
+  {
+   "id": "turn-scoped-usage-accounting",
+   "kind": "source-surface",
+   "rustPaths": [
+    "core/src/agent/host/usage.rs",
+    "core/src/client/response_delivery.rs",
+    "core/src/client_common.rs",
+    "core/src/client.rs",
+    "core/src/session/rollout_budget.rs",
+    "core/src/session/turn.rs"
+   ],
+   "goPaths": [
+    "runtimeutil/usage_accounting.go",
+    "appserver/usage_accounting.go",
+    "appserver/turn_runtime.go",
+    "turn/agent_loop.go",
+    "model/responses_stream.go",
+    "appserver/turn_scoped_budget_like_rust_test.go",
+    "turn/sampling_settlement_like_rust_test.go",
+    "model/responses_preempt_billing_like_rust_test.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestUsageAccountingExhaustedForTurnFailsOnlyThatTurnLikeRust;TestAgentLoopSettlesEachResponseWithItsOwnUsageLikeRust;TestAgentLoopKeepsSettledResponseWhenAccountingFailsLikeRust;TestResponsesRunnerPreemptionKeepsObservedCompletionLikeRust"
   }
   ]
 }

@@ -160,7 +160,7 @@ func TestApplyModelRequestHookChargePostsSharedBudgetLikeRust(t *testing.T) {
 	router := NewRuntimeRouter(RuntimeServices{})
 	router.rolloutBudget = budget
 
-	if err := router.applyModelRequestHookCharge("thread-1", &HookRunResult{ModelRequestHookCharge: HookCharge{Units: 1}}); err != nil {
+	if err := router.applyModelRequestHookCharge("thread-1", "turn-1", &HookRunResult{ModelRequestHookCharge: HookCharge{Units: 1}}); err != nil {
 		t.Fatalf("applyModelRequestHookCharge() error = %v", err)
 	}
 	if budget.Exhausted() {
@@ -178,7 +178,7 @@ func TestApplyModelRequestHookChargeSurfacesInvalidPriceLikeRust(t *testing.T) {
 	router := NewRuntimeRouter(RuntimeServices{})
 	router.rolloutBudget = budget
 
-	err := router.applyModelRequestHookCharge("thread-1", &HookRunResult{
+	err := router.applyModelRequestHookCharge("thread-1", "turn-1", &HookRunResult{
 		ModelRequestHookCharge:       HookCharge{Units: 1},
 		ModelRequestHookInvalidPrice: "hook extra_codex_rollout_budget_units must be finite and nonnegative",
 	})
@@ -201,7 +201,7 @@ func TestApplyModelRequestHookChargeClosesLargestAllowanceOnOverflowLikeRust(t *
 	router := NewRuntimeRouter(RuntimeServices{})
 	router.rolloutBudget = budget
 
-	err := router.applyModelRequestHookCharge("thread-1", &HookRunResult{
+	err := router.applyModelRequestHookCharge("thread-1", "turn-1", &HookRunResult{
 		ModelRequestHookCharge:       HookCharge{Units: 1e308, Overflowed: true},
 		ModelRequestHookInvalidPrice: "total hook cost exceeds f64 range",
 	})

@@ -163,6 +163,11 @@ type AgentRequest struct {
 	// second) instead of abandoning the socket. The completed part keeps its
 	// usage accounting and the connection stays reusable.
 	InterruptOnCancel bool
+	// completionObserved, when set, reports that this attempt's stream parsed
+	// its `response.completed` event. It closes the race between a steer and a
+	// completion the producer already accepted (Rust #61958's consumer_dropped
+	// / settlement_started ordering).
+	completionObserved func()
 }
 
 type AgentUsage struct {

@@ -2073,6 +2073,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			r.notify(NotificationWarning, &WarningNotification{ThreadID: stringPtrIfNotEmpty(threadID), Message: message})
 		},
 		SamplingFollowUp:         samplingFollowUp,
+		SamplingSettlement:       r.rolloutBudgetSettlement(threadID, turnID),
 		SamplingCompaction:       samplingCompaction,
 		SettleBeforeToolDispatch: responseProcessMode == config.ResponseProcessModeAfterCompleteResponse,
 		CheckWorkBudget:          r.rolloutBudgetCheck(threadID),
@@ -2113,7 +2114,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	// the same turn with the transcript this turn already produced, instead of
 	// being dropped when the turn completes.
 	var finishTurn func()
-	for err == nil && ctx.Err() == nil {
+	for err == nil && ctx.Err() == nil && result.SamplingError == nil {
 		if hook := r.turnFinishHook; hook != nil {
 			hook(threadID, turnID)
 		}
@@ -2303,6 +2304,13 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			TurnID:     turnID,
 			TokenUsage: *usage,
 		})
+		if result.SamplingError != nil {
+			// Rust #61958 reports the accounting failure after the response's
+			// output and usage are recorded, before any post-turn compaction.
+			r.clearActiveRuntimeTurn(threadID, turnID)
+			r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, result.SamplingError, nil)
+			return
+		}
 		if statusErr == nil && status != nil {
 			_ = r.persistAutoCompactFallbackOutcome(threadID, turnID, result, status, tokenBudgetDelivery)
 			fallbackRecorded, fallbackErr := r.recordAutoCompactFallbackPrompt(threadID, turnID, status)
@@ -2351,12 +2359,28 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			}
 		}
 	}
+	if result.SamplingError != nil {
+		// Rust #61958: a completed response whose settlement failed keeps its
+		// output and usage - both were persisted above - while the turn reports
+		// the accounting failure (SessionBudgetExceeded or
+		// UsageAccountingFailed).
+		r.clearActiveRuntimeTurn(threadID, turnID)
+		r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, result.SamplingError, nil)
+		return
+	}
+	if r.hostBudgetExhaustedFor(threadID) {
+		// Rust UsageAccountingDecision::Exhausted stops new work across the
+		// rollout tree; the turn that observed it fails, later turns stay
+		// gated until the host lifts the decision.
+		r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, ErrSessionBudgetExceeded, nil)
+		return
+	}
 	if budget := r.rolloutBudgetForThread(threadID); budget != nil {
-		// Per-response charging happens in the sampling follow-up; turns that
+		// Per-response charging happens in the sampling settlement; turns that
 		// produced no model responses are charged here. Exhaustion (from either
 		// path) fails the turn with the sessionBudgetExceeded codexErrorInfo,
 		// mirroring Rust Session::record_rollout_budget_usage.
-		if len(result.Responses) == 0 {
+		if len(result.Responses) == 0 && result.SettledResponses == 0 {
 			_, budgetErr := budget.RecordUsage(runtimeutil.TokenUsage{
 				InputTokens:             result.Usage.InputTokens,
 				CachedInputTokens:       result.Usage.CachedInputTokens,
@@ -4482,12 +4506,16 @@ func mergeAgentLoopAttempts(first *turn.AgentLoopResult, second *turn.AgentLoopR
 	merged.SteerInputItems = append(append([]any(nil), first.SteerInputItems...), second.SteerInputItems...)
 	merged.Compactions += first.Compactions
 	merged.SamplingFollowUps += first.SamplingFollowUps
+	merged.SettledResponses += first.SettledResponses
 	if first.SampledThroughSequence != nil && (merged.SampledThroughSequence == nil || *first.SampledThroughSequence > *merged.SampledThroughSequence) {
 		value := *first.SampledThroughSequence
 		merged.SampledThroughSequence = &value
 	}
 	merged.Iterations += first.Iterations
 	merged.InitialInputCount = first.InitialInputCount
+	if merged.SamplingError == nil {
+		merged.SamplingError = first.SamplingError
+	}
 	if merged.Response == nil {
 		merged.Response = first.Response
 	}
@@ -6972,6 +7000,14 @@ func (r *RuntimeRouter) recordIncompleteResponseUsage(threadID string, turnID st
 	if strings.TrimSpace(turnID) != "" {
 		r.recordGoalTokenUsageWithDescendants(threadID, turnID, *total)
 	}
+	if r.chargeIncompleteUsageLikeRust(threadID, turnID, runtimeutil.TokenUsage{
+		InputTokens:             usage.InputTokens,
+		CachedInputTokens:       usage.CachedInputTokens,
+		OutputTokens:            usage.OutputTokens,
+		CodexRolloutBudgetUnits: usage.CodexRolloutBudgetUnits,
+	}) {
+		return
+	}
 	if budget := r.rolloutBudgetForThread(threadID); budget != nil {
 		// Per-response charging, mirroring Rust's `record_rollout_budget_usage`
 		// reached from `record_token_usage_info`.
@@ -7015,7 +7051,7 @@ func (r *RuntimeRouter) recordIncompleteCompactionUsage(record *session.Record, 
 	usage := *incomplete.Usage
 	threadID := strings.TrimSpace(request.ThreadID)
 	if request.Trigger != compact.TriggerManual {
-		r.chargeRolloutBudgetUsage(threadID, usage)
+		r.chargeRolloutBudgetUsage(threadID, request.TurnID, usage)
 		return
 	}
 	modelID := ""
@@ -7042,8 +7078,16 @@ func (r *RuntimeRouter) recordIncompleteCompactionUsage(record *session.Record, 
 // reached from the background compaction arm. Budget exhaustion is recorded for
 // later reporting but never turned into an error: the caller already holds a
 // terminal failure.
-func (r *RuntimeRouter) chargeRolloutBudgetUsage(threadID string, usage model.AgentUsage) {
+func (r *RuntimeRouter) chargeRolloutBudgetUsage(threadID string, turnID string, usage model.AgentUsage) {
 	if r == nil {
+		return
+	}
+	if r.chargeIncompleteUsageLikeRust(threadID, turnID, runtimeutil.TokenUsage{
+		InputTokens:             usage.InputTokens,
+		CachedInputTokens:       usage.CachedInputTokens,
+		OutputTokens:            usage.OutputTokens,
+		CodexRolloutBudgetUnits: usage.CodexRolloutBudgetUnits,
+	}) {
 		return
 	}
 	budget := r.rolloutBudgetForThread(threadID)

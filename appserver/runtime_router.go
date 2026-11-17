@@ -93,10 +93,14 @@ type RuntimeServices struct {
 	Config              *config.ConfigService
 	Account             *auth.AccountManager
 	AccountOAuthOptions *auth.OAuthOptions
-	Hooks               *HookRegistry
-	HooksDiscovery      *HookDiscoveryService
-	HookRunner          *HookRunner
-	Skills              *SkillsService
+	// UsageAccounting is the embedding host's accounting for completed model
+	// responses (Rust AgentRuntimeServices::Host usage_accounting, #61958).
+	// Nil keeps the native rollout budget.
+	UsageAccounting UsageAccounting
+	Hooks           *HookRegistry
+	HooksDiscovery  *HookDiscoveryService
+	HookRunner      *HookRunner
+	Skills          *SkillsService
 	// SkillInvocationContributors are extension contributors that may require
 	// host-owned skills; any one of them disables skip_host_skill_discovery
 	// (Rust #40631).
@@ -939,11 +943,17 @@ type RuntimeRouter struct {
 	rolloutBudgetRoots     map[string]string
 	rolloutBudgetCharged   atomic.Bool
 	rolloutBudgetExhausted atomic.Bool
-	reasoningEffortMu      sync.Mutex
-	reasoningEffortPins    map[string]reasoningEffortPin
-	closeOnce              sync.Once
-	closeErr               error
-	codexHomeScanCancel    func()
+	// hostBudgetExhausted records root threads whose host usage accounting
+	// answered UsageAccountingExhausted, and turnBudgetExhausted records the
+	// turns whose host answered UsageAccountingExhaustedForTurn (Rust
+	// UsageAccountingDecision, #61958). Both are guarded by rolloutBudgetsMu.
+	hostBudgetExhausted map[string]struct{}
+	turnBudgetExhausted map[string]struct{}
+	reasoningEffortMu   sync.Mutex
+	reasoningEffortPins map[string]reasoningEffortPin
+	closeOnce           sync.Once
+	closeErr            error
+	codexHomeScanCancel func()
 	// daemonRecoverySink is the daemon-scoped slot a managed daemon shares
 	// between the per-connection routers; nil for every other server, so an
 	// unmanaged app-server never contributes or writes a recovery snapshot.
@@ -1078,6 +1088,9 @@ func (r *RuntimeRouter) rolloutBudgetRootThread(threadID string) string {
 // tool handlers, and MCP handoff (Rust RolloutBudget::check_start, #61582).
 func (r *RuntimeRouter) rolloutBudgetCheck(threadID string) func() error {
 	return func() error {
+		if r.hostBudgetExhaustedFor(threadID) {
+			return ErrSessionBudgetExceeded
+		}
 		budget := r.rolloutBudgetForThread(threadID)
 		if budget != nil && budget.Exhausted() {
 			return ErrSessionBudgetExceeded
@@ -1097,13 +1110,11 @@ func rolloutBudgetReminderMessage(remainingUnits float64) any {
 	))
 }
 
-// rolloutBudgetFollowUp returns a SamplingFollowUp that charges each completed
-// model response against the shared rollout budget (mirroring Rust
-// Session::record_rollout_budget_usage) and injects the `<rollout_budget>`
-// developer reminder when a remaining-tokens threshold is crossed (mirroring
-// Rust maybe_record_reminder, core/src/session/rollout_budget.rs). Exhaustion
-// is recorded on the router and surfaced as ErrSessionBudgetExceeded at turn
-// completion (Go's agent loop cannot abort a sampling step mid-loop).
+// rolloutBudgetFollowUp injects the `<rollout_budget>` developer reminder when
+// a remaining-tokens threshold is crossed (Rust maybe_record_reminder,
+// core/src/session/rollout_budget.rs). Charging lives in
+// rolloutBudgetSettlement so the bill is posted once, with the response's own
+// usage, before its tools start (Rust #61577/#61958).
 func (r *RuntimeRouter) rolloutBudgetFollowUp(threadID string) turn.SamplingFollowUp {
 	return func(ctx *turn.SamplingFollowUpContext) []any {
 		if ctx == nil {
@@ -1112,19 +1123,6 @@ func (r *RuntimeRouter) rolloutBudgetFollowUp(threadID string) turn.SamplingFoll
 		budget := r.rolloutBudgetForThread(threadID)
 		if budget == nil {
 			return nil
-		}
-		r.rolloutBudgetCharged.Store(true)
-		exhausted, err := budget.RecordUsage(runtimeutil.TokenUsage{
-			InputTokens:             ctx.Usage.InputTokens,
-			CachedInputTokens:       ctx.Usage.CachedInputTokens,
-			OutputTokens:            ctx.Usage.OutputTokens,
-			CodexRolloutBudgetUnits: ctx.Usage.CodexRolloutBudgetUnits,
-		})
-		if err != nil {
-			return nil
-		}
-		if exhausted {
-			r.rolloutBudgetExhausted.Store(true)
 		}
 		windowID := threadID
 		reminder := budget.PendingReminder(threadID, windowID)

@@ -96,24 +96,25 @@ func (r *RuntimeRouter) runModelRequestHook(ctx context.Context, threadID string
 	if hookErr != nil || hookResult == nil {
 		return nil
 	}
-	return r.applyModelRequestHookCharge(threadID, hookResult)
+	return r.applyModelRequestHookCharge(threadID, event.TurnID, hookResult)
 }
 
 // applyModelRequestHookCharge posts a billable PostModelRequest run's hook
-// price to the thread's shared rollout budget. Rust #61580 charges the
-// synchronous hook contribution independently of the provider usage record,
-// then surfaces a bad price as a terminal failure only after its valid
-// siblings were posted.
-func (r *RuntimeRouter) applyModelRequestHookCharge(threadID string, hookResult *HookRunResult) error {
+// price to the thread's shared rollout budget, or to the host's accounting
+// when one is installed (Rust #61580/#61958). A bad price surfaces as a
+// terminal failure only after its valid siblings were posted.
+func (r *RuntimeRouter) applyModelRequestHookCharge(threadID string, turnID string, hookResult *HookRunResult) error {
 	if hookResult == nil {
 		return nil
 	}
 	if charge := hookResult.ModelRequestHookCharge; charge.Units != 0 || charge.Overflowed {
-		if budget := r.rolloutBudgetForThread(threadID); budget != nil {
-			exhausted, chargeErr := budget.RecordHookCharge(runtimeutil.HookCharge{
-				Units:      charge.Units,
-				Overflowed: charge.Overflowed,
-			})
+		hookCharge := runtimeutil.HookCharge{Units: charge.Units, Overflowed: charge.Overflowed}
+		if handled, err := r.reportHookChargeToHost(threadID, turnID, hookCharge); handled {
+			if err != nil {
+				return err
+			}
+		} else if budget := r.rolloutBudgetForThread(threadID); budget != nil {
+			exhausted, chargeErr := budget.RecordHookCharge(hookCharge)
 			if chargeErr != nil {
 				return fmt.Errorf("%w: %v", model.ErrUsageAccountingFailed, chargeErr)
 			}

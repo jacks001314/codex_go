@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -307,6 +308,25 @@ type responsesSSEEvent struct {
 	Data  []byte
 }
 
+// responsesSSECompletedEvent reports whether a parsed frame carries the
+// terminal `response.completed` event. Providers that omit the SSE event name
+// put the type in the JSON payload instead.
+func responsesSSECompletedEvent(sse *responsesSSEEvent) bool {
+	if sse == nil {
+		return false
+	}
+	if strings.TrimSpace(sse.Event) == "response.completed" {
+		return true
+	}
+	var payload struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(sse.Data, &payload); err != nil {
+		return false
+	}
+	return strings.TrimSpace(payload.Type) == "response.completed"
+}
+
 var errResponsesStreamFailed = errors.New("response.failed event received")
 
 type responsesStreamAccumulator struct {
@@ -450,6 +470,9 @@ func preemptedAgentResponse(request *AgentRequest) *AgentResponse {
 // runStreamingOncePreemptible mirrors Rust #48141's `try_run_sampling_request`:
 // the stream future is raced against the request's preemption signal, and a
 // preemption cancels the in-flight request so its transport is abandoned.
+// Rust #61958 adds one exception: when the stream already observed its
+// `response.completed` event, the step keeps that completion so its usage and
+// output are settled before the steer opens the follow-up request.
 func (r *ResponsesAgentRunner) runStreamingOncePreemptible(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest) (*AgentResponse, error) {
 	if request == nil || request.Preempt == nil {
 		return r.runStreamingOnce(ctx, request, apiRequest)
@@ -461,22 +484,61 @@ func (r *ResponsesAgentRunner) runStreamingOncePreemptible(ctx context.Context, 
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// The wrapper records whether the terminal event reached the consumer
+	// before the steer arrived; that completion owns a bill the turn must
+	// settle instead of discarding (Rust #61958).
+	clone := *request
+	var completed atomic.Bool
+	clone.completionObserved = func() { completed.Store(true) }
 	type outcome struct {
 		response *AgentResponse
 		err      error
 	}
 	done := make(chan outcome, 1)
 	go func() {
-		response, err := r.runStreamingOnce(streamCtx, request, apiRequest)
+		response, err := r.runStreamingOnce(streamCtx, &clone, apiRequest)
 		done <- outcome{response: response, err: err}
 	}()
+	// Rust biases this select toward the dropped consumer, so a steer that is
+	// already pending wins over a ready stream.
 	select {
-	case result := <-done:
-		return result.response, result.err
 	case <-request.Preempt:
 		cancel()
 		return nil, errResponsesSamplingPreempted
+	default:
 	}
+	select {
+	case result := <-done:
+		// The steer and the terminal event can become ready together; Rust's
+		// biased select prefers the dropped consumer, so a completion observed
+		// after the steer still yields a drained preemption.
+		markResponsePreemptedIfSteered(request.Preempt, result.response)
+		return result.response, result.err
+	case <-request.Preempt:
+		if completed.Load() {
+			result := <-done
+			markResponsePreemptedIfSteered(request.Preempt, result.response)
+			return result.response, result.err
+		}
+		cancel()
+		return nil, errResponsesSamplingPreempted
+	}
+}
+
+// markResponsePreemptedIfSteered keeps a response the stream already completed
+// when new user input interrupted the step: its bill and output are settled
+// and the turn continues from the queued input (Rust #61958).
+func markResponsePreemptedIfSteered(preempt <-chan struct{}, response *AgentResponse) {
+	if response == nil || preempt == nil {
+		return
+	}
+	select {
+	case <-preempt:
+	default:
+		return
+	}
+	response.Preempted = true
+	response.Drained = true
 }
 
 // sleepWithContextPreemptible waits for the retry backoff, reporting true when
@@ -791,6 +853,12 @@ func parseResponsesStreamWithTreatment(ctx context.Context, reader io.Reader, re
 			return nil, err
 		}
 		var streamedEvent *ResponsesStreamEvent
+		// Rust #61958: the producer marks the settlement as started as soon as
+		// it accepts the terminal event, before the consumer can observe the
+		// steer. Go reports the same point here.
+		if request != nil && request.completionObserved != nil && responsesSSECompletedEvent(sse) {
+			request.completionObserved()
+		}
 		done, err := accumulator.apply(sse, func(event *ResponsesStreamEvent) {
 			streamedEvent = event
 			if handler != nil {

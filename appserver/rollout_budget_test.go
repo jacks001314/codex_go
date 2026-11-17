@@ -90,21 +90,35 @@ func TestRuntimeRouterRolloutBudgetReminderInjectsDeveloperMessage(t *testing.T)
 	}
 
 	followUp := router.rolloutBudgetFollowUp("thread-reminder")
+	settle := router.rolloutBudgetSettlement("thread-reminder", "turn-reminder")
+	// Charging moved out of the reminder follow-up: every completed response
+	// settles its own bill first (Rust #61577/#61958).
+	charge := func(outputTokens int64) {
+		t.Helper()
+		if err := settle(&turn.SamplingFollowUpContext{Response: &model.AgentResponse{Usage: model.AgentUsage{OutputTokens: outputTokens}}}); err != nil {
+			t.Fatalf("settlement error = %v", err)
+		}
+	}
 	// The reminder fires on the first charge and at each threshold crossing,
 	// exactly once per delivered index (mirrors Rust pending_reminder):
 	// 80 remaining (initial), then 75 (crosses the 75 threshold), then 35.
+	charge(20)
 	expectReminder(t, followUp, 20, "80")
+	charge(5)
 	expectReminder(t, followUp, 5, "75")
+	charge(20)
 	if items := followUp(&turn.SamplingFollowUpContext{Usage: model.AgentUsage{OutputTokens: 20}}); len(items) != 0 {
 		t.Fatalf("reminder fired without a new threshold crossing: %#v", items)
 	}
+	charge(20)
 	expectReminder(t, followUp, 20, "35")
 	// The same delivered index is never repeated.
+	charge(0)
 	if items := followUp(&turn.SamplingFollowUpContext{Usage: model.AgentUsage{OutputTokens: 0}}); len(items) != 0 {
 		t.Fatalf("duplicate reminder delivered: %#v", items)
 	}
 	// Exhaustion is recorded on the router and surfaces at turn completion.
-	followUp(&turn.SamplingFollowUpContext{Usage: model.AgentUsage{OutputTokens: 60}})
+	charge(60)
 	if !router.rolloutBudgetExhausted.Load() {
 		t.Fatal("rolloutBudgetExhausted = false after charging past the limit")
 	}
