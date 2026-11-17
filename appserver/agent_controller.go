@@ -216,6 +216,7 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 	var record *session.Record
 	forkTurns := runtimeForkTurns(args.ForkTurns)
 	forkedHistory := false
+	copiedHistory := false
 	var forkContext time.Duration
 	var childCreateStartedAt time.Time
 	var durabilityWait time.Duration
@@ -246,7 +247,12 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 			c.cleanupProvisionalSpawn(string(threadID))
 			return nil, recordRuntimeAgentSpawnFailure(c, ctx, firstNonNilError(readErr, fmt.Errorf("parent thread %s is unavailable", c.parentID)), tool.AgentErrorContextForkHistory, forkMode)
 		}
-		forkOptions := session.ForkOptions{NewID: threadID, ParentThreadID: session.ThreadID(c.parentID), Now: now, Mode: session.ForkAll}
+		// Rust thread_manager.rs sets ForkPersistence::CopiedDeferred for every
+		// forked child spawn: a paginated child persists its inherited model
+		// context as its own rollout prefix instead of referencing the parent
+		// (Rust #61833). Legacy children already copy their items.
+		copiedHistory = threadUsesPaginatedHistory(parent)
+		forkOptions := session.ForkOptions{NewID: threadID, ParentThreadID: session.ThreadID(c.parentID), Now: now, Mode: session.ForkAll, CopyHistory: copiedHistory}
 		forked, forkErr := c.router.services.ThreadRouter.store.ForkRecord(parent, forkOptions)
 		if forkErr != nil {
 			c.cleanupProvisionalSpawn(string(threadID))
@@ -318,6 +324,23 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 	if err := c.router.runtimeSaveThreadRecord(record); err != nil {
 		c.cleanupProvisionalSpawn(string(threadID))
 		return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextChildStartup, forkMode)
+	}
+	if copiedHistory {
+		boundary, seedErr := c.router.services.ThreadRouter.seedCopiedSubagentHistory(record)
+		if seedErr != nil {
+			c.cleanupProvisionalSpawn(string(threadID))
+			return nil, recordRuntimeAgentSpawnFailure(c, ctx, seedErr, tool.AgentErrorContextChildStartup, forkMode)
+		}
+		if boundary > 0 {
+			// Rust LiveThread::create_with_inherited_model_context records the
+			// first child-owned ordinal in session metadata before the copied
+			// prefix becomes observable.
+			record.Metadata.SubagentHistoryStartOrdinal = &boundary
+			if err := c.router.runtimeSaveThreadRecord(record); err != nil {
+				c.cleanupProvisionalSpawn(string(threadID))
+				return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextChildStartup, forkMode)
+			}
+		}
 	}
 	childCreate := time.Since(childCreateStartedAt)
 	if err := ctx.Err(); err != nil {
@@ -444,6 +467,7 @@ func (c *runtimeAgentController) cleanupProvisionalSpawn(threadID string) {
 		c.router.agentRegistry.ReleaseSpawnedThread(threadID)
 	}
 	if c.router.services.ThreadRouter != nil && c.router.services.ThreadRouter.store != nil {
+		c.router.services.ThreadRouter.deleteThreadRollouts(session.ThreadID(threadID))
 		_ = c.router.services.ThreadRouter.store.Delete(session.ThreadID(threadID))
 	}
 }

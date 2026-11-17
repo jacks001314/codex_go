@@ -436,6 +436,50 @@ func (r *Router) createThreadRollout(record *session.Record, now time.Time) erro
 	return appendThreadRolloutRecord(recorder, record, now)
 }
 
+// seedCopiedSubagentHistory persists a spawned child's inherited model context
+// as its own rollout prefix and returns the first ordinal that belongs to the
+// child's own history (Rust ForkPersistence::CopiedDeferred +
+// LiveThread::create_with_inherited_model_context). The child record carries
+// the copied items because its fork skipped the history_base reference.
+func (r *Router) seedCopiedSubagentHistory(record *session.Record) (uint64, error) {
+	if r == nil || record == nil {
+		return 0, nil
+	}
+	if existing, err := r.findThreadRolloutPath(record.ID, record.Archived); err == nil && strings.TrimSpace(existing) != "" {
+		// A live rollout already owns the prefix; Rust's spawn path only seeds
+		// the copied context when the child thread is created. The inherited
+		// `rollout_path` extra still points at the parent, so only the
+		// discovery by the child's own id counts.
+		return 0, nil
+	}
+	if err := r.createThreadRollout(record, record.CreatedAt); err != nil {
+		return 0, err
+	}
+	path := strings.TrimSpace(r.threadRolloutPath(record))
+	if path == "" {
+		return 0, fmt.Errorf("rollout path for spawned child %s is unavailable", record.ID)
+	}
+	// The copied prefix occupies every record written so far; the next ordinal
+	// starts the child's own history (Rust stores prefix item count + 1, which
+	// is the same first-free ordinal here because the head already consumed one).
+	boundary, err := rollout.CountRolloutRecords(path)
+	if err != nil {
+		return 0, err
+	}
+	if boundary == 0 {
+		return 0, fmt.Errorf("spawned child %s has an empty rollout", record.ID)
+	}
+	if err := rollout.RewriteSubagentHistoryStartBoundary(path, boundary); err != nil {
+		return 0, err
+	}
+	// The durable rollout is the source of truth; projection is best-effort and
+	// the recorder's after-flush hook reconciles it on the child's first turn.
+	if err := r.materializeThreadHistory(record.ID, path); err != nil {
+		slog.Warn("could not project copied subagent history", "thread_id", record.ID, "error", err)
+	}
+	return boundary, nil
+}
+
 func appendThreadRolloutRecord(recorder *rollout.Recorder, record *session.Record, now time.Time) error {
 	if recorder == nil || record == nil {
 		return nil
@@ -543,36 +587,37 @@ func (r *Router) newThreadRolloutRecorder(record *session.Record, now time.Time)
 		}
 	}
 	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
-		CodexHome:                  codexHome,
-		Path:                       recordedPath,
-		SessionID:                  record.SessionID,
-		SessionPrefix:              record.Metadata.SessionPrefix,
-		ThreadID:                   string(record.ID),
-		ForkedFromID:               string(record.ForkedFromID),
-		AttachedThread:             record.AttachedThreadParentID != "",
-		Source:                     record.Metadata.Source,
-		ThreadSource:               record.Metadata.ThreadSource,
-		Originator:                 record.Metadata.Originator,
-		CWD:                        record.Metadata.CWD,
-		Model:                      record.Metadata.Model,
-		ModelProvider:              record.Metadata.ModelProvider,
-		HistoryMode:                record.Metadata.HistoryMode,
-		HistoryBase:                rolloutHistoryPositionFromRecord(record.HistoryBase),
-		MemoryMode:                 record.Metadata.MemoryMode,
-		ParentThreadID:             string(record.ParentThreadID),
-		BaseInstructions:           record.Metadata.BaseInstructions,
-		BaseInstructionsProvenance: cloneSessionBaseInstructionsProvenance(record.Metadata.BaseInstructionsProvenance),
-		AgentNickname:              record.Metadata.AgentNickname,
-		AgentRole:                  record.Metadata.AgentRole,
-		AgentPath:                  record.Metadata.AgentPath,
-		DynamicTools:               record.Metadata.DynamicTools,
-		SelectedCapabilityRoots:    record.Metadata.SelectedCapabilityRoots,
-		MultiAgentVersion:          record.Metadata.MultiAgentVersion,
-		ContextWindow:              record.Metadata.ContextWindow,
-		CLIVersion:                 record.Metadata.CLIVersion,
-		Git:                        record.Metadata.Git,
-		Extra:                      record.Metadata.Extra,
-		Now:                        now,
+		CodexHome:                   codexHome,
+		Path:                        recordedPath,
+		SessionID:                   record.SessionID,
+		SessionPrefix:               record.Metadata.SessionPrefix,
+		ThreadID:                    string(record.ID),
+		ForkedFromID:                string(record.ForkedFromID),
+		AttachedThread:              record.AttachedThreadParentID != "",
+		Source:                      record.Metadata.Source,
+		ThreadSource:                record.Metadata.ThreadSource,
+		Originator:                  record.Metadata.Originator,
+		CWD:                         record.Metadata.CWD,
+		Model:                       record.Metadata.Model,
+		ModelProvider:               record.Metadata.ModelProvider,
+		HistoryMode:                 record.Metadata.HistoryMode,
+		HistoryBase:                 rolloutHistoryPositionFromRecord(record.HistoryBase),
+		SubagentHistoryStartOrdinal: record.Metadata.SubagentHistoryStartOrdinal,
+		MemoryMode:                  record.Metadata.MemoryMode,
+		ParentThreadID:              string(record.ParentThreadID),
+		BaseInstructions:            record.Metadata.BaseInstructions,
+		BaseInstructionsProvenance:  cloneSessionBaseInstructionsProvenance(record.Metadata.BaseInstructionsProvenance),
+		AgentNickname:               record.Metadata.AgentNickname,
+		AgentRole:                   record.Metadata.AgentRole,
+		AgentPath:                   record.Metadata.AgentPath,
+		DynamicTools:                record.Metadata.DynamicTools,
+		SelectedCapabilityRoots:     record.Metadata.SelectedCapabilityRoots,
+		MultiAgentVersion:           record.Metadata.MultiAgentVersion,
+		ContextWindow:               record.Metadata.ContextWindow,
+		CLIVersion:                  record.Metadata.CLIVersion,
+		Git:                         record.Metadata.Git,
+		Extra:                       record.Metadata.Extra,
+		Now:                         now,
 	})
 	if err != nil {
 		return nil, err

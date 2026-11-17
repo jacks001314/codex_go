@@ -2712,6 +2712,26 @@
    "verifier": "TestCompatibilityWritableRootsPreserveOutputOnlyFallbackLikeRust;TestWorkspaceWritableRootsListAWSMetadata;TestWritableRootCaseVariantMetadataLikeRust;TestProtectedMetadataNameGateCaseRules"
   },
   {
+   "id": "subagent-copied-paginated-history",
+   "kind": "source-surface",
+   "rustPaths": [
+    "core/src/thread_manager.rs",
+    "core/src/session/mod.rs",
+    "thread-store/src/live_thread.rs",
+    "thread-store/src/local/mod.rs"
+   ],
+   "goPaths": [
+    "appserver/agent_controller.go",
+    "appserver/router.go",
+    "session/store.go",
+    "rollout/canonicalize.go",
+    "appserver/subagent_copied_history_like_rust_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestRuntimeAgentControllerV2SpawnCopiesPaginatedParentHistoryLikeRust"
+  },
+  {
    "id": "network-proxy-tool-call-attribution",
    "kind": "source-surface",
    "rustPaths": [

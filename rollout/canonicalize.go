@@ -257,28 +257,37 @@ func isSubagentRollout(meta *SessionMeta) bool {
 // which the subagent's own history starts (the canonical writer's final
 // ordinal, i.e. the first ordinal after all copied parent history).
 func rewriteStagedSubagentBoundary(stagedPath string, boundary uint64) error {
-	data, err := os.ReadFile(stagedPath)
+	return RewriteSubagentHistoryStartBoundary(stagedPath, boundary)
+}
+
+// RewriteSubagentHistoryStartBoundary rewrites a closed rollout's head
+// session_meta so it records the first ordinal owned by the subagent's own
+// history. Rust writes the ordinal before the copied prefix; a live child is
+// seeded first and the boundary is stamped before anything else observes the
+// rollout.
+func RewriteSubagentHistoryStartBoundary(path string, boundary uint64) error {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("read staged rollout for subagent boundary: %w", err)
+		return fmt.Errorf("read rollout for subagent boundary: %w", err)
 	}
 	lines := strings.SplitN(string(data), "\n", 2)
 	if len(lines) == 0 {
-		return errors.New("staged rollout is empty")
+		return errors.New("rollout is empty")
 	}
 	var head Line
 	if err := json.Unmarshal([]byte(lines[0]), &head); err != nil {
-		return fmt.Errorf("parse staged head: %w", err)
+		return fmt.Errorf("parse rollout head: %w", err)
 	}
 	// The staged head is serialized by Line.MarshalJSON: session_meta lines
 	// carry the SessionMeta under the "payload" key.
 	if head.Meta == nil && len(head.Payload) == 0 {
-		return errors.New("staged rollout head is not session metadata")
+		return errors.New("rollout head is not session metadata")
 	}
 	meta := head.Meta
 	if meta == nil {
 		var parsed SessionMeta
 		if err := json.Unmarshal(head.Payload, &parsed); err != nil {
-			return fmt.Errorf("parse staged head session metadata: %w", err)
+			return fmt.Errorf("parse rollout head session metadata: %w", err)
 		}
 		meta = &parsed
 	}
@@ -292,8 +301,48 @@ func rewriteStagedSubagentBoundary(stagedPath string, boundary uint64) error {
 	if len(lines) == 2 {
 		rewritten += "\n" + lines[1]
 	}
-	if err := os.WriteFile(stagedPath, []byte(rewritten), 0o600); err != nil {
-		return fmt.Errorf("rewrite staged subagent boundary: %w", err)
+	temp, err := os.CreateTemp(filepath.Dir(path), ".subagent-boundary-*")
+	if err != nil {
+		return fmt.Errorf("create rewritten rollout: %w", err)
+	}
+	tempPath := temp.Name()
+	if _, err := temp.WriteString(rewritten); err != nil {
+		temp.Close()
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("write rewritten rollout: %w", err)
+	}
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("sync rewritten rollout: %w", err)
+	}
+	if err := temp.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("close rewritten rollout: %w", err)
+	}
+	if err := os.Chmod(tempPath, 0o600); err != nil {
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("chmod rewritten rollout: %w", err)
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("publish rewritten rollout: %w", err)
 	}
 	return nil
+}
+
+// CountRolloutRecords returns the number of newline-terminated records in a
+// closed rollout, i.e. the next ordinal a paginated recorder would assign.
+func CountRolloutRecords(path string) (uint64, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, fmt.Errorf("read rollout: %w", err)
+	}
+	count := uint64(0)
+	for _, value := range data {
+		if value == '\n' {
+			count++
+		}
+	}
+	return count, nil
 }

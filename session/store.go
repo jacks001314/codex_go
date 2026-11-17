@@ -306,6 +306,10 @@ type Metadata struct {
 	// recovered turn's trigger, parent, root and initiating agent path. Older
 	// records omit it.
 	TurnAttribution *TurnAttribution `json:"turn_attribution,omitempty"`
+	// SubagentHistoryStartOrdinal marks the first rollout ordinal that belongs
+	// to a spawned subagent's own history. A copied child persists its
+	// inherited model context before this ordinal (Rust #61833).
+	SubagentHistoryStartOrdinal *uint64 `json:"subagent_history_start_ordinal,omitempty"`
 }
 
 // BaseInstructionsProvenance records whether persisted instructions were explicit or
@@ -544,7 +548,12 @@ type ForkOptions struct {
 	Ephemeral      bool
 	HistoryBase    *HistoryPosition
 	HistoryBaseSet bool
-	Now            time.Time
+	// CopyHistory persists the inherited history as the child's own records
+	// instead of referencing the source (Rust ForkPersistence::CopiedDeferred).
+	// Paginated subagent spawns use this so the child never depends on the
+	// parent rollout.
+	CopyHistory bool
+	Now         time.Time
 }
 
 type ForkBoundaryKind string
@@ -564,6 +573,9 @@ type PrepareForkParams struct {
 	Mode     ForkMode
 	LastN    int
 	Boundary ForkBoundary
+	// CopyHistory keeps the inherited items local to the child instead of
+	// recording a history_base reference.
+	CopyHistory bool
 }
 
 // ForkSourceReservation keeps a source thread alive until a prepared fork is
@@ -583,6 +595,9 @@ type PreparedFork struct {
 	HistoryBase  *HistoryPosition
 	Items        []Item
 	RolloutTurns []TurnSnapshot
+	// CopiedHistory records that the child persists its inherited items as its
+	// own rollout prefix (Rust ForkPersistence::Copied/CopiedDeferred).
+	CopiedHistory bool
 
 	sourceReservation ForkSourceReservation
 	revalidateSource  bool
@@ -1961,8 +1976,11 @@ func (s *Store) PrepareFork(source *Record, params PrepareForkParams) (*Prepared
 	if len(snapshots) == 0 {
 		snapshots = syntheticForkTurnSnapshots(items, lastTurnID != "")
 	}
+	paginated := strings.EqualFold(strings.TrimSpace(source.Metadata.HistoryMode), "paginated")
 	var historyBase *HistoryPosition
-	if strings.EqualFold(strings.TrimSpace(source.Metadata.HistoryMode), "paginated") {
+	// Rust ForkPersistence::Copied/CopiedDeferred persists the inherited items
+	// as the child's own records, so no history_base reference is recorded.
+	if paginated && !params.CopyHistory {
 		historyBase = &HistoryPosition{
 			ThreadID: source.ID,
 			ItemEnd:  len(items),
@@ -1970,10 +1988,11 @@ func (s *Store) PrepareFork(source *Record, params PrepareForkParams) (*Prepared
 		}
 	}
 	return &PreparedFork{
-		SourceID:     source.ID,
-		HistoryBase:  historyBase,
-		Items:        items,
-		RolloutTurns: snapshots,
+		SourceID:      source.ID,
+		HistoryBase:   historyBase,
+		Items:         items,
+		RolloutTurns:  snapshots,
+		CopiedHistory: params.CopyHistory && paginated,
 	}, nil
 }
 
@@ -1986,7 +2005,7 @@ func prepareForkParamsFromOptions(options ForkOptions) PrepareForkParams {
 	} else if beforeTurnID != "" {
 		boundary = ForkBoundary{Kind: ForkBoundaryBeforeTurn, TurnID: beforeTurnID}
 	}
-	return PrepareForkParams{Mode: options.Mode, LastN: options.LastN, Boundary: boundary}
+	return PrepareForkParams{Mode: options.Mode, LastN: options.LastN, Boundary: boundary, CopyHistory: options.CopyHistory}
 }
 
 func cloneTurnSnapshots(values []TurnSnapshot) []TurnSnapshot {
