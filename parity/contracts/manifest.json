@@ -3349,6 +3349,22 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestStatusLineSetupOffersProviderPickerLikeRust;TestStatuslineProviderPickerDiscoveryKeepsHighlightLikeRust;TestStatuslineProviderPickerSelectsAndReturnsToEditorLikeRust;TestStatuslineProviderPickerNumericShortcutsLikeRust"
+  },
+  {
+   "id": "tui-statusline-provider-failure-copy",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/statusline_provider.rs",
+    "tui/src/chatwidget.rs",
+    "tui/src/bottom_pane/status_line.rs"
+   ],
+   "goPaths": [
+    "tui/tea/statusline_provider_footer.go",
+    "tui/tea/statusline_provider_poll_like_rust_test.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestStatuslineProviderLookupFailureCopyLikeRust;TestStatuslineProviderInvalidContentStopsPollingLikeRust;TestStatuslineProviderRPCErrorStopsPollingLikeRust;TestStatuslineProviderLateReplyAfterDeadlineFailsLikeRust;TestStatuslineProviderHungReadStopsAtDeadlineLikeRust"
   }
 
 

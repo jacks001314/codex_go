@@ -199,7 +199,7 @@ func TestStatuslineProviderReadsDropStaleResultsLikeRust(t *testing.T) {
 		server:   model.statuslineProviderRead.server,
 		err:      errors.New("boom"),
 	})
-	want := "Error loading statusline contents from line. Use /statusline to (re)select your provider and try again."
+	want := statuslineProviderFailedCopy
 	if got := model.statusLineContent(); got != want {
 		t.Fatalf("failure copy = %q", got)
 	}

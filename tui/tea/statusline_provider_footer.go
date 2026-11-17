@@ -11,7 +11,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +25,11 @@ import (
 const (
 	statuslineProviderLookupTimeout = 5 * time.Second
 	statuslineProviderInitializing  = "Initializing…"
+	// Rust #61990 replaces the generic failure copy with short status line
+	// messages that point at /statusline.
+	statuslineProviderUnavailableCopy = "Status line unavailable · /statusline"
+	statuslineProviderTimedOutCopy    = "Status line timed out · /statusline"
+	statuslineProviderFailedCopy      = "Status line failed · /statusline"
 )
 
 // Rust #61981 reads the provider again one second after each successful read and
@@ -431,7 +435,7 @@ func (m *Model) applyStatuslineProviderResolve(msg statuslineProviderResolveMsg)
 	}
 	if msg.err != nil || !msg.provider.Found {
 		read.failed = true
-		m.setProviderFooterError(read.name)
+		m.setProviderFooterFailure(statuslineProviderUnavailableCopy)
 		return nil
 	}
 	if title := strings.TrimSpace(msg.provider.Title); title != "" {
@@ -459,13 +463,13 @@ func (m *Model) applyStatuslineProviderRead(msg statuslineProviderReadMsg) bubbl
 	}
 	if msg.err != nil {
 		read.failed = true
-		m.setProviderFooterError(read.name)
+		m.setProviderFooterFailure(statuslineProviderReadFailureCopy(msg.err))
 		return nil
 	}
 	tree, err := decodeStatuslineProviderTree(read.uri, msg.contents)
 	if err != nil {
 		read.failed = true
-		m.setProviderFooterError(read.name)
+		m.setProviderFooterFailure(statuslineProviderFailedCopy)
 		return nil
 	}
 	m.SetExtensionStatusLine(&tree)
@@ -509,11 +513,18 @@ func (m *Model) setProviderFooterText(text string) {
 	m.statusLineExtension = &line
 }
 
-func (m *Model) setProviderFooterError(name string) {
-	m.setProviderFooterText(fmt.Sprintf(
-		"Error loading statusline contents from %s. Use /statusline to (re)select your provider and try again.",
-		name,
-	))
+// statuslineProviderReadFailureCopy mirrors Rust's ReadIssue to footer mapping:
+// a read that misses its one-second deadline reports a timeout, every other
+// transport, RPC, or response failure is a generic status line failure.
+func statuslineProviderReadFailureCopy(err error) string {
+	if errors.Is(err, errStatuslineProviderReadTimeout) || errors.Is(err, context.DeadlineExceeded) {
+		return statuslineProviderTimedOutCopy
+	}
+	return statuslineProviderFailedCopy
+}
+
+func (m *Model) setProviderFooterFailure(message string) {
+	m.setProviderFooterText(message)
 }
 
 // statuslineProviderServerReady wakes a pending lookup when the selected MCP

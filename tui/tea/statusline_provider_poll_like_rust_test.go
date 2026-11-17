@@ -45,7 +45,7 @@ func statuslineProviderPollingModel(
 }
 
 func statuslineProviderFailureCopy() string {
-	return "Error loading statusline contents from Fixture Line. Use /statusline to (re)select your provider and try again."
+	return statuslineProviderFailedCopy
 }
 
 func statuslineSnapshotDisplayMode(t *testing.T, snapshot map[string]any) any {
@@ -156,6 +156,24 @@ func TestStatuslineProviderRPCErrorStopsPollingLikeRust(t *testing.T) {
 	}
 }
 
+// Rust #61990: a provider that never resolves shows the short unavailable copy
+// that points at /statusline.
+func TestStatuslineProviderLookupFailureCopyLikeRust(t *testing.T) {
+	compressStatuslineProviderClock(t, 5*time.Millisecond, time.Second)
+	model := statuslineProviderFooterModel(t,
+		func(context.Context, StatuslineProviderReadRequest) (StatuslineProvider, error) {
+			return StatuslineProvider{}, context.DeadlineExceeded
+		},
+		func(context.Context, StatuslineProviderResourceRequest) ([]StatuslineProviderContent, error) {
+			return nil, errors.New("read before resolve")
+		})
+	model.refreshStatusControls()
+	runProviderCmd(model, runProviderCmd(model, model.ensureProviderFooterCmd()))
+	if got := model.statusLineContent(); got != statuslineProviderUnavailableCopy {
+		t.Fatalf("lookup failure copy = %q", got)
+	}
+}
+
 // Rust #61981 statusline_returning_to_a_thread_fetches_fresh_state_and_discards_its_old_reply:
 // retiring the reader cancels the outstanding context and returning to the
 // thread stages a brand new read.
@@ -212,7 +230,7 @@ func TestStatuslineProviderLateReplyAfterDeadlineFailsLikeRust(t *testing.T) {
 	if next != nil {
 		t.Fatal("late reply kept polling")
 	}
-	if got := model.statusLineContent(); got != statuslineProviderFailureCopy() {
+	if got := model.statusLineContent(); got != statuslineProviderTimedOutCopy {
 		t.Fatalf("late reply painted %q", got)
 	}
 }
@@ -234,7 +252,7 @@ func TestStatuslineProviderHungReadStopsAtDeadlineLikeRust(t *testing.T) {
 	if next != nil {
 		t.Fatal("hung read kept polling")
 	}
-	if got := model.statusLineContent(); got != statuslineProviderFailureCopy() {
+	if got := model.statusLineContent(); got != statuslineProviderTimedOutCopy {
 		t.Fatalf("hung read painted %q", got)
 	}
 }
@@ -278,7 +296,7 @@ func TestStatuslineProviderLookupDeadlineAndCancelLikeRust(t *testing.T) {
 	if remaining <= 0 || remaining > statuslineProviderLookupTimeout {
 		t.Fatalf("startup deadline = %v", remaining)
 	}
-	if got := model.statusLineContent(); strings.Contains(got, "Error loading statusline contents") {
+	if got := model.statusLineContent(); strings.Contains(got, "Status line") {
 		t.Fatalf("retired lookup painted the footer: %q", got)
 	}
 }
