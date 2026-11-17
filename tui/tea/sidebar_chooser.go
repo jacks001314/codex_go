@@ -134,8 +134,19 @@ type SidebarFilesSnapshot struct {
 	PreviewUnavailable string
 }
 
+// SidebarFilesRequest names the snapshot the chooser needs. Resume marks the
+// first request after the chooser opens (Rust refresh_sidebar_files); later
+// requests continue the same backwards page scan.
+type SidebarFilesRequest struct {
+	ParentThreadID     string
+	OlderHistoryCursor string
+	Resume             bool
+}
+
 // SidebarFilesFunc snapshots the files the owning conversation mentioned.
-type SidebarFilesFunc func(parentThreadID string) SidebarFilesSnapshot
+// Snapshot.Loading schedules another request so a host can stream pages the
+// way Rust's start_sidebar_files_scan does.
+type SidebarFilesFunc func(request SidebarFilesRequest) SidebarFilesSnapshot
 
 // SideOpenFunc attaches a saved side chat so the sidebar can show it.
 type SideOpenFunc func(parentThreadID, sideThreadID string) (AgentThreadSwitchResponse, error)
@@ -1694,10 +1705,8 @@ func (m *Model) requestSidebarFiles() bubbletea.Cmd {
 	if m == nil {
 		return nil
 	}
-	transcript := m.sidebarTranscriptFileLinks()
 	parentThreadID := strings.TrimSpace(m.sidebarChooserParent)
-	promoted := append([]markdown.SidebarFileLink(nil), m.sidebarPromotedFiles[parentThreadID]...)
-	transcript = mergeSidebarFileLinks(nil, append(promoted, transcript...))
+	transcript := m.sidebarRequestedFileLinks()
 	if parentThreadID == "" || m.onSidebarFiles == nil {
 		m.sidebarFilesLoading = false
 		selected := m.sidebarChooserSelectedFilePath()
@@ -1710,11 +1719,53 @@ func (m *Model) requestSidebarFiles() bubbletea.Cmd {
 	request := m.sidebarFilesRequest
 	m.sidebarFilesLoading = true
 	load := m.onSidebarFiles
+	cursor := strings.TrimSpace(m.olderHistoryCursor)
 	return func() bubbletea.Msg {
-		snapshot := load(parentThreadID)
+		snapshot := load(SidebarFilesRequest{
+			ParentThreadID:     parentThreadID,
+			OlderHistoryCursor: cursor,
+			Resume:             true,
+		})
 		snapshot.Files = mergeSidebarFileLinks(nil, append(append([]markdown.SidebarFileLink{}, transcript...), snapshot.Files...))
 		return SidebarFilesLoadedMsg{ParentThreadID: parentThreadID, RequestID: request, Snapshot: snapshot}
 	}
+}
+
+// requestSidebarFilesPage asks the host for the next backwards page. Rust
+// start_sidebar_files_scan chains one page per loaded event while the chooser
+// stays focused, so a snapshot that still has history reports Loading.
+func (m *Model) requestSidebarFilesPage() bubbletea.Cmd {
+	if m == nil || !m.sidebarChooserOpen || m.onSidebarFiles == nil {
+		return nil
+	}
+	parentThreadID := strings.TrimSpace(m.sidebarChooserParent)
+	if parentThreadID == "" {
+		return nil
+	}
+	m.sidebarFilesRequest++
+	request := m.sidebarFilesRequest
+	load := m.onSidebarFiles
+	transcript := m.sidebarRequestedFileLinks()
+	cursor := strings.TrimSpace(m.olderHistoryCursor)
+	return func() bubbletea.Msg {
+		snapshot := load(SidebarFilesRequest{
+			ParentThreadID:     parentThreadID,
+			OlderHistoryCursor: cursor,
+		})
+		snapshot.Files = mergeSidebarFileLinks(nil, append(append([]markdown.SidebarFileLink{}, transcript...), snapshot.Files...))
+		return SidebarFilesLoadedMsg{ParentThreadID: parentThreadID, RequestID: request, Snapshot: snapshot}
+	}
+}
+
+// sidebarRequestedFileLinks is the promoted-and-transcript view the chooser
+// keeps ahead of the inventory on every request.
+func (m *Model) sidebarRequestedFileLinks() []markdown.SidebarFileLink {
+	if m == nil {
+		return nil
+	}
+	parentThreadID := strings.TrimSpace(m.sidebarChooserParent)
+	promoted := append([]markdown.SidebarFileLink(nil), m.sidebarPromotedFiles[parentThreadID]...)
+	return mergeSidebarFileLinks(nil, append(promoted, m.sidebarTranscriptFileLinks()...))
 }
 
 // applySidebarFilePromoted keeps live patch and image paths ahead of the
@@ -1833,6 +1884,9 @@ func (m *Model) applySidebarFilesLoaded(msg SidebarFilesLoadedMsg) bubbletea.Cmd
 		m.sidebarFilePathScroll = 0
 	}
 	m.refreshTranscript()
+	if msg.Snapshot.Loading {
+		return m.requestSidebarFilesPage()
+	}
 	return nil
 }
 

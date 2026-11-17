@@ -1737,6 +1737,13 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	// the embedded app server, so the footer hooks share the local router.
 	resolveStatuslineProvider, readStatuslineProvider := interactiveLocalStatuslineProviderHooks(root)
 	discoverStatuslineProviders := interactiveLocalStatuslineProviderDiscovery(root)
+	// Rust #61920: the chooser's Files group inventories the owning
+	// conversation from the local store, one backwards page at a time.
+	sidebarFileHost := newSidebarFilesHost(
+		newEmbeddedSidebarFilesSource(store),
+		func() string { return strings.TrimSpace(state.CWD) },
+		sidebarPreviewUnavailableForEmbedded(),
+	)
 	options := codextea.Options{
 		// Rust #57516: the status line's profile item reports the profile
 		// selected with --profile.
@@ -1814,6 +1821,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnLoadTranscriptPreview:     interactiveTranscriptPreviewHandler(),
 		OnReadSessionTranscript:     interactiveSessionTranscriptHandler(interactiveShowRawAgentReasoning(root)),
 		LoadOlderHistory:            interactiveOlderHistoryLoader(store, strings.TrimSpace(root.Shared.CWD)),
+		OnSidebarFiles:              sidebarFileHost.snapshot,
 		OnAcknowledgeSessionRead:    interactiveSessionReadAcknowledgeHandler(store),
 		OnRenameThread:              interactiveRenameThreadHandler(),
 		OnGenerateRecap:             localStructuredGenerate,
@@ -5638,6 +5646,12 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 	}
 	streamWriter := newInteractiveStreamEventWriter(send, interactivePlanMode(request.CollaborationMode))
 	streamWriter.threadID = strings.TrimSpace(requestedThreadID)
+	streamWriter.sidebarCWD = func() string {
+		if state != nil {
+			return strings.TrimSpace(state.CWD)
+		}
+		return strings.TrimSpace(turnRoot.Shared.CWD)
+	}
 	streamOutput := io.Writer(streamWriter)
 	var internalEventHandler func(protocol.ThreadEvent)
 	if _, ok := runner.(*codexexec.Runner); ok {
@@ -5906,6 +5920,9 @@ type interactiveStreamEventWriter struct {
 	planStreams        map[string]*interactivePlanStreamState
 	threadID           string
 	turnID             string
+	// sidebarCWD resolves newly completed patch and image paths for the
+	// chooser's Files group (Rust notice_sidebar_file_item).
+	sidebarCWD func() string
 }
 
 type interactivePlanStreamState struct {
@@ -6106,6 +6123,11 @@ func (w *interactiveStreamEventWriter) emitPlanSegmentsLocked(itemID string, sta
 func (w *interactiveStreamEventWriter) sendEvent(event protocol.ThreadEvent) {
 	if w == nil || w.send == nil {
 		return
+	}
+	if event.Type == "item.completed" && event.Item != nil && w.sidebarCWD != nil {
+		if entries := sidebarProtocolPromotionEntries(w.sidebarCWD(), event.Item); len(entries) > 0 {
+			w.send(codextea.SidebarFilePromotedMsg{ParentThreadID: strings.TrimSpace(w.threadID), Entries: entries})
+		}
 	}
 	if threadID := strings.TrimSpace(w.threadID); threadID != "" {
 		w.send(codextea.ThreadScopedEventMsg{ThreadID: threadID, Event: event})

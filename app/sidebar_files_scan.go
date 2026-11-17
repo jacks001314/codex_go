@@ -177,6 +177,38 @@ func (i *sidebarFilesInventory) entries(parent string) []markdown.SidebarFileLin
 	return append([]markdown.SidebarFileLink(nil), files.entries...)
 }
 
+// hasMore reports whether older history remains to be scanned.
+func (i *sidebarFilesInventory) hasMore(parent string) bool {
+	if i == nil {
+		return false
+	}
+	parent = strings.TrimSpace(parent)
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	files := i.panes[parent]
+	return files != nil && files.next != nil
+}
+
+// restart rescans from the newest page on the next request, keeping the listed
+// files. New mentions merge at the front the way Rust's promote pass does.
+func (i *sidebarFilesInventory) restart(parent string) {
+	if i == nil {
+		return
+	}
+	parent = strings.TrimSpace(parent)
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	files := i.panes[parent]
+	if files == nil {
+		return
+	}
+	empty := ""
+	files.scan = ""
+	files.next = &empty
+	files.needsHistoryCursor = false
+	files.confirmed = 0
+}
+
 // fetchSidebarFilesPage loads one backwards item page for the request (Rust
 // `thread_items_page(parent, None, Some(cursor), 100)`).
 func fetchSidebarFilesPage(ctx context.Context, client *remoteAppServerTUIClient, request sidebarFilesPageRequest) sidebarFilesScanResult {

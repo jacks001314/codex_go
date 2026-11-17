@@ -237,7 +237,7 @@ func TestSidebarChooserMergesHostFilesLikeRust(t *testing.T) {
 	model, _ := newSidebarTabsModel(t)
 	model.State.CWD = "/workspace"
 	model.State.AddMessage(codextui.RoleAssistant, "see [app](src/app.ts)")
-	model.onSidebarFiles = func(string) SidebarFilesSnapshot {
+	model.onSidebarFiles = func(SidebarFilesRequest) SidebarFilesSnapshot {
 		return SidebarFilesSnapshot{
 			Files: []markdown.SidebarFileLink{
 				{Path: "/workspace/src/app.ts"},
@@ -284,3 +284,49 @@ func TestSidebarChooserPromotesPatchFilesLikeRust(t *testing.T) {
 // keymsgPageDown keeps the path-view test readable while spelling the key the
 // shared list bindings resolve (ctrl+f).
 func keymsgPageDown() keymsg.KeyType { return keymsg.KeyCtrlF }
+
+// Rust refresh_sidebar_files + start_sidebar_files_scan: opening the chooser
+// restarts the scan, and each snapshot that still has history schedules the
+// next page instead of reopening the chooser.
+func TestSidebarChooserChainsSidebarFilePagesLikeRust(t *testing.T) {
+	model, _ := newSidebarTabsModel(t)
+	var requests []SidebarFilesRequest
+	model.onSidebarFiles = func(request SidebarFilesRequest) SidebarFilesSnapshot {
+		requests = append(requests, request)
+		if len(requests) == 1 {
+			return SidebarFilesSnapshot{
+				Files:   []markdown.SidebarFileLink{{Path: "/workspace/newest.ts"}},
+				Loading: true,
+				CWD:     "/workspace",
+			}
+		}
+		return SidebarFilesSnapshot{
+			Files: []markdown.SidebarFileLink{
+				{Path: "/workspace/newest.ts"},
+				{Path: "/workspace/older.ts"},
+			},
+			CWD: "/workspace",
+		}
+	}
+	if cmd := model.openSidebarChooser(); cmd != nil {
+		runTeaCmdChain(t, model, cmd, 0)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("requests = %+v, want the open plus one page", requests)
+	}
+	if !requests[0].Resume {
+		t.Fatal("the first request must resume the scan")
+	}
+	if requests[1].Resume {
+		t.Fatal("a page request must continue the scan")
+	}
+	if requests[1].ParentThreadID != "parent-a" {
+		t.Fatalf("page parent = %q", requests[1].ParentThreadID)
+	}
+	if len(model.sidebarFiles) != 2 || model.sidebarFiles[1].Path != "/workspace/older.ts" {
+		t.Fatalf("files = %+v, want both pages", model.sidebarFiles)
+	}
+	if model.sidebarFilesLoading {
+		t.Fatal("an exhausted scan must clear the loading notice")
+	}
+}
