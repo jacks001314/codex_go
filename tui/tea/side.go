@@ -954,15 +954,67 @@ func (m *Model) sideContextLabel() string {
 	if m == nil || m.activeSide == nil {
 		return ""
 	}
+	switchLabel := m.sideToggleBindingLabel()
 	if !m.activeSide.ShowingSide {
-		return "ctrl+/ for side"
+		// Rust app/side.rs only advertises the hidden side chat when the
+		// toggle still resolves to a binding.
+		if switchLabel == "" {
+			return ""
+		}
+		return switchLabel + " for side"
 	}
-	parts := []string{"from main thread"}
-	if statusLabel := m.activeSide.ParentSideStatus.label(true); statusLabel != "" {
+	// Rust app/side.rs labels the parent by identity: the primary thread reads
+	// "from main thread", any other parent keeps its thread label.
+	parentID := strings.TrimSpace(m.activeSide.ParentThreadID)
+	parentIsMain := m.sideParentIsMain(parentID)
+	parts := make([]string, 0, 4)
+	if parentIsMain {
+		parts = append(parts, "from main thread")
+	} else {
+		parts = append(parts, "from parent thread ("+m.threadLabel(parentID)+")")
+	}
+	if statusLabel := m.activeSide.ParentSideStatus.label(parentIsMain); statusLabel != "" {
 		parts = append(parts, statusLabel)
 	}
-	parts = append(parts, "ctrl+/ to switch", codextui.ModifierLabelPrefix(codextui.ControlKeyLabel())+"c to close")
-	return "Side " + strings.Join(parts, " - ")
+	if switchLabel != "" {
+		parts = append(parts, switchLabel+" to switch")
+	}
+	// Rust app/side.rs keeps a saved side chat and archives it; the legacy
+	// temporary fork is deleted, so the hint has to name the matching action.
+	action := "close"
+	if m.activeSide.Storage.Attached() && m.sideWorkspaceEnabled() {
+		action = "archive"
+	}
+	parts = append(parts, codextui.ModifierLabelPrefix(codextui.ControlKeyLabel())+"c to "+action)
+	return "Side " + strings.Join(parts, " \u00b7 ")
+}
+
+// sideToggleBindingLabel returns the keymap's primary hint for the side-chat
+// toggle (Rust `keymap.primary_hint(Global, "toggle_side_conversation")`), or
+// an empty string when the action no longer resolves to a binding.
+func (m *Model) sideToggleBindingLabel() string {
+	if m == nil {
+		return ""
+	}
+	bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, "global", "toggle_side_conversation")
+	if len(bindings) == 0 {
+		return ""
+	}
+	return displayKeyBinding(bindings[0])
+}
+
+// sideParentIsMain mirrors Rust's `primary_thread_id == Some(parent_thread_id)`.
+// The agent registry names the primary thread once an agent tree exists; a
+// thread it has never seen can only be the conversation's root.
+func (m *Model) sideParentIsMain(parentThreadID string) bool {
+	parentThreadID = strings.TrimSpace(parentThreadID)
+	if m == nil || parentThreadID == "" {
+		return false
+	}
+	if _, ok := m.agentEntry(parentThreadID); !ok {
+		return true
+	}
+	return m.isPrimaryThread(parentThreadID)
 }
 
 func (m *Model) showSideCommandMessage(commandName string, userMessage string, message string) {

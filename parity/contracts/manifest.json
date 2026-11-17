@@ -2267,6 +2267,7 @@
    "id": "side-workspace-chrome-layout",
    "kind": "source-surface",
    "rustPaths": [
+    "tui/src/app/side.rs",
     "tui/src/app/side_pane.rs",
     "tui/src/app/side_focus.rs",
     "tui/src/app/sidebar_close.rs",
@@ -2278,7 +2279,7 @@
    ],
    "phase": "P3",
    "status": "complete",
-   "verifier": "TestSideWorkspaceDividerUsesRustGapColumnLikeRust;TestSidebarTabStripOverflowArrowsLikeRust;TestSideWorkspaceWidthsUseRustPercentMathLikeRust;TestSidebarTabStripCloseCellClosesTabLikeRust;TestSidebarTabActivationRequiresMatchingPressAndReleaseLikeRust;TestSidebarChooserBackgroundPressReturnsFocusToMainLikeRust;TestSidebarChooserFooterHintsAreClickableLikeRust;TestSidePaneParkedDraftInsetsLikeRust"
+   "verifier": "TestSideWorkspaceDividerUsesRustGapColumnLikeRust;TestSidebarTabStripOverflowArrowsLikeRust;TestSideWorkspaceWidthsUseRustPercentMathLikeRust;TestSidebarTabStripCloseCellClosesTabLikeRust;TestSidebarTabActivationRequiresMatchingPressAndReleaseLikeRust;TestSidebarChooserBackgroundPressReturnsFocusToMainLikeRust;TestSidebarChooserFooterHintsAreClickableLikeRust;TestSidePaneParkedDraftInsetsLikeRust;TestSideContextLabelJoinsRustPartsLikeRust;TestSideContextLabelArchivesSavedWorkspaceSideLikeRust;TestSideContextLabelNamesNonPrimaryParentLikeRust;TestSideContextLabelHidesToggleWithoutBindingLikeRust"
   },
   {
    "id": "status-line-content-surface",
