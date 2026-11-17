@@ -1315,13 +1315,21 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	}
 }
 
-// prewarmInputMode labels a warmup by the input it prepares, mirroring Rust
-// #48812's PrewarmInput::Base / PrewarmInput::History.
+// prewarmInputMode labels a warmup by the input it prepares, mirroring Rust's
+// PrewarmInput::Base / History / Restoring (#48812, #61959).
 func prewarmInputMode(request *AgentRequest) string {
-	if request != nil && strings.EqualFold(strings.TrimSpace(request.PrewarmInputMode), "history") {
-		return "history"
+	if request == nil {
+		return "base"
 	}
-	return "base"
+	switch strings.ToLower(strings.TrimSpace(request.PrewarmInputMode)) {
+	case "history":
+		return "history"
+	case "restored_history":
+		// Rust #61959 labels the cold-resume image warmup `restored_history`.
+		return "restored_history"
+	default:
+		return "base"
+	}
 }
 
 // toolResultMetadataDestinationAllowed reports whether raw tool-result metadata

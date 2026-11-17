@@ -4293,6 +4293,14 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 			if err := r.applySubscribedIdleResumeModelSnapshot(result); err != nil {
 				return nil, err
 			}
+			if threadReadyAfterResume {
+				if response, ok := result.(*ThreadResumeResponse); ok && response.Thread != nil {
+					// Rust #61959: a session created for a resumed history schedules
+					// its startup prewarm right after the restore, so the handshake
+					// overlaps the work the first turn still has to do.
+					r.scheduleResumePrewarm(response.Thread.ID)
+				}
+			}
 			r.markThreadResumeSessionStartSource(result, request)
 			if err := r.installThreadSubscription(result, request.normalizedConnectionID()); err != nil {
 				return nil, err

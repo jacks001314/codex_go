@@ -73,8 +73,9 @@ type AgentRequest struct {
 	// by a session startup or idle-history prewarm. Rust #48812 tags the
 	// websocket continuation of that request with after_prewarm.
 	PreviousResponseFromPrewarm bool
-	// PrewarmInputMode labels a Prewarm call as "base" (startup) or "history"
-	// (idle-thread warmup). It only affects prewarm telemetry (Rust #48812).
+	// PrewarmInputMode labels a Prewarm call as "base" (startup), "history"
+	// (idle-thread warmup, Rust #48812), or "restored_history" (cold-resume
+	// image warmup, Rust #61959). It only affects prewarm telemetry.
 	PrewarmInputMode  string
 	ParallelToolCalls bool
 	ReasoningEffort   string

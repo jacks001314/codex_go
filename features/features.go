@@ -419,6 +419,10 @@ var Registry = []Spec{
 	// user-message format.
 	{Key: "untrusted_as_tool_output", Stage: StageStable, DefaultEnabled: true},
 	{Key: "code_mode_prewarm", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs #61959): warm the persisted history,
+	// including its file images, before the first generation on cold resume.
+	// Under development and disabled by default.
+	{Key: "restored_history_prewarm", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "skip_host_skill_discovery", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs #57500/#57262): omit descriptions from
 	// model-visible skill catalogs, and publish incremental skill catalogs.

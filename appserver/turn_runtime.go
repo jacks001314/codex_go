@@ -9340,7 +9340,7 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 		// request keeps only the latest while saved history keeps all of them.
 		historyItems = coalesceAdjacentReasoningEffortUpdates(historyItems)
 	}
-	if previousResponseID == "" && consumePrewarm {
+	if consumePrewarm {
 		// Rust core/src/tasks/regular.rs: the first regular turn consumes the
 		// session-startup websocket prewarm (its response id chains the first
 		// request). A prewarm that has not finished is skipped and the turn
@@ -9350,7 +9350,12 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 			serviceTier = *params.ServiceTier
 		}
 		settingsKey := prewarmSettingsKey(modelInfo.Slug, instructions, serviceTier)
-		if id, consumed := r.takeStartupPrewarmResponseID(threadID, historyItems, settingsKey); id != "" {
+		id, consumed, discardContinuation := r.consumeStartupPrewarmForTurn(threadID, historyItems, settingsKey, previousResponseID)
+		if discardContinuation {
+			// Rust #61959: the restored-history warmup dropped its continuation,
+			// so generation resends the full history with no previous response.
+			previousResponseID = ""
+		} else if id != "" {
 			previousResponseID = id
 			previousResponseFromPrewarm = true
 			if consumed > 0 && consumed <= len(historyItems) {

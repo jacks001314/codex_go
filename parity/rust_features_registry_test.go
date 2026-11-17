@@ -152,6 +152,9 @@ func TestFeaturesRegistryMatchesRust(t *testing.T) {
 		// The anchor predates Rust #61897; the UTC environment date port keeps
 		// its upstream key so the behavior stays gated the same way.
 		"utc_environment_date": true,
+		// The anchor predates Rust #61959; the restored-history prewarm port
+		// keeps its upstream key so the behavior stays gated the same way.
+		"restored_history_prewarm": true,
 	}
 	for key := range goByKey {
 		if _, ok := rustSpecs[key]; !ok {

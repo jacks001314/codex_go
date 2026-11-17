@@ -3244,6 +3244,27 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestTcpTunnelClapDiagnosticsLikeRust;TestTcpTunnelArgsParseLikeRust;TestSSHDestinationRoutesOAuthAndLegacyLikeRust;TestOAuthBearerMatchesRust;TestSafeTunnelErrorSanitizesLikeRust;TestReadTokenFileIsOneUseLikeRust;TestRunSSHProxyRefusesBeforeLoadingCredentials;TestHTTP2AdmitsConnectAndForwardsLikeRust;TestHTTP2RejectsBeforeUploadLikeRust;TestHTTP2CertificateFailureIsNamedLikeRust;TestProxyOnlyEgressKeepsCredentialsInsideTLSLikeRust;TestSystemProxySelectionLikeRust;TestTransportPrefersAdmittedQUICLikeRust;TestTransportFallsBackToHTTP2WhenUDPBlockedLikeRust;TestTransportAdmissionRejectionIsTerminalLikeRust;TestOpenNeverLoadsCredentialsBeforeTLSLikeRust"
+  },
+  {
+   "id": "restored-history-prewarm",
+   "kind": "shared-fixtures",
+   "rustPaths": [
+    "core/src/session/startup_prewarm.rs",
+    "core/src/session/session.rs",
+    "core/src/client.rs",
+    "features/src/lib.rs"
+   ],
+   "goPaths": [
+    "appserver/session_startup_prewarm.go",
+    "appserver/turn_runtime.go",
+    "appserver/runtime_router.go",
+    "appserver/restored_history_prewarm_like_rust_test.go",
+    "features/features.go",
+    "model/responses_agent.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestRestoredHistoryPrewarmCandidateLikeRust;TestColdResumePrewarmsRestoredFileImagesLikeRust;TestColdResumeRestoredPrewarmWithoutPersistedContinuationLikeRust;TestColdResumePrewarmFallsBackToBaseLikeRust"
   }
 
 

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log/slog"
+	"reflect"
 	"strings"
 	"time"
 
@@ -27,6 +28,19 @@ import (
 
 const startupPrewarmTimeout = 15 * time.Second
 
+// Prewarm input labels mirror Rust's PrewarmInput::as_str
+// (core/src/session/startup_prewarm.rs).
+const (
+	// startupPrewarmInputBase warms only the connection and base instructions.
+	startupPrewarmInputBase = "base"
+	// startupPrewarmInputHistory warms an idle thread's existing history (Rust
+	// #48812).
+	startupPrewarmInputHistory = "history"
+	// startupPrewarmInputRestoredHistory warms the history a cold resume loaded,
+	// including its file images, and drops its own response id (Rust #61959).
+	startupPrewarmInputRestoredHistory = "restored_history"
+)
+
 // startupPrewarmState is the per-thread prewarm result.
 type startupPrewarmState struct {
 	responseID string
@@ -37,13 +51,166 @@ type startupPrewarmState struct {
 	// prewarm returned without error, otherwise "failed").
 	status   string
 	consumed bool
-	// inputMode is "base" for the empty startup prewarm and "history" for the
-	// idle-thread prewarm (Rust #48812).
+	// inputMode is startupPrewarmInputBase for the empty startup prewarm,
+	// startupPrewarmInputHistory for the idle-thread prewarm (Rust #48812), or
+	// startupPrewarmInputRestoredHistory for a cold-resume image warmup (Rust
+	// #61959), whose response id is never chained by a later turn.
 	inputMode string
 	// historyKeys and settingsKey gate reuse: only a prompt that extends the
 	// prewarmed history under the same model/settings may chain its response id.
 	historyKeys []string
 	settingsKey string
+}
+
+// startupPrewarmJob is one scheduled warm-up: the resolved generate=false
+// request plus the bookkeeping a later turn uses to decide whether it may chain
+// the prepared response.
+type startupPrewarmJob struct {
+	threadID     string
+	inputMode    string
+	modelID      string
+	serviceTier  string
+	effort       string
+	instructions string
+	inputItems   []any
+	params       *turn.TurnStartParams
+	historyKeys  []string
+	settingsKey  string
+	retained     *startupPrewarmState
+	startedAt    time.Time
+}
+
+// beginStartupPrewarm publishes a warm-up before its network work starts so a
+// later resume shares the in-flight one instead of dialing twice (Rust keeps a
+// single startup prewarm per session). It reports false when another warm-up is
+// still running.
+func (r *RuntimeRouter) beginStartupPrewarm(threadID string, inputMode string, historyKeys []string, settingsKey string) (startupPrewarmJob, bool) {
+	r.startupPrewarmMu.Lock()
+	defer r.startupPrewarmMu.Unlock()
+	if r.startupPrewarms == nil {
+		r.startupPrewarms = map[string]*startupPrewarmState{}
+	}
+	if existing := r.startupPrewarms[threadID]; existing != nil && !existing.finished {
+		return startupPrewarmJob{}, false
+	}
+	// Rust #47709: a completed warmup returns its client to the cache and the
+	// next resume re-checks the socket; when that check skips preparation the
+	// retained baseline below stays valid.
+	retained := r.startupPrewarms[threadID]
+	switch inputMode {
+	case startupPrewarmInputHistory:
+		if retained != nil && (retained.consumed ||
+			retained.settingsKey != settingsKey ||
+			!equalStringSlices(retained.historyKeys, historyKeys)) {
+			retained = nil
+		}
+	case startupPrewarmInputRestoredHistory:
+		// A restored-history warmup never hands its response to a turn, so no
+		// baseline from an earlier warmup can survive it.
+		retained = nil
+	default:
+		if retained != nil && retained.consumed {
+			retained = nil
+		}
+	}
+	startedAt := time.Now().UTC()
+	r.startupPrewarms[threadID] = &startupPrewarmState{
+		startedAt:   startedAt,
+		inputMode:   inputMode,
+		historyKeys: historyKeys,
+		settingsKey: settingsKey,
+	}
+	return startupPrewarmJob{
+		threadID:    threadID,
+		inputMode:   inputMode,
+		historyKeys: historyKeys,
+		settingsKey: settingsKey,
+		retained:    retained,
+		startedAt:   startedAt,
+	}, true
+}
+
+// runStartupPrewarm dials and sends the job's generate=false request. The
+// handshake metadata is built before the goroutine so the prepared connection
+// carries the window and fork lineage of the thread it warms.
+func (r *RuntimeRouter) runStartupPrewarm(job startupPrewarmJob) {
+	prewarmer, ok := r.services.Agent.(guardianPrewarmer)
+	if !ok {
+		return
+	}
+	threadID := job.threadID
+	// Rust #47709: the warmup handshake carries the startup turn's executed
+	// settings and window/fork metadata (the request kind is `prewarm`), so the
+	// prepared connection matches the window the first turn will use.
+	lineage := r.responsesMetadataLineage(threadID)
+	prewarmMetadata := turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
+		InstallationID:             r.guardianInstallationID(),
+		SessionID:                  firstNonEmpty(lineage.SessionID, threadID),
+		ThreadID:                   threadID,
+		WindowID:                   r.windowIDForThread(threadID),
+		ContextWindowID:            r.contextWindowIDForThread(threadID),
+		WindowNumber:               uint64PtrAppserver(r.windowNumberForThread(threadID)),
+		RequestKind:                codexapi.ClientRequestPrewarm,
+		ForkedFromThreadID:         lineage.ForkedFromThreadID,
+		ForkedFromOrdinalExclusive: lineage.ForkedFromOrdinalExclusive,
+		ParentThreadID:             lineage.ParentThreadID,
+		RootTurnID:                 effectiveRootTurnID("", "", "", lineage.SubagentHeader),
+		SubagentHeader:             lineage.SubagentHeader,
+		SubagentKind:               lineage.SubagentKind,
+		ThreadSource:               lineage.ThreadSource,
+		CodexVersion:               appServerVersion(),
+		Model:                      job.modelID,
+		ReasoningEffort:            job.effort,
+		UseResponsesLite:           r.modelUsesResponsesLite(job.modelID),
+	})
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), startupPrewarmTimeout)
+		defer cancel()
+		var responseID string
+		status := "failed"
+		resp, err := prewarmer.Prewarm(ctx, &model.AgentRequest{
+			Model:           job.modelID,
+			ServiceTier:     job.serviceTier,
+			ReasoningEffort: job.effort,
+			// Rust #61535: the startup prewarm turn captures the thread's
+			// trusted host country like any other sampling request.
+			RequestCountry: r.requestCountryForThread(threadID),
+			Instructions:   job.instructions,
+			InputItems:     job.inputItems,
+			// Rust #47912: the creating connection is registered before the
+			// startup prewarm dials, so the handshake can request attestation
+			// for the thread.
+			ThreadID:            threadID,
+			AttestationProvider: r.appServerAttestationProvider(),
+			PrewarmTools:        r.startupPrewarmToolProvider(job.params),
+			Originator:          "session_startup",
+			ClientMetadata:      prewarmMetadata,
+			PrewarmInputMode:    job.inputMode,
+		})
+		if err == nil {
+			status = "ready"
+		}
+		if err == nil && resp != nil {
+			responseID = strings.TrimSpace(resp.ResponseID)
+		}
+		finishedAt := time.Now().UTC()
+		r.startupPrewarmMu.Lock()
+		if state := r.startupPrewarms[threadID]; state != nil && state.inputMode == job.inputMode {
+			state.responseID = responseID
+			state.finished = true
+			state.finishedAt = finishedAt
+			state.status = status
+			if responseID == "" && err == nil && job.retained != nil {
+				// The warmup skipped preparation on a socket that is still warm,
+				// so the previous baseline remains the connection's last request.
+				state.responseID = job.retained.responseID
+			}
+		}
+		r.startupPrewarmMu.Unlock()
+		// Rust's prewarm task records these when it completes.
+		r.recordStartupPhase("startup_prewarm_total", finishedAt.Sub(job.startedAt), status)
+		r.recordStartupPrewarmDuration(status, job.inputMode, finishedAt.Sub(job.startedAt))
+	}()
 }
 
 // scheduleStartupPrewarm kicks off an asynchronous websocket prewarm for a
@@ -63,30 +230,13 @@ func (r *RuntimeRouter) scheduleStartupPrewarm(response *ThreadStartResponse) {
 	if r.services.Agent == nil {
 		return
 	}
-	prewarmer, ok := r.services.Agent.(guardianPrewarmer)
+	if _, ok := r.services.Agent.(guardianPrewarmer); !ok {
+		return
+	}
+	job, ok := r.beginStartupPrewarm(threadID, startupPrewarmInputBase, nil, "")
 	if !ok {
 		return
 	}
-	r.startupPrewarmMu.Lock()
-	if r.startupPrewarms == nil {
-		r.startupPrewarms = map[string]*startupPrewarmState{}
-	}
-	if existing := r.startupPrewarms[threadID]; existing != nil && !existing.finished {
-		// Rust shares an in-flight warmup with every later resume instead of
-		// starting a second one.
-		r.startupPrewarmMu.Unlock()
-		return
-	}
-	// Rust #47709: a completed warmup returns its client to the cache and the
-	// next resume re-checks the socket; when that check skips preparation the
-	// completed baseline below stays valid.
-	retained := r.startupPrewarms[threadID]
-	if retained != nil && retained.consumed {
-		retained = nil
-	}
-	startedAt := time.Now().UTC()
-	r.startupPrewarms[threadID] = &startupPrewarmState{startedAt: startedAt, inputMode: "base"}
-	r.startupPrewarmMu.Unlock()
 
 	modelID := strings.TrimSpace(response.Model)
 	cwd := strings.TrimSpace(response.CWD)
@@ -111,76 +261,11 @@ func (r *RuntimeRouter) scheduleStartupPrewarm(response *ThreadStartResponse) {
 	if cfg, cfgErr := r.effectiveConfigForTurn(params); cfgErr == nil && cfg != nil {
 		effort = r.reasoningEffortForPrewarm(cfg, params, modelID, providerID)
 	}
-	// Rust #47709: the warmup handshake carries the startup turn's executed
-	// settings and window/fork metadata (the request kind is `prewarm`), so the
-	// prepared connection matches the window the first turn will use.
-	lineage := r.responsesMetadataLineage(threadID)
-	prewarmMetadata := turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
-		InstallationID:             r.guardianInstallationID(),
-		SessionID:                  firstNonEmpty(lineage.SessionID, threadID),
-		ThreadID:                   threadID,
-		WindowID:                   r.windowIDForThread(threadID),
-		ContextWindowID:            r.contextWindowIDForThread(threadID),
-		WindowNumber:               uint64PtrAppserver(r.windowNumberForThread(threadID)),
-		RequestKind:                codexapi.ClientRequestPrewarm,
-		ForkedFromThreadID:         lineage.ForkedFromThreadID,
-		ForkedFromOrdinalExclusive: lineage.ForkedFromOrdinalExclusive,
-		ParentThreadID:             lineage.ParentThreadID,
-		RootTurnID:                 effectiveRootTurnID("", "", "", lineage.SubagentHeader),
-		SubagentHeader:             lineage.SubagentHeader,
-		SubagentKind:               lineage.SubagentKind,
-		ThreadSource:               lineage.ThreadSource,
-		CodexVersion:               appServerVersion(),
-		Model:                      modelID,
-		ReasoningEffort:            effort,
-		UseResponsesLite:           r.modelUsesResponsesLite(modelID),
-	})
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), startupPrewarmTimeout)
-		defer cancel()
-		var responseID string
-		status := "failed"
-		resp, err := prewarmer.Prewarm(ctx, &model.AgentRequest{
-			Model:           modelID,
-			ServiceTier:     serviceTier,
-			ReasoningEffort: effort,
-			// Rust #61535: the startup prewarm turn captures the thread's
-			// trusted host country like any other sampling request.
-			RequestCountry: r.requestCountryForThread(threadID),
-			// Rust #47912: thread/start registers the creating connection before
-			// the startup prewarm dials, so the handshake can request attestation
-			// for the thread. The request therefore carries the thread id and the
-			// app-server attestation provider.
-			ThreadID:            threadID,
-			AttestationProvider: r.appServerAttestationProvider(),
-			PrewarmTools:        r.startupPrewarmToolProvider(params),
-			Originator:          "session_startup",
-			ClientMetadata:      prewarmMetadata,
-		})
-		if err == nil {
-			status = "ready"
-		}
-		if err == nil && resp != nil {
-			responseID = strings.TrimSpace(resp.ResponseID)
-		}
-		finishedAt := time.Now().UTC()
-		r.startupPrewarmMu.Lock()
-		if state := r.startupPrewarms[threadID]; state != nil {
-			state.responseID = responseID
-			state.finished = true
-			state.finishedAt = finishedAt
-			state.status = status
-			if responseID == "" && err == nil && retained != nil {
-				// The warmup skipped preparation on a socket that is still warm,
-				// so the previous baseline remains the connection's last request.
-				state.responseID = retained.responseID
-			}
-		}
-		r.startupPrewarmMu.Unlock()
-		// Rust's prewarm task records these when it completes.
-		r.recordStartupPhase("startup_prewarm_total", finishedAt.Sub(startedAt), status)
-		r.recordStartupPrewarmDuration(status, "base", finishedAt.Sub(startedAt))
-	}()
+	job.modelID = modelID
+	job.serviceTier = serviceTier
+	job.effort = effort
+	job.params = params
+	r.runStartupPrewarm(job)
 }
 
 // scheduleHistoryPrewarm prepares an idle thread's cached WebSocket with its
@@ -195,8 +280,7 @@ func (r *RuntimeRouter) scheduleHistoryPrewarm(threadID string) {
 	if threadID == "" || r.threads == nil || r.threads.LiveThread(session.ThreadID(threadID)) == nil {
 		return
 	}
-	prewarmer, ok := r.services.Agent.(guardianPrewarmer)
-	if !ok {
+	if _, ok := r.services.Agent.(guardianPrewarmer); !ok {
 		return
 	}
 	historyItems, _ := r.historyInputItemsForTurn(threadID)
@@ -236,78 +320,157 @@ func (r *RuntimeRouter) scheduleHistoryPrewarm(threadID string) {
 	instructions, _ := appBaseInstructionsForConfig(cfg)
 	settingsKey := prewarmSettingsKey(modelID, instructions, record.Metadata.ServiceTier)
 	historyKeys := prewarmHistoryKeys(historyItems)
-
-	r.startupPrewarmMu.Lock()
-	if r.startupPrewarms == nil {
-		r.startupPrewarms = map[string]*startupPrewarmState{}
-	}
-	if existing := r.startupPrewarms[threadID]; existing != nil && !existing.finished {
-		// Rust keeps an in-flight warmup shared with every later resume.
-		r.startupPrewarmMu.Unlock()
+	job, ok := r.beginStartupPrewarm(threadID, startupPrewarmInputHistory, historyKeys, settingsKey)
+	if !ok {
 		return
 	}
-	// Rust #47709: a completed warmup returns its client to the cache and the
-	// next resume re-checks the socket, which may have closed since then. The
-	// warmup below performs that check; when it skips preparation the retained
-	// baseline is still the connection's last request.
-	retained := r.startupPrewarms[threadID]
-	if retained != nil && (retained.consumed ||
-		retained.settingsKey != settingsKey ||
-		!equalStringSlices(retained.historyKeys, historyKeys)) {
-		retained = nil
-	}
-	startedAt := time.Now().UTC()
-	r.startupPrewarms[threadID] = &startupPrewarmState{
-		startedAt:   startedAt,
-		inputMode:   "history",
-		historyKeys: historyKeys,
-		settingsKey: settingsKey,
-	}
-	r.startupPrewarmMu.Unlock()
+	job.modelID = modelID
+	job.serviceTier = strings.TrimSpace(record.Metadata.ServiceTier)
+	job.effort = effort
+	job.instructions = instructions
+	job.inputItems = historyItems
+	job.params = params
+	r.runStartupPrewarm(job)
+}
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), startupPrewarmTimeout)
-		defer cancel()
-		var responseID string
-		status := "failed"
-		resp, err := prewarmer.Prewarm(ctx, &model.AgentRequest{
-			Model:           modelID,
-			ServiceTier:     strings.TrimSpace(record.Metadata.ServiceTier),
-			ReasoningEffort: effort,
-			// Rust #61535: the idle-thread prewarm turn captures the thread's
-			// saved country; a later live update keeps the socket reusable.
-			RequestCountry: r.requestCountryForThread(threadID),
-			Instructions:   instructions,
-			InputItems:     historyItems,
-			ThreadID:       threadID,
-			// Rust #47912 applies to the idle-thread prewarm as well: the
-			// handshake resolves attestation through the creating connection.
-			AttestationProvider: r.appServerAttestationProvider(),
-			Originator:          "session_startup",
-			PrewarmInputMode:    "history",
-		})
-		if err == nil {
-			status = "ready"
+// scheduleResumePrewarm mirrors Rust #61959: a cold resume starts the
+// websocket handshake while the restored history is loaded. When the
+// `restored_history_prewarm` feature is enabled and that history carries file
+// images, the warm-up carries the full history so the socket (and its
+// normalized-image cache) already knows them, but it never hands its response
+// id to the first turn. A history without file images keeps the plain base
+// warm-up. When the handshake falls back to HTTP the warm-up prepares nothing
+// and generation prepares its own input, exactly like Rust.
+func (r *RuntimeRouter) scheduleResumePrewarm(threadID string) {
+	if r == nil || r.services.Agent == nil || r.services.ThreadRouter == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" || r.threads == nil || r.threads.LiveThread(session.ThreadID(threadID)) == nil {
+		return
+	}
+	if _, ok := r.services.Agent.(guardianPrewarmer); !ok {
+		return
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), false, false)
+	if err != nil || record == nil {
+		return
+	}
+	params := &turn.TurnStartParams{
+		ThreadID: threadID,
+		CWD:      strings.TrimSpace(record.Metadata.CWD),
+		Model:    strings.TrimSpace(record.Metadata.Model),
+	}
+	cfg, err := r.effectiveConfigForTurn(params)
+	if err != nil || cfg == nil {
+		return
+	}
+	modelID := strings.TrimSpace(record.Metadata.Model)
+	if modelID == "" {
+		modelID = strings.TrimSpace(stringFromAny(cfg.Values["model"]))
+	}
+	if modelID == "" {
+		return
+	}
+	params.Model = modelID
+	providerID := strings.TrimSpace(record.Metadata.ModelProvider)
+	if providerID == "" && record.Metadata.Extra != nil {
+		providerID = firstNonEmpty(
+			stringFromMap(record.Metadata.Extra, "model_provider"),
+			stringFromMap(record.Metadata.Extra, "modelProvider"),
+			stringFromMap(record.Metadata.Extra, "provider"),
+		)
+	}
+	inputMode := startupPrewarmInputBase
+	var inputItems []any
+	modelInfo := r.modelInfoForRuntimeWithConfig(modelID, cfg)
+	if features.Enabled(cfg.FeatureSettings(), "restored_history_prewarm") {
+		historyItems, _ := r.historyInputItemsForTurn(threadID)
+		// Rust projects the history through `for_prompt` before deciding, so a
+		// model without image input never warms the restored images.
+		if restoredHistoryPrewarmCandidate(historyItems, modelInfo) {
+			inputMode = startupPrewarmInputRestoredHistory
+			inputItems = historyItems
 		}
-		if err == nil && resp != nil {
-			responseID = strings.TrimSpace(resp.ResponseID)
+	}
+	// Rust defers this read until history is ready because the restore can
+	// change settings; the warm-up must still carry the instructions the first
+	// turn will send.
+	instructions, err := appBaseInstructionsForConfig(cfg)
+	if err != nil {
+		return
+	}
+	instructions = firstNonEmpty(turnBaseInstructions(params), instructions)
+	if instructions == "" && modelInfo != nil {
+		instructions = modelInfo.ModelInstructions(appPersonalityForTurn(cfg, params))
+	}
+	job, ok := r.beginStartupPrewarm(threadID, inputMode, nil, "")
+	if !ok {
+		return
+	}
+	job.modelID = modelID
+	job.serviceTier = strings.TrimSpace(record.Metadata.ServiceTier)
+	job.effort = r.reasoningEffortForPrewarm(cfg, params, modelID, providerID)
+	job.instructions = instructions
+	job.inputItems = inputItems
+	job.params = params
+	r.runStartupPrewarm(job)
+}
+
+// restoredHistoryPrewarmCandidate reports whether a cold resume warms the
+// restored history instead of only the connection (Rust #61959): the snapshot
+// is non-empty, the model accepts images, and the projected history still
+// carries a file image (inline images already live in the request body and get
+// no benefit from the socket's normalized-image cache).
+func restoredHistoryPrewarmCandidate(items []any, info *model.ModelInfo) bool {
+	if len(items) == 0 || !appModelInfoSupportsImageInput(info) {
+		return false
+	}
+	return prewarmHistoryHasFileImage(items)
+}
+
+// prewarmHistoryHasFileImage mirrors Rust's `has_file_image`: only message
+// parts and tool-output content items that reference a stored file count.
+func prewarmHistoryHasFileImage(items []any) bool {
+	for _, value := range items {
+		item, ok := value.(map[string]any)
+		if !ok {
+			continue
 		}
-		finishedAt := time.Now().UTC()
-		r.startupPrewarmMu.Lock()
-		if state := r.startupPrewarms[threadID]; state != nil && state.inputMode == "history" {
-			state.responseID = responseID
-			state.finished = true
-			state.finishedAt = finishedAt
-			state.status = status
-			if responseID == "" && err == nil && retained != nil {
-				// The warmup skipped preparation, so keep the prepared baseline.
-				state.responseID = retained.responseID
+		switch strings.TrimSpace(stringFromAny(item["type"])) {
+		case "message":
+			if prewarmContentHasFileImage(item["content"]) {
+				return true
+			}
+		case "function_call_output", "custom_tool_call_output":
+			if prewarmContentHasFileImage(item["output"]) || prewarmContentHasFileImage(item["content_items"]) {
+				return true
 			}
 		}
-		r.startupPrewarmMu.Unlock()
-		r.recordStartupPhase("startup_prewarm_total", finishedAt.Sub(startedAt), status)
-		r.recordStartupPrewarmDuration(status, "history", finishedAt.Sub(startedAt))
-	}()
+	}
+	return false
+}
+
+func prewarmContentHasFileImage(value any) bool {
+	// History builders produce concrete slices ([]any, []map[string]any), so
+	// walk the value reflectively instead of asserting one static type.
+	parts := reflect.ValueOf(value)
+	if !parts.IsValid() || (parts.Kind() != reflect.Slice && parts.Kind() != reflect.Array) {
+		return false
+	}
+	for index := 0; index < parts.Len(); index++ {
+		entry, ok := parts.Index(index).Interface().(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(stringFromAny(entry["type"])) != "input_image" {
+			continue
+		}
+		if strings.TrimSpace(stringFromAny(entry["file_id"])) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // reasoningEffortForPrewarm mirrors Rust #43795: a WebSocket prewarm resolves
@@ -367,12 +530,26 @@ func (r *RuntimeRouter) takeStartupPrewarmResponseID(threadID string, historyIte
 	}
 	r.startupPrewarmMu.Lock()
 	state := r.startupPrewarms[threadID]
+	if state != nil && state.inputMode == startupPrewarmInputRestoredHistory && !state.consumed {
+		// Rust #61959: the restored-history warmup retained the socket and its
+		// normalized images but dropped its response id, so generation resends
+		// the full history. The decision does not wait for the warm-up: the
+		// generation's first request serializes behind it on the socket.
+		state.consumed = true
+		age := time.Since(state.startedAt)
+		r.startupPrewarmMu.Unlock()
+		if age < 0 {
+			age = 0
+		}
+		r.recordStartupPrewarmAgeAtFirstTurn("consumed", age)
+		return "", 0
+	}
 	if state == nil || !state.finished || state.consumed {
 		r.startupPrewarmMu.Unlock()
 		return "", 0
 	}
 	consumed := 0
-	if state.inputMode == "history" {
+	if state.inputMode == startupPrewarmInputHistory {
 		if state.settingsKey != settingsKey || !historyExtendsPrewarm(state.historyKeys, prewarmHistoryKeys(historyItems)) {
 			// A non-prefix prompt or changed settings cannot chain the prepared
 			// response; consume it and let the regular request proceed.
@@ -398,6 +575,51 @@ func (r *RuntimeRouter) takeStartupPrewarmResponseID(threadID string, historyIte
 	r.startupPrewarmMu.Unlock()
 	r.recordStartupPrewarmAgeAtFirstTurn("consumed", age)
 	return responseID, consumed
+}
+
+// consumeStartupPrewarmForTurn resolves one regular turn's claim on the
+// thread's prepared warm-up. It returns the response id to chain (and the
+// history prefix it already covers), or reports that the turn must drop its
+// continuation and resend the full history (Rust #61959's
+// `reuse_response = false`).
+func (r *RuntimeRouter) consumeStartupPrewarmForTurn(threadID string, historyItems []any, settingsKey string, previousResponseID string) (string, int, bool) {
+	if strings.TrimSpace(previousResponseID) == "" {
+		id, consumed := r.takeStartupPrewarmResponseID(threadID, historyItems, settingsKey)
+		return id, consumed, false
+	}
+	if r.discardRestoredHistoryPrewarm(threadID) {
+		return "", 0, true
+	}
+	return "", 0, false
+}
+
+// discardRestoredHistoryPrewarm consumes a restored-history warmup that would
+// otherwise be skipped because the thread already carries a persisted
+// continuation. Rust never persists `previous_response_id`, so a resumed turn
+// always resends the full history; dropping the restored warm-up's response is
+// what lets Go do the same (Rust #61959 `reuse_response = false`).
+func (r *RuntimeRouter) discardRestoredHistoryPrewarm(threadID string) bool {
+	if r == nil {
+		return false
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return false
+	}
+	r.startupPrewarmMu.Lock()
+	state := r.startupPrewarms[threadID]
+	if state == nil || state.consumed || state.inputMode != startupPrewarmInputRestoredHistory {
+		r.startupPrewarmMu.Unlock()
+		return false
+	}
+	state.consumed = true
+	age := time.Since(state.startedAt)
+	r.startupPrewarmMu.Unlock()
+	if age < 0 {
+		age = 0
+	}
+	r.recordStartupPrewarmAgeAtFirstTurn("consumed", age)
+	return true
 }
 
 func prewarmSettingsKey(modelID, instructions, serviceTier string) string {
