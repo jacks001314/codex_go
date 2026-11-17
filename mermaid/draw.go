@@ -1,6 +1,9 @@
 package mermaid
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // renderGraph lays out orthogonal routes with unique lanes and endpoint
 // positions in all four directions (Rust `draw::render`). Routes never share
@@ -83,24 +86,123 @@ func renderGraph(g *graph, maxWidth int) ([][]Span, error) {
 		}
 	}
 	starts := make([]int, len(g.nodes))
-	along := 0
-	for i := 0; i < len(g.nodes); i++ {
-		index := i
-		if g.direction == directionUp || g.direction == directionLeft {
-			index = len(g.nodes) - 1 - i
-		}
-		starts[index] = along
-		along += sizes[index] + 2
+	grouped := len(g.subgraphs) > 0
+	inset := 0
+	if grouped {
+		inset = 2
 	}
-	firstLane := boxCross
+	membership := make([]int, len(g.nodes))
+	for i := range membership {
+		membership[i] = -1
+	}
+	for group, flat := range g.subgraphs {
+		for _, member := range flat.nodes {
+			membership[member] = group
+		}
+	}
+	// Keep a group's members contiguous even when an edge referenced them before
+	// its declaration.
+	order := make([]int, 0, len(g.nodes))
+	placed := make([]bool, len(g.nodes))
+	for n, group := range membership {
+		if placed[n] {
+			continue
+		}
+		if group < 0 {
+			placed[n] = true
+			order = append(order, n)
+			continue
+		}
+		members := append([]int(nil), g.subgraphs[group].nodes...)
+		sort.Ints(members)
+		for _, member := range members {
+			if placed[member] {
+				continue
+			}
+			placed[member] = true
+			order = append(order, member)
+		}
+	}
+	if g.direction == directionUp || g.direction == directionLeft {
+		for left, right := 0, len(order)-1; left < right; left, right = left+1, right-1 {
+			order[left], order[right] = order[right], order[left]
+		}
+	}
+	along := 0
+	frames := make([][2]int, len(g.subgraphs))
+	for position := 0; position < len(order); {
+		index := order[position]
+		group := membership[index]
+		if group < 0 {
+			starts[index] = along
+			along += sizes[index] + 2
+			position++
+			continue
+		}
+		frameStart := along
+		along += 2
+		for position < len(order) && membership[order[position]] == group {
+			member := order[position]
+			starts[member] = along
+			along += sizes[member] + 2
+			position++
+		}
+		if horizontal {
+			if extent := frameStart + textWidth(g.subgraphs[group].label) + 4; extent > along {
+				along = extent
+			}
+		}
+		frames[group] = [2]int{frameStart, along - 1}
+		along += 2
+	}
+	firstLane := inset + boxCross
 	if horizontal {
 		firstLane += 4
 	} else {
 		firstLane += labelWidth + 5
 	}
-	across := boxCross
-	if len(g.edges) > 0 {
-		across = firstLane + len(g.edges)*2 - 1
+	internal := make([]bool, len(g.edges))
+	internalCount := 0
+	for i, e := range g.edges {
+		if membership[e.from] >= 0 && membership[e.from] == membership[e.to] {
+			internal[i] = true
+			internalCount++
+		}
+	}
+	frameCross := inset + boxCross + 2
+	if len(g.edges) > 0 && firstLane+internalCount*2+1 > frameCross {
+		frameCross = firstLane + internalCount*2 + 1
+	}
+	if !horizontal {
+		for _, flat := range g.subgraphs {
+			if groupWidth := textWidth(flat.label) + 4; groupWidth > frameCross {
+				frameCross = groupWidth
+			}
+		}
+	}
+	externalLane := firstLane
+	if grouped {
+		externalLane = frameCross + 2
+	}
+	lanes := make([]int, len(g.edges))
+	nextInternal, nextExternal := 0, 0
+	for i := range g.edges {
+		if internal[i] {
+			lanes[i] = firstLane + nextInternal*2
+			nextInternal++
+			continue
+		}
+		lanes[i] = externalLane + nextExternal*2
+		nextExternal++
+	}
+	across := inset + boxCross
+	for _, lane := range lanes {
+		if lane+1 > across {
+			across = lane + 1
+		}
+	}
+	if grouped && frameCross > across {
+		across = frameCross
 	}
 	width, height := across, along-2
 	if horizontal {
@@ -113,6 +215,28 @@ func renderGraph(g *graph, maxWidth int) ([][]Span, error) {
 		return nil, ErrLimit
 	}
 	canvas := newCanvas(width, height, horizontal)
+	for group, frame := range frames {
+		start, end := frame[0], frame[1]
+		for x := 1; x < frameCross-1; x++ {
+			canvas.set(x, start, nodeCell('\u2500'))
+			canvas.set(x, end, nodeCell('\u2500'))
+		}
+		for y := start + 1; y < end; y++ {
+			canvas.set(0, y, nodeCell('\u2502'))
+			canvas.set(frameCross-1, y, nodeCell('\u2502'))
+		}
+		canvas.set(0, start, nodeCell('\u250c'))
+		canvas.set(frameCross-1, start, nodeCell('\u2510'))
+		canvas.set(0, end, nodeCell('\u2514'))
+		canvas.set(frameCross-1, end, nodeCell('\u2518'))
+		x, y := 2, start
+		if horizontal {
+			x, y = start+2, 0
+		}
+		if err := putText(canvas.row(y), x, g.subgraphs[group].label); err != nil {
+			return nil, err
+		}
+	}
 	for i, lines := range labels {
 		start := starts[i]
 		end := start + sizes[i] - 1
@@ -120,22 +244,22 @@ func renderGraph(g *graph, maxWidth int) ([][]Span, error) {
 		if g.nodes[i].shape == shapeStadium {
 			topLeft, topRight, bottomLeft, bottomRight = '\u256d', '\u256e', '\u2570', '\u256f'
 		}
-		canvas.set(0, start, nodeCell(topLeft))
-		canvas.set(boxCross-1, start, nodeCell(topRight))
-		canvas.set(0, end, nodeCell(bottomLeft))
-		canvas.set(boxCross-1, end, nodeCell(bottomRight))
+		canvas.set(inset, start, nodeCell(topLeft))
+		canvas.set(inset+boxCross-1, start, nodeCell(topRight))
+		canvas.set(inset, end, nodeCell(bottomLeft))
+		canvas.set(inset+boxCross-1, end, nodeCell(bottomRight))
 		for x := 1; x < boxCross-1; x++ {
-			canvas.set(x, start, nodeCell('\u2500'))
-			canvas.set(x, end, nodeCell('\u2500'))
+			canvas.set(inset+x, start, nodeCell('\u2500'))
+			canvas.set(inset+x, end, nodeCell('\u2500'))
 		}
 		for y := start + 1; y < end; y++ {
-			canvas.set(0, y, nodeCell('\u2502'))
-			canvas.set(boxCross-1, y, nodeCell('\u2502'))
+			canvas.set(inset, y, nodeCell('\u2502'))
+			canvas.set(inset+boxCross-1, y, nodeCell('\u2502'))
 		}
 		for j, line := range lines {
-			x, y := 2, start+j+1
+			x, y := inset+2, start+j+1
 			if horizontal {
-				x, y = start+2, j+1
+				x, y = start+2, inset+j+1
 			}
 			if err := putText(canvas.row(y), x, line); err != nil {
 				return nil, err
@@ -160,30 +284,34 @@ func renderGraph(g *graph, maxWidth int) ([][]Span, error) {
 			symbol = '\u2506'
 		}
 		for y := minInt(source, target) + 1; y < maxInt(source, target); y++ {
-			canvas.set(firstLane+2*i, y, edgeCell(symbol))
+			canvas.set(lanes[i], y, edgeCell(symbol))
 		}
 	}
 	for i, e := range g.edges {
 		source, target := endpoints[i][0], endpoints[i][1]
-		lane := firstLane + 2*i
+		lane := lanes[i]
 		for _, y := range []int{source, target} {
-			for x := boxCross; x < lane; x++ {
+			endpoint := e.to
+			if y == source {
+				endpoint = e.from
+			}
+			for x := inset + boxCross; x < lane; x++ {
 				ch := '\u2500'
-				switch canvas.get(x, y) {
-				case '\u2502', '\u2506':
+				if e.dashed {
+					ch = '\u2504'
+				}
+				if grouped && x == frameCross-1 && membership[endpoint] >= 0 {
+					ch = '\u253c'
+				} else if current := canvas.get(x, y); current == '\u2502' || current == '\u2506' {
 					ch = '\u256a'
-				default:
-					if e.dashed {
-						ch = '\u2504'
-					}
 				}
 				canvas.set(x, y, edgeCell(ch))
 			}
 		}
-		canvas.set(boxCross-1, source, nodeCell('\u251c'))
-		canvas.set(boxCross-1, target, nodeCell('\u251c'))
-		canvas.set(boxCross, source, edgeCell(e.sourceTip))
-		canvas.set(boxCross, target, edgeCell(e.targetTip))
+		canvas.set(inset+boxCross-1, source, nodeCell('\u251c'))
+		canvas.set(inset+boxCross-1, target, nodeCell('\u251c'))
+		canvas.set(inset+boxCross, source, edgeCell(e.sourceTip))
+		canvas.set(inset+boxCross, target, edgeCell(e.targetTip))
 		if source < target {
 			canvas.set(lane, source, edgeCell('\u2510'))
 			canvas.set(lane, target, edgeCell('\u2518'))
@@ -195,9 +323,9 @@ func renderGraph(g *graph, maxWidth int) ([][]Span, error) {
 			port  int
 			label string
 		}{{source, e.label}, {target, e.targetLabel}} {
-			x, y := boxCross+2, labelled.port
+			x, y := inset+boxCross+2, labelled.port
 			if horizontal {
-				x, y = labelled.port+1, boxCross+1
+				x, y = labelled.port+1, inset+boxCross+1
 			}
 			if err := putText(canvas.row(y), x, labelled.label); err != nil {
 				return nil, err

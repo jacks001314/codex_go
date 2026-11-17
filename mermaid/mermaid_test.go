@@ -213,7 +213,6 @@ func TestFlowchartRejectsUnsupportedInput(t *testing.T) {
 		"flowchart TD; P --> Q; A{\"`Decision`\"}",
 		"flowchart TD; P --> Q; A([\"`Stadium`\"])",
 		"flowchart TD; P --> Q; A -->|\"`Caption`\"| B",
-		"flowchart TD; subgraph X; A; end",
 		"flowchart TD; A --> B; garbage syntax",
 		"flowchart TD; A --> B &",
 		"flowchart TD; A && B",

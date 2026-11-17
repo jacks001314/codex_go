@@ -3017,6 +3017,26 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestAgentsOverviewSearchMatchesThreadIDAndBranchLikeRust;TestEmbeddedAgentsOverviewSearchMatchesThreadIDAndBranchLikeRust"
+  },
+  {
+   "id": "mermaid-flat-subgraphs",
+   "kind": "source-surface",
+   "rustPaths": [
+    "mermaid/src/lib.rs",
+    "mermaid/src/parse.rs",
+    "mermaid/src/draw.rs",
+    "mermaid/src/tests.rs"
+   ],
+   "goPaths": [
+    "mermaid/mermaid.go",
+    "mermaid/parse.go",
+    "mermaid/draw.go",
+    "mermaid/subgraphs_like_rust_test.go",
+    "tui/markdown/mermaid_test.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestFlatSubgraphsAndCrossGroupEdgesLikeRust;TestSubgraphTitlesAndMembershipLikeRust;TestInvalidOrUnsupportedSubgraphsKeepSourceLikeRust;TestMermaidFencesUseNativeRendererForEveryFamily"
   }
   ]
 }

@@ -152,6 +152,38 @@ type graph struct {
 	direction direction
 	nodes     []node
 	edges     []edge
+	subgraphs []subgraph
+}
+
+// subgraph is a flat `subgraph ... end` group. Members stay contiguous in the
+// layout and share one frame (Rust `Subgraph`).
+type subgraph struct {
+	id    string
+	label string
+	nodes []int
+}
+
+// nodeInAnySubgraph reports whether index already belongs to a group; the first
+// enclosing group wins.
+func (g *graph) nodeInAnySubgraph(index int) bool {
+	for _, group := range g.subgraphs {
+		for _, member := range group.nodes {
+			if member == index {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasSubgraph reports whether id is already used by a group.
+func (g *graph) hasSubgraph(id string) bool {
+	for _, group := range g.subgraphs {
+		if group.id == id {
+			return true
+		}
+	}
+	return false
 }
 
 // node returns the index of an existing node or appends a new undeclared one,

@@ -1,6 +1,7 @@
 package mermaid
 
 import (
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -24,9 +25,43 @@ func parseFlowchart(header string, body []string) (*graph, error) {
 		return nil, ErrUnsupported
 	}
 	g := &graph{direction: dir}
+	var block *int
 	for _, statement := range body {
+		if text, ok := strings.CutPrefix(statement, "subgraph"); ok &&
+			text != "" && (text[0] == ' ' || text[0] == '\t') {
+			if block != nil {
+				return nil, ErrUnsupported
+			}
+			if len(g.subgraphs) == maxNodes {
+				return nil, ErrLimit
+			}
+			id, label, err := parseSubgraph(text[1:], len(g.subgraphs))
+			if err != nil {
+				return nil, err
+			}
+			if err := checkLabel(label); err != nil {
+				return nil, err
+			}
+			if id == "" || g.hasSubgraph(id) {
+				return nil, ErrUnsupported
+			}
+			index := len(g.subgraphs)
+			block = &index
+			g.subgraphs = append(g.subgraphs, subgraph{id: id, label: label})
+			continue
+		}
+		if statement == "end" {
+			if block == nil {
+				return nil, ErrUnsupported
+			}
+			if len(g.subgraphs[*block].nodes) == 0 {
+				return nil, ErrUnsupported
+			}
+			block = nil
+			continue
+		}
 		rest := statement
-		from, err := flowchartNodes(&rest, g)
+		from, err := flowchartNodes(&rest, g, block)
 		if err != nil {
 			return nil, err
 		}
@@ -36,7 +71,7 @@ func parseFlowchart(header string, body []string) (*graph, error) {
 			if err != nil {
 				return nil, err
 			}
-			to, err := flowchartNodes(&rest, g)
+			to, err := flowchartNodes(&rest, g, block)
 			if err != nil {
 				return nil, err
 			}
@@ -60,16 +95,74 @@ func parseFlowchart(header string, body []string) (*graph, error) {
 			from = to
 		}
 	}
-	if len(g.nodes) == 0 {
+	if block != nil || len(g.nodes) == 0 {
 		return nil, ErrUnsupported
+	}
+	for _, group := range g.subgraphs {
+		if len(group.nodes) == 0 {
+			return nil, ErrUnsupported
+		}
+		for _, n := range g.nodes {
+			if n.id == group.id {
+				return nil, ErrUnsupported
+			}
+		}
 	}
 	return g, nil
 }
 
+// parseSubgraph parses the text after `subgraph ` into a group id and label.
+// `ID[title]` names the group explicitly; otherwise a plain title is used as the
+// id, synthesized as `subGraph<n>` when it contains whitespace (Rust
+// `parse::parse`'s subgraph branch).
+func parseSubgraph(text string, index int) (string, string, error) {
+	text = strings.TrimSpace(text)
+	if bracket := strings.IndexByte(text, '['); bracket >= 0 && !strings.HasPrefix(text, "\"") {
+		idPart := strings.TrimSpace(text[:bracket])
+		id, err := identifier(&idPart)
+		if err != nil {
+			return "", "", err
+		}
+		if idPart != "" {
+			return "", "", ErrUnsupported
+		}
+		rawLabel, rest, err := delimitedLabel(text[bracket+1:], "]")
+		if err != nil {
+			return "", "", err
+		}
+		if strings.TrimSpace(rest) != "" {
+			return "", "", ErrUnsupported
+		}
+		label, err := flowchartLabel(rawLabel)
+		if err != nil {
+			return "", "", err
+		}
+		return id, label, nil
+	}
+	if !strings.HasPrefix(text, "\"") {
+		// Edge syntax in a bare title would silently become a group named after
+		// an operator, so reject it before labelling.
+		for _, operator := range []string{"--", "==", "-.", ".-", "~~~"} {
+			if strings.Contains(text, operator) {
+				return "", "", ErrUnsupported
+			}
+		}
+	}
+	label, err := flowchartLabel(text)
+	if err != nil {
+		return "", "", err
+	}
+	id := label
+	if strings.ContainsFunc(label, unicode.IsSpace) {
+		id = "subGraph" + strconv.Itoa(index)
+	}
+	return id, label, nil
+}
+
 // flowchartNodes expands an `&` group into every referenced node, capping the
 // group at maxEdges references (Rust `parse::nodes`).
-func flowchartNodes(rest *string, g *graph) ([]int, error) {
-	first, err := flowchartNode(rest, g)
+func flowchartNodes(rest *string, g *graph, block *int) ([]int, error) {
+	first, err := flowchartNode(rest, g, block)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +176,7 @@ func flowchartNodes(rest *string, g *graph) ([]int, error) {
 			return nil, ErrLimit
 		}
 		*rest = trimmed[len("&"):]
-		index, err := flowchartNode(rest, g)
+		index, err := flowchartNode(rest, g, block)
 		if err != nil {
 			return nil, err
 		}
@@ -179,7 +272,7 @@ var flowchartReservedIDs = map[string]bool{
 // longerShapeDelimiters must not become punctuation inside a simpler node.
 var longerShapeDelimiters = []string{"[(", "[[", "[/", "[\\", "{{"}
 
-func flowchartNode(rest *string, g *graph) (int, error) {
+func flowchartNode(rest *string, g *graph, block *int) (int, error) {
 	id, err := identifier(rest)
 	if err != nil {
 		return 0, err
@@ -209,6 +302,11 @@ func flowchartNode(rest *string, g *graph) (int, error) {
 	index, err := g.node(id)
 	if err != nil {
 		return 0, err
+	}
+	// A node joins the first group that contains it; later references from
+	// another group leave the original membership intact.
+	if block != nil && !g.nodeInAnySubgraph(index) {
+		g.subgraphs[*block].nodes = append(g.subgraphs[*block].nodes, index)
 	}
 	if declared == nil {
 		return index, nil
