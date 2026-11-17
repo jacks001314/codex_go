@@ -21,14 +21,16 @@ func TestBundledModelsCatalogMatchesRustSnapshot(t *testing.T) {
 	if err := json.Unmarshal(raw, &response); err != nil {
 		t.Fatalf("Unmarshal bundled catalog error = %v", err)
 	}
-	if len(response.Models) != 12 {
-		t.Fatalf("bundled catalog has %d models, want the 0.166 release's 12", len(response.Models))
+	if len(response.Models) != 14 {
+		t.Fatalf("bundled catalog has %d models, want upstream models.json's 14", len(response.Models))
 	}
 	bySlug := map[string]ModelInfo{}
 	for _, info := range response.Models {
 		bySlug[info.Slug] = info
 	}
 	for _, slug := range []string{
+		"gpt-6.2-sol",
+		"gpt-6.2-astra",
 		"gpt-6-astra",
 		"gpt-6.1-sol",
 		"gpt-daybreak-blue-latest",

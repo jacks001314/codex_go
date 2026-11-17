@@ -3596,5 +3596,26 @@
    "status": "complete",
    "verifier": "TestStatusLineSetupOffersCustomAuthoringLikeRust;TestStatusLineCreateCustomBindsBundledSkillLikeRust;TestStatusLineCreateCustomFallsBackWithoutSkillLikeRust;TestStatusLineCreateCustomActivatesOnEnterLikeRust;TestStatusLineCreateCustomPreservesPreviousDraftLikeRust;TestStatusLineCreateCustomDropsStaleSkillReadLikeRust"
   }
+  {
+   "id": "gpt-6.2-model-catalog",
+   "kind": "shared-fixtures",
+   "rustPaths": [
+    "models-manager/models.json",
+    "model-provider-info/src/lib.rs",
+    "model-provider/src/amazon_bedrock/catalog.rs",
+    "model-provider/src/amazon_bedrock/runtime_catalog.rs",
+    "model-provider/src/gcp/mod.rs"
+   ],
+   "goPaths": [
+    "model/bundled_models_catalog.json",
+    "model/catalog.go",
+    "model/provider_info.go",
+    "model/provider.go",
+    "model/catalog_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestBundledModelsCatalogMatchesRustSnapshot;TestFallbackBundledModelsMatchCurrentRustDefault;TestAmazonBedrockModelCatalogLikeRust;TestAmazonBedrockRuntimeModelCatalogLikeRust;TestBedrockCatalogAdvertisesUltrafastForAstraLikeRust;TestAmazonBedrockProviderModelsManagerUsesRuntimeCatalogLikeRust"
+  },
   ]
 }

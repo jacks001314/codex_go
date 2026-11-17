@@ -61,6 +61,10 @@ const (
 	// AmazonBedrockGPT61TerraModelID is the Bedrock slug for GPT-6.1 Terra
 	// (Rust #57293).
 	AmazonBedrockGPT61TerraModelID = "openai.gpt-6.1-terra"
+	// AmazonBedrockGPT62SolModelID / AmazonBedrockGPT62AstraModelID are the
+	// Bedrock slugs Rust #62106 added alongside the bundled GPT-6.2 entries.
+	AmazonBedrockGPT62SolModelID   = "openai.gpt-6.2-sol"
+	AmazonBedrockGPT62AstraModelID = "openai.gpt-6.2-astra"
 	AmazonBedrockGPT6SolModelID    = "openai.gpt-6-sol"
 	AmazonBedrockGPT6LunaModelID   = "openai.gpt-6-luna"
 	// AmazonBedrockGPT6AstraModelID is the Bedrock slug for the bundled

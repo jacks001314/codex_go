@@ -270,15 +270,15 @@ func TestAmazonBedrockProviderCapabilitiesAndModels(t *testing.T) {
 // are preserved.
 func TestAmazonBedrockProviderModelsManagerUsesRuntimeCatalogLikeRust(t *testing.T) {
 	mantleManager := CreateRuntimeProvider(CreateAmazonBedrockProvider(nil), nil).ModelsManager(nil)
-	if got := mantleManager.GetDefaultModel("", true, RefreshOffline); got != AmazonBedrockGPT61SolModelID {
-		t.Fatalf("mantle default model = %q, want %q", got, AmazonBedrockGPT61SolModelID)
+	if got := mantleManager.GetDefaultModel("", true, RefreshOffline); got != AmazonBedrockGPT62SolModelID {
+		t.Fatalf("mantle default model = %q, want %q", got, AmazonBedrockGPT62SolModelID)
 	}
 	if got := mantleManager.GetDefaultModel(AmazonBedrockGPT56SolModelID, true, RefreshOffline); got != AmazonBedrockGPT56SolModelID {
 		t.Fatalf("mantle supported model = %q, want %q", got, AmazonBedrockGPT56SolModelID)
 	}
 
 	runtimeManager := CreateRuntimeProvider(CreateAmazonBedrockRuntimeProvider(nil), nil).ModelsManager(nil)
-	globalSol := bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT61SolModelID
+	globalSol := bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT62SolModelID
 	if got := runtimeManager.GetDefaultModel("", true, RefreshOffline); got != globalSol {
 		t.Fatalf("runtime default model = %q, want %q", got, globalSol)
 	}
@@ -342,7 +342,7 @@ func TestAmazonBedrockGovCloudMantleCatalogLikeRust(t *testing.T) {
 	if strings.Join(govSlugs, ",") != strings.Join(wantSlugs, ",") {
 		t.Fatalf("govcloud manager slugs = %v, want %v", govSlugs, wantSlugs)
 	}
-	// Terra (priority 5) leads the restricted catalog, so it is the default.
+	// Terra (priority 8) leads the restricted catalog, so it is the default.
 	if got := govManager.GetDefaultModel("", true, RefreshOffline); got != AmazonBedrockGPT56TerraModelID {
 		t.Fatalf("govcloud default model = %q, want %q", got, AmazonBedrockGPT56TerraModelID)
 	}
@@ -370,7 +370,7 @@ func TestAmazonBedrockGovCloudMantleCatalogLikeRust(t *testing.T) {
 	runtimeInfo := CreateAmazonBedrockRuntimeProvider(nil)
 	runtimeInfo.BaseURL = "https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1"
 	runtimeManager := CreateRuntimeProvider(runtimeInfo, nil).ModelsManager(nil)
-	wantRuntime := bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT61SolModelID
+	wantRuntime := bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT62SolModelID
 	if got := runtimeManager.GetDefaultModel("", true, RefreshOffline); got != wantRuntime {
 		t.Fatalf("runtime default model = %q, want %q", got, wantRuntime)
 	}

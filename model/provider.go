@@ -982,6 +982,7 @@ func (p *GCPProvider) ModelsManager(configCatalog *ModelsResponse) ModelsManager
 	}
 	allowed := map[string]struct{}{
 		"gpt-6-astra": {}, "gpt-6-luna": {}, "gpt-6.1-sol": {}, "gpt-6.1-terra": {},
+		"gpt-6.2-sol": {}, "gpt-6.2-astra": {},
 	}
 	filtered := ModelsResponse{Models: make([]ModelInfo, 0, len(catalog.Models))}
 	for _, item := range catalog.Models {

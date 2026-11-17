@@ -969,7 +969,7 @@ func TestInteractiveWithoutPromptRunsLineSession(t *testing.T) {
 	}
 	output := stdout.String()
 	if !strings.Contains(output, "gcode") ||
-		!strings.Contains(output, "Model: gpt-6.1-sol") ||
+		!strings.Contains(output, "Model: gpt-6.2-sol") ||
 		!strings.Contains(output, "Directory:") ||
 		!strings.Contains(output, "first turn") ||
 		!strings.Contains(output, "second turn") {
@@ -1078,7 +1078,7 @@ func TestInteractiveUIStateUsesEffectiveConfigModelAndDirectory(t *testing.T) {
 func TestInteractiveUIStateUsesSelectedModelDefaultReasoningEffort(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 	state := interactiveUIState(&cli.RootOptions{})
-	if state.Model != "gpt-6.1-sol" || state.ReasoningEffort != "low" {
+	if state.Model != "gpt-6.2-sol" || state.ReasoningEffort != "low" {
 		t.Fatalf("default state = model %q reasoning %q", state.Model, state.ReasoningEffort)
 	}
 }

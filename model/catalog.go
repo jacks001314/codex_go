@@ -1498,7 +1498,7 @@ func fallbackBundledModelsResponse() ModelsResponse {
 	response := ModelsResponse{
 		Models: []ModelInfo{
 			{
-				Slug: "gpt-6.1-sol", DisplayName: "GPT-6.1-Sol", Description: "Latest workhorse model for coding and everyday work.",
+				Slug: "gpt-6.2-sol", DisplayName: "GPT-6.2-Sol", Description: "Fast, go-to model for coding and everyday work.",
 				Visibility: VisibilityList, SupportedInAPI: true, Priority: 1, BaseInstructions: BaseInstructions,
 				ToolMode: ToolModeCodeModeOnly, MultiAgentVersion: "v2", DefaultReasoningLevel: "low",
 				SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
@@ -1506,11 +1506,11 @@ func fallbackBundledModelsResponse() ModelsResponse {
 				SupportVerbosity:         true, DefaultVerbosity: "low", WebSearchToolType: "text_and_image",
 				TruncationPolicy: TruncationPolicy{Mode: TruncationModeTokens, Limit: 10000}, SupportsImageDetailOriginal: true,
 				UseResponsesLite: true, DefaultReasoningSummary: "none", SupportsReasoningEffortUpdates: true,
-				ContextWindow: 272000, MaxContextWindow: 872000, EffectiveContextWindowPercent: 95,
+				ContextWindow: 500000, MaxContextWindow: 872000, EffectiveContextWindowPercent: 95,
 				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
 			},
 			{
-				Slug: "gpt-6-astra", DisplayName: "GPT-6-Astra", Description: "Frontier intelligence for the most demanding work.",
+				Slug: "gpt-6.2-astra", DisplayName: "GPT-6.2-Astra", Description: "Our most capable model for complex coding and professional work.",
 				Visibility: VisibilityList, SupportedInAPI: true, Priority: 2, BaseInstructions: BaseInstructions,
 				ToolMode: ToolModeCodeModeOnly, MultiAgentVersion: "v2", DefaultReasoningLevel: "low",
 				SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
@@ -1522,8 +1522,20 @@ func fallbackBundledModelsResponse() ModelsResponse {
 				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
 			},
 			{
-				Slug: "gpt-6.1-terra", DisplayName: "GPT-6.1 Terra", Description: "GPT-6.1 Terra Codex model.",
-				Visibility: VisibilityList, SupportedInAPI: true, Priority: 7, BaseInstructions: BaseInstructions,
+				Slug: "gpt-6-astra", DisplayName: "GPT-6-Astra", Description: "Previous generation model for complex coding and professional work.",
+				Visibility: VisibilityList, SupportedInAPI: true, Priority: 5, BaseInstructions: BaseInstructions,
+				ToolMode: ToolModeCodeModeOnly, MultiAgentVersion: "v2", DefaultReasoningLevel: "low",
+				SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
+				ServiceTiers:             []string{"priority"},
+				SupportVerbosity:         true, DefaultVerbosity: "low", WebSearchToolType: "text_and_image",
+				TruncationPolicy: TruncationPolicy{Mode: TruncationModeTokens, Limit: 10000}, SupportsImageDetailOriginal: true,
+				UseResponsesLite: true, DefaultReasoningSummary: "none", SupportsReasoningEffortUpdates: true,
+				ContextWindow: 272000, MaxContextWindow: 872000, EffectiveContextWindowPercent: 95,
+				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
+			},
+			{
+				Slug: "gpt-6.1-sol", DisplayName: "GPT-6.1-Sol", Description: "Previous generation model for coding and everyday work.",
+				Visibility: VisibilityList, SupportedInAPI: true, Priority: 4, BaseInstructions: BaseInstructions,
 				ToolMode: ToolModeCodeModeOnly, MultiAgentVersion: "v2", DefaultReasoningLevel: "low",
 				SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
 				ServiceTiers:             []string{"priority"},
@@ -1532,9 +1544,22 @@ func fallbackBundledModelsResponse() ModelsResponse {
 				UseResponsesLite: true, DefaultReasoningSummary: "none", SupportsReasoningEffortUpdates: true,
 				ContextWindow: 500000, MaxContextWindow: 872000, EffectiveContextWindowPercent: 95,
 				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
-			}, {
-				Slug: "gpt-6-sol", DisplayName: "GPT-6-Sol", Description: "Previous generation workhorse model.",
+			},
+			{
+				Slug: "gpt-6.1-terra", DisplayName: "GPT-6.1 Terra", Description: "Efficient model that excels at visual understanding and computer use.",
 				Visibility: VisibilityList, SupportedInAPI: true, Priority: 3, BaseInstructions: BaseInstructions,
+				ToolMode: ToolModeCodeModeOnly, MultiAgentVersion: "v2", DefaultReasoningLevel: "low",
+				SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
+				ServiceTiers:             []string{"priority"},
+				SupportVerbosity:         true, DefaultVerbosity: "low", WebSearchToolType: "text_and_image",
+				TruncationPolicy: TruncationPolicy{Mode: TruncationModeTokens, Limit: 10000}, SupportsImageDetailOriginal: true,
+				UseResponsesLite: true, DefaultReasoningSummary: "none", SupportsReasoningEffortUpdates: true,
+				ContextWindow: 500000, MaxContextWindow: 872000, EffectiveContextWindowPercent: 95,
+				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
+			},
+			{
+				Slug: "gpt-6-sol", DisplayName: "GPT-6-Sol", Description: "Legacy model for coding and everyday work.",
+				Visibility: VisibilityList, SupportedInAPI: true, Priority: 6, BaseInstructions: BaseInstructions,
 				ToolMode: ToolModeCodeModeOnly, MultiAgentVersion: "v2", DefaultReasoningLevel: "medium",
 				SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
 				ServiceTiers:             []string{"priority"},
@@ -1546,7 +1571,7 @@ func fallbackBundledModelsResponse() ModelsResponse {
 			},
 			{
 				Slug: "gpt-6-luna", DisplayName: "GPT-6-Luna", Description: "Fast and affordable model for easier tasks.",
-				Visibility: VisibilityList, SupportedInAPI: true, Priority: 4, BaseInstructions: BaseInstructions,
+				Visibility: VisibilityList, SupportedInAPI: true, Priority: 7, BaseInstructions: BaseInstructions,
 				ToolMode: ToolModeCodeModeOnly, MultiAgentVersion: "v2", DefaultReasoningLevel: "medium",
 				SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "max"},
 				ServiceTiers:             []string{"priority"},
@@ -1557,8 +1582,8 @@ func fallbackBundledModelsResponse() ModelsResponse {
 				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
 			},
 			{
-				Slug: "gpt-5.6-sol", DisplayName: "GPT-5.6-Sol", Description: "Older generation workhorse model.",
-				Visibility: VisibilityList, SupportedInAPI: true, Priority: 5, BaseInstructions: BaseInstructions,
+				Slug: "gpt-5.6-sol", DisplayName: "GPT-5.6-Sol", Description: "Legacy model for coding and everyday work.",
+				Visibility: VisibilityList, SupportedInAPI: true, Priority: 8, BaseInstructions: BaseInstructions,
 				ToolMode: ToolModeCodeModeOnly, MultiAgentVersion: "v2", DefaultReasoningLevel: "low",
 				SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
 				ServiceTiers:             []string{"priority"},
@@ -1569,8 +1594,8 @@ func fallbackBundledModelsResponse() ModelsResponse {
 				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
 			},
 			{
-				Slug: "gpt-5.6-terra", DisplayName: "GPT-5.6-Terra", Description: "Older balanced model for straightforward work.",
-				Visibility: VisibilityList, SupportedInAPI: true, Priority: 8, BaseInstructions: BaseInstructions,
+				Slug: "gpt-5.6-terra", DisplayName: "GPT-5.6-Terra", Description: "Legacy balanced model for agentic coding.",
+				Visibility: VisibilityList, SupportedInAPI: true, Priority: 9, BaseInstructions: BaseInstructions,
 				ToolMode: ToolModeCodeModeOnly, MultiAgentVersion: "v2", DefaultReasoningLevel: "medium",
 				SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
 				ServiceTiers:             []string{"priority"},
@@ -1581,8 +1606,8 @@ func fallbackBundledModelsResponse() ModelsResponse {
 				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
 			},
 			{
-				Slug: "gpt-5.6-luna", DisplayName: "GPT-5.6-Luna", Description: "Older fast and efficient model.",
-				Visibility: VisibilityList, SupportedInAPI: true, Priority: 9, BaseInstructions: BaseInstructions,
+				Slug: "gpt-5.6-luna", DisplayName: "GPT-5.6-Luna", Description: "Legacy fast model for simpler tasks.",
+				Visibility: VisibilityList, SupportedInAPI: true, Priority: 10, BaseInstructions: BaseInstructions,
 				ToolMode: ToolModeCodeModeOnly, MultiAgentVersion: "v1", DefaultReasoningLevel: "medium",
 				SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "max"},
 				ServiceTiers:             []string{"priority"},
@@ -1706,18 +1731,20 @@ func AmazonBedrockModelCatalog() ModelsResponse {
 	bundled := BundledModelsResponse()
 	return normalizeBundledBedrockCatalog(ModelsResponse{
 		Models: []ModelInfo{
-			// Rust #49339 (a6e9eaa9bd): GPT-6.1 Sol leads the Bedrock Mantle
-			// catalog and is the default (priority 0); Rust #47347 (df30941072)
-			// supplied the GPT-6 Sol/Luna entries that predate it.
-			bedrockModel(bundled, "gpt-6.1-sol", AmazonBedrockGPT61SolModelID, "GPT-6.1 Sol", 0),
-			bedrockModel(bundled, "gpt-6-astra", AmazonBedrockGPT6AstraModelID, "GPT-6-Astra", 1),
+			// Rust #62106: GPT-6.2 Sol leads the Bedrock Mantle catalog and is the
+			// default (priority 0); #49339 supplied GPT-6.1 Sol and #47347 the
+			// older GPT-6 Sol/Luna entries.
+			bedrockModel(bundled, "gpt-6.2-sol", AmazonBedrockGPT62SolModelID, "GPT-6.2 Sol", 0),
+			bedrockModel(bundled, "gpt-6.2-astra", AmazonBedrockGPT62AstraModelID, "GPT-6.2 Astra", 1),
 			bedrockModel(bundled, "gpt-6.1-terra", AmazonBedrockGPT61TerraModelID, "GPT-6.1 Terra", 2),
-			bedrockModel(bundled, "gpt-6-sol", AmazonBedrockGPT6SolModelID, "GPT-6 Sol", 3),
-			bedrockModel(bundled, "gpt-6-luna", AmazonBedrockGPT6LunaModelID, "GPT-6 Luna", 4),
-			bedrockModel(bundled, "gpt-5.6-sol", AmazonBedrockGPT56SolModelID, "GPT-5.6 Sol", 5),
-			bedrockModel(bundled, "gpt-5.6-terra", AmazonBedrockGPT56TerraModelID, "GPT-5.6 Terra", 6),
-			bedrockModel(bundled, "gpt-5.6-luna", AmazonBedrockGPT56LunaModelID, "GPT-5.6 Luna", 7),
-			gpt5BedrockModel(bundled, "gpt-5.5", AmazonBedrockGPT55ModelID, "GPT-5.5", 8),
+			bedrockModel(bundled, "gpt-6.1-sol", AmazonBedrockGPT61SolModelID, "GPT-6.1 Sol", 3),
+			bedrockModel(bundled, "gpt-6-astra", AmazonBedrockGPT6AstraModelID, "GPT-6-Astra", 4),
+			bedrockModel(bundled, "gpt-6-sol", AmazonBedrockGPT6SolModelID, "GPT-6 Sol", 5),
+			bedrockModel(bundled, "gpt-6-luna", AmazonBedrockGPT6LunaModelID, "GPT-6 Luna", 6),
+			bedrockModel(bundled, "gpt-5.6-sol", AmazonBedrockGPT56SolModelID, "GPT-5.6 Sol", 7),
+			bedrockModel(bundled, "gpt-5.6-terra", AmazonBedrockGPT56TerraModelID, "GPT-5.6 Terra", 8),
+			bedrockModel(bundled, "gpt-5.6-luna", AmazonBedrockGPT56LunaModelID, "GPT-5.6 Luna", 9),
+			gpt5BedrockModel(bundled, "gpt-5.5", AmazonBedrockGPT55ModelID, "GPT-5.5", 10),
 		},
 	}, bedrockEndpointMantle)
 }
@@ -1807,6 +1834,8 @@ const (
 // static_runtime_model_catalog: every Bedrock catalog entry except GPT-5.5 has
 // a Bedrock Runtime variant.
 var bedrockRuntimeBaseSlugs = map[string]bool{
+	AmazonBedrockGPT62SolModelID:   true,
+	AmazonBedrockGPT62AstraModelID: true,
 	AmazonBedrockGPT61SolModelID:   true,
 	AmazonBedrockGPT61TerraModelID: true,
 	AmazonBedrockGPT6AstraModelID:  true,
@@ -1847,9 +1876,11 @@ func normalizeBundledBedrockCatalog(catalog ModelsResponse, endpoint bedrockEndp
 		model.ServiceTierDefinitions = nil
 		model.DefaultServiceTier = ""
 		advertisesUltrafast := (endpoint == bedrockEndpointMantle &&
-			(model.Slug == AmazonBedrockGPT6AstraModelID || model.Slug == AmazonBedrockGPT61SolModelID)) ||
+			(model.Slug == AmazonBedrockGPT62AstraModelID || model.Slug == AmazonBedrockGPT6AstraModelID || model.Slug == AmazonBedrockGPT61SolModelID)) ||
 			(endpoint == bedrockEndpointRuntime &&
-				(model.Slug == bedrockRuntimeGlobalSlugPrefix+AmazonBedrockGPT6AstraModelID ||
+				(model.Slug == bedrockRuntimeGlobalSlugPrefix+AmazonBedrockGPT62AstraModelID ||
+					model.Slug == bedrockRuntimeUSSlugPrefix+AmazonBedrockGPT62AstraModelID ||
+					model.Slug == bedrockRuntimeGlobalSlugPrefix+AmazonBedrockGPT6AstraModelID ||
 					model.Slug == bedrockRuntimeUSSlugPrefix+AmazonBedrockGPT6AstraModelID ||
 					model.Slug == bedrockRuntimeGlobalSlugPrefix+AmazonBedrockGPT61SolModelID ||
 					model.Slug == bedrockRuntimeUSSlugPrefix+AmazonBedrockGPT61SolModelID))
