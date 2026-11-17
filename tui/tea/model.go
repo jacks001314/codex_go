@@ -1603,6 +1603,10 @@ type Options struct {
 	// resource with the displayed thread's statusline snapshot. A nil hook keeps
 	// the built-in status line in place.
 	OnReadStatuslineProvider func(ctx context.Context, request StatuslineProviderResourceRequest) ([]StatuslineProviderContent, error)
+	// OnDiscoverStatuslineProviders probes MCP servers for the /statusline
+	// provider picker (Rust #61988 refresh_statusline_providers). Nil keeps the
+	// picker rows limited to the saved provider and the default status line.
+	OnDiscoverStatuslineProviders StatuslineProviderDiscoveryFunc
 	// OnReadBackendBanner reads and validates the backend-owned inline banner
 	// plus the ordinary-usage recovery inputs (Rust backend_banners). Nil leaves
 	// the banner surface unused.
@@ -3190,11 +3194,15 @@ type Model struct {
 	// transport is down (Rust #61985 statusline_disconnected): reads would only
 	// fail, so the built-in status line takes the footer until a new session
 	// attaches.
-	statuslineDisconnected      bool
-	statuslineProviderToken     uint64
-	statuslineProviderReady     *statuslineReadyGate
-	onResolveStatuslineProvider func(context.Context, StatuslineProviderReadRequest) (StatuslineProvider, error)
-	onReadStatuslineProvider    func(context.Context, StatuslineProviderResourceRequest) ([]StatuslineProviderContent, error)
+	statuslineDisconnected        bool
+	statuslineProviderToken       uint64
+	statuslineProviderReady       *statuslineReadyGate
+	onResolveStatuslineProvider   func(context.Context, StatuslineProviderReadRequest) (StatuslineProvider, error)
+	onReadStatuslineProvider      func(context.Context, StatuslineProviderResourceRequest) ([]StatuslineProviderContent, error)
+	onDiscoverStatuslineProviders StatuslineProviderDiscoveryFunc
+	// statuslinePicker is the open /statusline provider picker (Rust #61988).
+	statuslinePicker     *statuslineProviderPickerState
+	statuslinePickerScan uint64
 	// threadSettingsConfirmed mirrors Rust's flag of the same name: approval and
 	// service-tier values stay out of the provider snapshot until the server has
 	// reported the thread's settings.
@@ -3878,6 +3886,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		statusLineProvider:               options.StatusLineProvider.Clone(),
 		onResolveStatuslineProvider:      options.OnResolveStatuslineProvider,
 		onReadStatuslineProvider:         options.OnReadStatuslineProvider,
+		onDiscoverStatuslineProviders:    options.OnDiscoverStatuslineProviders,
 		rateLimitSnapshots:               map[string]chatwidget.RateLimitSnapshot{},
 		rateLimitSwitchPrompt:            chatwidget.RateLimitSwitchPromptIdle,
 		hideRateLimitModelNudge:          boolPtrValueTea(options.HideRateLimitModelNudge),
@@ -4508,6 +4517,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, m.applyStatuslineProviderRead(msg)
 	case statuslineProviderPollMsg:
 		return m, m.applyStatuslineProviderPoll(msg)
+	case statuslinePickerDiscoveryMsg:
+		m.applyStatuslinePickerDiscovery(msg)
+		return m, nil
 	case AuthRecoveryMsg:
 		m.applyAuthRecoveryMessage(msg)
 		return m, nil
@@ -4577,6 +4589,13 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		// Rust #61985: a disconnected transport cancels provider reads and shows
 		// the built-in status line instead of a stale provider footer.
 		m.statuslineDisconnected = true
+		if m.statuslinePicker != nil {
+			// Rust #61988 keeps the picker open while offline: the default row
+			// stays selectable and provider rows turn unavailable.
+			m.statuslinePicker.offline = true
+			m.statuslinePicker.discovering = false
+			m.renderStatuslineProviderPicker()
+		}
 		// Rust #61596: a disconnected backend has no registered request handle,
 		// so its "Show more" row disappears and stale reads are cancelled.
 		if state := m.agentsOverviewBackendState(m.backendID); state != nil {

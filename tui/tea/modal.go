@@ -24,35 +24,38 @@ const (
 	ModalKindPicker      ModalKind = "picker"
 	// ModalKindVoiceChannels hosts the microphone channel multi-select
 	// (Rust #49836).
-	ModalKindVoiceChannels   ModalKind = "voice_channels"
-	ModalKindUserInput       ModalKind = "user_input"
-	ModalKindUsage           ModalKind = "usage"
-	ModalKindStatusLine      ModalKind = "status_line"
-	ModalKindTitle           ModalKind = "terminal_title"
-	ModalKindPermissions     ModalKind = "permissions"
-	ModalKindExperimental    ModalKind = "experimental"
-	ModalKindRateLimitSwitch ModalKind = "rate_limit_switch"
-	ModalKindReview          ModalKind = "review"
-	ModalKindSkills          ModalKind = "skills"
-	ModalKindManageSkills    ModalKind = "manage_skills"
-	ModalKindExternalImport  ModalKind = "external_agent_import"
-	ModalKindHooksBrowser    ModalKind = "hooks_browser"
-	ModalKindPluginsBrowser  ModalKind = "plugins_browser"
-	ModalKindAgent           ModalKind = "agent"
-	ModalKindAgents          ModalKind = "agents"
-	ModalKindTheme           ModalKind = "theme"
-	ModalKindPets            ModalKind = "pets"
-	ModalKindMemories        ModalKind = "memories"
-	ModalKindFeedback        ModalKind = "feedback"
-	ModalKindAutoReview      ModalKind = "auto_review_denials"
-	ModalKindGoal            ModalKind = "goal"
-	ModalKindPresets         ModalKind = "presets"
-	ModalKindConfig          ModalKind = "config"
-	ModalKindMisalignment    ModalKind = "misalignment"
-	ModalKindWindowsSandbox  ModalKind = "windows_sandbox"
-	ModalKindRunningTaskExit ModalKind = "running_task_exit"
-	ModalKindWorktree        ModalKind = "worktree"
-	ModalKindGeneric         ModalKind = "generic"
+	ModalKindVoiceChannels ModalKind = "voice_channels"
+	ModalKindUserInput     ModalKind = "user_input"
+	ModalKindUsage         ModalKind = "usage"
+	ModalKindStatusLine    ModalKind = "status_line"
+	// ModalKindStatuslineProvider hosts the /statusline MCP provider picker
+	// (Rust #61988 statusline_picker.rs).
+	ModalKindStatuslineProvider ModalKind = "statusline_provider"
+	ModalKindTitle              ModalKind = "terminal_title"
+	ModalKindPermissions        ModalKind = "permissions"
+	ModalKindExperimental       ModalKind = "experimental"
+	ModalKindRateLimitSwitch    ModalKind = "rate_limit_switch"
+	ModalKindReview             ModalKind = "review"
+	ModalKindSkills             ModalKind = "skills"
+	ModalKindManageSkills       ModalKind = "manage_skills"
+	ModalKindExternalImport     ModalKind = "external_agent_import"
+	ModalKindHooksBrowser       ModalKind = "hooks_browser"
+	ModalKindPluginsBrowser     ModalKind = "plugins_browser"
+	ModalKindAgent              ModalKind = "agent"
+	ModalKindAgents             ModalKind = "agents"
+	ModalKindTheme              ModalKind = "theme"
+	ModalKindPets               ModalKind = "pets"
+	ModalKindMemories           ModalKind = "memories"
+	ModalKindFeedback           ModalKind = "feedback"
+	ModalKindAutoReview         ModalKind = "auto_review_denials"
+	ModalKindGoal               ModalKind = "goal"
+	ModalKindPresets            ModalKind = "presets"
+	ModalKindConfig             ModalKind = "config"
+	ModalKindMisalignment       ModalKind = "misalignment"
+	ModalKindWindowsSandbox     ModalKind = "windows_sandbox"
+	ModalKindRunningTaskExit    ModalKind = "running_task_exit"
+	ModalKindWorktree           ModalKind = "worktree"
+	ModalKindGeneric            ModalKind = "generic"
 )
 
 type ModalOption struct {
@@ -285,7 +288,7 @@ func (m *Model) modalShowsOptionShortcut() bool {
 		return false
 	}
 	switch m.modal.kind {
-	case ModalKindApproval, ModalKindElicitation, ModalKindPermissions:
+	case ModalKindApproval, ModalKindElicitation, ModalKindPermissions, ModalKindStatuslineProvider:
 		return true
 	default:
 		return false
@@ -691,7 +694,7 @@ func (m *Model) updateModal(message keymsg.KeyMsg) bubbletea.Cmd {
 			if option.Disabled {
 				continue
 			}
-			if option.Shortcut == key || fmt.Sprintf("%d", i+1) == key {
+			if option.Shortcut == key || (m.modal.kind != ModalKindStatuslineProvider && fmt.Sprintf("%d", i+1) == key) {
 				return m.activateModalOption(i)
 			}
 		}
@@ -1338,12 +1341,25 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 		return m.applyMisalignmentModalOption(modal.id, response.OptionID)
 	}
 	if modal.kind == ModalKindStatusLine && modal.statusLineSetup != nil {
+		if !cancelled && modal.selected >= 0 && modal.selected < len(modal.options) &&
+			modal.options[modal.selected].ID == statuslineProviderPickerActionID {
+			// Rust #61988 keeps the item editor open underneath the picker.
+			return m.openStatuslineProviderPicker()
+		}
 		m.modal = nil
 		if cancelled {
 			m.notice = "Cancelled"
 			return nil
 		}
 		return m.commitStatusLineSetup(modal.statusLineSetup)
+	}
+	if modal.kind == ModalKindStatuslineProvider {
+		m.modal = nil
+		if cancelled {
+			m.cancelStatuslineProviderPicker()
+			return nil
+		}
+		return m.applyStatuslineProviderPickerOption(response.OptionID)
 	}
 	if modal.kind == ModalKindTitle && modal.terminalTitleSetup != nil {
 		m.modal = nil

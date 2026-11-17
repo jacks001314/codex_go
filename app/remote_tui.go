@@ -584,6 +584,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	// Rust #61979: a saved MCP statusline provider resolves and reads through
 	// the remote app server that owns the displayed thread.
 	resolveStatuslineProvider, readStatuslineProvider := interactiveRemoteStatuslineProviderHooks(ctx, endpoint, root)
+	discoverStatuslineProviders := interactiveRemoteStatuslineProviderDiscovery(ctx, endpoint, root)
 	options := codextea.Options{
 		Profile:                      interactiveStringFromSharedProfile(root),
 		NoAltScreen:                  interactiveNoAltScreen(root, settings, terminalAppOverSSH),
@@ -774,8 +775,9 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnReadThreadUsage:        interactiveRemoteThreadUsageReader(ctx, endpoint),
 
 		// Rust #61979: the saved MCP statusline provider footer.
-		OnResolveStatuslineProvider: resolveStatuslineProvider,
-		OnReadStatuslineProvider:    readStatuslineProvider,
+		OnResolveStatuslineProvider:   resolveStatuslineProvider,
+		OnReadStatuslineProvider:      readStatuslineProvider,
+		OnDiscoverStatuslineProviders: discoverStatuslineProviders,
 
 		OnReadPlanHistory:   interactivePlanHistoryReader(root),
 		PlanHistoryEnabled:  features.Enabled(settings.FeatureSettings, "analytics_plan_history"),

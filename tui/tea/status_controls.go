@@ -444,6 +444,15 @@ func (m *Model) openStatusLineSetup() {
 		}
 		options = append(options, ModalOption{ID: item.ID, Label: item.Name, Description: description})
 	}
+	if m.statuslineProviderPickerEnabled() {
+		// Rust #61988: the item editor leads with the provider picker action when
+		// status line extensions are enabled.
+		options = append([]ModalOption{{
+			ID:          statuslineProviderPickerActionID,
+			Label:       "Choose a statusline plugin",
+			Description: "Discover MCP status line providers",
+		}}, options...)
+	}
 	m.replaceModal(&modalState{
 		id:              "status-line-setup",
 		kind:            ModalKindStatusLine,
@@ -496,6 +505,9 @@ func (m *Model) toggleStatusSetupSelection() bubbletea.Cmd {
 		return nil
 	}
 	option := m.modal.options[m.modal.selected]
+	if m.modal.kind == ModalKindStatusLine && option.ID == statuslineProviderPickerActionID {
+		return m.openStatuslineProviderPicker()
+	}
 	if m.modal.statusLineSetup != nil {
 		setup := m.modal.statusLineSetup
 		if option.ID == chatwidget.StatusLineUseThemeColorsItemID {

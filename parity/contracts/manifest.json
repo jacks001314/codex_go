@@ -3326,6 +3326,29 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestStatuslineProviderFailedReadStopsSnapshotConsumersLikeRust;TestStatusControlsSelectionsStayItemBasedWithProviderLikeRust;TestStatusControlsProviderRequestsWorkspaceHeadlineWithoutItemsLikeRust"
+  },
+  {
+   "id": "tui-statusline-provider-picker",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/app/status_line_settings.rs",
+    "tui/src/statusline_provider.rs",
+    "tui/src/statusline_provider/discovery.rs",
+    "tui/src/bottom_pane/status_line_setup.rs",
+    "tui/src/bottom_pane/list_selection_view.rs",
+    "tui/src/bottom_pane/multi_select_picker.rs"
+   ],
+   "goPaths": [
+    "tui/tea/statusline_provider_picker.go",
+    "tui/tea/status_controls.go",
+    "tui/tea/modal.go",
+    "tui/tea/model.go",
+    "app/statusline_provider_tui.go",
+    "tui/tea/statusline_provider_picker_like_rust_test.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestStatusLineSetupOffersProviderPickerLikeRust;TestStatuslineProviderPickerDiscoveryKeepsHighlightLikeRust;TestStatuslineProviderPickerSelectsAndReturnsToEditorLikeRust;TestStatuslineProviderPickerNumericShortcutsLikeRust"
   }
 
 

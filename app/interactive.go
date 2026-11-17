@@ -1736,6 +1736,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	// Rust #61979: a saved MCP statusline provider resolves and reads through
 	// the embedded app server, so the footer hooks share the local router.
 	resolveStatuslineProvider, readStatuslineProvider := interactiveLocalStatuslineProviderHooks(root)
+	discoverStatuslineProviders := interactiveLocalStatuslineProviderDiscovery(root)
 	options := codextea.Options{
 		// Rust #57516: the status line's profile item reports the profile
 		// selected with --profile.
@@ -1913,8 +1914,9 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnReadThreadUsage:        interactiveLocalThreadUsageReader(),
 
 		// Rust #61979: the saved MCP statusline provider footer.
-		OnResolveStatuslineProvider: resolveStatuslineProvider,
-		OnReadStatuslineProvider:    readStatuslineProvider,
+		OnResolveStatuslineProvider:   resolveStatuslineProvider,
+		OnReadStatuslineProvider:      readStatuslineProvider,
+		OnDiscoverStatuslineProviders: discoverStatuslineProviders,
 
 		OnReadPlanHistory:       interactivePlanHistoryReader(root),
 		PlanHistoryEnabled:      features.Enabled(settings.FeatureSettings, "analytics_plan_history"),

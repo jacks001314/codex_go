@@ -217,6 +217,77 @@ func statuslineProviderHooks(
 	return resolve, read
 }
 
+// interactiveLocalStatuslineProviderDiscovery discovers /statusline providers
+// through the embedded app server (Rust #61988 refresh_statusline_providers).
+func interactiveLocalStatuslineProviderDiscovery(root *cli.RootOptions) codextea.StatuslineProviderDiscoveryFunc {
+	connect := func(ctx context.Context) (statuslineprovider.AppServer, func(), error) {
+		router := appserver.NewDefaultRuntimeRouter(newSessionStore(), auth.DefaultCodexHome())
+		if err := initializeLocalTUIConnection(router.Handle, interactiveStatuslineProviderConnectionID); err != nil {
+			router.Close()
+			return nil, nil, err
+		}
+		return &localStatuslineRequestClient{handle: router.Handle, connectionID: interactiveStatuslineProviderConnectionID},
+			func() { router.Close() }, nil
+	}
+	return statuslineProviderDiscovery(connect)
+}
+
+// interactiveRemoteStatuslineProviderDiscovery discovers providers against the
+// remote app server session.
+func interactiveRemoteStatuslineProviderDiscovery(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, root *cli.RootOptions) codextea.StatuslineProviderDiscoveryFunc {
+	connect := func(context.Context) (statuslineprovider.AppServer, func(), error) {
+		reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
+		client, err := openRemoteSessionClient(reqCtx, endpoint)
+		if err != nil {
+			cancel()
+			return nil, nil, err
+		}
+		return &remoteStatuslineRequestClient{ctx: reqCtx, client: client}, func() {
+			client.close()
+			cancel()
+		}, nil
+	}
+	return statuslineProviderDiscovery(connect)
+}
+
+// statuslineProviderDiscovery streams discovery updates over one connection so
+// the picker can show rows as servers answer.
+func statuslineProviderDiscovery(connect func(context.Context) (statuslineprovider.AppServer, func(), error)) codextea.StatuslineProviderDiscoveryFunc {
+	return func(ctx context.Context, request codextea.StatuslineProviderDiscoveryRequest) <-chan codextea.StatuslineProviderDiscoveryUpdate {
+		updates := make(chan codextea.StatuslineProviderDiscoveryUpdate)
+		go func() {
+			defer close(updates)
+			client, closeClient, err := connect(ctx)
+			if err != nil {
+				select {
+				case updates <- codextea.StatuslineProviderDiscoveryUpdate{Err: err}:
+				case <-ctx.Done():
+				}
+				return
+			}
+			defer closeClient()
+			for update := range statuslineprovider.Refresh(ctx, client, request.Known) {
+				converted := codextea.StatuslineProviderDiscoveryUpdate{Server: update.Server, Err: update.Err}
+				for _, provider := range update.Providers {
+					converted.Providers = append(converted.Providers, codextea.StatuslineProviderCandidate{
+						Server:      provider.ID.Server,
+						Tool:        provider.ID.Tool,
+						Title:       provider.Title,
+						PluginLabel: provider.PluginLabel,
+						URI:         provider.URI,
+					})
+				}
+				select {
+				case updates <- converted:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+		return updates
+	}
+}
+
 // statuslineProviderContents decodes the read response's resource contents.
 func statuslineProviderContents(raw map[string]any) []codextea.StatuslineProviderContent {
 	encoded, err := json.Marshal(raw["contents"])
