@@ -2376,9 +2376,12 @@ type Model struct {
 	// shortcutOverlay mirrors Rust FooterMode::ShortcutOverlay: pressing `?`
 	// on an empty composer swaps the passive hint row for the shortcut
 	// reference until the next key.
-	shortcutOverlay   bool
-	rateLimitWarnings chatwidget.RateLimitWarningState
-	warningDisplay    chatwidget.WarningDisplayState
+	shortcutOverlay bool
+	// shortcutOverlayKeyboard tracks the guide's view switch (Rust
+	// ShortcutView::Keyboard). It resets whenever the guide opens or closes.
+	shortcutOverlayKeyboard bool
+	rateLimitWarnings       chatwidget.RateLimitWarningState
+	warningDisplay          chatwidget.WarningDisplayState
 
 	terminalFocused bool
 	rawOutput       bool
@@ -12691,6 +12694,22 @@ func (m *Model) bottomReservedRows() int {
 // bottomReservedRowsExceptVoice is bottomReservedRows without the rows the
 // composer strip reserves, so the strip's fit check has a terminator.
 func (m *Model) bottomReservedRowsExceptVoice() int {
+	overlay := ""
+	if m != nil && m.shortcutOverlay {
+		overlay = m.renderShortcutOverlay()
+	}
+	overlayRows := 0
+	if overlay != "" {
+		overlayRows = sectionHeight(overlay)
+	}
+	return m.bottomReservedRowsExceptVoiceFor(overlay != "", overlayRows)
+}
+
+// bottomReservedRowsExceptVoiceFor is bottomReservedRowsExceptVoice with the
+// shortcut guide supplied by the caller. The guide measures its sibling
+// sections with this form so it can clip itself to the terminal without
+// recursing through its own renderer.
+func (m *Model) bottomReservedRowsExceptVoiceFor(shortcutOverlayVisible bool, shortcutOverlayRows int) int {
 	if m == nil {
 		return defaultComposerHeight
 	}
@@ -12719,13 +12738,10 @@ func (m *Model) bottomReservedRowsExceptVoice() int {
 	if hook := m.renderHookStatus(m.currentTime()); hook != "" && !m.statusRowVisible() {
 		rows += sectionHeight(hook)
 	}
-	overlay := m.renderShortcutOverlay()
-	if overlay != "" {
-		rows += sectionHeight(overlay)
-	}
+	rows += shortcutOverlayRows
 	popupRows := m.popupRowCount()
 	rows += popupRows
-	if popupRows == 0 && overlay == "" {
+	if popupRows == 0 && !shortcutOverlayVisible {
 		rows++ // blank gap row above the composer
 	}
 	rows += m.composerSectionRowsExceptVoice() // shaded block: content + two pad rows

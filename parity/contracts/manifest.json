@@ -3506,6 +3506,24 @@
    "phase": "P3",
    "status": "complete",
    "verifier": "TestStatuslineMetricsExporterEligibilityLikeRust;TestStatuslineMetricsAppliesAnalyticsConsentLikeRust;TestStatuslineMetricsRecordsPickerOpenedLikeRust;TestStatuslineProviderChangeKindsLikeRust;TestStatuslineProviderChangeRecordsOnlyTransitionsLikeRust;TestStatuslineMetricsFirstPromptModesLikeRust;TestStatuslineMetricsFirstPromptSkipsSideAndSubagentThreadsLikeRust;TestStatuslineProviderMetricsRecordStartAndFailuresLikeRust"
+  },
+  {
+   "id": "shortcut-overlay-keyboard-diagram",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/bottom_pane/shortcut_overlay.rs",
+    "tui/src/bottom_pane/shortcut_overlay_tests.rs",
+    "tui/src/bottom_pane/chat_composer/footer_state.rs",
+    "tui/src/app.rs"
+   ],
+   "goPaths": [
+    "tui/tea/shortcut_overlay.go",
+    "tui/tea/shortcut_overlay_keyboard.go",
+    "tui/style_sgr.go"
+   ],
+   "phase": "P3",
+   "status": "complete",
+   "verifier": "TestShortcutOverlayKeyboardMatchesRustBaseSnapshot;TestShortcutOverlayKeyboardMatchesRustRoomySnapshot;TestShortcutOverlayGuideKeySkipsClaimedKeysLikeRust;TestShortcutOverlayKeyboardFallsBackWhenNarrowLikeRust;TestShortcutOverlayKeyboardFallsBackWhenShortLikeRust;TestShortcutOverlayKeyboardMarksBoundKeysLikeRust;TestShortcutOverlayKeyboardResizeHintKeepsFooterLikeRust"
   }
   ]
 }

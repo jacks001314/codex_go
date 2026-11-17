@@ -38,6 +38,28 @@ func DefaultBackgroundRGB() (RGB, bool) {
 	return background, ok
 }
 
+// DefaultForegroundRGB reports the terminal's default foreground colour when the
+// palette is known (Rust's terminal_palette::default_fg).
+func DefaultForegroundRGB() (RGB, bool) {
+	foreground, _, ok := defaultTerminalColorsRGB()
+	return foreground, ok
+}
+
+// TerminalColorRGB resolves a resolved terminal colour to the RGB it paints:
+// a truecolor value directly, an xterm entry at or above 16 through the shared
+// palette, and the terminal-default or ANSI-16 entries as unknown (Rust's
+// `background_rgb`/`foreground_rgb` pair).
+func TerminalColorRGB(color TerminalColor) (RGB, bool) {
+	return terminalColorRGB(color)
+}
+
+// SameTerminalColor reports whether two resolved colours paint the same cells.
+// A pair that mixes a truecolor value with an index, or that has an unset side,
+// is never equal.
+func SameTerminalColor(a TerminalColor, b TerminalColor) bool {
+	return sameTerminalColor(a, b)
+}
+
 // HistoryPromptSGR renders Rust's `style::history_prompt_style` surface for
 // submitted prompts: a 16% (dark) or 2% (light) blend toward the terminal
 // background. A terminal that does not answer the default-color probe gets the
