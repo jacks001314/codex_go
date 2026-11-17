@@ -54,6 +54,29 @@ func TestAcquireWritersReleasesPartialAcquisitionOnConflict(t *testing.T) {
 	defer available.Close()
 }
 
+// TestIndependentWriterLocksDoNotBlockLikeRust pins the property Rust #61934
+// relies on: only the same thread is serialized, so independent thread resumes
+// can overlap. Go has no global thread-list permit, so two distinct threads must
+// acquire immediately while the same thread still conflicts.
+func TestIndependentWriterLocksDoNotBlockLikeRust(t *testing.T) {
+	root := t.TempDir()
+	first := NewStore(root)
+	second := NewStore(root)
+	held, err := first.AcquireWriter("thread-independent-a")
+	if err != nil {
+		t.Fatalf("AcquireWriter(thread-independent-a) error = %v", err)
+	}
+	defer held.Close()
+	contender, err := second.AcquireWriter("thread-independent-b")
+	if err != nil {
+		t.Fatalf("AcquireWriter(thread-independent-b) error = %v", err)
+	}
+	defer contender.Close()
+	if _, err := second.AcquireWriter("thread-independent-a"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("AcquireWriter(same thread) error = %v, want ErrConflict", err)
+	}
+}
+
 // Rust parity: codex-rs/rollout/src/writer_lock_tests.rs at #44138. Publication
 // skips a live writer, holds coordination until it is released, and treats an
 // existing-but-unlocked lock file as idle.
