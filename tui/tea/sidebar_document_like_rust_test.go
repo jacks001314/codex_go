@@ -404,3 +404,69 @@ func TestSidebarDocumentRecordsOpenedFilesLikeRust(t *testing.T) {
 		t.Fatalf("reopening duplicated opened files = %#v", model.sidebarOpenedFiles["parent-a"])
 	}
 }
+
+// Rust #61889: while the preview owns the pane, Find scans the rendered rows,
+// starts at the first match from the viewport top, and keeps its status line in
+// the footer until Esc closes it.
+func TestSidebarDocumentFindScansAndNavigatesLikeRust(t *testing.T) {
+	model, _ := newSidebarTabsModel(t)
+	model.transcript.Height = 20
+	tab := openDocumentTabAt(t, model, SidebarDocumentView{
+		Path:       "/workspace/main.go",
+		Text:       "alpha\nneedle one\nbeta\nneedle two\n",
+		Code:       true,
+		Language:   "go",
+		LineStarts: []int{0, 6, 17, 22},
+	})
+
+	if handled, _ := model.updateSidebarDocumentKey(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune("/")}); !handled {
+		t.Fatal("slash did not open Find in the preview")
+	}
+	if !tab.Find.editing {
+		t.Fatal("Find did not start editing")
+	}
+	for _, char := range "needle" {
+		model.updateSidebarDocumentKey(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{char}})
+	}
+	if tab.Find.query != "needle" || len(tab.Find.matches) != 2 {
+		t.Fatalf("find state = %#v", tab.Find)
+	}
+	if tab.Find.matches[tab.Find.index] != 1 {
+		t.Fatalf("selected match row = %d, want the first hit", tab.Find.matches[tab.Find.index])
+	}
+	width := model.sidebarTabStripWidth()
+	rows := strings.Split(model.renderSidebarDocument(width, 20), "\n")
+	if !strings.Contains(ansi.Strip(rows[19]), "Find: needle") {
+		t.Fatalf("footer = %q", ansi.Strip(rows[19]))
+	}
+	if !strings.Contains(rows[1+tab.Find.matches[0]], "\x1b[7m") {
+		t.Fatal("current match was not highlighted")
+	}
+
+	model.updateSidebarDocumentKey(keymsg.KeyMsg{Type: keymsg.KeyEnter})
+	if tab.Find.editing {
+		t.Fatal("enter did not accept the query")
+	}
+	rows = strings.Split(model.renderSidebarDocument(width, 20), "\n")
+	if !strings.Contains(ansi.Strip(rows[19]), "esc latest") {
+		t.Fatalf("accepted footer = %q", ansi.Strip(rows[19]))
+	}
+
+	model.updateSidebarDocumentKey(keymsg.KeyMsg{Type: keymsg.KeyCtrlN})
+	if tab.Find.index != 1 {
+		t.Fatalf("ctrl+n index = %d", tab.Find.index)
+	}
+	model.updateSidebarDocumentKey(keymsg.KeyMsg{Type: keymsg.KeyCtrlN})
+	if !tab.Find.exhausted || tab.Find.index != 1 {
+		t.Fatalf("exhausted=%t index=%d", tab.Find.exhausted, tab.Find.index)
+	}
+	model.updateSidebarDocumentKey(keymsg.KeyMsg{Type: keymsg.KeyCtrlP})
+	if tab.Find.index != 0 || tab.Find.exhausted {
+		t.Fatalf("ctrl+p index = %d exhausted = %t", tab.Find.index, tab.Find.exhausted)
+	}
+
+	model.updateSidebarDocumentKey(keymsg.KeyMsg{Type: keymsg.KeyEsc, Code: 0x1b})
+	if tab.Find.active() || !model.sidebarDocumentVisible() {
+		t.Fatalf("esc left find active=%t visible=%t", tab.Find.active(), model.sidebarDocumentVisible())
+	}
+}

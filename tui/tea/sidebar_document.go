@@ -79,6 +79,8 @@ type sidebarDocumentTab struct {
 	// HoverLink is the link under the pointer, or -1 (Rust
 	// TranscriptView::paint_document_links emphasizes the hovered destination).
 	HoverLink int
+	// Find is this preview's reader search (Rust TranscriptView::search).
+	Find sidebarDocumentFind
 	// TargetCleared records that Esc removed the coordinate highlight (Rust
 	// Document::target.take()).
 	TargetCleared bool
@@ -258,6 +260,11 @@ func (m *Model) applySidebarDocumentLoaded(msg SidebarDocumentLoadedMsg) bubblet
 		tab.renderLines = nil
 		tab.linkRowsSet = false
 		tab.HoverLink = -1
+		if tab.Find.active() {
+			// Rust keeps the query and caret across a reload and rescans the
+			// freshly loaded rows.
+			m.refreshSidebarDocumentFindMatches(tab, false)
+		}
 		m.refreshTranscript()
 		return nil
 	}
@@ -639,6 +646,16 @@ func (m *Model) updateSidebarDocumentKey(msg keymsg.KeyMsg) (bool, bubbletea.Cmd
 	if tab == nil || !m.sidebarChooserFocused {
 		return false, nil
 	}
+	if tab.Find.active() {
+		return m.updateSidebarDocumentFindKey(tab, msg)
+	}
+	if m.keyMatches("global", "find_transcript", keySpecFromKeyMsg(msg)) ||
+		m.keyMatches("pager", "find", keySpecFromKeyMsg(msg)) {
+		// Rust handle_document_input starts the reader's own Find, not the
+		// transcript overlay, while the preview owns the pane.
+		m.beginSidebarDocumentFind(tab)
+		return true, nil
+	}
 	action := sidebarChooserListAction(msg)
 	if action == "" {
 		switch msg.Type {
@@ -929,6 +946,10 @@ func (m *Model) renderSidebarDocument(width int, height int) string {
 		hoverRow = linkRows[tab.HoverLink].Row
 		hoverPath = linkRows[tab.HoverLink].Path
 	}
+	matchRow := -1
+	if match, ok := tab.Find.selected(); ok {
+		matchRow = match
+	}
 	for index := 0; index < contentHeight && tab.Scroll+index < len(lines); index++ {
 		row := tab.Scroll + index
 		line := lines[row]
@@ -941,9 +962,12 @@ func (m *Model) renderSidebarDocument(width int, height int) string {
 		if row == targetRow {
 			line = paintSidebarDocumentTarget(line, bodyWidth)
 		}
+		if row == matchRow {
+			line = reverseVideoTranscriptLine(line)
+		}
 		rows[1+index] = " " + codextui.TruncateToWidth(line, bodyWidth)
 	}
-	rows[footer] = " " + m.sidebarDocumentFooter(bodyWidth, tab)
+	rows[footer] = " " + m.sidebarDocumentFooterLine(bodyWidth, tab)
 	return strings.Join(rows, "\n")
 }
 
