@@ -875,6 +875,14 @@ func (u ResponsesAPIClientMetadataUpdate) Empty() bool {
 	return !u.HasReplacement && len(u.Patch) == 0
 }
 
+// ApplyStartResponsesAPIClientMetadataUpdate mirrors Rust's dedicated
+// turn-start helper (#61941, core/src/turn_metadata.rs): both turn-start paths
+// apply the request's client-metadata update through this single seam, which
+// delegates to ApplyResponsesAPIClientMetadataUpdate.
+func ApplyStartResponsesAPIClientMetadataUpdate(current map[string]string, update ResponsesAPIClientMetadataUpdate) map[string]string {
+	return ApplyResponsesAPIClientMetadataUpdate(current, update)
+}
+
 // ApplyResponsesAPIClientMetadataUpdate applies an update the way Rust's
 // `TurnMetadataState::update_responsesapi_client_metadata` does (#54053): the
 // replacement replaces the current map, then the patch overwrites and adds

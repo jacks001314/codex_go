@@ -9508,7 +9508,7 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 	// Rust #54053: the request's client-metadata update (replacement then patch)
 	// lands on the turn's own client metadata, which is then merged over the
 	// configured Responses metadata.
-	clientMetadata := turn.ApplyResponsesAPIClientMetadataUpdate(nil, turn.ResponsesAPIClientMetadataUpdate{
+	clientMetadata := turn.ApplyStartResponsesAPIClientMetadataUpdate(nil, turn.ResponsesAPIClientMetadataUpdate{
 		Replacement:    params.ResponsesAPIMetadata,
 		HasReplacement: params.ResponsesAPIMetadata != nil,
 		Patch:          params.ResponsesAPIMetadataPatch,
@@ -10472,7 +10472,7 @@ func (r *RuntimeRouter) steerClientMetadata(params *turn.TurnSteerParams) map[st
 		current = cloneStringMap(active.RunConfig.ClientMetadata)
 	}
 	return r.activeTurnClientMetadata(params.ThreadID, params.ExpectedTurnID,
-		turn.ApplyResponsesAPIClientMetadataUpdate(current, update))
+		turn.ApplyStartResponsesAPIClientMetadataUpdate(current, update))
 }
 
 // activeTurnClientMetadata rebuilds a running turn's request metadata from its
