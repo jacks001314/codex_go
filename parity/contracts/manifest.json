@@ -3577,6 +3577,24 @@
    "phase": "P1",
    "status": "complete",
    "verifier": "TestInputItemsFromRecordNormalizesCanonicalTurnItemContentLikeRust;TestRunnerSessionStoreResolvesPaginatedHistoryLikeRust"
+  },
+  {
+   "id": "statusline-create-custom-authoring",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/bottom_pane/status_line_setup.rs",
+    "tui/src/app/session_lifecycle.rs",
+    "tui/src/chatwidget/status_controls.rs",
+    "tui/src/app/event_dispatch.rs"
+   ],
+   "goPaths": [
+    "tui/tea/statusline_authoring.go",
+    "tui/tea/status_controls.go",
+    "tui/tea/modal.go"
+   ],
+   "phase": "P3",
+   "status": "complete",
+   "verifier": "TestStatusLineSetupOffersCustomAuthoringLikeRust;TestStatusLineCreateCustomBindsBundledSkillLikeRust;TestStatusLineCreateCustomFallsBackWithoutSkillLikeRust;TestStatusLineCreateCustomActivatesOnEnterLikeRust;TestStatusLineCreateCustomPreservesPreviousDraftLikeRust;TestStatusLineCreateCustomDropsStaleSkillReadLikeRust"
   }
   ]
 }

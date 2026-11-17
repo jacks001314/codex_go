@@ -1346,6 +1346,12 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 			// Rust #61988 keeps the item editor open underneath the picker.
 			return m.openStatuslineProviderPicker()
 		}
+		if !cancelled && modal.selected >= 0 && modal.selected < len(modal.options) &&
+			modal.options[modal.selected].ID == statuslineCreateCustomActionID {
+			// Rust #62037: the authoring row opens a fresh conversation instead of
+			// committing the item selection.
+			return m.startStatuslineAuthoring()
+		}
 		m.modal = nil
 		if cancelled {
 			m.notice = "Cancelled"

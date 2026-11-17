@@ -445,13 +445,23 @@ func (m *Model) openStatusLineSetup() {
 		options = append(options, ModalOption{ID: item.ID, Label: item.Name, Description: description})
 	}
 	if m.statuslineProviderPickerEnabled() {
-		// Rust #61988: the item editor leads with the provider picker action when
-		// status line extensions are enabled.
-		options = append([]ModalOption{{
+		// Rust #61988/#62037: the item editor leads with the provider actions when
+		// status line extensions are enabled. "Create a custom status line" joins
+		// them outside cloud mode, where a fresh local conversation can host the
+		// authoring draft.
+		actions := []ModalOption{{
 			ID:          statuslineProviderPickerActionID,
-			Label:       "Choose a statusline plugin",
+			Label:       "Choose a status line provider",
 			Description: "Discover MCP status line providers",
-		}}, options...)
+		}}
+		if m.statuslineCreateCustomEnabled() {
+			actions = append(actions, ModalOption{
+				ID:          statuslineCreateCustomActionID,
+				Label:       "Create a custom status line",
+				Description: "Open a new conversation with an authoring draft",
+			})
+		}
+		options = append(actions, options...)
 	}
 	m.replaceModal(&modalState{
 		id:              "status-line-setup",
@@ -507,6 +517,9 @@ func (m *Model) toggleStatusSetupSelection() bubbletea.Cmd {
 	option := m.modal.options[m.modal.selected]
 	if m.modal.kind == ModalKindStatusLine && option.ID == statuslineProviderPickerActionID {
 		return m.openStatuslineProviderPicker()
+	}
+	if m.modal.kind == ModalKindStatusLine && option.ID == statuslineCreateCustomActionID {
+		return m.startStatuslineAuthoring()
 	}
 	if m.modal.statusLineSetup != nil {
 		setup := m.modal.statusLineSetup

@@ -5124,6 +5124,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case SkillsInventoryResultMsg:
 		m.applySkillsInventoryResult(msg)
 		return m, nil
+	case statuslineAuthoringSkillsMsg:
+		m.applyStatuslineAuthoringSkills(msg)
+		return m, nil
 	case LogoutResultMsg:
 		return m, m.applyLogoutResult(msg)
 	case StreamStartedMsg:
