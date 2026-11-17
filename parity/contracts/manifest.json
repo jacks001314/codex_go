@@ -3155,6 +3155,38 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestMouseScrollSpeedConfigPickerLikeRust;TestMouseScrollSpeedPanelRowLikeRust;TestMouseScrollSpeedReloadRepricesPickerLikeRust;TestChangingDirectoryReloadsLocalSettingsLikeRust;TestChangingDirectoryKeepsLiveSettingsWhenReloadFailsLikeRust;TestInteractiveLoadSettingsForCWDReadsDestinationConfigLikeRust"
+  },
+  {
+   "id": "tui-statusline-provider-footer",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/chatwidget/statusline_state.rs",
+    "tui/src/chatwidget/statusline_state/account.rs",
+    "tui/src/chatwidget/statusline_state/usage.rs",
+    "tui/src/chatwidget/status_surfaces.rs",
+    "tui/src/chatwidget/thread_usage.rs",
+    "tui/src/statusline_provider.rs",
+    "tui/src/app/event_dispatch.rs"
+   ],
+   "goPaths": [
+    "tui/tea/statusline_provider_footer.go",
+    "tui/tea/statusline_provider_state.go",
+    "tui/tea/statusline_provider_footer_like_rust_test.go",
+    "tui/tea/status_controls.go",
+    "tui/tea/thread_usage.go",
+    "tui/tea/model.go",
+    "tui/tea/thread_reset.go",
+    "tui/tea/thread_settings.go",
+    "tui/chatwidget/status_controls.go",
+    "tui/chatwidget/statusline_provider_surfaces_test.go",
+    "statuslineprovider/resolve.go",
+    "app/statusline_provider_tui.go",
+    "app/interactive.go",
+    "app/remote_tui.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestStatuslineProviderDecodeRequiresOneMatchingJSONTextItem;TestStatuslineProviderFooterLifecycleLikeRust;TestStatuslineProviderReadsDropStaleResultsLikeRust;TestStatuslineProviderSelectionChangesLikeRust;TestStatuslineProviderWithoutHostHooksKeepsBuiltinLikeRust;TestStatuslineProviderThreadUsageSelectionLikeRust;TestStatusControlsProviderRequestsWorkspaceHeadlineWithoutItemsLikeRust;TestStatusControlsProviderOwnsStatusLineLikeRust;TestStatusControlsSelectionsStayItemBasedWithProviderLikeRust"
   }
 
   ]

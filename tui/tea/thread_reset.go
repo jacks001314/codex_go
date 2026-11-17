@@ -32,6 +32,12 @@ func (m *Model) resetThreadScopedState() {
 	m.delegatedTurnOrder = nil
 	m.typedRealtimeItems = map[string]struct{}{}
 	m.clearThreadUsage()
+	// Rust #61979 resets thread_settings_confirmed when a different thread is
+	// attached; the provider snapshot stops advertising approval and service
+	// tier until the new thread's settings arrive.
+	m.threadSettingsConfirmed = false
+	m.statuslineProviderRead = nil
+	m.statusLineExtension = nil
 	// Rust ChatWidget::set_current_cwd/session_flow clear the cached project
 	// root whenever the transcript switches threads.
 	m.invalidateStatusProjectRootCache()

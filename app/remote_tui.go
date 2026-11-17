@@ -581,6 +581,9 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	stdin = codextea.PrepareTerminal(stdin, stdout)
 	terminalAppOverSSH := codextui.TerminalAppOverSSH()
 	daemonVersion := interactiveDaemonVersionForEndpoint(endpoint)
+	// Rust #61979: a saved MCP statusline provider resolves and reads through
+	// the remote app server that owns the displayed thread.
+	resolveStatuslineProvider, readStatuslineProvider := interactiveRemoteStatuslineProviderHooks(ctx, endpoint, root)
 	options := codextea.Options{
 		Profile:                      interactiveStringFromSharedProfile(root),
 		NoAltScreen:                  interactiveNoAltScreen(root, settings, terminalAppOverSSH),
@@ -769,9 +772,14 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnReadRateLimits:         interactiveRemoteRateLimitsReader(ctx, endpoint),
 		OnReadRateLimitSnapshots: interactiveRemoteRateLimitSnapshotsReader(ctx, endpoint),
 		OnReadThreadUsage:        interactiveRemoteThreadUsageReader(ctx, endpoint),
-		OnReadPlanHistory:        interactivePlanHistoryReader(root),
-		PlanHistoryEnabled:       features.Enabled(settings.FeatureSettings, "analytics_plan_history"),
-		OnReadBackendBanner:      interactiveRemoteBackendBannerReader(ctx, endpoint),
+
+		// Rust #61979: the saved MCP statusline provider footer.
+		OnResolveStatuslineProvider: resolveStatuslineProvider,
+		OnReadStatuslineProvider:    readStatuslineProvider,
+
+		OnReadPlanHistory:   interactivePlanHistoryReader(root),
+		PlanHistoryEnabled:  features.Enabled(settings.FeatureSettings, "analytics_plan_history"),
+		OnReadBackendBanner: interactiveRemoteBackendBannerReader(ctx, endpoint),
 		OnBackendBannerAction: interactiveBackendBannerActionHandler(
 			interactiveRemoteAddCreditsNudgeSender(ctx, endpoint),
 		),

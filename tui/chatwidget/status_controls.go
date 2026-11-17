@@ -192,10 +192,15 @@ type StatusControlsState struct {
 	StatusLineEnabled      bool
 	LastStatusLine         bottompane.StatusLine
 	LastStatusLineRendered bool
-	StatusLineHyperlink    string
-	StatusLineHyperlinkSet bool
-	ActiveAgentLabel       string
-	ActiveAgentLabelSet    bool
+	// StatusLineProviderActive reports that a saved MCP statusline provider
+	// owns the footer for this thread. Rust's ChatWidget::refresh_provider_footer
+	// returns true for that case, so the native span refresh is skipped while the
+	// terminal title and workspace-headline requests keep running (#61979).
+	StatusLineProviderActive bool
+	StatusLineHyperlink      string
+	StatusLineHyperlinkSet   bool
+	ActiveAgentLabel         string
+	ActiveAgentLabelSet      bool
 
 	LastTerminalTitle         string
 	LastTerminalTitleRendered bool
@@ -603,7 +608,7 @@ func (s *StatusControlsState) syncGitSummaryState(selections StatusSurfaceSelect
 }
 
 func (s *StatusControlsState) syncWorkspaceHeadlineState(selections StatusSurfaceSelections, now time.Time) (bool, uint64) {
-	if !selections.UsesWorkspaceHeadline() {
+	if !s.usesWorkspaceHeadline(selections) {
 		s.Runtime.WorkspaceHeadline = ""
 		s.WorkspaceHeadlinePendingRequestID = nil
 		s.WorkspaceHeadlineLastRequestedAt = time.Time{}
@@ -665,14 +670,31 @@ func (s *StatusControlsState) SetStatusLineWorkspaceHeadline(requestID uint64, f
 		RefreshStatusLine: true,
 		StatusLineText:    result.StatusLineText,
 	}
-	if !s.WorkspaceMessagesDisabled && selections.UsesWorkspaceHeadline() {
+	if !s.WorkspaceMessagesDisabled && s.usesWorkspaceHeadline(selections) {
 		update.ScheduleWorkspaceHeadlineRefresh = true
 		update.ScheduleWorkspaceHeadlineAfter = WorkspaceHeadlineRefreshInterval
 	}
 	return update
 }
 
+// usesWorkspaceHeadline mirrors Rust ChatWidget::uses_workspace_headline: a
+// selected statusline provider consumes the headline even when no built-in item
+// asks for it (#61979).
+func (s *StatusControlsState) usesWorkspaceHeadline(selections StatusSurfaceSelections) bool {
+	if s != nil && s.StatusLineProviderActive {
+		return true
+	}
+	return selections.UsesWorkspaceHeadline()
+}
+
 func (s *StatusControlsState) refreshStatusLineFromSelections(selections StatusSurfaceSelections, result *StatusSurfaceRefreshResult) {
+	// Rust's refresh_status_line_from_selections returns early when a provider
+	// footer is selected: the extension content already owns the status line.
+	if s.StatusLineProviderActive {
+		s.StatusLineEnabled = true
+		result.StatusLineEnabled = true
+		return
+	}
 	enabled := len(selections.StatusLineItems) > 0
 	s.StatusLineEnabled = enabled
 	result.StatusLineEnabled = enabled

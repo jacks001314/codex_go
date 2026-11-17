@@ -57,7 +57,11 @@ type RateLimitCredits struct {
 }
 
 type RateLimitSnapshot struct {
-	LimitID   string
+	LimitID string
+	// LimitName is the server-provided display name for this limit bucket.
+	// The statusline provider snapshot forwards it as `limit_name` (Rust
+	// RateLimitSnapshot::limit_name).
+	LimitName string
 	Primary   *RateLimitWindow
 	Secondary *RateLimitWindow
 	Credits   *RateLimitCredits

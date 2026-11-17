@@ -990,6 +990,11 @@ func (m *Model) refreshStatusControls() chatwidget.StatusSurfaceRefreshResult {
 	}
 	m.ensureStatusControls()
 	m.syncTerminalTitleAnimation()
+	// Rust #61979: a selected provider owns the status line and requests the
+	// workspace headline even without a built-in item; terminal title and
+	// thread usage keep their normal lifecycle.
+	m.syncProviderFooterSelection()
+	m.statusControls.StatusLineProviderActive = m.statuslineProviderSelected()
 	return m.statusControls.RefreshStatusSurfaces()
 }
 
@@ -999,6 +1004,7 @@ func (m *Model) refreshStatusControlsCmd() bubbletea.Cmd {
 	if m != nil {
 		cmds = append(cmds, m.applyTerminalTitleResult(result))
 		cmds = append(cmds, m.ensureThreadUsageForSurfaces(result.Selections))
+		cmds = append(cmds, m.ensureProviderFooterCmd())
 	}
 	return bubbletea.Batch(cmds...)
 }

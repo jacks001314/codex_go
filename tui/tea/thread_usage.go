@@ -138,7 +138,9 @@ func (m *Model) ensureThreadUsageForSurfaces(selections chatwidget.StatusSurface
 	if m == nil {
 		return nil
 	}
-	if !selections.UsesThreadUsage() {
+	// Rust #61979: a selected statusline provider asks for the estimate even
+	// when no built-in item is configured.
+	if !selections.UsesThreadUsage() && !m.statuslineProviderSelected() {
 		m.cancelThreadUsagePolling()
 		return nil
 	}
@@ -341,6 +343,15 @@ func (m *Model) clearThreadUsageSettlement() {
 // currently show. ENT26 never shows credits (Rust selected_thread_usage).
 func (m *Model) threadUsageSelection() (credits bool, cost bool) {
 	if m == nil || m.statusControls == nil {
+		return false, false
+	}
+	// Rust selected_thread_usage: a provider footer always shows both amounts,
+	// with credits suppressed on ENT26, and read-only history never scans the
+	// configured built-in items.
+	if m.statuslineProviderSelected() {
+		return !strings.EqualFold(strings.TrimSpace(m.chatGPTPlanType), tuistatus.PlanTypeEnt26), true
+	}
+	if m.readOnlyThread {
 		return false, false
 	}
 	selections := chatwidget.NewStatusSurfaceSelections(m.statusControls.ConfiguredStatusLineItems(), m.statusControls.ConfiguredTerminalTitleItems())

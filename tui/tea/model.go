@@ -1594,6 +1594,15 @@ type Options struct {
 	// OnReadThreadUsage reads the active thread's billing estimate for /status
 	// (Rust #44970). Nil keeps the thread-usage surface disabled.
 	OnReadThreadUsage ThreadUsageReaderFunc
+	// OnResolveStatuslineProvider resolves the saved `tui.status_line_provider`
+	// MCP tool for one displayed thread and working directory (Rust #61979
+	// ResolvedStatuslineProvider::lookup). A nil hook leaves the built-in status
+	// line in place.
+	OnResolveStatuslineProvider func(ctx context.Context, request StatuslineProviderReadRequest) (StatuslineProvider, error)
+	// OnReadStatuslineProvider renders the resolved provider's advertised
+	// resource with the displayed thread's statusline snapshot. A nil hook keeps
+	// the built-in status line in place.
+	OnReadStatuslineProvider func(ctx context.Context, request StatuslineProviderResourceRequest) ([]StatuslineProviderContent, error)
 	// OnReadBackendBanner reads and validates the backend-owned inline banner
 	// plus the ordinary-usage recovery inputs (Rust backend_banners). Nil leaves
 	// the banner surface unused.
@@ -3173,7 +3182,18 @@ type Model struct {
 	// statusLineExtension carries prepared provider-supplied status content
 	// (Rust StatusLine extension variant). Native configured status lines stay
 	// on the span renderer when this is nil.
-	statusLineExtension       *bottompane.StatusLine
+	statusLineExtension *bottompane.StatusLine
+	// statuslineProviderRead is the footer read bound to the displayed thread,
+	// saved provider, and working directory (Rust ActiveStatuslineRead, #61979).
+	statuslineProviderRead      *activeStatuslineProviderRead
+	statuslineProviderToken     uint64
+	statuslineProviderReady     *statuslineReadyGate
+	onResolveStatuslineProvider func(context.Context, StatuslineProviderReadRequest) (StatuslineProvider, error)
+	onReadStatuslineProvider    func(context.Context, StatuslineProviderResourceRequest) ([]StatuslineProviderContent, error)
+	// threadSettingsConfirmed mirrors Rust's flag of the same name: approval and
+	// service-tier values stay out of the provider snapshot until the server has
+	// reported the thread's settings.
+	threadSettingsConfirmed   bool
 	statusSurfaceOverrides    statusSurfaceOverrides
 	lastTerminalTitleSequence string
 	// Time-varying terminal-title animation state (Rust #46832): progress
@@ -3851,6 +3871,8 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onReadReviewCommits:              options.OnReadReviewCommits,
 		statusLineConfiguredByUser:       options.StatusLineItems != nil,
 		statusLineProvider:               options.StatusLineProvider.Clone(),
+		onResolveStatuslineProvider:      options.OnResolveStatuslineProvider,
+		onReadStatuslineProvider:         options.OnReadStatuslineProvider,
 		rateLimitSnapshots:               map[string]chatwidget.RateLimitSnapshot{},
 		rateLimitSwitchPrompt:            chatwidget.RateLimitSwitchPromptIdle,
 		hideRateLimitModelNudge:          boolPtrValueTea(options.HideRateLimitModelNudge),
@@ -4475,6 +4497,11 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		m.setStatus(msg.Status)
 		m.refreshTranscript()
 		return m, m.refreshStatusControlsCmd()
+	case statuslineProviderResolveMsg:
+		return m, m.applyStatuslineProviderResolve(msg)
+	case statuslineProviderReadMsg:
+		m.applyStatuslineProviderRead(msg)
+		return m, nil
 	case AuthRecoveryMsg:
 		m.applyAuthRecoveryMessage(msg)
 		return m, nil
@@ -7904,6 +7931,11 @@ func (m *Model) applyMCPStartupUpdate(message MCPStartupUpdateMsg) bubbletea.Cmd
 	status := message.Status
 	if status.Kind == chatwidget.McpStartupFailed && status.Error == "" {
 		status.Error = "MCP client for `" + message.Name + "` failed to start"
+	}
+	if status.Kind == chatwidget.McpStartupReady {
+		// Rust ChatWidget::server_ready wakes a statusline provider lookup that
+		// started before its MCP server finished connecting.
+		m.statuslineProviderServerReady(message.Name)
 	}
 	result := m.mcpStartup.Update(message.Name, status)
 	if result.StandaloneDiagnostic {

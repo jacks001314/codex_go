@@ -1733,6 +1733,9 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	// process; the TUI's own startup path reuses its leftover input.
 	stdin = codextea.PrepareTerminal(stdin, stdout)
 	terminalAppOverSSH := codextui.TerminalAppOverSSH()
+	// Rust #61979: a saved MCP statusline provider resolves and reads through
+	// the embedded app server, so the footer hooks share the local router.
+	resolveStatuslineProvider, readStatuslineProvider := interactiveLocalStatuslineProviderHooks(root)
 	options := codextea.Options{
 		// Rust #57516: the status line's profile item reports the profile
 		// selected with --profile.
@@ -1908,30 +1911,35 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnReadRateLimits:         interactiveLocalRateLimitsReader(),
 		OnReadRateLimitSnapshots: interactiveLocalRateLimitSnapshotsReader(),
 		OnReadThreadUsage:        interactiveLocalThreadUsageReader(),
-		OnReadPlanHistory:        interactivePlanHistoryReader(root),
-		PlanHistoryEnabled:       features.Enabled(settings.FeatureSettings, "analytics_plan_history"),
-		OnReadBackendBanner:      interactiveLocalBackendBannerReader(),
-		OnReadSecuritySetup:      interactiveLocalSecuritySetupReader(root),
-		OnBackendBannerAction:    interactiveBackendBannerActionHandler(interactiveLocalAddCreditsNudgeSender()),
-		InitialMessages:          initialMessages,
-		InitialHistoryCells:      interactiveUpdateHistoryCells(root),
-		HideRateLimitModelNudge:  settings.HideRateLimitModelNudge,
-		TUITheme:                 settings.TUITheme,
-		TUIPet:                   settings.TUIPet,
-		CodexHome:                auth.DefaultCodexHome(),
-		HistoryPersistence:       settings.HistoryPersistence,
-		PetEnv:                   environmentMapFromEnviron(os.Environ()),
-		OnPostNotification:       interactiveNotificationPoster(stdout),
-		OnReadDebugConfig:        interactiveDebugConfigReader(root),
-		OnReadGoal:               readGoal,
-		OnSetGoal:                setGoal,
-		OnClearGoal:              clearGoal,
-		OnGoalEditText:           editGoalText,
-		OnGoalDraftMaterialize:   materializeGoalDraft,
-		OnGoalContinuation:       interactiveLocalGoalContinuationCommand(ctx, root, runner, state, approvalBroker, elicitationBroker, userInputBroker, interrupts),
-		OnReadAgents:             readAgents,
-		OnSwitchAgent:            switchAgent,
-		AgentsOverviewEmbedded:   true,
+
+		// Rust #61979: the saved MCP statusline provider footer.
+		OnResolveStatuslineProvider: resolveStatuslineProvider,
+		OnReadStatuslineProvider:    readStatuslineProvider,
+
+		OnReadPlanHistory:       interactivePlanHistoryReader(root),
+		PlanHistoryEnabled:      features.Enabled(settings.FeatureSettings, "analytics_plan_history"),
+		OnReadBackendBanner:     interactiveLocalBackendBannerReader(),
+		OnReadSecuritySetup:     interactiveLocalSecuritySetupReader(root),
+		OnBackendBannerAction:   interactiveBackendBannerActionHandler(interactiveLocalAddCreditsNudgeSender()),
+		InitialMessages:         initialMessages,
+		InitialHistoryCells:     interactiveUpdateHistoryCells(root),
+		HideRateLimitModelNudge: settings.HideRateLimitModelNudge,
+		TUITheme:                settings.TUITheme,
+		TUIPet:                  settings.TUIPet,
+		CodexHome:               auth.DefaultCodexHome(),
+		HistoryPersistence:      settings.HistoryPersistence,
+		PetEnv:                  environmentMapFromEnviron(os.Environ()),
+		OnPostNotification:      interactiveNotificationPoster(stdout),
+		OnReadDebugConfig:       interactiveDebugConfigReader(root),
+		OnReadGoal:              readGoal,
+		OnSetGoal:               setGoal,
+		OnClearGoal:             clearGoal,
+		OnGoalEditText:          editGoalText,
+		OnGoalDraftMaterialize:  materializeGoalDraft,
+		OnGoalContinuation:      interactiveLocalGoalContinuationCommand(ctx, root, runner, state, approvalBroker, elicitationBroker, userInputBroker, interrupts),
+		OnReadAgents:            readAgents,
+		OnSwitchAgent:           switchAgent,
+		AgentsOverviewEmbedded:  true,
 		// Rust #58238/#58239: the embedded command center lists and manages
 		// this process's sessions; side conversations follow their task's
 		// subtree only (Rust #58237).

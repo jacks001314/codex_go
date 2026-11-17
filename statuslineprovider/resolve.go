@@ -129,21 +129,28 @@ func (r *Resolved) Read(ctx context.Context, snapshot map[string]any) (map[strin
 	if r == nil {
 		return nil, errors.New("statusline provider is not resolved")
 	}
+	return ReadResource(ctx, r.app, r.ThreadID, r.Provider.ID.Server, r.Provider.URI, snapshot)
+}
+
+// ReadResource performs the thread-scoped provider read for an advertisement
+// that is already known, so a host that resolves and reads in separate calls
+// reuses the same request shape as Resolved.Read.
+func ReadResource(ctx context.Context, app AppServer, threadID string, server string, uri string, snapshot map[string]any) (map[string]any, error) {
 	meta := map[string]any{}
 	if snapshot != nil {
 		meta["com.openai/codex-statusline-state"] = snapshot
 	}
 	params := map[string]any{
-		"threadId":      r.ThreadID,
-		"server":        r.Provider.ID.Server,
+		"threadId":      threadID,
+		"server":        server,
 		"environmentId": nil,
-		"uri":           r.Provider.URI,
+		"uri":           uri,
 		"connectorId":   nil,
 		"originCallId":  nil,
 		"target":        nil,
 		"_meta":         meta,
 	}
-	return r.app.Request(ctx, mcpResourceReadMethod, params)
+	return app.Request(ctx, mcpResourceReadMethod, params)
 }
 
 // projectSets implements Rust has_project_field over config layers ordered

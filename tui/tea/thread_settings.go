@@ -142,6 +142,10 @@ func (m *Model) applyThreadSettingsValues(settings appserver.Settings) {
 	// it travels only through explicit session configuration.
 
 	m.refreshServiceTierCommands()
+	// Rust #61979: an authoritative settings snapshot confirms the thread, so
+	// the provider statusline snapshot may advertise approval, permissions, and
+	// service tier.
+	m.threadSettingsConfirmed = true
 	if cwdChanged {
 		m.invalidateAppsScope()
 	}
