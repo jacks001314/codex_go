@@ -247,7 +247,8 @@ func embeddedAgentsOverviewSearch(store *session.Store) codextea.AgentsOverviewS
 		}
 		matches := make([]agentsoverview.Row, 0, len(rows))
 		for _, row := range rows {
-			haystack := strings.ToLower(strings.Join([]string{row.Name, row.Preview, row.CWD}, " "))
+			// Rust #61926: history search also matches thread IDs and Git branches.
+			haystack := strings.ToLower(strings.Join([]string{row.Name, row.Preview, row.CWD, row.ThreadID, row.GitBranch}, " "))
 			if strings.Contains(haystack, query) {
 				matches = append(matches, row)
 			}

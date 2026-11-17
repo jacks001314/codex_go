@@ -851,8 +851,7 @@ func (v *View) visibleIndicesUnbounded() []int {
 		if v.isHidden(v.Rows[i].ThreadID) {
 			continue
 		}
-		searchable := strings.ToLower(strings.Join([]string{v.Rows[i].Name, v.Rows[i].Preview, v.Rows[i].CWD}, " "))
-		if search != "" && !strings.Contains(searchable, search) {
+		if search != "" && !rowMatchesSearch(v.Rows[i], search) {
 			continue
 		}
 		// Rust #46839: the status filter combines with search and hide. The
@@ -901,6 +900,23 @@ func (v *View) visibleIndicesUnbounded() []int {
 		})
 	}
 	return append(pinned, visible...)
+}
+
+// rowMatchesSearch mirrors Rust #60286 matches_query plus #61926: a
+// case-insensitive substring of the name, preview, or working directory, or of
+// the thread ID or Git branch.
+func rowMatchesSearch(row Row, search string) bool {
+	if search == "" {
+		return true
+	}
+	haystack := strings.ToLower(strings.Join([]string{row.Name, row.Preview, row.CWD}, " "))
+	if strings.Contains(haystack, search) {
+		return true
+	}
+	if strings.Contains(strings.ToLower(row.ThreadID), search) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(row.GitBranch), search)
 }
 
 // VisibleIndices caps the unbounded task order at the published history window

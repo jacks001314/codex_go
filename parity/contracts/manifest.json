@@ -2999,6 +2999,24 @@
   "phase": "P2",
   "status": "complete",
   "verifier": "TestSavedEnvironmentCatalogFollowsEachScopeCursorLikeRust;TestSavedEnvironmentCatalogRejectsBadPagesLikeRust;TestPrewarmRequestCarriesSavedEnvironmentAndDeferredFlagLikeRust;TestCloudThreadStartUsesSavedEnvironmentLikeRust;TestSavedEnvironmentCatalogRequiresCurrentAccountLikeRust;TestCloudThreadStartEnvironmentSelectionLikeRust"
- }
+  },
+  {
+   "id": "agents-overview-search-thread-id-branch",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/app/agents_overview_discovery.rs",
+    "tui/src/app/agent_center_tests.rs",
+    "tui/src/app/agents_overview_discovery_tests.rs"
+   ],
+   "goPaths": [
+    "tui/agents_overview/overview.go",
+    "app/agents_overview_embedded.go",
+    "tui/agents_overview/search_thread_id_branch_like_rust_test.go",
+    "app/agents_overview_search_like_rust_test.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestAgentsOverviewSearchMatchesThreadIDAndBranchLikeRust;TestEmbeddedAgentsOverviewSearchMatchesThreadIDAndBranchLikeRust"
+  }
   ]
 }
