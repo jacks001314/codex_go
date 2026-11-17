@@ -1742,7 +1742,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	sidebarFileHost := newSidebarFilesHost(
 		newEmbeddedSidebarFilesSource(store),
 		func() string { return strings.TrimSpace(state.CWD) },
-		sidebarPreviewUnavailableForEmbedded(),
+		sidebarPreviewUnavailableForEmbedded,
 	)
 	options := codextea.Options{
 		// Rust #57516: the status line's profile item reports the profile

@@ -1,11 +1,13 @@
 package app
 
 import (
+	"context"
 	"runtime"
 	"strings"
 	"sync"
 
 	"codex_go/appserver"
+	"codex_go/appserverdaemon"
 	"codex_go/protocol"
 	"codex_go/session"
 	"codex_go/tui/markdown"
@@ -31,19 +33,29 @@ type sidebarFilesPageSource interface {
 
 // sidebarFilesHost renders the shared inventory as a TUI snapshot.
 type sidebarFilesHost struct {
-	inventory *sidebarFilesInventory
-	source    sidebarFilesPageSource
-	cwd       func() string
-	preview   string
+	inventory         *sidebarFilesInventory
+	source            sidebarFilesPageSource
+	cwd               func() string
+	preview           func() string
+	inspectLocalPaths bool
 }
 
-func newSidebarFilesHost(source sidebarFilesPageSource, cwd func() string, preview string) *sidebarFilesHost {
+func newSidebarFilesHost(source sidebarFilesPageSource, cwd func() string, preview func() string) *sidebarFilesHost {
 	return &sidebarFilesHost{
-		inventory: newSidebarFilesInventory(),
-		source:    source,
-		cwd:       cwd,
-		preview:   strings.TrimSpace(preview),
+		inventory:         newSidebarFilesInventory(),
+		source:            source,
+		cwd:               cwd,
+		preview:           preview,
+		inspectLocalPaths: true,
 	}
+}
+
+// newRemoteSidebarFilesHost keeps unresolved links: a remote workspace path may
+// live on another host, so Rust's remote path never stats or drops it.
+func newRemoteSidebarFilesHost(source sidebarFilesPageSource, cwd func() string, preview func() string) *sidebarFilesHost {
+	host := newSidebarFilesHost(source, cwd, preview)
+	host.inspectLocalPaths = false
+	return host
 }
 
 // snapshot loads one page and reports whether older history remains. The TUI
@@ -70,7 +82,7 @@ func (h *sidebarFilesHost) snapshot(request codextea.SidebarFilesRequest) codext
 			h.source.Reset(parent)
 		}
 	}
-	h.inventory.filesFor(parent, cwd, start, true)
+	h.inventory.filesFor(parent, cwd, start, h.inspectLocalPaths)
 	if request.Resume {
 		h.inventory.restart(parent)
 	}
@@ -87,11 +99,15 @@ func (h *sidebarFilesHost) snapshot(request codextea.SidebarFilesRequest) codext
 			}
 		}
 	}
+	preview := ""
+	if h.preview != nil {
+		preview = strings.TrimSpace(h.preview())
+	}
 	return codextea.SidebarFilesSnapshot{
 		Files:              h.inventory.entries(parent),
 		Loading:            loading,
 		CWD:                cwd,
-		PreviewUnavailable: h.preview,
+		PreviewUnavailable: preview,
 	}
 }
 
@@ -197,6 +213,85 @@ func sidebarPreviewUnavailableForEmbedded() string {
 		return "Preview unavailable on Windows"
 	}
 	return ""
+}
+
+// sidebarPreviewUnavailableForRemote mirrors Rust's Windows branch for a
+// server-owned workspace. This path has no local windows-sandbox host, so the
+// remaining Rust condition is the server platform family.
+func sidebarPreviewUnavailableForRemote(platformFamily string, usesRemoteWorkspace bool) string {
+	if strings.EqualFold(strings.TrimSpace(platformFamily), "windows") ||
+		(runtime.GOOS == "windows" && !usesRemoteWorkspace) {
+		return "Preview unavailable on Windows"
+	}
+	return ""
+}
+
+// remoteSidebarFilesSource pages the owning thread over an app-server
+// connection. One connection serves every page of a single chooser open and
+// closes when the scan finishes, fails, or the chooser reopens.
+type remoteSidebarFilesSource struct {
+	mu             sync.Mutex
+	ctx            context.Context
+	endpoint       *appserverdaemon.RemoteAppServerEndpoint
+	client         *remoteAppServerTUIClient
+	platformFamily string
+}
+
+func newRemoteSidebarFilesSource(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) *remoteSidebarFilesSource {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return &remoteSidebarFilesSource{ctx: ctx, endpoint: endpoint}
+}
+
+func (s *remoteSidebarFilesSource) Reset(parent string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closeLocked()
+}
+
+func (s *remoteSidebarFilesSource) Page(parent string, cursor string) *appserver.ThreadItemsListResponse {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.client == nil {
+		client, err := openRemoteSessionClient(s.ctx, s.endpoint)
+		if err != nil {
+			return nil
+		}
+		s.client = client
+	}
+	if family := strings.TrimSpace(s.client.platformFamily); family != "" {
+		s.platformFamily = family
+	}
+	result := fetchSidebarFilesPage(s.ctx, s.client, sidebarFilesPageRequest{Parent: parent, Cursor: cursor})
+	if result.Page == nil || result.Page.NextCursor == nil {
+		s.closeLocked()
+	}
+	return result.Page
+}
+
+// platformFamilyName reports the server family the last connection announced.
+func (s *remoteSidebarFilesSource) platformFamilyName() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.platformFamily
+}
+
+func (s *remoteSidebarFilesSource) closeLocked() {
+	if s.client == nil {
+		return
+	}
+	s.client.close()
+	s.client = nil
 }
 
 // sidebarProtocolPromotionEntries is the embedded counterpart of Rust's

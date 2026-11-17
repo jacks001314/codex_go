@@ -585,6 +585,16 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	// the remote app server that owns the displayed thread.
 	resolveStatuslineProvider, readStatuslineProvider := interactiveRemoteStatuslineProviderHooks(ctx, endpoint, root)
 	discoverStatuslineProviders := interactiveRemoteStatuslineProviderDiscovery(ctx, endpoint, root)
+	// Rust #61920: the chooser's Files group inventories the owning thread over
+	// the app-server, one backwards page per request.
+	sidebarFilesSource := newRemoteSidebarFilesSource(ctx, endpoint)
+	sidebarFileHost := newRemoteSidebarFilesHost(
+		sidebarFilesSource,
+		func() string { return strings.TrimSpace(state.CWD) },
+		func() string {
+			return sidebarPreviewUnavailableForRemote(sidebarFilesSource.platformFamilyName(), paramsMode.UsesRemoteWorkspace())
+		},
+	)
 	options := codextea.Options{
 		Profile:                      interactiveStringFromSharedProfile(root),
 		NoAltScreen:                  interactiveNoAltScreen(root, settings, terminalAppOverSSH),
@@ -668,6 +678,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnLoadTranscriptPreview:     interactiveRemoteTranscriptPreviewHandler(ctx, endpoint),
 		OnReadSessionTranscript:     interactiveRemoteSessionTranscriptHandler(ctx, endpoint, showRawReasoning),
 		LoadOlderHistory:            interactiveRemoteOlderHistoryLoader(ctx, endpoint),
+		OnSidebarFiles:              sidebarFileHost.snapshot,
 		OnAcknowledgeSessionRead:    interactiveRemoteSessionReadAcknowledgeHandler(ctx, endpoint),
 		OnRenameThread:              renameThreadHandler,
 		OnUpdateDaybreak:            interactiveRemoteDaybreakUpdateHandler(ctx, endpoint),

@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"runtime"
 	"testing"
 	"time"
 
@@ -65,7 +66,7 @@ func TestEmbeddedSidebarFilesHostPagesTheStoreLikeRust(t *testing.T) {
 		}},
 	})
 
-	host := newSidebarFilesHost(newEmbeddedSidebarFilesSource(store), func() string { return "/workspace" }, sidebarPreviewUnavailableForEmbedded())
+	host := newSidebarFilesHost(newEmbeddedSidebarFilesSource(store), func() string { return "/workspace" }, sidebarPreviewUnavailableForEmbedded)
 	snapshot := host.snapshot(codextea.SidebarFilesRequest{ParentThreadID: "parent-files", Resume: true})
 	if snapshot.Loading {
 		t.Fatal("a short thread must finish in one page")
@@ -110,7 +111,7 @@ func TestEmbeddedSidebarFilesHostChainsPagesLikeRust(t *testing.T) {
 		})
 	}
 
-	host := newSidebarFilesHost(newEmbeddedSidebarFilesSource(store), func() string { return "/workspace" }, sidebarPreviewUnavailableForEmbedded())
+	host := newSidebarFilesHost(newEmbeddedSidebarFilesSource(store), func() string { return "/workspace" }, sidebarPreviewUnavailableForEmbedded)
 	request := codextea.SidebarFilesRequest{ParentThreadID: "parent-files", Resume: true}
 	snapshot := host.snapshot(request)
 	if !snapshot.Loading {
@@ -178,7 +179,7 @@ func TestEmbeddedSidebarFilesHostRescansOnReopenLikeRust(t *testing.T) {
 		Text: "see [first](src/first.ts)", CreatedAt: now,
 		Metadata: map[string]any{"turn_id": "turn-1"},
 	})
-	host := newSidebarFilesHost(newEmbeddedSidebarFilesSource(store), func() string { return "/workspace" }, "")
+	host := newSidebarFilesHost(newEmbeddedSidebarFilesSource(store), func() string { return "/workspace" }, nil)
 	first := host.snapshot(codextea.SidebarFilesRequest{ParentThreadID: "parent-files", Resume: true})
 	if len(first.Files) != 1 || first.Files[0].Path != "/workspace/src/first.ts" {
 		t.Fatalf("first open = %+v", first.Files)
@@ -194,5 +195,23 @@ func TestEmbeddedSidebarFilesHostRescansOnReopenLikeRust(t *testing.T) {
 	}
 	if second.Files[0].Path != "/workspace/src/second.ts" || second.Files[1].Path != "/workspace/src/first.ts" {
 		t.Fatalf("reopen = %+v, want the newer mention first", second.Files)
+	}
+}
+
+// Rust file_preview_unavailable: a server-owned workspace on Windows offers no
+// document preview, while a POSIX server keeps it.
+func TestSidebarPreviewUnavailableForRemoteLikeRust(t *testing.T) {
+	if got := sidebarPreviewUnavailableForRemote("windows", true); got != "Preview unavailable on Windows" {
+		t.Fatalf("windows server = %q", got)
+	}
+	if got := sidebarPreviewUnavailableForRemote("unix", true); got != "" {
+		t.Fatalf("remote unix workspace = %q, want a working preview", got)
+	}
+	localWant := ""
+	if runtime.GOOS == "windows" {
+		localWant = "Preview unavailable on Windows"
+	}
+	if got := sidebarPreviewUnavailableForRemote("unix", false); got != localWant {
+		t.Fatalf("local workspace = %q, want %q", got, localWant)
 	}
 }
