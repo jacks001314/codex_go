@@ -1399,7 +1399,12 @@ type Options struct {
 	OnAppLinkAction          func(action AppLinkAction) bubbletea.Cmd
 	OnSessionAction          SessionActionFunc
 	OnWorkingDirectoryChange WorkingDirectoryChangeFunc
-	OnResumeSession          SessionResumeFunc
+	// OnReloadSettingsForCWD reloads the client-owned TUI preferences for a
+	// directory the session is about to change into (Rust
+	// session_lifecycle's rebuild_config_for_cwd + local_settings refresh).
+	// A nil hook keeps the live preferences.
+	OnReloadSettingsForCWD func(cwd string) (SettingsWriteResult, error)
+	OnResumeSession        SessionResumeFunc
 	// OnUnarchiveThread unarchives a displayed conversation before the TUI
 	// resumes it (Rust #61486: `U` in the archived read-only view). A nil hook
 	// keeps unarchiving unavailable and reports the failure as a notice.
@@ -2831,6 +2836,7 @@ type Model struct {
 	onAppLinkAction                 func(action AppLinkAction) bubbletea.Cmd
 	onSessionAction                 SessionActionFunc
 	onWorkingDirectoryChange        WorkingDirectoryChangeFunc
+	onReloadSettingsForCWD          func(cwd string) (SettingsWriteResult, error)
 	onResumeSession                 SessionResumeFunc
 	onUnarchiveThread               func(threadID string) error
 	onSwitchBackendSession          BackendSwitchFunc
@@ -3700,6 +3706,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onAppLinkAction:                  options.OnAppLinkAction,
 		onSessionAction:                  options.OnSessionAction,
 		onWorkingDirectoryChange:         options.OnWorkingDirectoryChange,
+		onReloadSettingsForCWD:           options.OnReloadSettingsForCWD,
 		onResumeSession:                  options.OnResumeSession,
 		onUnarchiveThread:                options.OnUnarchiveThread,
 		onSwitchBackendSession:           options.OnSwitchBackendSession,

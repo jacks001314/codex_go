@@ -3132,6 +3132,30 @@
    "status": "complete",
    "verifier": "TestBillingPlanPrefersKnownQuotaPlanInEitherReplyOrderLikeRust;TestBillingPlanIgnoresNonCodexQuotaLimitsLikeRust;TestRollingQuotaCannotRestoreObsoleteBillingPlanLikeRust;TestAccountUpdateDropsQuotaPlanLikeRust;TestBillingPlanClearsThreadUsageOnlyWhenUnavailableLikeRust;TestQuotaReadReArmsPendingStatusThreadUsageLikeRust;TestAgentsOverviewUsagePlanChangeRepricesCache"
   }
+,
+  {
+   "id": "tui-config-mouse-scroll-speed",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/config_panel/mod.rs",
+    "tui/src/config_panel/render.rs",
+    "tui/src/config_panel/toggle.rs",
+    "tui/src/chatwidget/config_panel.rs",
+    "tui/src/app/config_panel.rs",
+    "tui/src/app/session_lifecycle.rs"
+   ],
+   "goPaths": [
+    "tui/tea/config_panel.go",
+    "tui/tea/config_panel_mouse_scroll_like_rust_test.go",
+    "tui/tea/model.go",
+    "tui/tea/working_directory.go",
+    "app/interactive.go",
+    "app/mouse_scroll_wiring_test.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestMouseScrollSpeedConfigPickerLikeRust;TestMouseScrollSpeedPanelRowLikeRust;TestMouseScrollSpeedReloadRepricesPickerLikeRust;TestChangingDirectoryReloadsLocalSettingsLikeRust;TestChangingDirectoryKeepsLiveSettingsWhenReloadFailsLikeRust;TestInteractiveLoadSettingsForCWDReadsDestinationConfigLikeRust"
+  }
 
   ]
 }

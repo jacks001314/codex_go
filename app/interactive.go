@@ -1800,6 +1800,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		SidebarWidthPercent:         interactiveSidebarWidthPercent(root),
 		OnListCollaborationModes:    interactiveLocalListCollaborationModes(),
 		OnWorkingDirectoryChange:    interactiveWorkingDirectoryChangeHandler(root),
+		OnReloadSettingsForCWD:      interactiveReloadSettingsForCWD(root),
 		OnResumeSession:             interactiveResumeSessionHandler(root),
 		OnUnarchiveThread:           interactiveUnarchiveThreadHandler(),
 		OnSwitchBackendSession:      interactiveBackendSwitchHandler(interactiveResumeSessionHandler(root), codextui.ProcessBackendID()),
@@ -2931,6 +2932,28 @@ func interactiveLoadSettings(root *cli.RootOptions) (codextea.SettingsWriteResul
 	// runs here carries the requirements instead of issuing a second request.
 	result.ServiceTierRequirements = interactiveServiceTierRequirements()
 	return result, nil
+}
+
+// interactiveLoadSettingsForCWD reloads the client-owned preferences for the
+// directory a session is about to change into, mirroring Rust
+// change_working_directory -> load_new_session_config -> rebuild_config_for_cwd
+// (#51510, #61976). The launch-time overrides still apply; only the
+// directory-scoped layers move.
+func interactiveLoadSettingsForCWD(root *cli.RootOptions, cwd string) (codextea.SettingsWriteResult, error) {
+	if root == nil {
+		return interactiveLoadSettings(nil)
+	}
+	scoped := *root
+	scoped.Shared.CWD = strings.TrimSpace(cwd)
+	return interactiveLoadSettings(&scoped)
+}
+
+// interactiveReloadSettingsForCWD adapts interactiveLoadSettingsForCWD to the
+// TUI's per-directory reload hook.
+func interactiveReloadSettingsForCWD(root *cli.RootOptions) func(cwd string) (codextea.SettingsWriteResult, error) {
+	return func(cwd string) (codextea.SettingsWriteResult, error) {
+		return interactiveLoadSettingsForCWD(root, cwd)
+	}
 }
 
 // interactivePresetLayerAccess resolves #54380's config ownership guard. Set

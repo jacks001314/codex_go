@@ -3,6 +3,7 @@ package tea
 import (
 	"reflect"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -64,6 +65,7 @@ const (
 	configActionModelProviders
 	configActionCopyOnSelect
 	configActionCopyOnSelectClear
+	configActionMouseScrollSpeed
 )
 
 type configPanelRow struct {
@@ -161,6 +163,13 @@ var configPanelRows = []configPanelRow{
 		description: "Recognize pasted-text bursts and keep multiline input together",
 		keywords:    "burst clipboard multiline",
 		action:      configActionPasteDetection,
+	},
+	{
+		section:     configSectionInput,
+		label:       "Mouse scroll speed",
+		description: "Adjust how far the fullscreen transcript scrolls with the mouse wheel",
+		keywords:    "wheel scrolling speed multiplier trackpad",
+		action:      configActionMouseScrollSpeed,
 	},
 	{
 		section:     configSectionSessions,
@@ -379,6 +388,8 @@ func (m *Model) configPanelValue(row configPanelRow) string {
 		return configPanelToggleValue(m.vimModeDefault)
 	case configActionPasteDetection:
 		return configPanelToggleValue(!m.disablePasteBurst)
+	case configActionMouseScrollSpeed:
+		return configMouseScrollSpeedLabel(m.mouseScrollSpeed) + " \u203a"
 	case configActionAutomaticRecaps:
 		return configPanelToggleValue(!m.disableAutoRecap)
 	case configActionCollapseTurnDetails:
@@ -425,6 +436,14 @@ func (m *Model) configPanelValue(row configPanelRow) string {
 	default:
 		return "Configure \u203a"
 	}
+}
+
+// configMouseScrollSpeedLabel mirrors Rust's `format!("{}×", speed)` label for
+// the mouse-wheel multiplier: whole values drop the decimal point while custom
+// fractional values keep it (1 -> "1×", 1.75 -> "1.75×").
+func configMouseScrollSpeedLabel(speed float64) string {
+	normalized := codextui.NormalizeMouseScrollSpeed(&speed)
+	return strconv.FormatFloat(normalized, 'f', -1, 64) + "\u00d7"
 }
 
 func configPanelOnOff(on bool) string {
@@ -827,11 +846,11 @@ func (m *Model) activateConfigRow(row configPanelRow) bubbletea.Cmd {
 		// Rust opens the browsing picker instead of changing the provider.
 		return m.openConfigProviderBrowser()
 	case configActionNotifyCondition, configActionRightClickPaste, configActionSessionPicker,
-		configActionResumeCWD, configActionCopyOnSelect:
+		configActionResumeCWD, configActionCopyOnSelect, configActionMouseScrollSpeed:
 		// Rust opens a child picker for these editors instead of cycling the
 		// value in place (config_panel/render.rs::notification_condition,
 		// right_click_paste, session_picker_layout, resume_directory,
-		// copy_on_select).
+		// copy_on_select, mouse_scroll_speed).
 		m.openConfigPanelChoice(row)
 		return nil
 	case configActionCopyOnSelectClear:
@@ -887,6 +906,25 @@ func (m *Model) openConfigPanelChoice(row configPanelRow) {
 		add("Auto (default)", "auto", current == "auto")
 		add("On", "on", current == "on")
 		add("Off", "off", current == "off")
+	case configActionMouseScrollSpeed:
+		choice.subtitle = "Choose a mouse-wheel speed for the fullscreen transcript"
+		current := codextui.NormalizeMouseScrollSpeed(&m.mouseScrollSpeed)
+		// Rust keeps a custom configured value available as the current choice
+		// by inserting it into the sorted preset list.
+		speeds := []float64{0.5, 1.0, 1.5, 2.0, 3.0}
+		index := sort.SearchFloat64s(speeds, current)
+		if index >= len(speeds) || speeds[index] != current {
+			speeds = append(speeds, 0)
+			copy(speeds[index+1:], speeds[index:])
+			speeds[index] = current
+		}
+		for _, speed := range speeds {
+			label := configMouseScrollSpeedLabel(speed)
+			if speed == codextui.MouseScrollSpeedDefault {
+				label += " (default)"
+			}
+			add(label, strconv.FormatFloat(speed, 'f', -1, 64), speed == current)
+		}
 	default:
 		return
 	}
@@ -926,6 +964,15 @@ func (m *Model) applyConfigPanelChoiceItem(action configPanelAction, item config
 	case configActionRightClickPaste:
 		m.setRightClickPasteMode(item.value)
 		return m.saveConfigPanelPreference("tui.right_click_paste", item.value)
+	case configActionMouseScrollSpeed:
+		speed, err := strconv.ParseFloat(strings.TrimSpace(item.value), 64)
+		if err != nil {
+			return nil
+		}
+		// Rust applies the saved multiplier to the transcript immediately
+		// (tui.mouse_scroll_speed -> TranscriptView, #61976).
+		m.setMouseScrollSpeed(speed)
+		return m.saveConfigPanelPreference("tui.mouse_scroll_speed", speed)
 	}
 	return nil
 }
@@ -1237,6 +1284,10 @@ func configPanelEffectiveValue(result SettingsWriteResult, keyPath string) (any,
 	case "tui.copy_on_select_clear_selection":
 		if result.CopyOnSelectClearSelection != nil {
 			return *result.CopyOnSelectClearSelection, true
+		}
+	case "tui.mouse_scroll_speed":
+		if result.MouseScrollSpeed != nil {
+			return *result.MouseScrollSpeed, true
 		}
 	}
 	return nil, false

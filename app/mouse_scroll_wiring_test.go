@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -14,6 +15,40 @@ import (
 	codextui "codex_go/tui"
 	codextea "codex_go/tui/tea"
 )
+
+// TestInteractiveLoadSettingsForCWDReadsDestinationConfigLikeRust mirrors the
+// Rust `change_directory_scenario` half of #61976: changing directories reloads
+// the configuration for the destination, so its `tui.mouse_scroll_speed` (and
+// every other directory-scoped TUI preference) reaches the config panel.
+func TestInteractiveLoadSettingsForCWDReadsDestinationConfigLikeRust(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	source := t.TempDir()
+	destination := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(destination, ".gcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll destination .gcode: %v", err)
+	}
+	if err := os.WriteFile(config.ProjectConfigPath(destination), []byte("[tui]\nmouse_scroll_speed = 1.75\n"), 0o600); err != nil {
+		t.Fatalf("write destination project config: %v", err)
+	}
+	trustKey := strings.ReplaceAll(filepath.Clean(destination), `\`, `\\`)
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[projects.\""+trustKey+"\"]\ntrust_level = \"trusted\"\n"), 0o600); err != nil {
+		t.Fatalf("write user config: %v", err)
+	}
+
+	root := &cli.RootOptions{Shared: cli.SharedOptions{CWD: source}}
+	settings, err := interactiveLoadSettingsForCWD(root, destination)
+	if err != nil {
+		t.Fatalf("interactiveLoadSettingsForCWD: %v", err)
+	}
+	if settings.MouseScrollSpeed == nil || *settings.MouseScrollSpeed != 1.75 {
+		t.Fatalf("destination mouse scroll speed = %v, want 1.75", settings.MouseScrollSpeed)
+	}
+	// The launch directory keeps resolving its own value.
+	if base := interactiveTUISettings(root); base.MouseScrollSpeed == nil || *base.MouseScrollSpeed != codextui.MouseScrollSpeedDefault {
+		t.Fatalf("source mouse scroll speed = %v, want the default", base.MouseScrollSpeed)
+	}
+}
 
 // TestInteractiveMouseScrollSpeedLikeRust pins the host-side resolution of
 // `tui.mouse_scroll_speed` (#50209). Rust validates the value while parsing the

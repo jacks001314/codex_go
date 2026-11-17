@@ -119,7 +119,19 @@ func (m *Model) requestWorkingDirectoryChange(threadID string, target string) bu
 		if err != nil {
 			return WorkingDirectoryChangeResultMsg{ThreadID: threadID, SourceCWD: sourceCWD, CWD: resolved, Error: err.Error()}
 		}
-		return WorkingDirectoryChangeResultMsg{ThreadID: threadID, SourceCWD: sourceCWD, CWD: resolved, Summary: summary}
+		// Rust's change_working_directory rebuilds the configuration for the
+		// destination and stages its local settings, so directory-scoped TUI
+		// preferences (mouse scroll speed included, #61976) follow the session.
+		var settings *LocalSettings
+		if m.onReloadSettingsForCWD != nil {
+			staged, reloadErr := LoadNewSessionLocalSettings(m.localSettings, func() (SettingsWriteResult, error) {
+				return m.onReloadSettingsForCWD(resolved)
+			})
+			if reloadErr == nil {
+				settings = &staged
+			}
+		}
+		return WorkingDirectoryChangeResultMsg{ThreadID: threadID, SourceCWD: sourceCWD, CWD: resolved, Summary: summary, Settings: settings}
 	}
 }
 
@@ -178,6 +190,11 @@ func (m *Model) applyWorkingDirectoryChangeResult(msg WorkingDirectoryChangeResu
 	if provider := strings.TrimSpace(msg.Summary.Provider); provider != "" {
 		m.State.Provider = provider
 	}
+	// Rust stages the destination's local settings with the replacement
+	// session, so the configuration panel shows the new directory's values.
+	if msg.Settings != nil {
+		m.applyLocalSettings(*msg.Settings)
+	}
 	m.activeSide = nil
 	m.activeAgentLabel = ""
 	if m.statusControls != nil {
@@ -198,6 +215,10 @@ type WorkingDirectoryChangeResultMsg struct {
 	SourceCWD string
 	CWD       string
 	Summary   *codextui.SessionSummary
+	// Settings is the destination's staged local-settings record (Rust
+	// session_lifecycle copies local_settings into the replacement chat
+	// widget). It is nil when the reload failed or no hook is installed.
+	Settings *LocalSettings
 	Error     string
 }
 
