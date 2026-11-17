@@ -43,6 +43,11 @@ type StatuslineProviderCandidate struct {
 	Title       string
 	PluginLabel string
 	URI         string
+	// PluginName and MarketplaceName identify the owning plugin (Rust
+	// StatuslineProvider::plugin_id) so the picker's selection can be resolved as
+	// ProviderSelection::Discovered without a global inventory query.
+	PluginName      string
+	MarketplaceName string
 }
 
 // StatuslineProviderDiscoveryUpdate streams one server's probe result.
@@ -389,6 +394,7 @@ func (m *Model) applyStatuslineProviderPickerOption(optionID string) bubbletea.C
 	}
 	optionID = strings.TrimSpace(optionID)
 	if optionID == statuslineProviderDefaultOption {
+		m.statuslinePickedProvider = nil
 		m.cancelStatuslineProviderPicker()
 		return m.SaveStatusLineProvider(config.StatusLineProviderSelection{Default: true})
 	}
@@ -397,11 +403,26 @@ func (m *Model) applyStatuslineProviderPickerOption(optionID string) bubbletea.C
 		m.cancelStatuslineProviderPicker()
 		return nil
 	}
-	if state.candidate(server, tool) == nil &&
+	candidate := state.candidate(server, tool)
+	if candidate == nil &&
 		(state.selected == nil || state.selected.Default || state.selected.Server != server || state.selected.Tool != tool) {
 		m.cancelStatuslineProviderPicker()
 		return nil
 	}
 	m.cancelStatuslineProviderPicker()
+	// Rust hands the chosen StatuslineProvider object to
+	// reselect_statusline_provider; keep it for the next reader.
+	m.statuslinePickedProvider = nil
+	if candidate != nil {
+		m.statuslinePickedProvider = &StatuslineProvider{
+			Found:           true,
+			Server:          server,
+			Tool:            tool,
+			Title:           candidate.Title,
+			URI:             candidate.URI,
+			PluginName:      candidate.PluginName,
+			MarketplaceName: candidate.MarketplaceName,
+		}
+	}
 	return m.SaveStatusLineProvider(config.StatusLineProviderSelection{Server: server, Tool: tool})
 }

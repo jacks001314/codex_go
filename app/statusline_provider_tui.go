@@ -20,6 +20,7 @@ import (
 	"codex_go/cli"
 	"codex_go/config"
 	"codex_go/mcp"
+	"codex_go/plugin"
 	"codex_go/statuslineprovider"
 	codextea "codex_go/tui/tea"
 )
@@ -189,18 +190,42 @@ func statuslineProviderHooks(
 		}
 		defer closeClient()
 		id := statuslineprovider.ProviderID{Server: request.Server, Tool: request.Tool}
-		resolved, err := statuslineprovider.Lookup(ctx, client, layers, request.ThreadID, request.WorkingDirectory, statuslineprovider.Selection{Saved: &id})
+		selection := statuslineprovider.Selection{Saved: &id}
+		if advertised := request.Advertised; advertised != nil {
+			// Rust provider_from_picker: the picker already knows the advertisement,
+			// so resolve it as ProviderSelection::Discovered and skip the global
+			// inventory query.
+			provider := statuslineprovider.Provider{
+				ID:    statuslineprovider.ProviderID{Server: advertised.Server, Tool: advertised.Tool},
+				Title: advertised.Title,
+				URI:   advertised.URI,
+			}
+			if advertised.PluginName != "" && advertised.MarketplaceName != "" {
+				if pluginID, err := plugin.NewPluginId(advertised.PluginName, advertised.MarketplaceName); err == nil {
+					provider.PluginID = pluginID
+				}
+			}
+			selection = statuslineprovider.Selection{Discovered: &provider}
+		}
+		resolved, err := statuslineprovider.Lookup(ctx, client, layers, request.ThreadID, request.WorkingDirectory, selection)
 		if err != nil {
 			return codextea.StatuslineProvider{}, err
 		}
 		if resolved == nil {
 			return codextea.StatuslineProvider{}, nil
 		}
-		return codextea.StatuslineProvider{
-			Found: true,
-			Title: resolved.Provider.Title,
-			URI:   resolved.Provider.URI,
-		}, nil
+		out := codextea.StatuslineProvider{
+			Found:  true,
+			Server: resolved.Provider.ID.Server,
+			Tool:   resolved.Provider.ID.Tool,
+			Title:  resolved.Provider.Title,
+			URI:    resolved.Provider.URI,
+		}
+		if pluginID := resolved.Provider.PluginID; pluginID != nil {
+			out.PluginName = pluginID.PluginName
+			out.MarketplaceName = pluginID.MarketplaceName
+		}
+		return out, nil
 	}
 	read := func(ctx context.Context, request codextea.StatuslineProviderResourceRequest) ([]codextea.StatuslineProviderContent, error) {
 		client, closeClient, err := connect(ctx)
@@ -273,12 +298,19 @@ func statuslineProviderDiscovery(connect func(context.Context) (statuslineprovid
 					converted.TimedOut = true
 				}
 				for _, provider := range update.Providers {
+					pluginName, marketplaceName := "", ""
+					if pluginID := provider.PluginID; pluginID != nil {
+						pluginName = pluginID.PluginName
+						marketplaceName = pluginID.MarketplaceName
+					}
 					converted.Providers = append(converted.Providers, codextea.StatuslineProviderCandidate{
-						Server:      provider.ID.Server,
-						Tool:        provider.ID.Tool,
-						Title:       provider.Title,
-						PluginLabel: provider.PluginLabel,
-						URI:         provider.URI,
+						Server:          provider.ID.Server,
+						Tool:            provider.ID.Tool,
+						Title:           provider.Title,
+						PluginLabel:     provider.PluginLabel,
+						URI:             provider.URI,
+						PluginName:      pluginName,
+						MarketplaceName: marketplaceName,
 					})
 				}
 				select {

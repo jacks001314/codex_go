@@ -3388,6 +3388,26 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestStatuslineProviderDiscoveryWarningsLikeRust;TestWarningDisplayStatuslineDiscoveryLikeRust;TestStatuslineProviderEmptyCatalogRetriesAfterServerReadyLikeRust;TestStatuslineProviderRetrySharesLookupDeadlineLikeRust;TestStatuslineProviderReadyWaitReportsUnavailableLikeRust;TestStatuslineProviderLateLookupAfterDeadlineTimesOutLikeRust;TestStatuslineProviderLookupFailureCopyLikeRust"
+  },
+  {
+   "id": "tui-statusline-provider-picker-handoff",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/statusline_provider.rs",
+    "tui/src/statusline_provider/discovery.rs",
+    "tui/src/app/status_line_settings.rs"
+   ],
+   "goPaths": [
+    "tui/tea/statusline_provider_footer.go",
+    "tui/tea/statusline_provider_picker.go",
+    "tui/tea/model.go",
+    "app/statusline_provider_tui.go",
+    "statuslineprovider/resolve.go",
+    "tui/tea/statusline_provider_picker_advertisement_like_rust_test.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestStatuslineProviderPickerHandsAdvertisementToReaderLikeRust;TestStatuslineProviderAdvertisementSurvivesRefreshLikeRust;TestResolveChecksProjectScopeAndLiveOwnerLikeRust"
   }
 
 

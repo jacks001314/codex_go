@@ -3194,9 +3194,13 @@ type Model struct {
 	// transport is down (Rust #61985 statusline_disconnected): reads would only
 	// fail, so the built-in status line takes the footer until a new session
 	// attaches.
-	statuslineDisconnected        bool
-	statuslineProviderToken       uint64
-	statuslineProviderReady       *statuslineReadyGate
+	statuslineDisconnected  bool
+	statuslineProviderToken uint64
+	statuslineProviderReady *statuslineReadyGate
+	// statuslinePickedProvider is the provider object the /statusline picker handed
+	// back for the next reader (Rust provider_from_picker). It is consumed once and
+	// only when it still matches the saved selection.
+	statuslinePickedProvider      *StatuslineProvider
 	onResolveStatuslineProvider   func(context.Context, StatuslineProviderReadRequest) (StatuslineProvider, error)
 	onReadStatuslineProvider      func(context.Context, StatuslineProviderResourceRequest) ([]StatuslineProviderContent, error)
 	onDiscoverStatuslineProviders StatuslineProviderDiscoveryFunc

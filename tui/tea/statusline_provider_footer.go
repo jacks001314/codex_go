@@ -57,13 +57,23 @@ type StatuslineProviderReadRequest struct {
 	WorkingDirectory string
 	Server           string
 	Tool             string
+	// Advertised is the provider object the picker handed back for this
+	// selection (Rust `provider_from_picker`). When set, the host resolves it as
+	// ProviderSelection::Discovered, which skips the global inventory query.
+	Advertised *StatuslineProvider
 }
 
 // StatuslineProvider is one resolved provider advertisement.
 type StatuslineProvider struct {
-	Found bool
-	Title string
-	URI   string
+	Found  bool
+	Server string
+	Tool   string
+	Title  string
+	URI    string
+	// PluginName and MarketplaceName mirror Rust StatuslineProvider::plugin_id.
+	// An empty name means the provider is not owned by a plugin.
+	PluginName      string
+	MarketplaceName string
 }
 
 // StatuslineProviderContent is one resource returned by the provider read.
@@ -95,9 +105,12 @@ type activeStatuslineProviderRead struct {
 	hostCWD  string
 	// name is the provider title once resolved; the saved tool name until then.
 	// Rust uses it verbatim in the failure copy.
-	name    string
-	uri     string
-	started bool
+	name string
+	uri  string
+	// advertised is the picker's provider object, retained so every retry can
+	// resolve it with ProviderSelection::Discovered (Rust provider_from_picker).
+	advertised *StatuslineProvider
+	started    bool
 	// failed records a lookup, RPC, deadline, or content failure. Rust #61986
 	// cancels the reader on failure, which stops provider snapshot consumers
 	// (thread usage, workspace headline) until the reader is reselected.
@@ -280,15 +293,23 @@ func (m *Model) syncProviderFooterSelection() {
 		m.statuslineProviderToken = 1
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	advertised := m.takeStatuslinePickedProvider(selection.Server, selection.Tool)
+	if advertised == nil && m.statuslineProviderRead != nil {
+		previous := m.statuslineProviderRead.advertised
+		if previous != nil && previous.Server == selection.Server && previous.Tool == selection.Tool {
+			advertised = previous
+		}
+	}
 	read := &activeStatuslineProviderRead{
-		token:    m.statuslineProviderToken,
-		threadID: strings.TrimSpace(m.State.ThreadID),
-		server:   selection.Server,
-		tool:     selection.Tool,
-		hostCWD:  m.statusLineCWD(),
-		name:     selection.Tool,
-		ctx:      ctx,
-		cancel:   cancel,
+		token:      m.statuslineProviderToken,
+		threadID:   strings.TrimSpace(m.State.ThreadID),
+		server:     selection.Server,
+		tool:       selection.Tool,
+		hostCWD:    m.statusLineCWD(),
+		name:       selection.Tool,
+		advertised: advertised,
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 	if m.statuslineProviderRead != nil {
 		m.statuslineProviderRead.cancel()
@@ -307,6 +328,21 @@ func (m *Model) retireStatuslineProviderRead() {
 		m.statuslineProviderRead.cancel()
 	}
 	m.statuslineProviderRead = nil
+}
+
+// takeStatuslinePickedProvider consumes the advertisement the picker handed back
+// for a matching selection. Rust stores it as provider_from_picker and filters it
+// with `provider.id == selection` before the reader can use it.
+func (m *Model) takeStatuslinePickedProvider(server string, tool string) *StatuslineProvider {
+	picked := m.statuslinePickedProvider
+	m.statuslinePickedProvider = nil
+	if picked == nil || !picked.Found {
+		return nil
+	}
+	if picked.Server != server || picked.Tool != tool {
+		return nil
+	}
+	return picked
 }
 
 // ensureProviderFooterCmd starts the read whose selection was staged by
@@ -339,6 +375,7 @@ func (m *Model) statuslineProviderResolveCmd(read *activeStatuslineProviderRead)
 		WorkingDirectory: read.hostCWD,
 		Server:           read.server,
 		Tool:             read.tool,
+		Advertised:       read.advertised,
 	}
 	parent := read.ctx
 	if parent == nil {
