@@ -111,6 +111,17 @@ type TurnUserInput struct {
 	Name     string  `json:"name,omitempty"`
 	Detail   *string `json:"detail,omitempty"`
 	MimeType string  `json:"mimeType,omitempty"`
+	// Local attachment payloads captured by the submitting host before the
+	// input enters a session queue (Rust #61962 ResolvedUserInput). Queued
+	// input can outlive its source files, so the model message renders from
+	// these payloads while Path keeps naming the original file for display,
+	// labels, and diagnostics. LocalMediaResolved distinguishes "not captured"
+	// from a captured empty payload.
+	LocalImageBytes    []byte `json:"-"`
+	LocalImageError    string `json:"-"`
+	LocalAudioURL      string `json:"-"`
+	LocalAudioError    string `json:"-"`
+	LocalMediaResolved bool   `json:"-"`
 }
 
 // TurnToolOutput carries a standalone named function-call output used to start

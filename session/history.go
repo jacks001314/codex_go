@@ -1011,6 +1011,8 @@ func isLocalAudioContentType(value string) bool {
 }
 
 func localAudioHistoryBlocks(part ContentPart, options *HistoryBuildOptions) []map[string]any {
+	// Legacy fallback: user messages recorded before Rust #61962 (captured
+	// local attachments) still carry a path instead of an inline payload.
 	path := strings.TrimSpace(part.AudioURL)
 	resolved := path
 	if !filepath.IsAbs(resolved) && options != nil && strings.TrimSpace(options.CWD) != "" {
@@ -1025,6 +1027,8 @@ func localAudioHistoryBlocks(part ContentPart, options *HistoryBuildOptions) []m
 }
 
 func localImageHistoryBlocks(part ContentPart, options *HistoryBuildOptions) []map[string]any {
+	// Legacy fallback: user messages recorded before Rust #61962 (captured
+	// local attachments) still carry a path instead of an inline payload.
 	path := strings.TrimSpace(part.ImageURL)
 	resolved := path
 	if !filepath.IsAbs(resolved) && options != nil && strings.TrimSpace(options.CWD) != "" {

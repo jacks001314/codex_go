@@ -2695,11 +2695,12 @@ func localImageInputContentBlocks(path string, cwd string, detail string, imageI
 		resolvedPath = filepath.Join(cwd, resolvedPath)
 	}
 	resolvedPath = filepath.Clean(resolvedPath)
-	data, err := os.ReadFile(resolvedPath)
+	// Rust #61962 reads every client local image through the bounded reader.
+	data, err := turn.ReadLocalImageBytes(resolvedPath)
 	if err != nil {
 		return []map[string]any{{
 			"type": "input_text",
-			"text": fmt.Sprintf("Codex could not read the local image at `%s`: %v", path, err),
+			"text": turn.LocalImageReadErrorText(path, err),
 		}}
 	}
 	_, format, err := image.DecodeConfig(bytes.NewReader(data))

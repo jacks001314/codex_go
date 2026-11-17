@@ -8921,12 +8921,20 @@ func additionalContextNameError(values map[string]turn.AdditionalContextEntry) e
 }
 
 func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartResponse, error) {
-	r.turnAdmissionMu.Lock()
-	defer r.turnAdmissionMu.Unlock()
 	params, err := decodeTurnStartParams(request)
 	if err != nil {
 		return nil, err
 	}
+	// Rust #61962: validate the input shape, then capture client local
+	// attachments on the submitting host before the request waits for
+	// admission. Queued input can outlive its source files, so reading them
+	// only while rendering the model message could drop media.
+	if err := validateTurnUserInputImageURLs(params.Input); err != nil {
+		return nil, err
+	}
+	params.Input = turn.ResolveTurnUserInputs(params.Input)
+	r.turnAdmissionMu.Lock()
+	defer r.turnAdmissionMu.Unlock()
 	// Rust #49262: the accepted input is traced on `codex.turn_input`, which
 	// records the turn id once the submission has one.
 	inputSpan := r.startTurnInputSpan(r.openRequestSpan(request), params.ThreadID)
@@ -8943,9 +8951,6 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 	// Rust #57181: validate additional-context names before the turn changes any
 	// live thread policy or admits input.
 	if err := additionalContextNameError(params.AdditionalContext); err != nil {
-		return nil, err
-	}
-	if err := validateTurnUserInputImageURLs(params.Input); err != nil {
 		return nil, err
 	}
 	r.inheritTurnEnvironmentSelections(params)
@@ -10340,6 +10345,9 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 	if err := validateTurnUserInputImageURLs(params.Input); err != nil {
 		return nil, err
 	}
+	// Rust #61962: capture client local attachments on the submitting host
+	// before the steer joins the turn's pending input.
+	params.Input = turn.ResolveTurnUserInputs(params.Input)
 	captureTurnSteerDictation(params)
 	response, err := r.requireTurns().Steer(params)
 	if err != nil {

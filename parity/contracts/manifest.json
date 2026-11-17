@@ -3187,7 +3187,33 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestStatuslineProviderDecodeRequiresOneMatchingJSONTextItem;TestStatuslineProviderFooterLifecycleLikeRust;TestStatuslineProviderReadsDropStaleResultsLikeRust;TestStatuslineProviderSelectionChangesLikeRust;TestStatuslineProviderWithoutHostHooksKeepsBuiltinLikeRust;TestStatuslineProviderThreadUsageSelectionLikeRust;TestStatusControlsProviderRequestsWorkspaceHeadlineWithoutItemsLikeRust;TestStatusControlsProviderOwnsStatusLineLikeRust;TestStatusControlsSelectionsStayItemBasedWithProviderLikeRust"
+  },
+
+  {
+   "id": "turn-local-attachment-capture",
+   "kind": "source-surface",
+   "rustPaths": [
+    "protocol/src/models.rs",
+    "core/src/codex_thread.rs",
+    "core/src/session/mod.rs",
+    "core/src/session/turn_input.rs",
+    "core/src/session/input_queue.rs"
+   ],
+   "goPaths": [
+    "turn/api.go",
+    "turn/local_attachments.go",
+    "turn/local_attachments_like_rust_test.go",
+    "appserver/runtime_router.go",
+    "appserver/turn_runtime.go",
+    "appserver/local_attachment_capture_like_rust_test.go",
+    "exec/exec.go",
+    "session/history.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestResolveTurnUserInputsCapturesLocalMediaLikeRust;TestResolveTurnUserInputsKeepsRustErrorTextLikeRust;TestReadBoundedLocalMediaEnforcesRustBound;TestAudioMimeForPathMatchesRustExtensionTable;TestTurnUserInputCapturedPayloadStaysOffTheWire;TestTurnStartCapturesLocalAttachmentsBeforeAdmissionLikeRust;TestLocalAudioInputContentBlocksMatchRustLikeRust"
   }
+
 
   ]
 }

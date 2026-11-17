@@ -6515,6 +6515,15 @@ func sessionContentFromPreparedUserBlocks(blocks []map[string]any) []session.Con
 				part.Detail = &detail
 			}
 			content = append(content, part)
+		case "input_audio":
+			// Rust keeps inline audio (and `AudioReference::File`) in the
+			// persisted user message; dropping it here would make later
+			// requests replay the turn without its audio.
+			part := session.ContentPart{Type: "input_audio", AudioURL: stringFromAny(block["audio_url"])}
+			if fileID := firstNonEmpty(stringFromAny(block["file_id"]), stringFromAny(block["fileId"])); fileID != "" {
+				part.FileID = fileID
+			}
+			content = append(content, part)
 		}
 	}
 	if len(content) == 0 {
@@ -6546,6 +6555,14 @@ func threadContentFromPreparedUserBlocks(blocks []map[string]any, original []map
 			}
 			if detail := stringFromAny(block["detail"]); detail != "" {
 				entry["detail"] = detail
+			}
+			content = append(content, entry)
+		case "input_audio":
+			entry := map[string]any{"type": "audio"}
+			if fileID := firstNonEmpty(stringFromAny(block["file_id"]), stringFromAny(block["fileId"])); fileID != "" {
+				entry["fileId"] = fileID
+			} else if audioURL := stringFromAny(block["audio_url"]); audioURL != "" {
+				entry["url"] = audioURL
 			}
 			content = append(content, entry)
 		}
@@ -14813,6 +14830,7 @@ func inputContentFromTurnUserInputs(prompt string, inputs []turn.TurnUserInput) 
 		content = append(content, map[string]any{"type": "input_text", "text": text})
 	}
 	imageIndex := 0
+	audioIndex := 0
 	for i := range inputs {
 		input := inputs[i]
 		inputType := strings.TrimSpace(input.Type)
@@ -14838,7 +14856,7 @@ func inputContentFromTurnUserInputs(prompt string, inputs []turn.TurnUserInput) 
 		}
 		if path := strings.TrimSpace(input.Path); path != "" && (inputType == "" || strings.EqualFold(inputType, "localImage")) {
 			imageIndex++
-			content = append(content, localImageInputContentBlocks(path, inputDetail(input), imageIndex)...)
+			content = append(content, localImageInputContentBlocks(input, imageIndex)...)
 			continue
 		}
 		if fileID := strings.TrimSpace(input.FileID); fileID != "" && strings.EqualFold(inputType, "audio") {
@@ -14852,7 +14870,8 @@ func inputContentFromTurnUserInputs(prompt string, inputs []turn.TurnUserInput) 
 			continue
 		}
 		if path := strings.TrimSpace(input.Path); path != "" && strings.EqualFold(inputType, "localAudio") {
-			content = append(content, localAudioInputContentBlocks(path)...)
+			audioIndex++
+			content = append(content, localAudioInputContentBlocks(input, audioIndex)...)
 		}
 	}
 	return content
@@ -14881,13 +14900,25 @@ func inputDetail(input turn.TurnUserInput) string {
 	return "high"
 }
 
-func localImageInputContentBlocks(path string, detail string, imageIndex int) []map[string]any {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return []map[string]any{{
-			"type": "input_text",
-			"text": fmt.Sprintf("Codex could not read the local image at `%s`: %v", path, err),
-		}}
+// localImageInputContentBlocks renders one local image input. Captured payloads
+// (Rust #61962 ResolvedUserInput) render even after the source file is gone; an
+// input that was never captured falls back to reading the path for internal
+// callers that do not pass through the client boundary.
+func localImageInputContentBlocks(input turn.TurnUserInput, imageIndex int) []map[string]any {
+	path := strings.TrimSpace(input.Path)
+	detail := inputDetail(input)
+	var data []byte
+	if input.LocalMediaResolved {
+		if input.LocalImageError != "" {
+			return []map[string]any{{"type": "input_text", "text": input.LocalImageError}}
+		}
+		data = input.LocalImageBytes
+	} else {
+		read, err := turn.ReadLocalImageBytes(path)
+		if err != nil {
+			return []map[string]any{{"type": "input_text", "text": turn.LocalImageReadErrorText(path, err)}}
+		}
+		data = read
 	}
 	return []map[string]any{
 		{"type": "input_text", "text": fmt.Sprintf("<image name=[Image #%d] path=\"%s\">", imageIndex, path)},
@@ -14896,12 +14927,28 @@ func localImageInputContentBlocks(path string, detail string, imageIndex int) []
 	}
 }
 
-func localAudioInputContentBlocks(path string) []map[string]any {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return []map[string]any{{"type": "input_text", "text": fmt.Sprintf("Codex could not read the local audio at `%s`: %v", path, err)}}
+// localAudioInputContentBlocks renders one local audio input with Rust's
+// labelled framing (`<audio name=[Audio #n] path="...">` ... `</audio>`).
+func localAudioInputContentBlocks(input turn.TurnUserInput, audioIndex int) []map[string]any {
+	path := strings.TrimSpace(input.Path)
+	var audioURL string
+	if input.LocalMediaResolved {
+		if input.LocalAudioError != "" {
+			return []map[string]any{{"type": "input_text", "text": input.LocalAudioError}}
+		}
+		audioURL = input.LocalAudioURL
+	} else {
+		read, err := turn.ReadLocalAudioURL(path)
+		if err != nil {
+			return []map[string]any{{"type": "input_text", "text": turn.LocalAudioReadErrorText(path, err)}}
+		}
+		audioURL = read
 	}
-	return []map[string]any{audioInputContentBlock(dataURLFromBytes(data))}
+	return []map[string]any{
+		{"type": "input_text", "text": fmt.Sprintf("<audio name=[Audio #%d] path=\"%s\">", audioIndex, path)},
+		audioInputContentBlock(audioURL),
+		{"type": "input_text", "text": "</audio>"},
+	}
 }
 
 func dataURLFromBytes(data []byte) string {
@@ -14939,6 +14986,8 @@ func sessionContentFromTurnStart(params *turn.TurnStartParams) []session.Content
 
 func sessionContentFromTurnUserInputs(inputs []turn.TurnUserInput) []session.ContentPart {
 	content := make([]session.ContentPart, 0, len(inputs))
+	imageIndex := 0
+	audioIndex := 0
 	for i := range inputs {
 		input := inputs[i]
 		inputType := strings.TrimSpace(input.Type)
@@ -14949,22 +14998,55 @@ func sessionContentFromTurnUserInputs(inputs []turn.TurnUserInput) []session.Con
 			if inputType == "" {
 				inputType = "image"
 			}
+			imageIndex++
 			content = append(content, session.ContentPart{Type: inputType, ImageURL: strings.TrimSpace(input.URL), Detail: cloneString(input.Detail)})
 		case strings.TrimSpace(input.FileID) != "" && (inputType == "" || strings.EqualFold(inputType, "image")):
 			// Rust #45794: durable file identity is preserved in thread history.
+			imageIndex++
 			content = append(content, session.ContentPart{Type: "input_image", FileID: strings.TrimSpace(input.FileID), Detail: cloneString(input.Detail)})
 		case strings.TrimSpace(input.Path) != "" && (inputType == "" || strings.EqualFold(inputType, "localImage")):
 			if inputType == "" {
 				inputType = "localImage"
 			}
+			imageIndex++
+			if input.LocalMediaResolved {
+				// Rust #61962 persists the captured payload, so later requests
+				// replay the media instead of re-reading (and possibly missing)
+				// the source file.
+				if input.LocalImageError != "" {
+					content = append(content, session.ContentPart{Type: "input_text", Text: input.LocalImageError})
+					continue
+				}
+				content = append(content,
+					session.ContentPart{Type: "input_text", Text: fmt.Sprintf("<image name=[Image #%d] path=\"%s\">", imageIndex, strings.TrimSpace(input.Path))},
+					session.ContentPart{Type: "input_image", ImageURL: dataURLFromBytes(input.LocalImageBytes), Detail: cloneString(input.Detail)},
+					session.ContentPart{Type: "input_text", Text: "</image>"},
+				)
+				continue
+			}
 			content = append(content, session.ContentPart{Type: inputType, ImageURL: strings.TrimSpace(input.Path), Detail: cloneString(input.Detail)})
 		case strings.TrimSpace(input.FileID) != "" && strings.EqualFold(inputType, "audio"):
 			// Rust #59234 AudioReference::File: durable file identity is preserved in
 			// thread history so later requests can replay or omit it.
+			audioIndex++
 			content = append(content, session.ContentPart{Type: "input_audio", FileID: strings.TrimSpace(input.FileID)})
 		case strings.TrimSpace(input.URL) != "" && strings.EqualFold(inputType, "audio"):
+			audioIndex++
 			content = append(content, session.ContentPart{Type: "audio", AudioURL: strings.TrimSpace(input.URL)})
 		case strings.TrimSpace(input.Path) != "" && strings.EqualFold(inputType, "localAudio"):
+			audioIndex++
+			if input.LocalMediaResolved {
+				if input.LocalAudioError != "" {
+					content = append(content, session.ContentPart{Type: "input_text", Text: input.LocalAudioError})
+					continue
+				}
+				content = append(content,
+					session.ContentPart{Type: "input_text", Text: fmt.Sprintf("<audio name=[Audio #%d] path=\"%s\">", audioIndex, strings.TrimSpace(input.Path))},
+					session.ContentPart{Type: "audio", AudioURL: input.LocalAudioURL},
+					session.ContentPart{Type: "input_text", Text: "</audio>"},
+				)
+				continue
+			}
 			content = append(content, session.ContentPart{Type: "localAudio", AudioURL: strings.TrimSpace(input.Path)})
 		}
 	}
