@@ -50077,7 +50077,8 @@
    "status": "complete",
    "evidence": [
     "codex_go 217e43f2: Mask system SSH config drop-ins in the Linux sandbox like Rust (#61947).",
-    "plan: update/plan_2026_11_16.md batch 40"
+    "plan: update/plan_2026_11_16.md batch 40",
+    "Upstream #62058 removed the bwrap drop-in mask as a security regression fix; Go reverted the same way in batch 102 and dropped the ssh-config-dropins-mask contract."
    ]
   },
   {

@@ -2779,21 +2779,6 @@
    "verifier": "TestSendMessageAcknowledgesDeliveryLikeRust"
   },
   {
-   "id": "ssh-config-dropins-mask",
-   "kind": "source-surface",
-   "rustPaths": [
-    "linux-sandbox/src/bwrap.rs",
-    "linux-sandbox/README.md"
-   ],
-   "goPaths": [
-    "sandbox/linuxsandbox/linux.go",
-    "sandbox/linuxsandbox/ssh_config_dropins_like_rust_test.go"
-   ],
-   "phase": "P1",
-   "status": "complete",
-   "verifier": "TestShouldMaskSSHConfigDropInsLikeRust"
-  },
-  {
    "id": "network-proxy-tool-call-attribution",
    "kind": "source-surface",
    "rustPaths": [
