@@ -22,6 +22,8 @@ type sidebarFiles struct {
 	confirmed          int
 	cwd                string
 	inspectLocalPaths  bool
+	// scan is the in-flight page request id; empty when no page is loading.
+	scan               string
 	next               *string
 	needsHistoryCursor bool
 	seenCursors        map[string]bool
@@ -42,6 +44,7 @@ func newSidebarFiles(cwd string, next *string, inspectLocalPaths bool) *sidebarF
 // connectionReplaced forgets the incremental scan window. Callers must restore
 // `next` from the thread's older-item cursor before the next page.
 func (f *sidebarFiles) connectionReplaced() {
+	f.scan = ""
 	f.needsHistoryCursor = true
 	f.confirmed = 0
 	f.seenCursors = map[string]bool{}
