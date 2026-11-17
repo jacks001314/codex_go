@@ -960,6 +960,9 @@ func Parse(args []string) (*Parsed, error) {
 		if err := p.mergeExecRemoteOptions(); err != nil {
 			return nil, err
 		}
+		if err := p.validateSessionRemoteConflicts(); err != nil {
+			return nil, err
+		}
 		return p, p.Validate()
 	}
 	p.Root.Prompt = strings.Join(rest, " ")
@@ -1049,6 +1052,36 @@ func (p *Parsed) mergeExecRemoteOptions() error {
 	}
 	if strings.TrimSpace(p.Exec.RemoteAuthEnv) == "" {
 		p.Exec.RemoteAuthEnv = p.Root.RemoteAuthEnv
+	}
+	return nil
+}
+
+// validateSessionRemoteConflicts mirrors Rust #62065: `agents`, `resume` and
+// `fork` reject a root `--remote` that disagrees with the subcommand's own
+// endpoint, and they report the command-specific error before any authentication
+// token lookup (Parse never resolves credentials).
+func (p *Parsed) validateSessionRemoteConflicts() error {
+	if p == nil || strings.TrimSpace(p.Root.Remote) == "" {
+		return nil
+	}
+	command := ""
+	commandRemote := ""
+	switch p.Command {
+	case CommandAgents:
+		command = "agents"
+		commandRemote = p.Agents.Remote
+	case CommandResume:
+		command = "resume"
+		commandRemote = p.Session.Remote
+	case CommandFork:
+		command = "fork"
+		commandRemote = p.Session.Remote
+	default:
+		return nil
+	}
+	commandRemote = strings.TrimSpace(commandRemote)
+	if commandRemote != "" && commandRemote != p.Root.Remote {
+		return fmt.Errorf("`codex %s` received conflicting remote server endpoints", command)
 	}
 	return nil
 }

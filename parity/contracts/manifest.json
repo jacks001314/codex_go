@@ -3633,6 +3633,21 @@
    "phase": "P1",
    "status": "complete",
    "verifier": "TestBedrockMantleNormalizesCommentaryAnnotationsLikeRust;TestBedrockMantleStreamReplaysCommentaryWithoutEmptyAnnotationsLikeRust"
+  },
+  {
+   "id": "session-remote-endpoint-conflicts",
+   "kind": "source-surface",
+   "rustPaths": [
+    "cli/src/main.rs",
+    "cli/tests/queue.rs"
+   ],
+   "goPaths": [
+    "cli/cli.go",
+    "cli/cli_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestSessionCommandsRejectConflictingRemotesLikeRust;TestParseSessionRemoteOptions"
   }
   ]
 }

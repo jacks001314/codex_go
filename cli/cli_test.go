@@ -798,6 +798,40 @@ func TestParseRemoteForExecLikeRust(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #62065's
+// tui_session_commands_reject_conflicting_remotes_before_token_lookup:
+// agents/resume/fork reject differing root and subcommand `--remote` values
+// during parsing, i.e. before any authentication token lookup.
+func TestSessionCommandsRejectConflictingRemotesLikeRust(t *testing.T) {
+	const threadID = "9b2c3d4e-5f60-4718-9a0b-1c2d3e4f5a6b"
+	cases := []struct {
+		command string
+		args    []string
+	}{
+		{"agents", []string{"--remote", "wss://a.example:443", "agents", "--remote", "wss://b.example:443"}},
+		{"resume", []string{"--remote", "wss://a.example:443", "resume", "--remote", "wss://b.example:443", threadID}},
+		{"fork", []string{"--remote", "wss://a.example:443", "fork", "--remote", "wss://b.example:443", threadID}},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.command, func(t *testing.T) {
+			_, err := Parse(testCase.args)
+			want := "`codex " + testCase.command + "` received conflicting remote server endpoints"
+			if err == nil || err.Error() != want {
+				t.Fatalf("Parse(%v) error = %v, want %q", testCase.args, err, want)
+			}
+		})
+	}
+	for _, args := range [][]string{
+		{"--remote", "wss://a.example:443", "agents", "--remote", "wss://a.example:443"},
+		{"--remote", "wss://a.example:443", "resume", threadID},
+		{"--remote", "wss://a.example:443", "fork", threadID},
+	} {
+		if _, err := Parse(args); err != nil {
+			t.Fatalf("Parse(%v) returned error: %v", args, err)
+		}
+	}
+}
+
 func TestParseRemoteAuthEnvForInteractiveRoot(t *testing.T) {
 	parsed, err := Parse([]string{"--remote-auth-token-env", "TOKEN"})
 	if err != nil {
@@ -1094,7 +1128,6 @@ func TestParseSessionMutationRejectsTUIOnlyFlagsLikeRust(t *testing.T) {
 
 func TestParseSessionRemoteOptions(t *testing.T) {
 	resume, err := Parse([]string{
-		"--remote", "ws://127.0.0.1:4500",
 		"resume",
 		"--remote=wss://example.test/session",
 		"--remote-auth-token-env", "SESSION_TOKEN",
@@ -1103,8 +1136,18 @@ func TestParseSessionRemoteOptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse resume remote returned error: %v", err)
 	}
-	if resume.Root.Remote != "ws://127.0.0.1:4500" || resume.Session.Remote != "wss://example.test/session" || resume.Session.RemoteAuthEnv != "SESSION_TOKEN" {
+	if resume.Root.Remote != "" || resume.Session.Remote != "wss://example.test/session" || resume.Session.RemoteAuthEnv != "SESSION_TOKEN" {
 		t.Fatalf("resume remote = root %#v session %#v", resume.Root, resume.Session)
+	}
+
+	// Rust #62065 keeps a root-only endpoint valid; the session command falls
+	// back to it at launch time.
+	rootResume, err := Parse([]string{"--remote", "ws://127.0.0.1:4500", "--remote-auth-token-env", "ROOT_TOKEN", "resume", "--last"})
+	if err != nil {
+		t.Fatalf("Parse resume root remote returned error: %v", err)
+	}
+	if rootResume.Root.Remote != "ws://127.0.0.1:4500" || rootResume.Root.RemoteAuthEnv != "ROOT_TOKEN" || rootResume.Session.Remote != "" {
+		t.Fatalf("resume root remote = root %#v session %#v", rootResume.Root, rootResume.Session)
 	}
 
 	archive, err := Parse([]string{"archive", "--remote", "unix://", "--remote-auth-token-env=SESSION_TOKEN", "thread-1"})
