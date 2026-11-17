@@ -2278,7 +2278,7 @@
    ],
    "phase": "P3",
    "status": "complete",
-   "verifier": "TestSideWorkspaceDividerUsesRustGapColumnLikeRust;TestSidebarTabStripOverflowArrowsLikeRust;TestSideWorkspaceWidthsUseRustPercentMathLikeRust;TestSidebarTabStripCloseCellClosesTabLikeRust;TestSidebarTabActivationRequiresMatchingPressAndReleaseLikeRust;TestSidebarChooserBackgroundPressReturnsFocusToMainLikeRust;TestSidebarChooserFooterHintsAreClickableLikeRust"
+   "verifier": "TestSideWorkspaceDividerUsesRustGapColumnLikeRust;TestSidebarTabStripOverflowArrowsLikeRust;TestSideWorkspaceWidthsUseRustPercentMathLikeRust;TestSidebarTabStripCloseCellClosesTabLikeRust;TestSidebarTabActivationRequiresMatchingPressAndReleaseLikeRust;TestSidebarChooserBackgroundPressReturnsFocusToMainLikeRust;TestSidebarChooserFooterHintsAreClickableLikeRust;TestSidePaneParkedDraftInsetsLikeRust"
   },
   {
    "id": "status-line-content-surface",

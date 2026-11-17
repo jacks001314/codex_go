@@ -558,7 +558,13 @@ func (m *Model) composeSidePane(threadID string, content string, status string, 
 	// parked pane never paints a follow control, that affordance belongs to
 	// the focused transcript's composer gap.
 	rows = append(rows, "")
-	rows = append(rows, m.renderDimmedPaneDraft(draft, width, frame.composer)...)
+	// A multi-row composer insets its text by one row, so the preview starts
+	// on the composer's second row exactly like the live composer
+	// (side_pane.rs: inset = composer_height > 1).
+	if frame.composer > 1 {
+		rows = append(rows, "")
+	}
+	rows = append(rows, m.renderDimmedPaneDraft(draft, width, max(frame.composer-1, 1))...)
 	for len(rows) < frame.transcript+1+frame.composer {
 		rows = append(rows, "")
 	}
