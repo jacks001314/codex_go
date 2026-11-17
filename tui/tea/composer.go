@@ -36,9 +36,25 @@ type ComposerComponent struct {
 
 	// Paste burst handling
 	pasteEnterUntil *time.Time
+}
 
-	// Side conversation placeholder
-	sidePlaceholder string
+// SideComposerPlaceholder mirrors Rust's SIDE_PLACEHOLDER
+// (chatwidget.rs): a side conversation asks for follow-ups instead of new
+// work, so the composer advertises that while the side chat owns it.
+const SideComposerPlaceholder = "Ask a follow-up question"
+
+// activeComposerPlaceholder returns the placeholder the focused composer
+// shows. Rust swaps the bottom pane's placeholder text on
+// set_side_conversation_active and restores the normal one when the side
+// conversation closes.
+func (m *Model) activeComposerPlaceholder() string {
+	if m == nil {
+		return ""
+	}
+	if m.inSideConversation() {
+		return SideComposerPlaceholder
+	}
+	return m.composerPlaceholder
 }
 
 // newComposerComponent initializes the composer sub-component.
@@ -56,10 +72,7 @@ func newComposerComponent(placeholder string) ComposerComponent {
 	composer.SetHeight(1)
 	composer.SetWidth(defaultWidth)
 	composer.Focus()
-	return ComposerComponent{
-		textarea:        composer,
-		sidePlaceholder: "Side conversation - type /exit-side to return",
-	}
+	return ComposerComponent{textarea: composer}
 }
 
 // Textarea returns the underlying textarea for Bubble Tea Update delegation.

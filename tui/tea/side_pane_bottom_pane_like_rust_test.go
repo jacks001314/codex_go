@@ -45,8 +45,9 @@ func TestSideWorkspacePanesOwnTheirBottomPaneLikeRust(t *testing.T) {
 		}
 	}
 	// The side conversation owns the composer, so its prompt sits past the
-	// divider and the parent half of the row stays blank.
-	prompt := rowWith(rows, "› Ask Codex to do anything")
+	// divider and the parent half of the row stays blank. Rust swaps in
+	// SIDE_PLACEHOLDER while the side chat owns the bottom pane.
+	prompt := rowWith(rows, "› "+SideComposerPlaceholder)
 	divider := strings.Index(prompt, "│")
 	if divider < 0 {
 		t.Fatalf("composer row has no divider: %q", prompt)
@@ -54,7 +55,7 @@ func TestSideWorkspacePanesOwnTheirBottomPaneLikeRust(t *testing.T) {
 	if strings.TrimSpace(prompt[:divider]) != "" {
 		t.Fatalf("focused side composer spilled into the parent column: %q", prompt)
 	}
-	if !strings.Contains(prompt[divider:], "› Ask Codex to do anything") {
+	if !strings.Contains(prompt[divider:], "› "+SideComposerPlaceholder) {
 		t.Fatalf("focused side composer missing from its column: %q", prompt)
 	}
 	if !strings.Contains(ansi.Strip(rows[0])[rightStart():], sidebarSingleTabCell) {

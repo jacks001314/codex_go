@@ -3524,6 +3524,23 @@
    "phase": "P3",
    "status": "complete",
    "verifier": "TestShortcutOverlayKeyboardMatchesRustBaseSnapshot;TestShortcutOverlayKeyboardMatchesRustRoomySnapshot;TestShortcutOverlayGuideKeySkipsClaimedKeysLikeRust;TestShortcutOverlayKeyboardFallsBackWhenNarrowLikeRust;TestShortcutOverlayKeyboardFallsBackWhenShortLikeRust;TestShortcutOverlayKeyboardMarksBoundKeysLikeRust;TestShortcutOverlayKeyboardResizeHintKeepsFooterLikeRust"
+  },
+  {
+   "id": "side-conversation-placeholder",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/chatwidget.rs",
+    "tui/src/chatwidget/side.rs",
+    "tui/src/chatwidget/constructor.rs",
+    "tui/src/app/side.rs"
+   ],
+   "goPaths": [
+    "tui/tea/composer.go",
+    "tui/tea/composer_scroll.go"
+   ],
+   "phase": "P3",
+   "status": "complete",
+   "verifier": "TestSideConversationPlaceholderLikeRust;TestSideConversationKeepsPromptSuggestionOverrideLikeRust;TestParkedSideConversationUsesMainPlaceholderLikeRust"
   }
   ]
 }

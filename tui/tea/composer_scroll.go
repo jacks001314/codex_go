@@ -225,7 +225,7 @@ func (m *Model) renderComposerWindow() string {
 	if m == nil {
 		return ""
 	}
-	m.composer.Placeholder = m.composerPlaceholder
+	m.composer.Placeholder = m.activeComposerPlaceholder()
 	if suggestion := m.visiblePromptSuggestion(); suggestion != "" {
 		m.composer.Placeholder = suggestion
 	}
