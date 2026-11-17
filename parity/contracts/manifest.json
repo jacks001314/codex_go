@@ -3664,6 +3664,23 @@
    "phase": "P1",
    "status": "complete",
    "verifier": "TestRolloutCompressionSkipsRecentBeforeReadingHeaderLikeRust;TestRolloutCompressionAgedMalformedHeaderRecordsMetadataFailureLikeRust;TestRolloutCompressionLeavesRecentAccessTimeLikeRust"
+  },
+  {
+   "id": "thread-history-flush-durable-suffix",
+   "kind": "source-surface",
+   "rustPaths": [
+    "thread-store/src/local/live_writer.rs",
+    "thread-store/src/local/thread_history_materialization.rs",
+    "thread-store/src/local/thread_history_materialization_tests.rs"
+   ],
+   "goPaths": [
+    "state/thread_history_projection.go",
+    "appserver/router.go",
+    "state/thread_history_flush_skip_like_rust_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestMaterializeThreadHistoryDurableSuffixSkipsCoveredProjectionLikeRust;TestMaterializeThreadHistoryDurableSuffixProjectsPlainAndCompressedSuffixLikeRust;TestRouterRolloutFlushReconcilesStateAndLazilyProjectsHistory"
   }
   ]
 }

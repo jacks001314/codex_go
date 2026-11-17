@@ -103,16 +103,56 @@ WHERE thread_id = ?`, threadID).Scan(&byteOffset, &ordinal)
 // runtime must use StateRuntime.MaterializeThreadHistory so their write is
 // admitted like every other thread-history writer (Rust #60006(b)).
 func MaterializeThreadHistory(ctx context.Context, db *sql.DB, threadID string, rolloutPath string, initialOrdinal uint64, subagentHistoryStartOrdinal *uint64) error {
-	return materializeThreadHistory(ctx, db, nil, threadID, rolloutPath, initialOrdinal, subagentHistoryStartOrdinal)
+	return materializeThreadHistory(ctx, db, nil, threadID, rolloutPath, func() (uint64, *uint64, error) {
+		return initialOrdinal, subagentHistoryStartOrdinal, nil
+	}, nil)
 }
 
 // MaterializeThreadHistory projects one rollout suffix under the runtime's
 // single-writer admission.
 func (r *StateRuntime) MaterializeThreadHistory(ctx context.Context, db *sql.DB, threadID string, rolloutPath string, initialOrdinal uint64, subagentHistoryStartOrdinal *uint64) error {
-	return materializeThreadHistory(ctx, db, r.acquireHistoryWriter, threadID, rolloutPath, initialOrdinal, subagentHistoryStartOrdinal)
+	return materializeThreadHistory(ctx, db, r.acquireHistoryWriter, threadID, rolloutPath, func() (uint64, *uint64, error) {
+		return initialOrdinal, subagentHistoryStartOrdinal, nil
+	}, nil)
 }
 
-func materializeThreadHistory(ctx context.Context, db *sql.DB, admit func(context.Context) (func(), error), threadID string, rolloutPath string, initialOrdinal uint64, subagentHistoryStartOrdinal *uint64) error {
+// MaterializeThreadHistoryDurableSuffix projects the durable suffix of a flushed
+// rollout. When the saved projection already covers the plain rollout's length
+// the call returns after one checkpoint read, so a flush with no new durable
+// bytes neither opens the rollout nor reads its metadata (Rust #62085).
+func MaterializeThreadHistoryDurableSuffix(ctx context.Context, db *sql.DB, threadID string, rolloutPath string, flushedLen *uint64) error {
+	return materializeThreadHistory(ctx, db, nil, threadID, rolloutPath, threadHistoryOrdinalsFromRollout(rolloutPath), flushedLen)
+}
+
+// MaterializeThreadHistoryDurableSuffix projects one flushed rollout suffix
+// under the runtime's single-writer admission.
+func (r *StateRuntime) MaterializeThreadHistoryDurableSuffix(ctx context.Context, db *sql.DB, threadID string, rolloutPath string, flushedLen *uint64) error {
+	return materializeThreadHistory(ctx, db, r.acquireHistoryWriter, threadID, rolloutPath, threadHistoryOrdinalsFromRollout(rolloutPath), flushedLen)
+}
+
+// threadHistoryOrdinalsFromRollout mirrors Rust's in-materializer metadata read:
+// the history base and subagent start ordinal come from the rollout header.
+func threadHistoryOrdinalsFromRollout(rolloutPath string) func() (uint64, *uint64, error) {
+	return func() (uint64, *uint64, error) {
+		meta, err := rollout.FirstSessionMeta(rolloutPath)
+		if err != nil {
+			return 0, nil, fmt.Errorf("read rollout metadata %s: %w", rolloutPath, err)
+		}
+		initialOrdinal := uint64(0)
+		if meta.HistoryBase != nil {
+			initialOrdinal = meta.HistoryBase.EndOrdinalExclusive
+		}
+		return initialOrdinal, meta.SubagentHistoryStartOrdinal, nil
+	}
+}
+
+// projectionCoversFlushedLength mirrors Rust #62085: a nonzero saved offset
+// equal to the plain rollout's length leaves no durable bytes to project.
+func projectionCoversFlushedLength(checkpoint *ThreadHistoryProjectionState, flushedLen *uint64) bool {
+	return checkpoint != nil && checkpoint.NextRolloutByteOffset > 0 && flushedLen != nil && *flushedLen == checkpoint.NextRolloutByteOffset
+}
+
+func materializeThreadHistory(ctx context.Context, db *sql.DB, admit func(context.Context) (func(), error), threadID string, rolloutPath string, loadOrdinals func() (uint64, *uint64, error), flushedLen *uint64) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -124,6 +164,14 @@ func materializeThreadHistory(ctx context.Context, db *sql.DB, admit func(contex
 		return errors.New("thread id is required")
 	}
 	checkpoint, err := LoadThreadHistoryProjectionState(ctx, db, threadID)
+	if err != nil {
+		return err
+	}
+	// Rust #62085 checks the flushed length before the rollout header is read.
+	if projectionCoversFlushedLength(checkpoint, flushedLen) {
+		return nil
+	}
+	initialOrdinal, subagentHistoryStartOrdinal, err := loadOrdinals()
 	if err != nil {
 		return err
 	}

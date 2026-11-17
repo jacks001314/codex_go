@@ -660,20 +660,16 @@ func (r *Router) materializeThreadHistory(threadID session.ThreadID, path string
 	if codexHome == "" {
 		return nil
 	}
-	initialOrdinal := uint64(0)
-	var subagentHistoryStartOrdinal *uint64
-	if meta, err := rollout.FirstSessionMeta(path); err == nil && meta != nil {
-		if meta.HistoryBase != nil {
-			initialOrdinal = meta.HistoryBase.EndOrdinalExclusive
-		}
-		subagentHistoryStartOrdinal = meta.SubagentHistoryStartOrdinal
-	}
+	// Only the plain rollout's length is a decoded JSONL byte offset; a
+	// compressed file's size cannot be compared with the saved projection
+	// offset (Rust #62085).
+	flushedLen := plainRolloutLength(path)
 	if r.state != nil {
 		db, err := r.state.ThreadHistoryDB(context.Background())
 		if err != nil {
 			return err
 		}
-		return state.MaterializeThreadHistory(context.Background(), db, string(threadID), path, initialOrdinal, subagentHistoryStartOrdinal)
+		return r.state.MaterializeThreadHistoryDurableSuffix(context.Background(), db, string(threadID), path, flushedLen)
 	}
 	sqliteHome := rustSQLiteHome(codexHome)
 	db, err := state.OpenThreadHistoryDB(context.Background(), sqliteHome)
@@ -681,7 +677,18 @@ func (r *Router) materializeThreadHistory(threadID session.ThreadID, path string
 		return err
 	}
 	defer db.Close()
-	return state.MaterializeThreadHistory(context.Background(), db, string(threadID), path, initialOrdinal, subagentHistoryStartOrdinal)
+	return state.MaterializeThreadHistoryDurableSuffix(context.Background(), db, string(threadID), path, flushedLen)
+}
+
+// plainRolloutLength mirrors Rust's flush probe (#62085): the plain rollout
+// file's length, or nil when it is missing or not a regular file.
+func plainRolloutLength(path string) *uint64 {
+	info, err := os.Stat(rollout.PlainRolloutPath(path))
+	if err != nil || !info.Mode().IsRegular() {
+		return nil
+	}
+	length := uint64(info.Size())
+	return &length
 }
 
 func (r *Router) appendThreadMetadataRollout(record *session.Record, now time.Time, writer *session.WriterLock) error {
