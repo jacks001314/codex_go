@@ -15,7 +15,7 @@ type resolvableImageStore struct {
 }
 
 func (s *resolvableImageStore) Upload(request attachmentstore.UploadRequest) (attachmentstore.UploadResult, error) {
-	return attachmentstore.InlineUploadResult(request.Data), nil
+	return attachmentstore.InlineUploadResult(request.Content.Data), nil
 }
 
 func (s *resolvableImageStore) Resolve(attachmentstore.ResolveRequest) (attachmentstore.AttachmentMetadata, error) {
@@ -135,7 +135,7 @@ type boundedImageStore struct {
 }
 
 func (s *boundedImageStore) Upload(request attachmentstore.UploadRequest) (attachmentstore.UploadResult, error) {
-	return attachmentstore.InlineUploadResult(request.Data), nil
+	return attachmentstore.InlineUploadResult(request.Content.Data), nil
 }
 
 func (s *boundedImageStore) Resolve(attachmentstore.ResolveRequest) (attachmentstore.AttachmentMetadata, error) {
@@ -158,7 +158,7 @@ func (s *boundedImageStore) IsResolvable(string) bool {
 }
 
 func (s *concurrentImageStore) Upload(request attachmentstore.UploadRequest) (attachmentstore.UploadResult, error) {
-	return attachmentstore.InlineUploadResult(request.Data), nil
+	return attachmentstore.InlineUploadResult(request.Content.Data), nil
 }
 
 func (s *concurrentImageStore) Resolve(attachmentstore.ResolveRequest) (attachmentstore.AttachmentMetadata, error) {

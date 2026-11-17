@@ -81,14 +81,15 @@ func TestImageGenerationStoresFileReferenceLikeRust(t *testing.T) {
 	if len(store.uploads) != 1 {
 		t.Fatalf("uploads = %d, want 1", len(store.uploads))
 	}
-	if got := store.uploads[0].Tags[attachmentstore.TagUsageKey]; got != attachmentstore.TagUsageImageGen {
-		t.Fatalf("upload tags = %#v, want usage=image_gen", store.uploads[0].Tags)
+	if content := store.uploads[0].Content; content.Kind != attachmentstore.UploadContentImage ||
+		content.Tags[attachmentstore.TagUsageKey] != attachmentstore.TagUsageImageGen {
+		t.Fatalf("upload content = %s, want usage=image_gen", content.Debug())
 	}
 	if store.uploads[0].ThreadID != "thread-1" {
 		t.Fatalf("upload thread = %q, want thread-1", store.uploads[0].ThreadID)
 	}
-	if string(store.uploads[0].Data) != string(generated) {
-		t.Fatalf("upload bytes = %q, want the decoded generated image", store.uploads[0].Data)
+	if string(store.uploads[0].Content.Data) != string(generated) {
+		t.Fatalf("upload bytes = %q, want the decoded generated image", store.uploads[0].Content.Data)
 	}
 	if got := output.Data["fileId"]; got != "file_generated" {
 		t.Fatalf("fileId = %#v, want file_generated", got)

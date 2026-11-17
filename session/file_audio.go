@@ -10,7 +10,6 @@ import (
 )
 
 const (
-	toolAudioUsageTag      = "tool_audio"
 	toolAudioBudgetApplied = "tool_audio_budget_applied"
 )
 
@@ -242,11 +241,7 @@ func storeToolAudio(store attachmentstore.Store, threadID string, ephemeral bool
 	result, err := store.Upload(attachmentstore.UploadRequest{
 		ThreadID:  threadID,
 		Ephemeral: ephemeral,
-		Tags: map[string]string{
-			attachmentstore.TagUsageKey: toolAudioUsageTag,
-			"mime_type":                 mime,
-		},
-		Data: data,
+		Content:   attachmentstore.ToolAudioUploadContent(mime, data),
 	})
 	if err == nil {
 		if fileID := strings.TrimSpace(result.FileID); fileID != "" {

@@ -95,31 +95,83 @@ type UploadRequest struct {
 	// Ephemeral reports whether the originating thread intentionally skips
 	// durable persistence (Rust #51517).
 	Ephemeral bool
-	// FileName is the optional name associated with the attachment.
+	// Content is the type-specific attachment data (Rust #62047).
+	Content UploadContent
+}
+
+// UploadContentKind selects the typed content of an upload, mirroring Rust
+// `UploadContent` (#62047).
+type UploadContentKind string
+
+const (
+	// UploadContentImage is an image that may be shown to the model or kept
+	// for the UI.
+	UploadContentImage UploadContentKind = "image"
+	// UploadContentToolAudio is audio produced by a tool. Persistent backends
+	// must verify DeclaredMIMEType against the uploaded bytes.
+	UploadContentToolAudio UploadContentKind = "tool_audio"
+)
+
+// UploadContent is the type-specific attachment content supplied to
+// Store.Upload, mirroring Rust `UploadContent`. Image uploads keep their
+// filename and policy tags; tool audio carries its declared media type
+// explicitly instead of encoding it in tags.
+type UploadContent struct {
+	Kind UploadContentKind
+	// FileName is the optional name associated with an image.
 	FileName *string
-	// Tags are caller-supplied labels storage backends use for policy
-	// decisions (Rust #54398 adds `UploadRequest::tags`). Generated-image
-	// uploads carry `usage=image_gen`; image preparation passes an empty map.
+	// Tags are caller-supplied labels image backends use for policy decisions
+	// (Rust #54398). Generated images carry `usage=image_gen`; image
+	// preparation passes an empty map.
 	Tags map[string]string
-	// Data is the attachment bytes to persist.
+	// DeclaredMIMEType is the IANA media type a persistent backend must verify
+	// against the uploaded audio bytes.
+	DeclaredMIMEType string
+	// Data is the encoded attachment bytes.
 	Data []byte
+}
+
+// ImageUploadContent builds an image upload, matching Rust's
+// `UploadContent::Image` variant.
+func ImageUploadContent(fileName *string, tags map[string]string, data []byte) UploadContent {
+	return UploadContent{Kind: UploadContentImage, FileName: fileName, Tags: tags, Data: data}
+}
+
+// ToolAudioUploadContent builds a tool-audio upload, matching Rust's
+// `UploadContent::ToolAudio` variant.
+func ToolAudioUploadContent(declaredMIMEType string, data []byte) UploadContent {
+	return UploadContent{Kind: UploadContentToolAudio, DeclaredMIMEType: declaredMIMEType, Data: data}
+}
+
+// Debug mirrors Rust's manual `Debug` impl for `UploadContent`, which redacts
+// the payload for both variants.
+func (c UploadContent) Debug() string {
+	if c.Kind == UploadContentToolAudio {
+		return fmt.Sprintf(
+			"ToolAudio { declared_mime_type: %s, data: \"<redacted>\" }",
+			rustDebugString(c.DeclaredMIMEType),
+		)
+	}
+	return fmt.Sprintf(
+		"Image { file_name: %s, tags: %s, data: \"<redacted>\" }",
+		rustDebugOptionString(c.FileName),
+		rustDebugTags(c.Tags),
+	)
 }
 
 // String returns the Rust `Debug` rendering, so Go log output matches
 // `tracing` output for the same request.
 func (r UploadRequest) String() string { return r.Debug() }
 
-// Debug mirrors Rust's manual `Debug` impl for `UploadRequest`, which redacts
-// the attachment bytes. The field order matches Rust exactly:
-// `UploadRequest { thread_id: "thread-1", ephemeral: false, file_name: Some("image.png"), tags: {}, data: "<redacted>" }`.
+// Debug mirrors Rust's manual `Debug` impl for `UploadRequest`, which forwards
+// to the redacted `UploadContent` rendering:
+// `UploadRequest { thread_id: "thread-1", ephemeral: false, content: Image { file_name: Some("image.png"), tags: {}, data: "<redacted>" } }`.
 func (r UploadRequest) Debug() string {
 	return fmt.Sprintf(
-		"UploadRequest { thread_id: %s, ephemeral: %t, file_name: %s, tags: %s, data: %s }",
+		"UploadRequest { thread_id: %s, ephemeral: %t, content: %s }",
 		rustDebugString(r.ThreadID),
 		r.Ephemeral,
-		rustDebugOptionString(r.FileName),
-		rustDebugTags(r.Tags),
-		`"<redacted>"`,
+		r.Content.Debug(),
 	)
 }
 
@@ -366,7 +418,7 @@ type InlineStore struct{}
 // Upload returns the request bytes unchanged, mirroring Rust's
 // `InlineAttachmentStore::upload`.
 func (InlineStore) Upload(request UploadRequest) (UploadResult, error) {
-	return InlineUploadResult(request.Data), nil
+	return InlineUploadResult(request.Content.Data), nil
 }
 
 // Resolve always fails with ErrorKindNotFound: the inline store never uploads

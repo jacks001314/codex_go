@@ -302,8 +302,7 @@ func generatedImageFileRef(options ImageGenerationOptions, threadID string, resu
 	uploaded, err := attachmentstore.StoreOrDefault(options.AttachmentStore).Upload(attachmentstore.UploadRequest{
 		ThreadID:  strings.TrimSpace(threadID),
 		Ephemeral: options.Ephemeral,
-		Tags:      attachmentstore.ImageGenerationUploadTags(),
-		Data:      decoded,
+		Content:   attachmentstore.ImageUploadContent(nil, attachmentstore.ImageGenerationUploadTags(), decoded),
 	})
 	if err != nil || !uploaded.IsFile() {
 		return ""

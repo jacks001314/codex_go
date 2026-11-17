@@ -34,7 +34,7 @@ func (s *recordingTurnAttachmentStore) Upload(request attachmentstore.UploadRequ
 	if s.result.FileID != "" {
 		return s.result, nil
 	}
-	return attachmentstore.InlineUploadResult(request.Data), nil
+	return attachmentstore.InlineUploadResult(request.Content.Data), nil
 }
 
 func (s *recordingTurnAttachmentStore) Resolve(attachmentstore.ResolveRequest) (attachmentstore.AttachmentMetadata, error) {

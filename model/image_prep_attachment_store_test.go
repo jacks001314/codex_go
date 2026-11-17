@@ -17,7 +17,7 @@ type recordingModelImageStore struct {
 func (s *recordingModelImageStore) Upload(request attachmentstore.UploadRequest) (attachmentstore.UploadResult, error) {
 	s.requests = append(s.requests, request)
 	if s.result == nil {
-		return attachmentstore.InlineUploadResult(request.Data), nil
+		return attachmentstore.InlineUploadResult(request.Content.Data), nil
 	}
 	return *s.result, nil
 }

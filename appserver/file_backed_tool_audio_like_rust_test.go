@@ -138,8 +138,12 @@ func TestRuntimeRouterFileBackedToolAudioPersistsFileReferenceLikeRust(t *testin
 	if len(uploads) != 1 {
 		t.Fatalf("uploads = %d, want one tool audio upload", len(uploads))
 	}
-	if uploads[0].Tags[attachmentstore.TagUsageKey] != "tool_audio" || uploads[0].Tags["mime_type"] != "audio/wav" {
-		t.Fatalf("upload tags = %#v", uploads[0].Tags)
+	// Rust #62047: tool audio is a typed upload, not a usage/mime tag pair.
+	if uploads[0].Content.Kind != attachmentstore.UploadContentToolAudio || uploads[0].Content.DeclaredMIMEType != "audio/wav" {
+		t.Fatalf("upload content = %s", uploads[0].Content.Debug())
+	}
+	if len(uploads[0].Content.Tags) != 0 || uploads[0].Content.FileName != nil {
+		t.Fatalf("tool audio carried image fields: %#v", uploads[0].Content)
 	}
 	if uploads[0].ThreadID != threadID || uploads[0].Ephemeral {
 		t.Fatalf("upload scope = thread %q ephemeral %v", uploads[0].ThreadID, uploads[0].Ephemeral)

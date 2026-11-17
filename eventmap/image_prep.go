@@ -450,8 +450,7 @@ func PrepareImagePrepImageWithStoreResultModeDecoder(store attachmentstore.Store
 		Ephemeral: origin.Ephemeral,
 		// Rust #54398 (core/src/image_preparation.rs): model-facing image
 		// preparation keeps an empty tag map; only generated images are tagged.
-		Tags: map[string]string{},
-		Data: prepared.EncodedBytes,
+		Content: attachmentstore.ImageUploadContent(nil, map[string]string{}, prepared.EncodedBytes),
 	})
 	if uploadErr != nil {
 		// Rust keeps the prepared image inline when the store fails.

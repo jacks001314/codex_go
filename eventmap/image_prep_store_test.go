@@ -36,7 +36,7 @@ func (s *recordingImagePrepStore) Upload(request attachmentstore.UploadRequest) 
 		return attachmentstore.UploadResult{}, s.err
 	}
 	if s.result == nil {
-		return attachmentstore.InlineUploadResult(request.Data), nil
+		return attachmentstore.InlineUploadResult(request.Content.Data), nil
 	}
 	return *s.result, nil
 }
@@ -110,8 +110,8 @@ func TestPrepareImagePrepUploadsThreadPersistenceIntentLikeRust(t *testing.T) {
 	if prepared[0].FileID != "" || prepared[0].ImageURL == "" {
 		t.Fatalf("inline answer changed the reference: %#v", prepared[0])
 	}
-	if got := mustBase64Payload(t, prepared[0].ImageURL); string(got) != string(request.Data) {
-		t.Fatalf("inline bytes = %d bytes, want the uploaded %d bytes", len(got), len(request.Data))
+	if got := mustBase64Payload(t, prepared[0].ImageURL); string(got) != string(request.Content.Data) {
+		t.Fatalf("inline bytes = %d bytes, want the uploaded %d bytes", len(got), len(request.Content.Data))
 	}
 }
 

@@ -12,13 +12,16 @@ func TestAttachmentDebugOutputRedactsBytesLikeRust(t *testing.T) {
 	request := UploadRequest{
 		ThreadID:  "thread-1",
 		Ephemeral: false,
-		FileName:  &fileName,
-		Data:      []byte("secret"),
+		Content:   ImageUploadContent(&fileName, nil, []byte("secret")),
 	}
+	toolAudio := ToolAudioUploadContent("audio/wav", []byte("secret"))
 	result := InlineUploadResult([]byte("secret"))
 
-	if got, want := request.Debug(), `UploadRequest { thread_id: "thread-1", ephemeral: false, file_name: Some("image.png"), tags: {}, data: "<redacted>" }`; got != want {
+	if got, want := request.Debug(), `UploadRequest { thread_id: "thread-1", ephemeral: false, content: Image { file_name: Some("image.png"), tags: {}, data: "<redacted>" } }`; got != want {
 		t.Fatalf("UploadRequest debug = %s, want %s", got, want)
+	}
+	if got, want := toolAudio.Debug(), `ToolAudio { declared_mime_type: "audio/wav", data: "<redacted>" }`; got != want {
+		t.Fatalf("UploadContent debug = %s, want %s", got, want)
 	}
 	if got, want := result.Debug(), `Inline { bytes: "<redacted>" }`; got != want {
 		t.Fatalf("UploadResult debug = %s, want %s", got, want)
@@ -55,8 +58,7 @@ func TestInlineStorePreservesImageBytesLikeRust(t *testing.T) {
 		result, err := InlineStore{}.Upload(UploadRequest{
 			ThreadID:  "thread-1",
 			Ephemeral: false,
-			FileName:  &fileName,
-			Data:      tc.data,
+			Content:   ImageUploadContent(&fileName, nil, tc.data),
 		})
 		if err != nil {
 			t.Fatalf("inline attachment: %v", err)
@@ -67,6 +69,23 @@ func TestInlineStorePreservesImageBytesLikeRust(t *testing.T) {
 		if string(result.InlineBytes) != string(tc.data) {
 			t.Fatalf("inline bytes = %q, want %q", result.InlineBytes, tc.data)
 		}
+	}
+}
+
+// TestInlineStorePreservesToolAudioBytesLikeRust ports Rust
+// `inline_store_preserves_tool_audio_bytes`: the inline store returns the clip
+// without interpreting the declared media type.
+func TestInlineStorePreservesToolAudioBytesLikeRust(t *testing.T) {
+	data := []byte("RIFF\x04\x00\x00\x00WAVE")
+	result, err := InlineStore{}.Upload(UploadRequest{
+		ThreadID: "thread-1",
+		Content:  ToolAudioUploadContent("audio/wav", data),
+	})
+	if err != nil {
+		t.Fatalf("inline tool audio: %v", err)
+	}
+	if result.IsFile() || string(result.InlineBytes) != string(data) {
+		t.Fatalf("inline result = %v, want the uploaded bytes", result)
 	}
 }
 
@@ -93,8 +112,8 @@ func TestInlineStoreCannotResolveFileReferencesLikeRust(t *testing.T) {
 // PR #51517 added: the request carries the originating thread's persistence
 // intent next to the thread id.
 func TestEphemeralIntentTravelsOnUploadRequestLikeRust(t *testing.T) {
-	request := UploadRequest{ThreadID: "thread-1", Ephemeral: true, Data: []byte("image")}
-	if got, want := request.Debug(), `UploadRequest { thread_id: "thread-1", ephemeral: true, file_name: None, tags: {}, data: "<redacted>" }`; got != want {
+	request := UploadRequest{ThreadID: "thread-1", Ephemeral: true, Content: ImageUploadContent(nil, nil, []byte("image"))}
+	if got, want := request.Debug(), `UploadRequest { thread_id: "thread-1", ephemeral: true, content: Image { file_name: None, tags: {}, data: "<redacted>" } }`; got != want {
 		t.Fatalf("ephemeral debug = %s, want %s", got, want)
 	}
 	if got, want := FileUploadResult("file_1").Debug(), `File { file_id: "file_1" }`; got != want {
@@ -107,12 +126,12 @@ func TestEphemeralIntentTravelsOnUploadRequestLikeRust(t *testing.T) {
 // `tags: {}` / `tags: {"usage": "image_gen"}` renderings the manual `Debug` impl
 // produces in `attachment_debug_output_redacts_bytes`.
 func TestUploadRequestCarriesPolicyTagsLikeRust(t *testing.T) {
-	empty := UploadRequest{ThreadID: "thread-1", Data: []byte("secret")}
-	if got, want := empty.Debug(), `UploadRequest { thread_id: "thread-1", ephemeral: false, file_name: None, tags: {}, data: "<redacted>" }`; got != want {
+	empty := UploadRequest{ThreadID: "thread-1", Content: ImageUploadContent(nil, nil, []byte("secret"))}
+	if got, want := empty.Debug(), `UploadRequest { thread_id: "thread-1", ephemeral: false, content: Image { file_name: None, tags: {}, data: "<redacted>" } }`; got != want {
 		t.Fatalf("empty tags debug = %s, want %s", got, want)
 	}
-	tagged := UploadRequest{ThreadID: "thread-1", Tags: ImageGenerationUploadTags(), Data: []byte("secret")}
-	if got, want := tagged.Debug(), `UploadRequest { thread_id: "thread-1", ephemeral: false, file_name: None, tags: {"usage": "image_gen"}, data: "<redacted>" }`; got != want {
+	tagged := UploadRequest{ThreadID: "thread-1", Content: ImageUploadContent(nil, ImageGenerationUploadTags(), []byte("secret"))}
+	if got, want := tagged.Debug(), `UploadRequest { thread_id: "thread-1", ephemeral: false, content: Image { file_name: None, tags: {"usage": "image_gen"}, data: "<redacted>" } }`; got != want {
 		t.Fatalf("generated-image tags debug = %s, want %s", got, want)
 	}
 	if got := ImageGenerationUploadTags()[TagUsageKey]; got != TagUsageImageGen {
