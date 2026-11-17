@@ -3305,6 +3305,27 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestStatuslineProviderReselectionRestartsFailedReaderLikeRust;TestStatuslineProviderConfigReloadTogglesGateLikeRust;TestStatuslineProviderDisconnectShowsBuiltinAndReattachRestartsLikeRust"
+  },
+  {
+   "id": "tui-statusline-provider-snapshot-gate",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/statusline_provider.rs",
+    "tui/src/app/status_line_settings.rs",
+    "tui/src/chatwidget.rs",
+    "tui/src/chatwidget/status_surfaces.rs",
+    "tui/src/chatwidget/thread_usage.rs"
+   ],
+   "goPaths": [
+    "tui/tea/statusline_provider_footer.go",
+    "tui/tea/status_controls.go",
+    "tui/tea/thread_usage.go",
+    "tui/chatwidget/status_controls.go",
+    "tui/tea/statusline_provider_snapshot_like_rust_test.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestStatuslineProviderFailedReadStopsSnapshotConsumersLikeRust;TestStatusControlsSelectionsStayItemBasedWithProviderLikeRust;TestStatusControlsProviderRequestsWorkspaceHeadlineWithoutItemsLikeRust"
   }
 
 

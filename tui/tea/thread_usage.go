@@ -140,7 +140,7 @@ func (m *Model) ensureThreadUsageForSurfaces(selections chatwidget.StatusSurface
 	}
 	// Rust #61979: a selected statusline provider asks for the estimate even
 	// when no built-in item is configured.
-	if !selections.UsesThreadUsage() && !m.statuslineProviderSelected() {
+	if !selections.UsesThreadUsage() && !m.providerNeedsSnapshot() {
 		m.cancelThreadUsagePolling()
 		return nil
 	}
@@ -348,7 +348,7 @@ func (m *Model) threadUsageSelection() (credits bool, cost bool) {
 	// Rust selected_thread_usage: a provider footer always shows both amounts,
 	// with credits suppressed on ENT26, and read-only history never scans the
 	// configured built-in items.
-	if m.statuslineProviderSelected() {
+	if m.providerNeedsSnapshot() {
 		return !strings.EqualFold(strings.TrimSpace(m.chatGPTPlanType), tuistatus.PlanTypeEnt26), true
 	}
 	if m.readOnlyThread {

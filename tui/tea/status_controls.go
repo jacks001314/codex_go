@@ -995,6 +995,7 @@ func (m *Model) refreshStatusControls() chatwidget.StatusSurfaceRefreshResult {
 	// thread usage keep their normal lifecycle.
 	m.syncProviderFooterSelection()
 	m.statusControls.StatusLineProviderActive = m.statuslineProviderSelected()
+	m.statusControls.StatusLineProviderNeedsSnapshot = m.providerNeedsSnapshot()
 	return m.statusControls.RefreshStatusSurfaces()
 }
 

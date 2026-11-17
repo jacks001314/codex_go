@@ -197,10 +197,15 @@ type StatusControlsState struct {
 	// returns true for that case, so the native span refresh is skipped while the
 	// terminal title and workspace-headline requests keep running (#61979).
 	StatusLineProviderActive bool
-	StatusLineHyperlink      string
-	StatusLineHyperlinkSet   bool
-	ActiveAgentLabel         string
-	ActiveAgentLabelSet      bool
+	// StatusLineProviderNeedsSnapshot reports that the provider still consumes
+	// the statusline snapshot. Rust #61986 provider_needs_snapshot drops this
+	// after a failed read until the provider is reselected, while the error
+	// footer itself stays up (selected_statusline_provider is still Some).
+	StatusLineProviderNeedsSnapshot bool
+	StatusLineHyperlink             string
+	StatusLineHyperlinkSet          bool
+	ActiveAgentLabel                string
+	ActiveAgentLabelSet             bool
 
 	LastTerminalTitle         string
 	LastTerminalTitleRendered bool
@@ -681,7 +686,7 @@ func (s *StatusControlsState) SetStatusLineWorkspaceHeadline(requestID uint64, f
 // selected statusline provider consumes the headline even when no built-in item
 // asks for it (#61979).
 func (s *StatusControlsState) usesWorkspaceHeadline(selections StatusSurfaceSelections) bool {
-	if s != nil && s.StatusLineProviderActive {
+	if s != nil && s.StatusLineProviderNeedsSnapshot {
 		return true
 	}
 	return selections.UsesWorkspaceHeadline()

@@ -86,6 +86,10 @@ type activeStatuslineProviderRead struct {
 	name    string
 	uri     string
 	started bool
+	// failed records a lookup, RPC, deadline, or content failure. Rust #61986
+	// cancels the reader on failure, which stops provider snapshot consumers
+	// (thread usage, workspace headline) until the reader is reselected.
+	failed bool
 	// ctx is cancelled when the reader is retired (thread switch, selection
 	// change, disconnect), mirroring Rust's CancellationToken in
 	// ActiveStatuslineRead's Drop.
@@ -186,6 +190,17 @@ func (m *Model) selectedStatuslineProvider() *config.StatusLineProviderSelection
 // statuslineProviderSelected reports whether a provider owns the footer.
 func (m *Model) statuslineProviderSelected() bool {
 	return m.selectedStatuslineProvider() != nil
+}
+
+// providerNeedsSnapshot reports whether the provider still consumes the
+// statusline snapshot. Rust #61986 provider_needs_snapshot: a failed reader that
+// is still current keeps its error footer but stops asking for provider-specific
+// usage and workspace-headline data until /statusline reselects it.
+func (m *Model) providerNeedsSnapshot() bool {
+	if read := m.statuslineProviderRead; read != nil && read.failed && read.isCurrent(m) {
+		return false
+	}
+	return m.statuslineProviderSelected()
 }
 
 // statusLineCWD mirrors Rust ChatWidget::status_line_cwd: the thread's current
@@ -415,6 +430,7 @@ func (m *Model) applyStatuslineProviderResolve(msg statuslineProviderResolveMsg)
 		return m.ensureProviderFooterCmd()
 	}
 	if msg.err != nil || !msg.provider.Found {
+		read.failed = true
 		m.setProviderFooterError(read.name)
 		return nil
 	}
@@ -442,11 +458,13 @@ func (m *Model) applyStatuslineProviderRead(msg statuslineProviderReadMsg) bubbl
 		return m.ensureProviderFooterCmd()
 	}
 	if msg.err != nil {
+		read.failed = true
 		m.setProviderFooterError(read.name)
 		return nil
 	}
 	tree, err := decodeStatuslineProviderTree(read.uri, msg.contents)
 	if err != nil {
+		read.failed = true
 		m.setProviderFooterError(read.name)
 		return nil
 	}

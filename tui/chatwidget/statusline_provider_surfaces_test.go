@@ -17,6 +17,9 @@ func TestStatusControlsProviderRequestsWorkspaceHeadlineWithoutItemsLikeRust(t *
 	state.StatusLineConfigured = true
 	state.StatusLineIDs = []string{}
 	state.StatusLineProviderActive = true
+	// Rust #61986 gates the headline on provider_needs_snapshot rather than the
+	// broader provider selection.
+	state.StatusLineProviderNeedsSnapshot = true
 	selections := NewStatusSurfaceSelections(state.ConfiguredStatusLineItems(), state.ConfiguredTerminalTitleItems())
 	if selections.UsesWorkspaceHeadline() {
 		t.Fatal("test setup still configures the built-in workspace headline item")
@@ -82,8 +85,15 @@ func TestStatusControlsSelectionsStayItemBasedWithProviderLikeRust(t *testing.T)
 	}
 	state := NewStatusControlsState(StatusControlsRuntime{CWD: "/repo", ModelName: "gpt-5"})
 	state.StatusLineProviderActive = true
+	state.StatusLineProviderNeedsSnapshot = true
 	if state.usesWorkspaceHeadline(selections) != true {
 		t.Fatal("provider did not override the headline decision")
+	}
+	// Rust #61986: a failed reader keeps its error footer but stops consuming
+	// the workspace headline until the provider is reselected.
+	state.StatusLineProviderNeedsSnapshot = false
+	if state.usesWorkspaceHeadline(selections) {
+		t.Fatal("failed provider kept requesting the workspace headline")
 	}
 	state.StatusLineProviderActive = false
 	if state.usesWorkspaceHeadline(NewStatusSurfaceSelections([]string{"model"}, nil)) {
