@@ -251,6 +251,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"otel-trace-websocket",
 		"tcp-tunnel",
 		"tui",
+		"user-input",
 		"user-verification",
 		"tools",
 		"v8-poc",
@@ -357,7 +358,9 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// exec, core client and protocol surfaces advanced across the
 		// 9018f3a3..a394ff9cf6 window; every hash below is the LF-normalized
 		// digest of the new anchor checkout.
-		{Path: "Cargo.toml", SHA256: "e3e0bbf9cd54cbfe05e6d72f63206a2b3c4fe8a7dce939877db25d2f4634ac50"},
+		// Re-anchored to upstream 59ac39addb: Cargo.toml gained the
+		// user-input workspace member (#61949).
+		{Path: "Cargo.toml", SHA256: "29f258527c0b74c2ea0c58395db1dfdf13a0fc7e8739e999a723e7ca26f4dec6"},
 		{Path: "cli/src/lib.rs", SHA256: "4697a126821c57aeae21dcc8c396ffba4466dd5395271085d586ea413d9729a0"},
 		// Re-pinned to upstream 8ae55c863d (#47411): the shared network policy
 		// runs through embedded Codex startup.
@@ -365,7 +368,9 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// ThreadListParams literals in resolve_resume_thread_id gained
 		// `excluded_thread_ids: None` (mechanical consequence of the
 		// thread/list exclusion field; Go side already landed as sync551).
-		{Path: "exec/src/lib.rs", SHA256: "b7c816735a4c6d9d1f82979149423cf164dde71cc4b575035bbcf9d6af670ac1"},
+		// Re-anchored to upstream 59ac39addb: exec input preparation moved
+		// behind the shared user-input helpers (#61949/#61962).
+		{Path: "exec/src/lib.rs", SHA256: "773a416d227f0ddaf1c121c04b3843e8d4434b1fd7ffd644ec5532dc09eed189"},
 		// Re-pinned to upstream 7498521d (#46319): exec JSON web-search items
 		// now carry the structured results array.
 		{Path: "exec/src/exec_events.rs", SHA256: "dafa872d7e86a099e56e28a329dcb9c03db90ed768c3b88cca8c91d46dc1d0e5"},
@@ -386,7 +391,9 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// unavailable images (#57585) and the catalog-heading metadata changed.
 		// Re-anchored to upstream 68b67f0ff4: model providers and catalogs share
 		// runtime authentication through ProviderAuthContext (#57607).
-		{Path: "core/src/client.rs", SHA256: "3f98dc13bd6308ce7f5da4de4c0fb09d6814c7cbb2bda9733bb5bdfdf0c64a62"},
+		// Re-anchored to upstream 59ac39addb: the client gained the
+		// user-input snapshot path for tool outputs (#61962).
+		{Path: "core/src/client.rs", SHA256: "82afdff11699c891d14580b51a8f95e09dded10af3b160ec853b6412de8cba3a"},
 		// Re-pinned to upstream 8ae55c863d (#47207/#47248/#47377/#47648): the
 		// gateway OAuth, MCP resource-target, realtime reasoning-status and
 		// executor bearer-token requests.

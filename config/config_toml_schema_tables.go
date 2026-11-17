@@ -117,6 +117,14 @@ var configCodeModeFields = map[string]configFieldKind{
 	"heartbeat_interval_s": {kind: configKindU32},
 }
 
+// configRolloutTraceFields mirrors Rust's RolloutTraceToml: capture limits for
+// local rollout traces. Defaults live in the recorder (64 MiB per payload,
+// 256 MiB per bundle), so absent values stay absent here.
+var configRolloutTraceFields = map[string]configFieldKind{
+	"max_payload_bytes": {kind: configKindUsize},
+	"max_bytes":         {kind: configKindU64},
+}
+
 var configOrchestratorFields = map[string]configFieldKind{
 	"skills": {kind: configKindStruct, expected: "FeatureToggleToml", fields: configFeatureToggleFields},
 	"mcp":    {kind: configKindStruct, expected: "FeatureToggleToml", fields: configFeatureToggleFields},

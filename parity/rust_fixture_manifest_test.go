@@ -171,7 +171,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// Re-anchored to upstream a394ff9cf6: #61372/#61480/#61619 added
 			// the transparent-TCP, realtime-history and archive-command-center
 			// suites and snapshots.
-			Files: 484,
+			// Re-anchored to upstream 59ac39addb: five fixtures joined
+			// core/tests/suite across the Guardian and subagent windows.
+			Files: 489,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{

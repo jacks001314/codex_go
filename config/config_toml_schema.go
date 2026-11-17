@@ -378,6 +378,7 @@ var configTomlFields = map[string]configFieldKind{
 	"responses":                                  {kind: configKindStruct, expected: "ResponsesToml", fields: configResponsesFields},
 	"responses_api_metadata":                     {kind: configKindMap},
 	"review_model":                               {kind: configKindString},
+	"rollout_trace":                              {kind: configKindStruct, expected: "RolloutTraceToml", fields: configRolloutTraceFields},
 	"sandbox_mode":                               {kind: configKindEnum, variants: []string{"read-only", "workspace-write", "danger-full-access"}},
 	"sandbox_workspace_write":                    {kind: configKindStruct, expected: "SandboxWorkspaceWrite", fields: configSandboxWorkspaceWriteFields},
 	"service_tier":                               {kind: configKindString},

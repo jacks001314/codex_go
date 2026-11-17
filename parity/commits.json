@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "a394ff9cf66e9c17258077e8f8295178ca0c2025",
+ "rustToInclusive": "59ac39addbbcd3499319c805a916846ca8ac5fef",
  "commits": [
   {
    "sha": "27c05a52e0cdf93ef7db5a96ccaf88d6b9095472",
@@ -32862,8 +32862,8 @@
     "Round 108 (lead): typed-content layer landed in context/fragments.go - BodyItems() provider, RenderedFragment.ContentItems, RenderItems() (markers wrap only InputText; every other item passes through unchanged), ToolOutputParts() preserving image URL/detail and audio; tests context/typed_fragment_content_like_rust_test.go (3 cases) + fragments_test.go expectation updated; go test ./context ok. Remaining drift: extension prompt/world-state contributions still pass strings (appserver turn_runtime world-state hashing is text-only) and code-mode output conversion is not routed through ToolOutputPa",
     "Round 320 (audit correction): the estimate_original_image_bytes counterpart does exist. context/history.go EstimateImageReferenceBytes/estimateOriginalImageBytes parse base64 image data URLs, decode dimensions with image.DecodeConfig, count 32px patches (10,000 cap) and cache the result; compact/compact.go shares the same estimator through contextfrag.EstimateImageReferenceBytes. The earlier 'fixed 7373 bytes' downgrade note was stale. Context budget decisions therefore match Rust for detail:original images; verified by context/history_test.go and compact estimator tests.",
     "Round 320 (world-state hashing): the remaining text-only hashing drift is closed for collaboration_mode, plugins_instructions and model_catalog. Collaboration snapshots now store Rust's WorldStateHash::from_fragment (v1, markers included) and follow collaboration_mode.rs's empty-instructions/equal-hash unchanged rule; plugin snapshots store {\"instructions\": sha1(from_json(body)), \"catalog\"} and accept Rust's legacy bare bool; model catalog stores the fragment hash with Rust's body framing and budget. appserver/world_state_snapshot_like_rust_test.go pins Rust snapshot fingerprints 90f8f667 (default), bc50ed41 (plan) and d3f660b0 (plugins bundled body). Remaining open: typed ContentItems from extension prompt/world-state contributions and the per-section snapshot value shapes listed in update/plan_2026_11_16.md batch 13.",
-      "Round 321 (world-state section shapes): top_level_tools now persists Rust's untagged snapshot exactly: a bare {name: hash} map for ToolsOnly (and {tools, exec} accepted for WithExec), with the context window kept in Record.Metadata.Extra; the retired Go {window, hashes} wrapper is decode-only. The model section persists Rust's ModelInstructionsSnapshot: {model, instructions} for incremental windows and a bare string for ModelOnly, and ModelInstructionsUpdate takes previousHasInstructions so legacy ModelOnly snapshots refresh instructions only on a model change. Rust #53872's base_instructions section is decode-only and never written again, and the ordinary model-switch path is suppressed inside incremental windows so it cannot overwrite the WithInstructions snapshot. appserver/top_level_tools_world_state_like_rust_test.go pins the first-turn ToolsOnly/WithInstructions shapes without base_instructions, a model switch that keeps WithInstructions plus a model_instructions fragment, and compaction rewriting the model section with the new window's hash.",
-      "Round 322 (multi-agent and command-session snapshots): command_sessions now stores Rust CommandSessionsState's nested BTreeMap snapshot keyed by session id with session_id/status/in_use plus omitted and polling_unavailable; statuses persist the serde variant names Running/Exited while the rendered body stays lowercase, the lowest 16 ids are kept, and the retired Go array shape and lowercase statuses remain decode-only migrations. multi_agent_usage_hint now stores the bare WorldStateHash string of the resolved MultiAgentRoleInstructions fragment: configured text is verbatim and unmarked, catalog text carries <multi_agent_role> markers, bundled text is composed with Rust's shared/wait/concurrency/model-override body, and an Unknown previous snapshot is rewritten without re-emitting. multi_agent_mode now stores Rust MultiAgentModeState ({mode, usage_hint_hash?}) with camelCase variants and {\"custom\": text}, emits only when the mode or usage-hint hash changes, follows Rust's Absent/Unknown/proactive-downgrade render_diff rules, and is gated to MultiAgentVersion::V2 (non-V2 writes {\"mode\":null} and emits nothing). appserver/multi_agent_world_state_like_rust_test.go pins role fingerprints, all four mode wire shapes, Rust/legacy decoding, configured/bare-hash usage hints, mode re-emission after a usage-hint migration, and command_sessions line format."
+    "Round 321 (world-state section shapes): top_level_tools now persists Rust's untagged snapshot exactly: a bare {name: hash} map for ToolsOnly (and {tools, exec} accepted for WithExec), with the context window kept in Record.Metadata.Extra; the retired Go {window, hashes} wrapper is decode-only. The model section persists Rust's ModelInstructionsSnapshot: {model, instructions} for incremental windows and a bare string for ModelOnly, and ModelInstructionsUpdate takes previousHasInstructions so legacy ModelOnly snapshots refresh instructions only on a model change. Rust #53872's base_instructions section is decode-only and never written again, and the ordinary model-switch path is suppressed inside incremental windows so it cannot overwrite the WithInstructions snapshot. appserver/top_level_tools_world_state_like_rust_test.go pins the first-turn ToolsOnly/WithInstructions shapes without base_instructions, a model switch that keeps WithInstructions plus a model_instructions fragment, and compaction rewriting the model section with the new window's hash.",
+    "Round 322 (multi-agent and command-session snapshots): command_sessions now stores Rust CommandSessionsState's nested BTreeMap snapshot keyed by session id with session_id/status/in_use plus omitted and polling_unavailable; statuses persist the serde variant names Running/Exited while the rendered body stays lowercase, the lowest 16 ids are kept, and the retired Go array shape and lowercase statuses remain decode-only migrations. multi_agent_usage_hint now stores the bare WorldStateHash string of the resolved MultiAgentRoleInstructions fragment: configured text is verbatim and unmarked, catalog text carries <multi_agent_role> markers, bundled text is composed with Rust's shared/wait/concurrency/model-override body, and an Unknown previous snapshot is rewritten without re-emitting. multi_agent_mode now stores Rust MultiAgentModeState ({mode, usage_hint_hash?}) with camelCase variants and {\"custom\": text}, emits only when the mode or usage-hint hash changes, follows Rust's Absent/Unknown/proactive-downgrade render_diff rules, and is gated to MultiAgentVersion::V2 (non-V2 writes {\"mode\":null} and emits nothing). appserver/multi_agent_world_state_like_rust_test.go pins role fingerprints, all four mode wire shapes, Rust/legacy decoding, configured/bare-hash usage hints, mode re-emission after a usage-hint migration, and command_sessions line format."
    ]
   },
   {
@@ -49094,6 +49094,1289 @@
    "status": "complete",
    "evidence": [
     "Startup probes CSI ? 1007 $ p and restores the original alternate-scroll mode; owned screens disable 1007, static pagers enable it, and the editor handoff restores the initial mode."
+   ]
+  },
+  {
+   "sha": "598df2d0158544c3b9ce199d3d7ca9db5621af55",
+   "subject": "Refactor exec to use the shared app-server client (#61706)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 37183005: Exec uses the shared app-server client, so local and remote exec share one request path.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "e51c551fb406486afb7ef5c3d43387f1be3c09e8",
+   "subject": "Support remote app servers in `codex exec` (#61707)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 37183005: codex exec accepts remote app servers through the same shared client.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "b048d4a95cacdccd40425d94d4b5a313df5ed5f5",
+   "subject": "Avoid legacy transcript reads in the agents overview (#61709)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 37183005 4392a2ad: The agents overview reads previews from retained thread data instead of legacy transcript reads.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "96e0673f6ec42bd7f48c9182cea477a8fa0e8949",
+   "subject": "Enable slash-command completion for unavailable threads (#61710)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 37183005: Slash-command completion stays available for threads whose session is unavailable.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "58d5d3a0404bdd4e5d6af0f90a729068eb30396a",
+   "subject": "Open Windows desktop sessions through the registered URL handler (#61711)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 37183005: Windows desktop sessions open through the registered URL handler.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "aea4c6ee4b652d84b416731b11c2b8299d767209",
+   "subject": "Restore raw mode after returning from external editors (#61713)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Rust-only crossterm raw-mode cache reset: Go runs editors through Bubble Tea ExecProcess, which suspends and re-enters its own raw mode, so no cache can go stale.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "09c711b783cf19f5ed60b6e26fcf4ef269acae00",
+   "subject": "Use `clip.exe` for single-line ASCII clipboard copies in WSL (#61724)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go d22331b2: WSL single-line ASCII clipboard copies run through clip.exe.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "e649c6d74c92c638658af8f08290a1ea81d6872f",
+   "subject": "Fix Unicode grapheme highlighting in history search (#61725)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go f6256b0f: History-search highlighting walks graphemes instead of bytes.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "eff3036bf41b4b00bb5d34c6ec0ca3a1ff131baa",
+   "subject": "Preserve graphemes in mention search match highlighting (#61726)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go f6256b0f: Mention-search match highlighting keeps grapheme clusters intact.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "ca0bbbdf0c83cb64f2fb48cf0d5ffbc3d4409ab9",
+   "subject": "Optimize default and attached thread listings with targeted indexes (#61727)",
+   "kind": "persistence",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go f6256b0f: Default and attached thread listings read through targeted SQLite indexes.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "eb53da6c3ab0787f22707fcdc7f26ffd7316055e",
+   "subject": "Fix thread listing migration numbering and test setup (#61730)",
+   "kind": "persistence",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go f6256b0f: Thread listing migration numbering and test setup match the Rust schema history.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "540eb31ece8b5fea95062795183fc00a05340c85",
+   "subject": "Keep bidirectional TUI headers stable during shimmer (#61731)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go d22331b2: Bidirectional TUI headers stay static while the shimmer animates.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "ac2c4a339c15d96c9cd32b242ef487d48d27961b",
+   "subject": "Preserve agent message phases in the cloud backend (#61737)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 4e6319f3: Cloud agent-message phases survive the backend round trip.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "f1ebc7b372bc837b7c6386113e867256d7cc7036",
+   "subject": "Reuse matching thread inventories for lightweight MCP status pages (#61738)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 7780853f: Lightweight MCP status pages reuse a fixed-credential thread inventory.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "630c0d75abbe74784a35673926868cc4133ef6fa",
+   "subject": "Mark cloud threads with a cloud icon in the TUI (#61742)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go e57ed43a: Cloud threads render with a cloud icon in the TUI thread list.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "5a6bbd29a45d81c69395c12f0d6fa5b31747aaa6",
+   "subject": "Clarify shell-specific login guidance for `exec_command` (#61744)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 6544d0e5 643ff81f: exec_command login guidance names the shell the session actually uses.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "710bee73a89385aaf2afb41d885edf82473d941f",
+   "subject": "Refactor history and notes tool registration (#61747)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Rust-only extension refactor: Go registers history and notes actions from one flat tools.go table with unchanged behavior.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "0184dfa6a48f0110dd9c6835522492908e5abcf3",
+   "subject": "Fix the missing label style in the mention truncation test (#61762)",
+   "kind": "test",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Rust test-fixture style fix only (mentions_v2 render test label).",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "98e1584a082234ae716a3cc69d4c6f2d3631cf2d",
+   "subject": "Simplify history and notes tool registration (#61764)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Rust-only extension refactor of history/notes registration; Go remains a flat table and keeps the same schemas.",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "75fc67e8f4284a669eebd90ab6bc9ef7697e876e",
+   "subject": "Remove numeric positions from project responses (#61771)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "Project responses omit numeric positions; project/list still sorts by position without exposing it (appserver/projects.go).",
+    "plan: update/plan_2026_11_16.md (#61993 batch 69 re-anchor note)"
+   ]
+  },
+  {
+   "sha": "776bd46f03a30df0caf3c37cd2fbbc70d4b7d7b4",
+   "subject": "Centralize permission profile compatibility helpers in protocol (#61784)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go ea329151: Project writable-root defaults from existing protected subpaths like Rust (#61784).",
+    "plan: update/plan_2026_11_16.md batch 34"
+   ]
+  },
+  {
+   "sha": "95946faafcd8f068e28610e8ae6a4c03060c1448",
+   "subject": "Strengthen workspace-write configuration tests (#61785)",
+   "kind": "test",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Only strengthens Rust workspace-write configuration tests; Go has no behavior to port.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "cd1805370610e71eae7819b4ed28b90679a53f0e",
+   "subject": "Add lifecycle-managed Guardian housekeeping (#61795)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "blocked_precondition",
+   "evidence": [
+    "Guardian v3 housekeeping runtime (lifecycle-managed tasks) is not ported; no housekeeper to manage.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "9544f09e7b880f373532b4fb5ca98313d2450d4f",
+   "subject": "Wire Guardian V3 housekeeping into the app server (#61797)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "blocked_precondition",
+   "evidence": [
+    "Depends on #61795: the app-server does not host a Guardian v3 housekeeper yet.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "5630d58680af22b71dc0d435049d2a16ec9dace4",
+   "subject": "Add a dedicated Guardian v3 housekeeper inference client (#61798)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "blocked_precondition",
+   "evidence": [
+    "Depends on #61795: the dedicated Guardian v3 housekeeper inference client has no host.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "0370e34fe89585a3eb898e2dc21460b48abd1f83",
+   "subject": "Route Guardian housekeeping through its dedicated sampler (#61799)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "blocked_precondition",
+   "evidence": [
+    "Depends on #61795: housekeeping sampler routing follows the missing housekeeper.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "4fc37acc87fd9eacbc7fd6bf099a4acbdd2252cc",
+   "subject": "Clarify managed human command checkpoint stability (#61800)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Documentation and test-only clarification of managed human command checkpoint stability.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "662a634e88fcc809d77da393d75572c3d814cb27",
+   "subject": "Preserve active turn approvals when an earlier turn finishes late (#61801)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go e90d8174: Align 2026-11-16/17 upstream batches 8-33.",
+    "plan: update/plan_2026_11_16.md batch 25"
+   ]
+  },
+  {
+   "sha": "2309bae1ae7a6dcab6dd0ade0fd37a7491b1de01",
+   "subject": "Isolate app-server turn metadata by turn ID (#61817)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go e90d8174: Align 2026-11-16/17 upstream batches 8-33.",
+    "plan: update/plan_2026_11_16.md batch 27"
+   ]
+  },
+  {
+   "sha": "e5839cbc591df02408d5009e287887c7d57a9167",
+   "subject": "Preserve aggregate turn diffs across steering (#61820)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go e90d8174: Align 2026-11-16/17 upstream batches 8-33.",
+    "plan: update/plan_2026_11_16.md batch 28"
+   ]
+  },
+  {
+   "sha": "0d07dae8c9f7b0cd390aa4340fc1376b9d7c2e33",
+   "subject": "Avoid unnecessary rollout item copies during child thread creation (#61833)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go c75dbfcd: Copy paginated parent history into forked subagent threads like Rust (#61833)."
+   ]
+  },
+  {
+   "sha": "586203ad13f2e3153f5436f07942e50a8581f125",
+   "subject": "Avoid redundant store reads for loaded thread metadata (#61837)",
+   "kind": "persistence",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go e90d8174: Align 2026-11-16/17 upstream batches 8-33.",
+    "plan: update/plan_2026_11_16.md batch 33"
+   ]
+  },
+  {
+   "sha": "bc4a2544b8c02669446c111d6178f50524b7f52d",
+   "subject": "Resolve fork ancestry lazily for descending history pages (#61840)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go e90d8174: Align 2026-11-16/17 upstream batches 8-33.",
+    "plan: update/plan_2026_11_16.md batch 32"
+   ]
+  },
+  {
+   "sha": "090be4df0724cdef5758e6a0934ba557af8b6bbe",
+   "subject": "Close late command approval items when turns are interrupted (#61841)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go e90d8174: Align 2026-11-16/17 upstream batches 8-33.",
+    "plan: update/plan_2026_11_16.md batch 26"
+   ]
+  },
+  {
+   "sha": "e0241d4fae4c87b406aacaf11d9ceb8548879873",
+   "subject": "Defer code-mode tool catalog construction until first access (#61845)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan: update/plan_2026_11_16.md records the port.",
+    "plan: update/plan_2026_11_16.md batch 36"
+   ]
+  },
+  {
+   "sha": "fef47a6769414444b1ce37aa8188b55bf2624f27",
+   "subject": "Reuse code-mode tool catalogs across executions (#61846)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan: update/plan_2026_11_16.md records the port.",
+    "plan: update/plan_2026_11_16.md batch 36"
+   ]
+  },
+  {
+   "sha": "effad7568c7945c524923e71f1919d64e7b614aa",
+   "subject": "Allow network policy to enable transparent TCP capture (#61851)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go e90d8174: Align 2026-11-16/17 upstream batches 8-33.",
+    "plan: update/plan_2026_11_16.md batch 31"
+   ]
+  },
+  {
+   "sha": "35145aba212e923f987ccefaf9086ceba31e3b7c",
+   "subject": "Broadcast read-state changes to experimental clients (#61852)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan: update/plan_2026_11_16.md records the port."
+   ]
+  },
+  {
+   "sha": "3257e1b3eb04a43a8721ad0e59470327807eb844",
+   "subject": "Allow model metadata to control multi-agent tools in code mode (#61854)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go e90d8174: Align 2026-11-16/17 upstream batches 8-33.",
+    "plan: update/plan_2026_11_16.md batch 29"
+   ]
+  },
+  {
+   "sha": "457a191479f15ce517d70e9a7bc4caf9ddd6d404",
+   "subject": "Add opt-in tool-call attribution for upstream proxies (#61860)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 2fc31890: Align 2026-11-17 upstream batches 34-35.",
+    "plan: update/plan_2026_11_16.md batch 35"
+   ]
+  },
+  {
+   "sha": "237d8b104ed06ae46c5ed9a54693672dea21856c",
+   "subject": "Report remote plugin local versions from matching cached packages (#61865)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go e936c2df: Report remote plugin local versions from matching cached packages like Rust (#61865).",
+    "plan: update/plan_2026_11_16.md batch 79"
+   ]
+  },
+  {
+   "sha": "b8cbdbfeff72869e5d715480572aad24f739aa65",
+   "subject": "Preserve SQLite row metadata in thread listings (#61866)",
+   "kind": "persistence",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go ff76bfef: Preserve SQLite row metadata in thread listings like Rust (#61866).",
+    "plan: update/plan_2026_11_16.md batch 46"
+   ]
+  },
+  {
+   "sha": "77873dd0d284aeba7ce849b995b28ee8f4498d73",
+   "subject": "Preserve plugin skill picker ranking across version changes (#61871)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 27326b3a: Preserve plugin skill picker ranking across version changes like Rust (#61871).",
+    "plan: update/plan_2026_11_16.md batch 73"
+   ]
+  },
+  {
+   "sha": "dba22f2acc3bffbd57e3ce1d9c8f7ccc666b47e8",
+   "subject": "Support flat subgraphs in native Mermaid flowcharts (#61878)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 3e05e26e: Support flat Mermaid subgraphs like Rust (#61878).",
+    "plan: update/plan_2026_11_16.md batch 51"
+   ]
+  },
+  {
+   "sha": "d5a478e31c3296e544d53424a7a6c995e7dfb0f5",
+   "subject": "Preserve local Markdown document targets in transcript rendering (#61880)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "blocked_precondition",
+   "evidence": [
+    "Transcript markdown rendering in Go does not preserve document link destinations (only ViewImageHistoryCell exposes hyperlink lines).",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "59d8c797896c422afe8bff56bcc6207d2114fd7e",
+   "subject": "Add app-server file preview read helpers (#61887)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "partial",
+   "evidence": [
+    "codex_go 5a56841d: app/remote_file_preview.go landed (POSIX resolve, fs/readFile, pre/post workspace re-check, UTF-8/control validation).",
+    "Residual: the sidebar UI does not consume the helper yet; plan batch 75."
+   ]
+  },
+  {
+   "sha": "be5db96264e2f4b68cf01488fc984c3c024eb48e",
+   "subject": "Add read-only document previews to the TUI sidebar (#61888)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "partial",
+   "evidence": [
+    "codex_go 01304b7a: app/sidebar_document.go landed (1 MiB/10000-line source limits, str::lines offsets, clamped grapheme target, connection replacement).",
+    "Residual: TranscriptView-based rendering and document tabs; plan batch 80."
+   ]
+  },
+  {
+   "sha": "7c3f5e2cc2904c7a41742f337a65d606e1da8fe9",
+   "subject": "Add search, selection, and link navigation to document previews (#61889)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "blocked_precondition",
+   "evidence": [
+    "Document search, selection and link navigation need a TranscriptView equivalent, which Go does not have yet.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "3a51865c8cca4409dbdc77a22839a52a6bb1f8f9",
+   "subject": "Open source file links at line and column targets in the TUI (#61890)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "blocked_precondition",
+   "evidence": [
+    "Line/column link opening needs the TranscriptView target model plus chooser wiring; the document loader landed in batch 80.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "c0d47262f33fdb866e2012baad52cf6584e37c03",
+   "subject": "Acknowledge agent messages and clarify how to wake idle recipients (#61894)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 5bf8e33b: Acknowledge agent messages and clarify how to wake idle recipients like Rust (#61894).",
+    "plan: update/plan_2026_11_16.md batch 39"
+   ]
+  },
+  {
+   "sha": "ef6ce8100a910d107c41bb03bef93e8e0b4b043a",
+   "subject": "Bound rollout trace capture with configurable storage limits (#61896)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "blocked_precondition",
+   "evidence": [
+    "Only the config surface ([rollout_trace] limits, batch 81) landed; the rollout trace recorder that enforces the limits is not ported.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "ce7079b5063742d2dde9bb12b3c6077de6e298a4",
+   "subject": "Add opt-in UTC dates to environment context (#61897)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 5a5c7c82: Add opt-in UTC environment dates like Rust (#61897).",
+    "plan: update/plan_2026_11_16.md batch 37"
+   ]
+  },
+  {
+   "sha": "641b4cac88d08e03d3d72ed91ea7e0dfd8b12299",
+   "subject": "Tie Linux sandbox proxy bridges to the launcher lifetime (#61898)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "blocked_precondition",
+   "evidence": [
+    "Linux sandbox proxy bridge lifetime depends on the bwrap launcher architecture Go does not implement.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "a11d2403a5c8f346527379ccd061c2aa95e7edc4",
+   "subject": "Fix proc mount fallback detection for Bubblewrap 0.12 (#61900)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "blocked_precondition",
+   "evidence": [
+    "bwrap 0.12 proc mount fallback detection depends on the same missing launcher.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "b08fd8a6f175b932b9abd0df68b1fc5ba7674ea9",
+   "subject": "Filter thread listings before scanning rollout previews (#61902)",
+   "kind": "persistence",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 7966b04f: Filter thread listings before scanning rollout previews like Rust (#61902).",
+    "plan: update/plan_2026_11_16.md batch 38"
+   ]
+  },
+  {
+   "sha": "837f8b50be09c62467021c5f37091bb82588ddc6",
+   "subject": "Pass a per-call voice session ID through TUI realtime startup (#61908)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 604591f0: Pass a per-call voice session ID through TUI realtime startup like Rust (#61908).",
+    "plan: update/plan_2026_11_16.md batch 52"
+   ]
+  },
+  {
+   "sha": "cff061fca9f811ea07416793214b45eddf66965e",
+   "subject": "Add opt-in item-boundary interrupts for subagents (#61909)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "blocked_precondition",
+   "evidence": [
+    "Item-boundary interrupts need the subagent sampling interrupt architecture; Go has no equivalent boundary hook.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "c9df641eac7631027d5e933feca1b10e1cc25a86",
+   "subject": "Preserve native sandbox executable paths and PTY dispatch names (#61910)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Non-UTF-8 OsString executable paths; Go strings and the exec-server dispatch have no OsString layer.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "56e43660f8c8743a43117da53add23c0608e6a8e",
+   "subject": "Default Statsig metrics exports to Zstandard compression (#61911)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go d6031ca0: Default Statsig metrics exports to Zstandard like Rust (#61911).",
+    "plan: update/plan_2026_11_16.md batch 44"
+   ]
+  },
+  {
+   "sha": "30be9534c8c3b7c527d7e2988e228fd7a396b0d5",
+   "subject": "Fall back to the built-in status line for invalid providers (#61915)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 3290063a: Fall back to the built-in status line for invalid providers like Rust (#61915).",
+    "plan: update/plan_2026_11_16.md batch 45"
+   ]
+  },
+  {
+   "sha": "f8e58064fccfdf9c220996bdb26d081a6a732d9f",
+   "subject": "Preserve remote compaction summaries when interrupting child agents (#61916)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "blocked_precondition",
+   "evidence": [
+    "Depends on #61909: preserving remote compaction summaries on child interrupt needs the interrupt hook.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "a669d8ffb230fb117e8763245dc3a93ef81f923e",
+   "subject": "Add sidebar image previews and present generated images after answers (#61919)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "blocked_precondition",
+   "evidence": [
+    "Sidebar image previews and post-answer generated image presentation need the sidebar image pipeline.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "fd05a402b294fe115d1459276e7bce00e8a44d05",
+   "subject": "Track conversation files for the TUI sidebar (#61920)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "partial",
+   "evidence": [
+    "codex_go f1693858 2bfb3c97 c0a4fe0b: sidebar file link extraction, inventory pages and single-flight scan landed.",
+    "Residual: chooser Files rows/tabs; plan batches 76-78."
+   ]
+  },
+  {
+   "sha": "42248f5ef988883cebce298c2279ce22cb536726",
+   "subject": "Add conversation files to the TUI sidebar chooser (#61922)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "blocked_precondition",
+   "evidence": [
+    "Chooser Files rows/tabs: inventory, scan and document loading landed; row rendering and selection are pending.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "885a1df5ee5f18172233b12d6c94544a24e7b338",
+   "subject": "Allow agent search by thread ID and Git branch (#61926)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 9842bdac: Allow agent search by thread ID and Git branch like Rust (#61926).",
+    "plan: update/plan_2026_11_16.md batch 50"
+   ]
+  },
+  {
+   "sha": "4f556fdd6db3f614207bacc037b1bc4452e301bf",
+   "subject": "Encapsulate app-server thread-list locking in `ThreadListState` (#61928)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Go app-server has no global thread-list permit; thread-list locking is per-store.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "e3b721754e1e7e1e942db94431dff957c509e67e",
+   "subject": "Freeze Guardian review views at ordered evidence cutoffs (#61929)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan: update/plan_2026_11_16.md records the port."
+   ]
+  },
+  {
+   "sha": "d32c2ba608b18f82c92cb266ab51060d4059212c",
+   "subject": "Log Windows MXC deny-read glob expansion timings (#61931)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Windows MXC deny-read glob timing log only; Go does not log that path.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "9537934ed6d5a6658fc77032b3290650765466a1",
+   "subject": "Allow independent app-server thread resumes to overlap (#61934)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Same as #61928: independent thread resumes overlap because Go holds no global list lock.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "cc356fd384b9d3c46350758dacd37774b8f6a088",
+   "subject": "Preserve partial Git metadata when worktree status is slow (#61939)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 041fb91a: Preserve partial memory Git metadata at the deadline like Rust (#61939).",
+    "plan: update/plan_2026_11_16.md batch 43"
+   ]
+  },
+  {
+   "sha": "9b2d2c12db7a6d658203f2911dc7c83165967bb4",
+   "subject": "Add saved environment listing to the Cloud client (#61940)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan: update/plan_2026_11_16.md records the port.",
+    "plan: update/plan_2026_11_16.md batch 49"
+   ]
+  },
+  {
+   "sha": "1d9786941238f103b77f5f8a1392f4f42ddf0941",
+   "subject": "Route turn-start client metadata through a dedicated helper (#61941)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go efb74b5a: Route turn-start client metadata through a dedicated helper like Rust (#61941).",
+    "plan: update/plan_2026_11_16.md batch 41"
+   ]
+  },
+  {
+   "sha": "c656014177079dae2dcc5e1e70c03e3158383a27",
+   "subject": "Centralize exec-server launches in `WrappedSandboxCommand` (#61942)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan: update/plan_2026_11_16.md records the port."
+   ]
+  },
+  {
+   "sha": "34c7cbb454b359ce7dd9f30f728de60618322755",
+   "subject": "Allow host-started forks to inherit the root session ID (#61945)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "blocked_precondition",
+   "evidence": [
+    "Host extension data path for host-started forks is not ported.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "0637230e89beaaf34b882f60dcfa85cca59c0c50",
+   "subject": "Include enclosing tool context in nested Guardian approvals (#61946)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "blocked_precondition",
+   "evidence": [
+    "Nested Guardian approval enclosing-tool context: nested Guardian approvals are not ported.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "ad161203cb8e3733b2420a29df623ec05d37f632",
+   "subject": "Mask system SSH config drop-ins in the Linux sandbox (#61947)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 217e43f2: Mask system SSH config drop-ins in the Linux sandbox like Rust (#61947).",
+    "plan: update/plan_2026_11_16.md batch 40"
+   ]
+  },
+  {
+   "sha": "5b3d2c7fce11a62d0df0105e9cc7290f50f2a0f8",
+   "subject": "Extract user input preparation into `codex-user-input` (#61949)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Crate split extracting codex-user-input; Go keeps the equivalent helpers in package-level files.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "d3b7695db912fd7fc8c30d814d172e75fefbadde",
+   "subject": "Refactor composer undo and redo history (#61951)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 1bacf4a4: Share one composer edit history like Rust (#61951).",
+    "plan: update/plan_2026_11_16.md batch 53"
+   ]
+  },
+  {
+   "sha": "1443c64c625e2941ef233de7da0c9ee3aecab74f",
+   "subject": "Add undo and redo to the non-Vim prompt composer (#61954)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 011cc1b8: Add undo and redo to the non-Vim composer like Rust (#61954).",
+    "plan: update/plan_2026_11_16.md batch 56"
+   ]
+  },
+  {
+   "sha": "50c227a6e24eef3e1cd21321348be812b6d2d87c",
+   "subject": "Bound item loading for paginated `read_thread` calls (#61955)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 2eea91b1: Bound item loading for paginated read_thread calls like Rust (#61955).",
+    "plan: update/plan_2026_11_16.md batch 42"
+   ]
+  },
+  {
+   "sha": "e9a2a9e11525d30727ecee93eb15121476e4f87d",
+   "subject": "Support saved environments when starting Cloud threads (#61956)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go dae66cc9: Support saved environments when starting Cloud threads like Rust (#61956).",
+    "plan: update/plan_2026_11_16.md batch 49"
+   ]
+  },
+  {
+   "sha": "44834c58fa99d0a04f222e18817b99b430f7c0e8",
+   "subject": "Support turn-scoped exhaustion in host usage accounting (#61958)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 74bb7b18: Support turn-scoped usage exhaustion like Rust (#61958).",
+    "plan: update/plan_2026_11_16.md batch 48"
+   ]
+  },
+  {
+   "sha": "65a44508861af9d78435872ca6633f88b8c406cf",
+   "subject": "Prewarm restored file images on cold resume (#61959)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 6f41b7f4: Prewarm restored file images on cold resume like Rust (#61959).",
+    "plan: update/plan_2026_11_16.md batch 62"
+   ]
+  },
+  {
+   "sha": "d8d840d32a8ebf9ec75603e6aa9cd88a58a444a2",
+   "subject": "Capture local attachments before queuing turn input (#61962)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 366f23df: Capture local attachments before queuing turn input like Rust (#61962).",
+    "plan: update/plan_2026_11_16.md batch 60"
+   ]
+  },
+  {
+   "sha": "c8d1ba814eb984e8fdd2f595ffd9b287e825a5b3",
+   "subject": "Add HTTP/2 fallback for SSH tunnels (#61964)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go bc0010a1: Simplify SSH tunneling with HTTP/2 fallback and system proxies like Rust (#61975 #61964).",
+    "plan: update/plan_2026_11_16.md batch 61"
+   ]
+  },
+  {
+   "sha": "39b590389871c8db85381daa9504886276bbc7c6",
+   "subject": "Set explicit image detail in the restored-history prewarm test (#61969)",
+   "kind": "test",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Test-only image detail fix in the restored-history prewarm suite.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "c826ca128699b5464724c8757638ae79f51a45f2",
+   "subject": "Preserve accepted tool outputs and local resets in rollout traces (#61973)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Rollout trace writer gaps; Go has no rollout trace recorder, so there is nothing to preserve.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "9a5a78925d556c565367cbd01fac62617756c955",
+   "subject": "Add a Cloud environment picker for new TUI conversations (#61974)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Cloud environment picker UI; Go has no Cloud environment selection screen.",
+    "plan: update/plan_2026_11_16.md batch 74"
+   ]
+  },
+  {
+   "sha": "98323eddf944b765a391fda552be32df46f4bbbd",
+   "subject": "Simplify SSH tunneling and honor system HTTPS proxies (#61975)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go bc0010a1: Simplify SSH tunneling with HTTP/2 fallback and system proxies like Rust (#61975 #61964).",
+    "plan: update/plan_2026_11_16.md batch 61"
+   ]
+  },
+  {
+   "sha": "61f59108263da04deaacd51f12991b454d6b6b52",
+   "subject": "Add mouse scroll speed to the TUI config panel (#61976)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go c1672baf: Add mouse scroll speed to the TUI config panel like Rust (#61976).",
+    "plan: update/plan_2026_11_16.md batch 58"
+   ]
+  },
+  {
+   "sha": "490394c184eba25ebf4ec728e64f9af485a4cced",
+   "subject": "Keep TUI quota state scoped to the active provider (#61977)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 59cfae8a: Prefer the quota plan for TUI thread usage like Rust (#61977 #61978).",
+    "plan: update/plan_2026_11_16.md batch 57"
+   ]
+  },
+  {
+   "sha": "7e59b276677a2ee970c741390fb06aada0b01ad6",
+   "subject": "Use the current billing plan for TUI thread usage (#61978)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 59cfae8a: Prefer the quota plan for TUI thread usage like Rust (#61977 #61978).",
+    "plan: update/plan_2026_11_16.md batch 57"
+   ]
+  },
+  {
+   "sha": "46f5a1df9f2ade44cb9712d574cde9401a755d21",
+   "subject": "Render selected MCP statusline providers in the TUI footer (#61979)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 97d37e8e: Render selected MCP statusline providers in the TUI footer like Rust (#61979).",
+    "plan: update/plan_2026_11_16.md batch 59"
+   ]
+  },
+  {
+   "sha": "10a3126a030fa47dbcd93c449d936c870d8329cc",
+   "subject": "Poll MCP statusline providers with fresh state and bounded reads (#61981)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 9c99b0f7: Poll MCP statusline providers with fresh state and bounded reads like Rust (#61981).",
+    "plan: update/plan_2026_11_16.md batch 64"
+   ]
+  },
+  {
+   "sha": "47d9cde20e96eed528edcc155c6c0dc4daf7a33d",
+   "subject": "Refresh status line providers on config and connection changes (#61985)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go f46fc4f4: Refresh status line providers on config and connection changes like Rust (#61985).",
+    "plan: update/plan_2026_11_16.md batch 65"
+   ]
+  },
+  {
+   "sha": "7fb4014d52b5bc5049c389f9df015ff8c7e6e37c",
+   "subject": "Preserve statusline provider selections across thread startup (#61986)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 6f885b0e: Stop statusline provider snapshot consumers after a failed read like Rust (#61986).",
+    "plan: update/plan_2026_11_16.md batch 66"
+   ]
+  },
+  {
+   "sha": "568cccd4f55764bcc253fbb8843fcbaa99953094",
+   "subject": "Add a status line provider picker to `/statusline` (#61988)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go bb70c24b: Hand the picked status line provider to the reader like Rust (#61988).",
+    "plan: update/plan_2026_11_16.md batch 70"
+   ]
+  },
+  {
+   "sha": "a3fc418fb29d15fff9df779575aee3a5ca1ea73d",
+   "subject": "Classify status line provider failures and shorten error messages (#61990)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go e0aabea3: Classify status line provider failures and shorten messages like Rust (#61990).",
+    "plan: update/plan_2026_11_16.md batch 68"
+   ]
+  },
+  {
+   "sha": "59ac39addbbcd3499319c805a916846ca8ac5fef",
+   "subject": "Surface status line discovery failures and lookup timeouts (#61993)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codex_go 26da1d19: Surface status line discovery failures and lookup timeouts like Rust (#61993).",
+    "plan: update/plan_2026_11_16.md batch 69"
    ]
   }
  ]

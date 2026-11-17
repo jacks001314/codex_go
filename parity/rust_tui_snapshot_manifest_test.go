@@ -55,8 +55,11 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	// row-budget (#60680-#60683) suites added nine goldens.
 	// Re-anchored to upstream a394ff9cf6: the #61346-#61697 window moved the
 	// footer golden into bottom_pane and added six more goldens (1531 -> 1537).
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1537 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1537", got)
+	// Re-anchored to upstream 59ac39addb: the sidebar files/preview work
+	// (#61920/#61922) and the composer edit history (#61951) added seven
+	// goldens (1537 -> 1544).
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1544 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1544", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -132,7 +135,9 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// Re-anchored to a7a9d82f: the recovery-notice and transcript work
 			// added one app-level golden.
 			// Re-anchored to upstream a394ff9cf6: one more app-level golden.
-			Files:    108,
+			// Re-anchored to upstream 59ac39addb: three app-level goldens joined
+			// the sidebar/document preview work (#61920/#61922).
+			Files:    111,
 			Owner:    "tui/app, tui/chatwidget",
 			Focus:    "desktop history UI, cancelled-turn composer restore, and thread goal action rendering",
 			Priority: []string{"app", "composer", "history"},
@@ -205,7 +210,9 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// Re-anchored to 9018f3a3: the composer footer row-budget work
 			// (#60680-#60683) replaced two status-surface goldens with six new
 			// layouts, a net gain of four.
-			Files:    36,
+			// Re-anchored to upstream 59ac39addb: the shared composer edit
+			// history (#61951) added one golden.
+			Files:    37,
 			Owner:    "tui/bottom_pane/chat_composer",
 			Focus:    "draft and voice composer layout snapshots",
 			Priority: []string{"composer"},
@@ -237,7 +244,8 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// Re-anchored to a7a9d82f: one bottom-pane golden was added.
 			// Re-anchored to upstream a394ff9cf6: the prepared footer viewport
 			// golden moved here from bottom_pane/footer (263).
-			Files:    263,
+			// Re-anchored to upstream 59ac39addb: one more bottom-pane golden.
+			Files:    264,
 			Owner:    "tui/bottom_pane",
 			Focus:    "composer, footer, slash popup, approval overlays, MCP elicitation, queued input, and bottom pane layout",
 			Priority: []string{"composer", "approval", "status", "mcp", "slash"},
@@ -381,7 +389,8 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			Path: "tui/src/config_panel/snapshots",
 			// Round-90 re-anchor to head 4eb4a65407: the config panel surface
 			// gained its own snapshot directory (18 goldens).
-			Files:    18,
+			// Re-anchored to upstream 59ac39addb: one more config-panel golden.
+			Files:    19,
 			Owner:    "tui/config_panel",
 			Focus:    "config panel rendering, choice widgets, global search and validation states",
 			Priority: []string{"status"},
@@ -509,7 +518,8 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// Re-anchored to 9018f3a3: the safe key-chord guide (#60637) and
 			// the headless gateway device-code prompt (#60662) added two.
 			// Re-anchored to upstream a394ff9cf6: one more golden.
-			Files:    218,
+			// Re-anchored to upstream 59ac39addb: one more tui/src golden.
+			Files:    219,
 			Owner:    "tui, tui/markdown, tui/app",
 			Focus:    "diff render, markdown render, keymap, resume picker, pager overlay, model migration, and status indicator snapshots",
 			Priority: []string{"diff", "markdown", "status", "session", "keymap"},

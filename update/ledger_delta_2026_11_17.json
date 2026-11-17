@@ -72,7 +72,7 @@
   {
    "sha": "aea4c6ee4b652d84b416731b11c2b8299d767209",
    "subject": "Restore raw mode after returning from external editors (#61713)",
-   "kind": "not_applicable",
+   "kind": "runtime",
    "domains": [
     "codex_go"
    ],

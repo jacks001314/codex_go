@@ -229,6 +229,7 @@ func rustTopLevelDirectoriesSnapshot() []string {
 		"tools",
 		"tui",
 		"uds",
+		"user-input",
 		"user-verification",
 		"utils",
 		"v8-poc",

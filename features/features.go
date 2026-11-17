@@ -501,6 +501,9 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs a5ef02e561 #57441): preserve native
 	// MAv2 tool calls in synchronous Guardian history.
 	{Key: "guardian_native_multi_agent_history", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs 59ac39addb): pass nested approval
+	// context to Guardian reviews.
+	{Key: "guardian_nested_approval_context", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs 41ed72c32b #49036): opt-in
 	// conversation history retrieval for Guardian reviews.
 	{Key: "guardian_conversation_history_tools", Stage: StageUnderDevelopment, DefaultEnabled: false},

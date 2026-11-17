@@ -1,6 +1,6 @@
 {
  "schemaVersion": 1,
- "targetRustCommit": "a394ff9cf66e9c17258077e8f8295178ca0c2025",
+ "targetRustCommit": "59ac39addbbcd3499319c805a916846ca8ac5fef",
  "contracts": [
   {
    "id": "features",
@@ -1243,7 +1243,7 @@
    "kind": "source-surface",
    "rustPaths": [
     "utils/audio/src/lib.rs",
-    "protocol/src/local_media.rs"
+    "user-input/src/local_media.rs"
    ],
    "goPaths": [
     "audioutil/audio.go"
@@ -3059,9 +3059,9 @@
    "id": "composer-edit-history",
    "kind": "source-surface",
    "rustPaths": [
-    "tui/src/bottom_pane/chat_composer/vim_history.rs",
+    "tui/src/bottom_pane/chat_composer/edit_history.rs",
     "tui/src/bottom_pane/chat_composer.rs",
-    "tui/src/bottom_pane/chat_composer/vim_history_tests.rs"
+    "tui/src/bottom_pane/chat_composer/edit_history_tests.rs"
    ],
    "goPaths": [
     "tui/tea/edit_history.go",
@@ -3077,7 +3077,7 @@
    "id": "composer-undo-redo",
    "kind": "source-surface",
    "rustPaths": [
-    "tui/src/bottom_pane/chat_composer/vim_history.rs",
+    "tui/src/bottom_pane/chat_composer/edit_history.rs",
     "tui/src/bottom_pane/chat_composer.rs",
     "tui/src/bottom_pane/mod.rs",
     "tui/src/keymap.rs",

@@ -22,13 +22,10 @@ func TestRustFeatureKeySurfaceAgainstGo(t *testing.T) {
 	}
 	sort.Strings(goKeys)
 
-	// Re-anchored to upstream a394ff9cf6: Rust #61213 landed, so Go's Apps
-	// catalog instruction gate now matches the upstream feature table.
-	// Rust #61897 (utc_environment_date) landed after the a394ff9cf6 anchor;
-	// the Go port carries the key so the behavior is gated identically.
-	// Rust #61959 (restored_history_prewarm) also landed after the anchor and
-	// keeps its upstream key in the Go registry.
-	knownGoOnly := []string{"restored_history_prewarm", "utc_environment_date"}
+	// Re-anchored to upstream 59ac39addb: #61213, #61897 (utc_environment_date)
+	// and #61959 (restored_history_prewarm) are all upstream by now, so the Go
+	// registry carries no key the upstream feature table lacks.
+	knownGoOnly := []string{}
 	knownRustOnly := []string{}
 	assertKnownSurfaceDiff(t, "feature key", rustKeys, goKeys, knownRustOnly, knownGoOnly)
 }
@@ -46,8 +43,11 @@ func TestRustConfigTomlTopLevelSurfaceSnapshot(t *testing.T) {
 	// the top-level count from 105 to 106.
 	// Re-anchored to upstream a394ff9cf6: `code_mode` and `responses` join
 	// ConfigToml, taking the count from 106 to 108.
-	if len(fields) != 108 {
-		t.Fatalf("Rust ConfigToml top-level field count drift: got %d want 108", len(fields))
+	// Re-anchored to upstream 59ac39addb: `rollout_trace` (RolloutTraceToml,
+	// the local rollout trace capture limits) joins ConfigToml, taking the
+	// count from 108 to 109.
+	if len(fields) != 109 {
+		t.Fatalf("Rust ConfigToml top-level field count drift: got %d want 109", len(fields))
 	}
 	for _, required := range []string{
 		"agents",
@@ -62,6 +62,7 @@ func TestRustConfigTomlTopLevelSurfaceSnapshot(t *testing.T) {
 		"model_provider",
 		"model_providers",
 		"responses",
+		"rollout_trace",
 		"tools",
 	} {
 		if !surfaceContainsString(fields, required) {

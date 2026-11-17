@@ -1302,6 +1302,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"responsesapi_client_metadata":               {},
 	"responses_api_metadata":                     {},
 	"review_model":                               {},
+	"rollout_trace":                              {},
 	"resume_cwd":                                 {},
 	"requirements":                               {},
 	"sandbox_mode":                               {},
@@ -1476,6 +1477,15 @@ func validateKnownTopLevelConfigFields(values map[string]any) error {
 		for key := range codeMode {
 			if key != "heartbeat_interval_s" {
 				return fmt.Errorf("unknown configuration field `code_mode.%s`", key)
+			}
+		}
+	}
+	// Rust reports serde_ignored paths for every struct, so `[rollout_trace]`
+	// accepts only the two capture limits RolloutTraceToml declares.
+	if rolloutTrace, ok := values["rollout_trace"].(map[string]any); ok {
+		for _, key := range sortedConfigKeys(rolloutTrace) {
+			if key != "max_payload_bytes" && key != "max_bytes" {
+				return fmt.Errorf("unknown configuration field `rollout_trace.%s`", key)
 			}
 		}
 	}
