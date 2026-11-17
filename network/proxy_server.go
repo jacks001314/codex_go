@@ -528,7 +528,7 @@ func (s *ProxyServer) newHTTPProxy(baseEnv map[string]string) (*goproxy.ProxyHtt
 	}
 	proxy := goproxy.NewProxyHttpServer()
 	upstreamProxy := proxyUpstreamFunc(true, baseEnv)
-	proxy.Tr = &http.Transport{
+	transport := &http.Transport{
 		Proxy: func(request *http.Request) (*url.URL, error) {
 			if !s.runtimePolicy().settings.AllowUpstreamProxy || !s.requestMayUseUpstreamProxy(request) {
 				return nil, nil
@@ -540,13 +540,31 @@ func (s *ProxyServer) newHTTPProxy(baseEnv map[string]string) (*goproxy.ProxyHtt
 		TLSClientConfig:     &tls.Config{RootCAs: rootCAs, MinVersion: tls.VersionTLS12},
 		TLSHandshakeTimeout: 30 * time.Second,
 	}
+	// Rust #61860: an MITM'd HTTPS request carries the attribution on the outer
+	// CONNECT the transport opens toward the upstream proxy.
+	transport.GetProxyConnectHeader = s.upstreamProxyConnectHeader
+	proxy.Tr = transport
 	var upstreamConnectDial func(network, address string) (net.Conn, error)
 	if upstream := ProxyAddressForConnect(baseEnv); upstream != nil {
 		upstreamConnectDial = proxy.NewConnectDialToProxy(upstream.Raw)
 	}
 	proxy.ConnectDialWithReq = func(request *http.Request, networkName, address string) (net.Conn, error) {
-		if s.runtimePolicy().settings.AllowUpstreamProxy && upstreamConnectDial != nil && s.mayUseUpstreamProxyForAddress(address) {
-			return upstreamConnectDial(networkName, address)
+		if s.runtimePolicy().settings.AllowUpstreamProxy && s.mayUseUpstreamProxyForAddress(address) {
+			if upstream := ProxyAddressForConnect(baseEnv); upstream != nil {
+				// Rust #61860: the tunnel's CONNECT carries the attribution only
+				// when the selected upstream is the designated endpoint.
+				if value := s.toolCallAttribution().headerValueFor(upstream); value != "" {
+					dial := proxy.NewConnectDialToProxyWithHandler(upstream.Raw, func(connectReq *http.Request) {
+						connectReq.Header.Set(ToolCallAttributionHeader, value)
+					})
+					if dial != nil {
+						return dial(networkName, address)
+					}
+				}
+				if upstreamConnectDial != nil {
+					return upstreamConnectDial(networkName, address)
+				}
+			}
 		}
 		return s.dialCheckedTarget(request.Context(), networkName, address)
 	}
@@ -878,6 +896,7 @@ func (s *ProxyServer) handlePlaintextHTTPTunnel(client net.Conn, reader *bufio.R
 		}
 		removeProxyHopByHopRequestHeaders(request.Header)
 		request.Header.Del("Proxy-Connection")
+		request.Header.Del(ToolCallAttributionHeader)
 		policy.broker.InjectRequestHeadersForDestination("http", host, port, request.URL.Path, map[string][]string(request.Header))
 		response, err := transport.RoundTrip(request)
 		if err != nil {
@@ -986,6 +1005,7 @@ func (s *ProxyServer) handlePlaintextTunnelHTTP2(client net.Conn, reader *bufio.
 		outgoing.RequestURI = ""
 		outgoing.Header = request.Header.Clone()
 		removeProxyHopByHopRequestHeaders(outgoing.Header)
+		outgoing.Header.Del(ToolCallAttributionHeader)
 		policy.broker.InjectRequestHeadersForDestination("http", host, port, outgoing.URL.Path, map[string][]string(outgoing.Header))
 		response, err := transport.RoundTrip(outgoing)
 		if err != nil {
@@ -1038,6 +1058,7 @@ func (s *ProxyServer) handlePlaintextTunnelUpgrade(client net.Conn, reader *bufi
 	request.URL.Scheme = "http"
 	request.URL.Host = net.JoinHostPort(host, strconv.Itoa(int(port)))
 	request.RequestURI = ""
+	request.Header.Del(ToolCallAttributionHeader)
 	s.runtimePolicy().broker.InjectRequestHeadersForDestination("http", host, port, request.URL.Path, map[string][]string(request.Header))
 	upstream, err := net.DialTimeout("tcp", request.URL.Host, 30*time.Second)
 	if err != nil {
@@ -1143,6 +1164,8 @@ func (s *ProxyServer) handleHTTPRequest(request *http.Request, ctx *goproxy.Prox
 			return request, proxyBlockedHTTPResponse(request, reason)
 		}
 	}
+	// Rust #61860: never forward a caller-supplied attribution header.
+	request.Header.Del(ToolCallAttributionHeader)
 	scheme := "http"
 	if isMITM {
 		scheme = "https"
@@ -1203,6 +1226,13 @@ func (s *ProxyServer) handleHTTPRequest(request *http.Request, ctx *goproxy.Prox
 		policy.broker.InjectRequestHeadersForDestination(scheme, host, requestPort, path, request.Header)
 	}
 	removeProxyHopByHopRequestHeaders(request.Header)
+	if !isMITM {
+		// Rust #61860: plaintext HTTP requests carry attribution only when the
+		// selected upstream is the designated endpoint.
+		if value := s.upstreamAttributionHeaderForRequest(request); value != "" {
+			request.Header.Set(ToolCallAttributionHeader, value)
+		}
+	}
 	if substitution != nil {
 		if err := substitution.Apply(request, bodyFramingSupported); err != nil {
 			return request, proxyBlockedHTTPResponse(request, ProxyReasonMITMHookDenied)

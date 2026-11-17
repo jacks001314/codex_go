@@ -2677,6 +2677,39 @@
    "phase": "P1",
    "status": "complete",
    "verifier": "TestThreadReadTrimsLoadedStoredTitleLikeRust;TestThreadReadDoesNotPromoteLegacyPreviewLikeRust;TestThreadReadKeepsStoredTitleForUnloadedThreadsLikeRust"
+  },
+  {
+   "id": "permission-profile-compatibility-writable-roots",
+   "kind": "source-surface",
+   "rustPaths": [
+    "protocol/src/permissions.rs",
+    "sandboxing/src/windows.rs"
+   ],
+   "goPaths": [
+    "sandbox/permissions.go",
+    "sandbox/sandboxpath/sandboxpath.go",
+    "sandbox/compatibility_writable_roots_like_rust_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestCompatibilityWritableRootsPreserveOutputOnlyFallbackLikeRust;TestProtectedMetadataNamesMatchRustConstant"
+  },
+  {
+   "id": "network-proxy-tool-call-attribution",
+   "kind": "source-surface",
+   "rustPaths": [
+    "network-proxy/src/upstream.rs",
+    "network-proxy/src/http_proxy.rs",
+    "network-proxy/README.md"
+   ],
+   "goPaths": [
+    "network/proxy_tool_call_attribution.go",
+    "network/proxy_server.go",
+    "network/proxy_tool_call_attribution_like_rust_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestToolCallAttributionEndpointMatchingLikeRust;TestProxyHTTPAttributionLikeRust;TestProxyConnectAttributionLikeRust"
   }
   ]
 }

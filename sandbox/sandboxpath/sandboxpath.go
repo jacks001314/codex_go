@@ -81,9 +81,11 @@ func (r *WritableRoot) PathContainsProtectedMetadataName(path string) bool {
 }
 
 // DefaultProtectedMetadataNames are the workspace metadata names a writable root
-// keeps read-only unless the policy grants an explicit write rule.
+// keeps read-only unless the policy grants an explicit write rule. Rust's
+// `PROTECTED_METADATA_PATH_NAMES` lists `.git`, `.agents`, `.codex`, `.aws`;
+// `.gcode` stays as this port's own project metadata directory.
 func DefaultProtectedMetadataNames() []string {
-	return []string{".git", ".agents", ".gcode", ".aws"}
+	return []string{".git", ".agents", ".codex", ".gcode", ".aws"}
 }
 
 // ProtectedSubpaths mirrors the read-only carveouts a writable root carries by
@@ -92,6 +94,7 @@ func ProtectedSubpaths(root string) []string {
 	return []string{
 		filepath.Join(root, ".git"),
 		filepath.Join(root, ".agents"),
+		filepath.Join(root, ".codex"),
 		filepath.Join(root, ".gcode"),
 		// AWS profiles can select credential helpers the application executes,
 		// so a writable root keeps `.aws` protected by default (Rust #48176).

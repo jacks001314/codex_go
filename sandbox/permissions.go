@@ -205,6 +205,14 @@ func (p *PermissionProfile) LegacySandboxPolicy() *SandboxPolicy {
 	return p.SandboxPolicy
 }
 
+// CompatibilityWritableRoots mirrors Rust's
+// `compatibility_writable_roots_for_permission_profile` (#61784): the legacy
+// writable-root projection of the profile, including the workspace-write
+// fallback roots the sandbox mounts.
+func (p *PermissionProfile) CompatibilityWritableRoots(cwd string) []WritableRoot {
+	return p.LegacySandboxPolicy().GetWritableRootsWithCWD(cwd)
+}
+
 func (p *PermissionProfile) AllowsNetwork() bool {
 	if p == nil {
 		return false
