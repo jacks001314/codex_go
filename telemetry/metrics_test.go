@@ -1,15 +1,20 @@
 package telemetry
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // Mirrors codex-utils-string's sanitize_metric_tag_value tests.
@@ -130,7 +135,33 @@ func (d *recordingHTTPDoer) Do(request *http.Request) (*http.Response, error) {
 	}
 	payload := map[string]any{}
 	if request.Body != nil {
-		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+		raw, err := io.ReadAll(request.Body)
+		if err != nil {
+			return nil, err
+		}
+		switch request.Header.Get("Content-Encoding") {
+		case OtlpCompressionZstd:
+			decoder, err := zstd.NewReader(bytes.NewReader(raw))
+			if err != nil {
+				return nil, err
+			}
+			raw, err = io.ReadAll(decoder)
+			decoder.Close()
+			if err != nil {
+				return nil, err
+			}
+		case OtlpCompressionGzip:
+			reader, err := gzip.NewReader(bytes.NewReader(raw))
+			if err != nil {
+				return nil, err
+			}
+			raw, err = io.ReadAll(reader)
+			_ = reader.Close()
+			if err != nil {
+				return nil, err
+			}
+		}
+		if err := json.Unmarshal(raw, &payload); err != nil {
 			return nil, err
 		}
 	}

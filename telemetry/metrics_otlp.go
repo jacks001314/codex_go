@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -15,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	collectormetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
@@ -75,6 +77,22 @@ const (
 	// MetricsTransportHTTP and MetricsTransportGRPC select the OTLP transport.
 	MetricsTransportHTTP = "http"
 	MetricsTransportGRPC = "grpc"
+
+	// OTLP/HTTP payload compression. The built-in Statsig route defaults to
+	// zstd while explicit environment configuration is honored for every HTTP
+	// exporter (Rust #61911).
+	OtlpCompressionNone = ""
+	OtlpCompressionZstd = "zstd"
+	OtlpCompressionGzip = "gzip"
+
+	// MetricsExporterCompressionEnv / MetricsExporterSignalCompressionEnv and
+	// the matching header variables mirror the OTLP environment configuration
+	// Rust's exporter reads (OTEL_EXPORTER_OTLP_COMPRESSION and the per-signal
+	// overrides).
+	MetricsExporterCompressionEnv       = "OTEL_EXPORTER_OTLP_COMPRESSION"
+	MetricsExporterSignalCompressionEnv = "OTEL_EXPORTER_OTLP_METRICS_COMPRESSION"
+	MetricsExporterHeadersEnv           = "OTEL_EXPORTER_OTLP_HEADERS"
+	MetricsExporterSignalHeadersEnv     = "OTEL_EXPORTER_OTLP_METRICS_HEADERS"
 
 	// StatsigMetricsEndpoint and StatsigMetricsAPIKeyHeader mirror
 	// codex-rs/otel/src/config.rs's built-in metrics route.
@@ -183,6 +201,7 @@ type OTLPMetricsExporter struct {
 	requireHTTPS bool
 	protocol     string
 	headerHelper *otelHeadersHelper
+	compression  string
 }
 
 // MetricsExporter posts one encoded batch to the configured OTLP endpoint. It
@@ -214,6 +233,10 @@ type OTLPMetricsExporterOptions struct {
 	// headers override the static ones, and a failed refresh suspends exports
 	// (Rust #61028).
 	HeaderHelper *otelHeadersHelper
+	// Compression selects the OTLP/HTTP payload encoding (OtlpCompressionNone,
+	// OtlpCompressionZstd, or OtlpCompressionGzip). An empty value leaves the
+	// payload uncompressed, mirroring the exporter default.
+	Compression string
 }
 
 // OTLPHTTPTLSConfig mirrors codex-otel's OtelTlsConfig for OTLP HTTP: the CA
@@ -257,6 +280,7 @@ func NewOTLPMetricsExporter(options OTLPMetricsExporterOptions) *OTLPMetricsExpo
 		requireHTTPS: requireHTTPS,
 		protocol:     options.Protocol,
 		headerHelper: options.HeaderHelper,
+		compression:  options.Compression,
 	}
 }
 
@@ -370,6 +394,15 @@ func (e *OTLPMetricsExporter) Export(ctx context.Context, request OTLPExportMetr
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	contentEncoding := OtlpCompressionNone
+	if e.compression == OtlpCompressionZstd || e.compression == OtlpCompressionGzip {
+		compressed, err := compressMetricsPayload(payload, e.compression)
+		if err != nil {
+			return err
+		}
+		payload = compressed
+		contentEncoding = e.compression
+	}
 	if e.requireHTTPS && !strings.HasPrefix(e.endpoint, "https://") {
 		return fmt.Errorf("OTLP metrics endpoint %q must use HTTPS for mTLS", e.endpoint)
 	}
@@ -380,6 +413,9 @@ func (e *OTLPMetricsExporter) Export(ctx context.Context, request OTLPExportMetr
 		return err
 	}
 	httpRequest.Header.Set("Content-Type", contentType)
+	if contentEncoding != OtlpCompressionNone {
+		httpRequest.Header.Set("Content-Encoding", contentEncoding)
+	}
 	headers := e.headers
 	if e.headerHelper != nil {
 		refreshed, err := e.headerHelper.headersForExport(requestCtx)
@@ -405,6 +441,67 @@ func (e *OTLPMetricsExporter) Export(ctx context.Context, request OTLPExportMetr
 // OTLPExportMetricsRequest is one encoded export batch.
 type OTLPExportMetricsRequest struct {
 	ResourceMetrics []OTLPResourceMetrics
+}
+
+// compressMetricsPayload encodes one OTLP/HTTP batch with the requested
+// compression, mirroring opentelemetry-otlp's gzip and zstd encoders.
+func compressMetricsPayload(payload []byte, compression string) ([]byte, error) {
+	switch compression {
+	case OtlpCompressionZstd:
+		encoder, err := zstd.NewWriter(nil)
+		if err != nil {
+			return nil, err
+		}
+		defer encoder.Close()
+		return encoder.EncodeAll(payload, nil), nil
+	case OtlpCompressionGzip:
+		var buffer bytes.Buffer
+		writer := gzip.NewWriter(&buffer)
+		if _, err := writer.Write(payload); err != nil {
+			_ = writer.Close()
+			return nil, err
+		}
+		if err := writer.Close(); err != nil {
+			return nil, err
+		}
+		return buffer.Bytes(), nil
+	default:
+		return payload, nil
+	}
+}
+
+// normalizeOTLPCompression maps an OTLP compression environment value onto the
+// supported encodings; `none`, empty, and unrecognized values leave the payload
+// uncompressed like the SDK's parser.
+func normalizeOTLPCompression(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case OtlpCompressionZstd:
+		return OtlpCompressionZstd
+	case OtlpCompressionGzip:
+		return OtlpCompressionGzip
+	default:
+		return OtlpCompressionNone
+	}
+}
+
+// resolveOTLPHTTPCompression mirrors Rust #61911: explicit OTLP compression or
+// header configuration is left to the operator, otherwise the built-in Statsig
+// route defaults to Zstandard and a configured exporter stays uncompressed.
+func resolveOTLPHTTPCompression(statsig bool) string {
+	for _, key := range []string{MetricsExporterSignalCompressionEnv, MetricsExporterCompressionEnv} {
+		if value, ok := os.LookupEnv(key); ok {
+			return normalizeOTLPCompression(value)
+		}
+	}
+	if !statsig {
+		return OtlpCompressionNone
+	}
+	for _, key := range []string{MetricsExporterSignalHeadersEnv, MetricsExporterHeadersEnv} {
+		if _, ok := os.LookupEnv(key); ok {
+			return OtlpCompressionNone
+		}
+	}
+	return OtlpCompressionZstd
 }
 
 // OTLPResourceMetrics groups the resource, scope, and metrics of one batch.

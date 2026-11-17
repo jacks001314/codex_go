@@ -230,6 +230,7 @@ func NewMetricsClient(options MetricsClientOptions) *MetricsClient {
 		TLS:          options.TLS,
 		Protocol:     options.Protocol,
 		HeaderHelper: options.HeaderHelper,
+		Compression:  resolveOTLPHTTPCompression(options.Statsig),
 	}); exporter != nil {
 		client.exporter = exporter
 	}

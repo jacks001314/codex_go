@@ -2892,6 +2892,22 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestParseWorktreeStatusLikeRust;TestGetHeadStateDistinguishesUnbornAndMissingLikeRust;TestGetWorktreeStatusInRepoReportsHeadAndChangesLikeRust;TestProbeWorktreeChangesOnlyReportsPositiveLikeRust;TestMemoryGitCollectorPublishesPartialMetadataLikeRust;TestMemoryGitCollectorAppliesStatusOnlyWhenHeadMatchesLikeRust;TestApplyMemoryGitChangeObservationLikeRust"
+  },
+  {
+   "id": "statsig-metrics-zstd",
+   "kind": "source-surface",
+   "rustPaths": [
+    "otel/src/metrics/client.rs"
+   ],
+   "goPaths": [
+    "telemetry/metrics_otlp.go",
+    "telemetry/metrics_client.go",
+    "telemetry/metrics_test.go",
+    "telemetry/metrics_compression_like_rust_test.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestResolveOTLPHTTPCompressionLikeRust;TestMetricsClientCompressesStatsigExportsLikeRust;TestMetricsClientHonorsCompressionEnvLikeRust;TestCompressMetricsPayloadRoundTripLikeRust"
   }
   ]
 }
