@@ -2638,12 +2638,9 @@ type Model struct {
 	// the draft under the cursor until Esc returns to normal mode (Rust #42194).
 	vimReplaceMode     bool
 	vimReplaceRecovery []vimReplaceRecoveryEntry
-	// vimUndoStack/vimRedoStack store bounded composer draft snapshots for Vim
-	// undo (u) and redo (ctrl-r), mirroring Rust vim_history.rs (#41941/#42140).
-	vimUndoStack    []vimDraftSnapshot
-	vimRedoStack    []vimDraftSnapshot
-	vimEditPending  bool
-	vimEditSnapshot vimDraftSnapshot
+	// editHistory is the bounded composer undo/redo history shared by Vim and
+	// plain editing (Rust edit_history.rs, #41941/#42140/#61951).
+	editHistory editHistory
 	// vimPendingFind tracks a pending Vim find/till motion (f/F/t/T): the next
 	// typed character is the search target. vimFindKind: 0=find, 1=till;
 	// vimFindForward is true for f/t; vimFindOperator carries a pending d/y/c

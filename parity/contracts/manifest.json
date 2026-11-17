@@ -3054,6 +3054,24 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestRemoteVoiceOwnedCallCreatesClientCallLikeRust;TestVoiceSessionIDsArePerCallLikeRust"
+  },
+  {
+   "id": "composer-edit-history",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/bottom_pane/chat_composer/vim_history.rs",
+    "tui/src/bottom_pane/chat_composer.rs",
+    "tui/src/bottom_pane/chat_composer/vim_history_tests.rs"
+   ],
+   "goPaths": [
+    "tui/tea/edit_history.go",
+    "tui/tea/edit_history_test.go",
+    "tui/tea/vim_mode.go",
+    "tui/tea/model.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestEditHistoryCommitRecordsChangesOnlyLikeRust;TestEditHistoryStepTransfersSnapshotsLikeRust;TestEditHistoryBoundsUndoStepsLikeRust"
   }
   ]
 }

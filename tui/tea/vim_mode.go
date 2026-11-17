@@ -7,19 +7,7 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
-
-	bottompane "codex_go/tui/bottom_pane"
 )
-
-// vimDraftSnapshot captures the composer draft before a Vim edit so undo/redo
-// can restore it across normal-mode commands and insert sessions. Structured
-// elements and attachments ride along so undo/redo restore exact mention
-// bindings and image attachments (Rust #57564).
-type vimDraftSnapshot struct {
-	value       string
-	elements    []ComposerTextElement
-	attachments []bottompane.ComposerAttachment
-}
 
 // vimReplaceRecoveryEntry records one replace-mode keystroke so Backspace can
 // restore the overwritten rune (or remove an appended rune), mirroring Rust
@@ -30,8 +18,6 @@ type vimReplaceRecoveryEntry struct {
 	appended       bool
 	absorbedPrefix bool
 }
-
-const maxVimUndoSteps = 64
 
 // shouldHandleVimInsertEscape mirrors Rust TextArea::should_handle_vim_insert_escape:
 // Vim consumes Esc in insert/replace mode and while an operator waits for its
@@ -50,106 +36,17 @@ type vimSearchRange struct {
 	End   int
 }
 
-// vimCurrentDraftSnapshot returns the raw composer draft used by undo/redo.
-func (m *Model) vimCurrentDraftSnapshot() vimDraftSnapshot {
-	if m == nil {
-		return vimDraftSnapshot{}
-	}
-	return vimDraftSnapshot{
-		value:       m.composer.Value(),
-		elements:    cloneComposerTextElements(m.composerElements),
-		attachments: cloneComposerAttachments(m.attachments),
-	}
-}
+// The Vim bindings drive the shared composer edit history so one transaction
+// model covers normal-mode commands and insert sessions.
+func (m *Model) vimBeginEdit() bool { return m.beginEdit() }
 
-// restoreVimDraftSnapshot installs a snapshot's text, elements and attachments.
-func (m *Model) restoreVimDraftSnapshot(snapshot vimDraftSnapshot) {
-	if m == nil {
-		return
-	}
-	m.composer.SetValue(snapshot.value)
-	m.composerElements = cloneComposerTextElements(snapshot.elements)
-	m.attachments = cloneComposerAttachments(snapshot.attachments)
-	m.vimSetCursorAtByteOffset(len(snapshot.value))
-}
+func (m *Model) vimCommitEdit() { m.commitEdit() }
 
-// vimBeginEdit opens a Vim edit transaction when none is active and reports
-// whether this call created the transaction. Insert sessions and multi-key
-// commands reuse the outer transaction until vimCommitEdit.
-func (m *Model) vimBeginEdit() bool {
-	if m == nil || m.vimEditPending {
-		return false
-	}
-	m.vimEditPending = true
-	m.vimEditSnapshot = m.vimCurrentDraftSnapshot()
-	return true
-}
+func (m *Model) vimFinishEdit(startedHere bool) { m.finishEdit(startedHere) }
 
-// vimCommitEdit closes an open Vim transaction, pushing the pre-edit snapshot
-// onto the undo stack when the draft actually changed. New edits clear redo.
-func (m *Model) vimCommitEdit() {
-	if m == nil || !m.vimEditPending {
-		return
-	}
-	m.vimEditPending = false
-	if m.vimEditSnapshot.value == m.composer.Value() {
-		return
-	}
-	m.vimUndoStack = append(m.vimUndoStack, m.vimEditSnapshot)
-	if len(m.vimUndoStack) > maxVimUndoSteps {
-		m.vimUndoStack = m.vimUndoStack[len(m.vimUndoStack)-maxVimUndoSteps:]
-	}
-	m.vimRedoStack = nil
-}
+func (m *Model) vimApplyUndo() bool { return m.applyUndo() }
 
-// vimFinishEdit closes a transaction created by the caller of a mutating
-// helper (startedHere) while leaving an enclosing insert-session transaction
-// open for the eventual Esc commit.
-func (m *Model) vimFinishEdit(startedHere bool) {
-	if startedHere {
-		m.vimCommitEdit()
-	}
-}
-
-// vimApplyUndo restores the newest undo snapshot and moves the current draft
-// onto the redo stack (Vim `u`, Rust #41941).
-func (m *Model) vimApplyUndo() bool {
-	if m == nil || len(m.vimUndoStack) == 0 {
-		return false
-	}
-	m.vimRedoStack = append(m.vimRedoStack, m.vimCurrentDraftSnapshot())
-	snapshot := m.vimUndoStack[len(m.vimUndoStack)-1]
-	m.vimUndoStack = m.vimUndoStack[:len(m.vimUndoStack)-1]
-	m.restoreVimDraftSnapshot(snapshot)
-	return true
-}
-
-// vimApplyRedo restores the newest redo snapshot (Vim ctrl-r, Rust #42140).
-func (m *Model) vimApplyRedo() bool {
-	if m == nil || len(m.vimRedoStack) == 0 {
-		return false
-	}
-	m.vimUndoStack = append(m.vimUndoStack, m.vimCurrentDraftSnapshot())
-	if len(m.vimUndoStack) > maxVimUndoSteps {
-		m.vimUndoStack = m.vimUndoStack[len(m.vimUndoStack)-maxVimUndoSteps:]
-	}
-	snapshot := m.vimRedoStack[len(m.vimRedoStack)-1]
-	m.vimRedoStack = m.vimRedoStack[:len(m.vimRedoStack)-1]
-	m.restoreVimDraftSnapshot(snapshot)
-	return true
-}
-
-// resetVimEditHistory clears undo/redo state when a draft is replaced by a new
-// prompt, an external editor edit, or a thread switch.
-func (m *Model) resetVimEditHistory() {
-	if m == nil {
-		return
-	}
-	m.vimUndoStack = nil
-	m.vimRedoStack = nil
-	m.vimEditPending = false
-	m.vimEditSnapshot = vimDraftSnapshot{}
-}
+func (m *Model) vimApplyRedo() bool { return m.applyRedo() }
 
 // enterVimInsertAfterSubmission returns the composer to Vim Insert mode after a
 // submission or draft transition when Vim is enabled, clearing pending
