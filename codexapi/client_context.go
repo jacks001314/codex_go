@@ -162,6 +162,26 @@ func NewClientMetadata(installationID string, sessionID string, threadID string,
 	}
 }
 
+// ApplyMemoryGitChangeObservation adds a Git-confirmed positive change
+// observation to an otherwise unknown memory workspace status (Rust #61939).
+// A completed full scan wins, and the observation only applies when its HEAD
+// matches the independently observed workspace HEAD.
+func (m *ClientMetadata) ApplyMemoryGitChangeObservation(repoRoot string, headCommitHash *string, hasChanges bool) {
+	if m == nil || m.RequestKind != ClientRequestMemory || !hasChanges || headCommitHash == nil {
+		return
+	}
+	workspace, ok := m.Workspaces[repoRoot]
+	if !ok || workspace.HasChanges != nil {
+		return
+	}
+	if workspace.LatestGitCommitHash != *headCommitHash {
+		return
+	}
+	observed := true
+	workspace.HasChanges = &observed
+	m.Workspaces[repoRoot] = workspace
+}
+
 func (m *ClientMetadata) HasTurnMetadata() bool {
 	return m != nil && m.RequestKind != ""
 }

@@ -2866,6 +2866,32 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestReadThreadBoundsPaginatedTurnItemsLikeRust"
+  },
+  {
+   "id": "memory-git-metadata-partial",
+   "kind": "source-surface",
+   "rustPaths": [
+    "git-utils/src/status.rs",
+    "git-utils/src/info.rs",
+    "core/src/turn_metadata.rs",
+    "core/src/responses_metadata.rs",
+    "memories/write/src/runtime.rs",
+    "memories/write/src/phase1.rs"
+   ],
+   "goPaths": [
+    "gitutil/status.go",
+    "gitutil/head.go",
+    "gitutil/probe.go",
+    "codexapi/client_context.go",
+    "appserver/memory_git_metadata.go",
+    "appserver/memory_startup.go",
+    "gitutil/worktree_status_v2_like_rust_test.go",
+    "appserver/memory_git_metadata_like_rust_test.go",
+    "codexapi/memory_git_change_observation_like_rust_test.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestParseWorktreeStatusLikeRust;TestGetHeadStateDistinguishesUnbornAndMissingLikeRust;TestGetWorktreeStatusInRepoReportsHeadAndChangesLikeRust;TestProbeWorktreeChangesOnlyReportsPositiveLikeRust;TestMemoryGitCollectorPublishesPartialMetadataLikeRust;TestMemoryGitCollectorAppliesStatusOnlyWhenHeadMatchesLikeRust;TestApplyMemoryGitChangeObservationLikeRust"
   }
   ]
 }

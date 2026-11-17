@@ -13,11 +13,11 @@ func TestShareStatusRunCoalescesConcurrentScansSameRootLikeRust(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan struct{}, 1)
 	var calls atomic.Int32
-	initiator := func() (bool, error) {
+	initiator := func() (*GitWorktreeStatus, error) {
 		calls.Add(1)
 		started <- struct{}{}
 		<-release
-		return true, nil
+		return &GitWorktreeStatus{HasChanges: true}, nil
 	}
 	key := filepath.Join("tmp", "repo")
 	runA := shareStatusRun(key, initiator)
@@ -34,8 +34,8 @@ func TestShareStatusRunCoalescesConcurrentScansSameRootLikeRust(t *testing.T) {
 	close(release)
 	ctx := context.Background()
 	for name, run := range map[string]*statusRun{"first": runA, "second": runB} {
-		if ok, err := waitStatus(ctx, run); err != nil || !ok {
-			t.Fatalf("%s consumer result = %v, %v; want true, nil", name, ok, err)
+		if status, err := waitStatus(ctx, run); err != nil || status == nil || !status.HasChanges {
+			t.Fatalf("%s consumer result = %v, %v; want changes, nil", name, status, err)
 		}
 	}
 	if calls.Load() != 1 {
@@ -47,11 +47,11 @@ func TestShareStatusRunDifferentRootsScanIndependentlyLikeRust(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan struct{}, 2)
 	var calls atomic.Int32
-	initiator := func() (bool, error) {
+	initiator := func() (*GitWorktreeStatus, error) {
 		calls.Add(1)
 		started <- struct{}{}
 		<-release
-		return true, nil
+		return &GitWorktreeStatus{HasChanges: true}, nil
 	}
 	runOne := shareStatusRun("repo-one", initiator)
 	runTwo := shareStatusRun("repo-two", initiator)
@@ -74,9 +74,9 @@ func TestShareStatusRunDifferentRootsScanIndependentlyLikeRust(t *testing.T) {
 
 func TestShareStatusRunFreshScanAfterCompletionLikeRust(t *testing.T) {
 	var calls atomic.Int32
-	initiator := func() (bool, error) {
+	initiator := func() (*GitWorktreeStatus, error) {
 		calls.Add(1)
-		return false, nil
+		return &GitWorktreeStatus{}, nil
 	}
 	ctx := context.Background()
 	runA := shareStatusRun("repo", initiator)
@@ -103,11 +103,11 @@ func TestShareStatusRunConsumerCancellationDoesNotAbortSharedScan(t *testing.T) 
 	release := make(chan struct{})
 	started := make(chan struct{}, 1)
 	var calls atomic.Int32
-	initiator := func() (bool, error) {
+	initiator := func() (*GitWorktreeStatus, error) {
 		calls.Add(1)
 		started <- struct{}{}
 		<-release
-		return true, nil
+		return &GitWorktreeStatus{HasChanges: true}, nil
 	}
 	run := shareStatusRun("repo", initiator)
 	<-started // the shared scan is in flight before any consumer cancels
@@ -120,8 +120,8 @@ func TestShareStatusRunConsumerCancellationDoesNotAbortSharedScan(t *testing.T) 
 		t.Fatalf("runner calls = %d, want 1 (cancelled consumer reuses the run)", calls.Load())
 	}
 	close(release)
-	if ok, err := waitStatus(context.Background(), run); err != nil || !ok {
-		t.Fatalf("surviving consumer result = %v, %v; want true, nil", ok, err)
+	if status, err := waitStatus(context.Background(), run); err != nil || status == nil || !status.HasChanges {
+		t.Fatalf("surviving consumer result = %v, %v; want changes, nil", status, err)
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("runner calls = %d after completion, want 1", calls.Load())
@@ -142,11 +142,11 @@ func TestShareStatusRunCanonicalRootAliasesShareScanLikeRust(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan struct{}, 1)
 	var calls atomic.Int32
-	initiator := func() (bool, error) {
+	initiator := func() (*GitWorktreeStatus, error) {
 		calls.Add(1)
 		started <- struct{}{}
 		<-release
-		return true, nil
+		return &GitWorktreeStatus{HasChanges: true}, nil
 	}
 	realKey := canonicalRepoRoot(real)
 	aliasKey := canonicalRepoRoot(link)
@@ -191,14 +191,14 @@ func TestHasChangesInRepoReportsRealGitStatus(t *testing.T) {
 		t.Fatalf("git commit: %v", err)
 	}
 	ctx := context.Background()
-	if ok, err := hasChangesInRepoWithRunner(ctx, dir, dir, defaultStatusRunner); err != nil || ok {
-		t.Fatalf("clean repo = %v, %v; want false, nil", ok, err)
+	if status, err := worktreeStatusInRepoWithRunner(ctx, dir, dir, defaultStatusRunner); err != nil || status.HasChanges {
+		t.Fatalf("clean repo = %v, %v; want no changes, nil", status, err)
 	}
 	if err := os.WriteFile(file, []byte("changed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := hasChangesInRepoWithRunner(ctx, dir, dir, defaultStatusRunner); err != nil || !ok {
-		t.Fatalf("dirty repo = %v, %v; want true, nil", ok, err)
+	if status, err := worktreeStatusInRepoWithRunner(ctx, dir, dir, defaultStatusRunner); err != nil || !status.HasChanges {
+		t.Fatalf("dirty repo = %v, %v; want changes, nil", status, err)
 	}
 }
 
@@ -210,13 +210,13 @@ func TestCanonicalRepoRootFallsBackToCleanPath(t *testing.T) {
 }
 
 func TestHasChangesInRepoPropagatesRunnerError(t *testing.T) {
-	initiator := func() (bool, error) {
-		return false, errors.New("boom")
+	initiator := func() (*GitWorktreeStatus, error) {
+		return nil, errors.New("boom")
 	}
 	run := shareStatusRun("repo", initiator)
-	ok, err := waitStatus(context.Background(), run)
-	if err == nil || ok {
-		t.Fatalf("scan = %v, %v; want error", ok, err)
+	status, err := waitStatus(context.Background(), run)
+	if err == nil || status != nil {
+		t.Fatalf("scan = %v, %v; want error", status, err)
 	}
 }
 

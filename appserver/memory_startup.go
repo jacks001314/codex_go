@@ -101,6 +101,14 @@ func (e *appServerMemoryStageOne) ExtractMemory(ctx context.Context, request mem
 			}},
 		})
 	}
+	// Rust #61939: overlap a positive-only worktree probe with request
+	// preparation and use its observation only if it already completed.
+	gitProbe := startMemoryGitChangeProbe(ctx, e.parentCWD)
+	defer gitProbe.Close()
+	clientMetadata := e.detachedClientMetadataStruct(ctx)
+	if observed := gitProbe.completed(); observed != nil {
+		clientMetadata.ApplyMemoryGitChangeObservation(observed.RepoRoot, observed.Status.HeadCommitHash, observed.Status.HasChanges)
+	}
 	response, err := agent.Run(ctx, &model.AgentRequest{
 		InputItems:       inputItems,
 		Instructions:     request.Instructions,
@@ -114,7 +122,7 @@ func (e *appServerMemoryStageOne) ExtractMemory(ctx context.Context, request mem
 		ServiceTier:      e.serviceTier,
 		ItemIDsEnabled:   true,
 		OutputSchema:     request.OutputSchema,
-		ClientMetadata:   e.detachedClientMetadata(ctx),
+		ClientMetadata:   clientMetadata.ClientMetadata(),
 	})
 	if err != nil {
 		return memories.StageOneExtractionResponse{}, err
@@ -135,6 +143,10 @@ func (e *appServerMemoryStageOne) ExtractMemory(ctx context.Context, request mem
 }
 
 func (e *appServerMemoryStageOne) detachedClientMetadata(ctx context.Context) map[string]string {
+	return e.detachedClientMetadataStruct(ctx).ClientMetadata()
+}
+
+func (e *appServerMemoryStageOne) detachedClientMetadataStruct(ctx context.Context) *codexapi.ClientMetadata {
 	installationID := ""
 	codexHome := e.router.codexHomeForRollout()
 	if codexHome != "" {
@@ -162,7 +174,7 @@ func (e *appServerMemoryStageOne) detachedClientMetadata(ctx context.Context) ma
 	if cfg, err := e.router.effectiveConfigForTurn(&turn.TurnStartParams{ThreadID: e.parentThreadID, CWD: e.parentCWD}); err == nil && cfg != nil {
 		metadata.ResponsesAPIMetadata = cfg.ResponsesAPIMetadata()
 	}
-	return metadata.ClientMetadata()
+	return metadata
 }
 
 // newMemoryTurnID mirrors Rust's detached-memory turn identity
@@ -717,33 +729,31 @@ func detachedMemoryWorkspace(ctx context.Context, cwd string) (string, codexapi.
 	if cwd == "" {
 		return "", codexapi.ClientWorkspaceMetadata{}, false
 	}
-	run := func(args ...string) (string, error) {
-		// Rust 3149fa4b99: git metadata commands must terminate the whole
-		// process tree on timeout, not just the direct process.
-		output, err := gitutil.RunWithTimeout(ctx, 2*time.Second, cwd, args...)
-		return strings.TrimSpace(output), err
-	}
 	root, err := gitutil.DiscoverGitRoot(ctx, cwd)
 	if err != nil || root == "" {
 		return "", codexapi.ClientWorkspaceMetadata{}, false
 	}
 	root, _ = filepath.Abs(root)
-	workspace := codexapi.ClientWorkspaceMetadata{}
-	if head, headErr := run("rev-parse", "HEAD"); headErr == nil {
-		workspace.LatestGitCommitHash = head
+	// Rust #61939: HEAD, verified remote URLs, and worktree status publish
+	// incrementally so a slow scan cannot discard metadata observed before the
+	// one-second memory deadline.
+	collector := newMemoryGitCollector()
+	collectCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		collector.collect(collectCtx, cwd, root)
+	}()
+	timer := time.NewTimer(memoryGitMetadataTimeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
 	}
-	// Rust b6c3b51533 (#37151): coalesce concurrent `git status --porcelain`
-	// scans by the canonical repository root so sibling/symlink-alias
-	// metadata requests share a single in-flight invocation.
-	if hasChanges, statusErr := gitutil.HasChangesInRepo(ctx, cwd, root); statusErr == nil {
-		workspace.HasChanges = &hasChanges
-	}
-	// Rust #61488: read fetch URLs from NUL-delimited Git configuration so a
-	// partial clone filter can never be mistaken for a remote entry.
-	if remotes := gitutil.GetGitRemoteURLsAssumeGitRepo(ctx, cwd); len(remotes) > 0 {
-		workspace.AssociatedRemoteURLs = remotes
-	}
-	return root, workspace, true
+	cancel()
+	<-done
+	return root, collector.snapshot(), true
 }
 
 func waitForWaitGroup(group *sync.WaitGroup, timeout time.Duration) error {
