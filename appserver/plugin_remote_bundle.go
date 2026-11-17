@@ -39,10 +39,19 @@ func ensureRemoteInstalledPluginCache(ctx context.Context, client interface {
 		if err := validateCachedRemotePluginRoot(activeRoot, name); err != nil {
 			return "", err
 		}
-		if err := writeRemotePluginInstallMetadata(pluginBase, candidate.ID); err != nil {
-			return activeRoot, err
+		// Rust #61865: a same-version cache counts only when its install receipt
+		// proves ownership. Receipts written before this check are migrated in
+		// place; a conflicting or unreadable receipt forces a fresh download so
+		// a failed replacement keeps the original receipt.
+		switch persisted, err := readRemotePluginInstallMetadata(pluginBase); {
+		case err == nil && persisted == strings.TrimSpace(candidate.ID):
+			return activeRoot, nil
+		case err == nil && persisted == "":
+			if err := writeRemotePluginInstallMetadata(pluginBase, candidate.ID); err != nil {
+				return activeRoot, err
+			}
+			return activeRoot, nil
 		}
-		return activeRoot, nil
 	}
 	if version == "" || candidate.Release.BundleDownloadURL == nil || strings.TrimSpace(*candidate.Release.BundleDownloadURL) == "" {
 		if activeRoot == "" {
@@ -577,6 +586,29 @@ func writeRemotePluginInstallMetadata(pluginBase string, remotePluginID string) 
 	target := filepath.Join(pluginBase, remotePluginInstallMetadataFilename)
 	_ = os.Remove(target)
 	return os.Rename(temporaryPath, target)
+}
+
+// readRemotePluginInstallMetadata returns the cached remote identity. An empty
+// string with a nil error means the cache predates install receipts.
+func readRemotePluginInstallMetadata(pluginBase string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(pluginBase, remotePluginInstallMetadataFilename))
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	var metadata struct {
+		SchemaVersion  int    `json:"schema_version"`
+		RemotePluginID string `json:"remote_plugin_id"`
+	}
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return "", err
+	}
+	if metadata.SchemaVersion != 1 {
+		return "", fmt.Errorf("unsupported remote plugin install metadata schema version: %d", metadata.SchemaVersion)
+	}
+	return strings.TrimSpace(metadata.RemotePluginID), nil
 }
 
 func removeStaleRemoteInstalledPluginCaches(codexHome string, installed map[string]map[string]struct{}) error {

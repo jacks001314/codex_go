@@ -218,7 +218,7 @@ func (ctx *pluginCLIContext) remotePluginForSelection(selection *pluginSelection
 	return nil, nil, fmt.Errorf("plugin %q is not available in remote marketplace %q", selection.PluginName, selection.MarketplaceName)
 }
 
-func appendRemotePluginMarketplace(entries []plugin.PluginMarketplaceEntry, marketplace string, remote []plugin.RemoteCatalogPlugin, installed map[string]bool) []plugin.PluginMarketplaceEntry {
+func appendRemotePluginMarketplace(entries []plugin.PluginMarketplaceEntry, marketplace string, remote []plugin.RemoteCatalogPlugin, installed map[string]bool, store *plugin.PluginStore) []plugin.PluginMarketplaceEntry {
 	if len(remote) == 0 {
 		return entries
 	}
@@ -228,23 +228,34 @@ func appendRemotePluginMarketplace(entries []plugin.PluginMarketplaceEntry, mark
 		if name == "" {
 			continue
 		}
+		pluginID := name + "@" + marketplace
+		isInstalled := installed[item.ID]
+		// Rust #61865: localVersion reports the installed package that carries
+		// this catalog identity, which can differ from the advertised version.
+		// An uninstalled or unproven package leaves the field unset.
+		var localVersion *string
+		if isInstalled && store != nil {
+			if version, ok := store.LocalRemotePluginVersion(pluginID, strings.TrimSpace(item.ID)); ok {
+				localVersion = &version
+			}
+		}
 		summaries = append(summaries, plugin.PluginSummary{
-			ID:                name + "@" + marketplace,
+			ID:                pluginID,
 			Name:              name,
 			DisplayName:       firstNonEmptyLocal(strings.TrimSpace(item.Release.DisplayName), name),
 			Description:       strings.TrimSpace(item.Release.Description),
 			MarketplaceName:   marketplace,
 			RemotePluginID:    strings.TrimSpace(item.ID),
 			Version:           item.Release.Version,
-			LocalVersion:      item.Release.Version,
+			LocalVersion:      localVersion,
 			Availability:      item.Availability,
 			DisabledReason:    item.DisabledReason,
 			EligiblePlanTypes: item.EligiblePlanTypes,
 			InstallPolicy:     item.InstallationPolicy,
 			AuthPolicy:        item.AuthenticationPolicy,
 			Source:            plugin.PluginSource{Type: "remote"},
-			Installed:         installed[item.ID],
-			Enabled:           installed[item.ID],
+			Installed:         isInstalled,
+			Enabled:           isInstalled,
 			Keywords:          append([]string(nil), item.Release.Keywords...),
 		})
 	}
@@ -403,18 +414,19 @@ func runPluginList(ctx *pluginCLIContext, opts *cli.PluginOptions, stdout io.Wri
 			}
 		}
 	}
+	store, _ := plugin.NewPluginStore(ctx.codexHome)
 	if scope, ok := plugin.RemoteCatalogScopeForMarketplace(opts.MarketplaceName); ok {
 		remote, err := ctx.remoteCatalogPlugins(scope, false)
 		if err != nil {
 			return err
 		}
-		entries = appendRemotePluginMarketplace(entries, opts.MarketplaceName, remote, installedRemote)
+		entries = appendRemotePluginMarketplace(entries, opts.MarketplaceName, remote, installedRemote, store)
 	} else if opts.MarketplaceName == "" {
 		// An unfiltered listing keeps the local curated catalog when the remote
 		// directory is unavailable; an explicitly selected remote marketplace
 		// surfaces the error above.
 		if remote, err := ctx.remoteCatalogPlugins(plugin.RemoteCatalogScopeGlobal, false); err == nil {
-			entries = appendRemotePluginMarketplace(entries, plugin.RemoteGlobalMarketplaceName, remote, installedRemote)
+			entries = appendRemotePluginMarketplace(entries, plugin.RemoteGlobalMarketplaceName, remote, installedRemote, store)
 		}
 	}
 	writer := bufio.NewWriter(stdout)
@@ -755,11 +767,17 @@ func pluginMarketplaceEntriesPluginCount(entries []plugin.PluginMarketplaceEntry
 }
 
 func pluginListEntryFromSummary(summary plugin.PluginSummary) pluginListJSONEntry {
+	// Rust plugin_cmd.rs prints the installed package version when one proves
+	// this catalog identity, otherwise the catalog version (#61865).
+	version := summary.Version
+	if summary.LocalVersion != nil {
+		version = summary.LocalVersion
+	}
 	return pluginListJSONEntry{
 		PluginID:        summary.ID,
 		Name:            summary.Name,
 		MarketplaceName: summary.MarketplaceName,
-		Version:         summary.LocalVersion,
+		Version:         version,
 		Installed:       summary.Installed,
 		Enabled:         summary.Enabled,
 		Source:          summary.Source,
@@ -868,6 +886,8 @@ func printPluginRows(stdout io.Writer, rows []plugin.PluginSummary) error {
 		version := ""
 		if summary.LocalVersion != nil {
 			version = *summary.LocalVersion
+		} else if summary.Version != nil {
+			version = *summary.Version
 		}
 		path := firstNonEmptyLocal(summary.Source.Path, summary.Source.URL, summary.Source.Package)
 		row := [4]string{summary.ID, status, version, path}

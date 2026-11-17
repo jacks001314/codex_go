@@ -218,6 +218,43 @@ func (s *PluginStore) IsInstalled(pluginID *PluginId) bool {
 	return ok
 }
 
+// LocalRemotePluginVersion reports the version of the materialized remote
+// package that matches its catalog identity (Rust
+// `PluginsManager::local_remote_plugin_version`, #61865).
+//
+// A cached package only counts when its install receipt names the same remote
+// plugin and the package still carries a plugin manifest. The version is the
+// installed directory name, which can differ from the catalog's advertised
+// version.
+func (s *PluginStore) LocalRemotePluginVersion(pluginKey string, remotePluginID string) (string, bool) {
+	pluginID, err := ParsePluginId(pluginKey)
+	if err != nil || pluginID == nil {
+		return "", false
+	}
+	remotePluginID = strings.TrimSpace(remotePluginID)
+	if remotePluginID == "" {
+		return "", false
+	}
+	root, ok := s.ActivePluginRoot(pluginID)
+	if !ok || root == "" {
+		return "", false
+	}
+	// A missing receipt is the migration case: ownership is unproven, so the
+	// catalog version stands in until the package is reinstalled.
+	persisted, err := s.RemotePluginID(pluginID)
+	if err != nil || persisted != remotePluginID {
+		return "", false
+	}
+	if manifestPath, err := findPluginManifestPath(root); err != nil || manifestPath == "" {
+		return "", false
+	}
+	version := filepath.Base(root)
+	if version == "" || version == "." || version == string(filepath.Separator) {
+		return "", false
+	}
+	return version, true
+}
+
 // RemotePluginID reads the remote plugin identifier from the installed plugin's metadata.
 func (s *PluginStore) RemotePluginID(pluginID *PluginId) (string, error) {
 	if !s.IsInstalled(pluginID) {
