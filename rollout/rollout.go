@@ -2888,6 +2888,46 @@ type ListOptions struct {
 	IncludedThreadIDs []string
 }
 
+// threadItemFilters mirrors Rust's SummaryFilters (rollout/src/list.rs #61902):
+// the source, provider, cwd, and attached checks run as soon as the first
+// session metadata line is read, so an excluded rollout is never scanned for
+// preview or user-message events, and copied fork metadata cannot override the
+// canonical session metadata the filter saw.
+type threadItemFilters struct {
+	allowedSources         []string
+	modelProviders         []string
+	cwdFilters             []string
+	includeAttachedThreads bool
+}
+
+func listFiltersFromOptions(options *ListOptions) threadItemFilters {
+	if options == nil {
+		return threadItemFilters{includeAttachedThreads: true}
+	}
+	return threadItemFilters{
+		allowedSources:         options.AllowedSources,
+		modelProviders:         options.ModelProviders,
+		cwdFilters:             options.CWDFilters,
+		includeAttachedThreads: options.IncludeAttachedThreads,
+	}
+}
+
+func (f threadItemFilters) matches(item *ThreadItem) bool {
+	if !f.includeAttachedThreads && item.AttachedThread {
+		return false
+	}
+	if len(f.allowedSources) > 0 && !contains(f.allowedSources, item.Source) {
+		return false
+	}
+	if len(f.modelProviders) > 0 && !contains(f.modelProviders, item.ModelProvider) {
+		return false
+	}
+	if len(f.cwdFilters) > 0 && !contains(f.cwdFilters, item.CWD) {
+		return false
+	}
+	return true
+}
+
 func ListThreads(codexHome string, options ListOptions) (*Page, error) {
 	root := filepath.Join(codexHome, SessionsSubdir)
 	if options.Archived {
@@ -2898,8 +2938,9 @@ func ListThreads(codexHome string, options ListOptions) (*Page, error) {
 		return nil, err
 	}
 	items := make([]ThreadItem, 0, len(paths))
+	filters := listFiltersFromOptions(&options)
 	for _, path := range paths {
-		item, ok := BuildThreadItem(path, options.Archived)
+		item, ok := buildThreadItem(path, options.Archived, filters)
 		if !ok {
 			continue
 		}
@@ -2933,6 +2974,10 @@ func ListThreads(codexHome string, options ListOptions) (*Page, error) {
 }
 
 func BuildThreadItem(path string, archived bool) (ThreadItem, bool) {
+	return buildThreadItem(path, archived, threadItemFilters{includeAttachedThreads: true})
+}
+
+func buildThreadItem(path string, archived bool, filters threadItemFilters) (ThreadItem, bool) {
 	lines, _, err := Load(path)
 	if err != nil || len(lines) == 0 {
 		return ThreadItem{}, false
@@ -2947,6 +2992,9 @@ func BuildThreadItem(path string, archived bool) (ThreadItem, bool) {
 		RecencyAt: info.ModTime().UTC(),
 		Archived:  archived,
 	}
+	// Rust filters on the first session metadata record only, so later copied
+	// fork metadata cannot change whether the rollout is listed (#61902).
+	checkedSessionMeta := false
 	for _, line := range lines {
 		if line.Meta != nil {
 			item.ThreadID = line.Meta.ID
@@ -2962,6 +3010,12 @@ func BuildThreadItem(path string, archived bool) (ThreadItem, bool) {
 			item.CLIVersion = line.Meta.CLIVersion
 			if created, err := time.Parse(time.RFC3339, line.Meta.Timestamp); err == nil {
 				item.CreatedAt = created.UTC()
+			}
+			if !checkedSessionMeta {
+				checkedSessionMeta = true
+				if !filters.matches(&item) {
+					return ThreadItem{}, false
+				}
 			}
 			if session.IsGuardianReviewSource(item.Source) {
 				// Rust #47302 (codex-rs/rollout/src/list.rs): a Guardian review
@@ -3493,18 +3547,9 @@ func matchesOptions(item *ThreadItem, options *ListOptions) bool {
 	if options.IncludedThreadIDs != nil && !contains(options.IncludedThreadIDs, item.ThreadID) {
 		return false
 	}
-	if item.AttachedThread && (options == nil || !options.IncludeAttachedThreads) {
-		return false
-	}
-	if len(options.AllowedSources) > 0 && !contains(options.AllowedSources, item.Source) {
-		return false
-	}
-	if len(options.ModelProviders) > 0 && !contains(options.ModelProviders, item.ModelProvider) {
-		return false
-	}
-	if len(options.CWDFilters) > 0 && !contains(options.CWDFilters, item.CWD) {
-		return false
-	}
+	// Source, provider, cwd, and attached filters run against the first session
+	// metadata record inside buildThreadItem (Rust #61902), so they are not
+	// re-evaluated here against values a later copied record may have written.
 	if options.Search != "" {
 		needle := strings.ToLower(options.Search)
 		return strings.Contains(strings.ToLower(item.Preview), needle) ||

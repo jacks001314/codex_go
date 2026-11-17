@@ -2751,6 +2751,20 @@
    "verifier": "TestEnvironmentContextUTCDateLikeRust"
   },
   {
+   "id": "thread-list-prefilters",
+   "kind": "source-surface",
+   "rustPaths": [
+    "rollout/src/list.rs"
+   ],
+   "goPaths": [
+    "rollout/rollout.go",
+    "rollout/list_filters_before_preview_like_rust_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestListThreadsFiltersCanonicalSessionMetaLikeRust"
+  },
+  {
    "id": "network-proxy-tool-call-attribution",
    "kind": "source-surface",
    "rustPaths": [
