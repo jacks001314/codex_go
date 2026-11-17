@@ -32,7 +32,8 @@ func TestKeymapPageRowsLikeRust(t *testing.T) {
 	tabs := KeymapPageTabs(rows)
 
 	all := keymapPageTabByLabel(t, tabs, "All")
-	if all.Summary != "171 actions, 0 customized, 23 unbound." {
+	// composer.undo/composer.redo (#61954) join the picker.
+	if all.Summary != "173 actions, 0 customized, 23 unbound." {
 		t.Fatalf("all summary = %q (rows=%d)", all.Summary, len(rows))
 	}
 	if got := keymapPageTabByLabel(t, tabs, "Common").Summary; got != "21 actions." {
@@ -62,7 +63,7 @@ func TestKeymapPageRowsLikeRust(t *testing.T) {
 	}
 
 	counts := map[string]int{
-		"App": 39, "Composer": 5, "Editor": 17, "Vim": 69,
+		"App": 39, "Composer": 7, "Editor": 17, "Vim": 69,
 		"Navigation": 22, "Agents": 11, "Approval": 8,
 	}
 	for label, want := range counts {

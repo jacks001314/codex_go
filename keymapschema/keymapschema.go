@@ -62,6 +62,8 @@ var ContextActions = map[string]map[string]struct{}{
 		"toggle_shortcuts":        {},
 		"history_search_previous": {},
 		"history_search_next":     {},
+		"undo":                    {},
+		"redo":                    {},
 	},
 	"editor": {
 		"insert_newline":       {},

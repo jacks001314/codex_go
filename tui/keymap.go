@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 )
 
@@ -67,6 +68,8 @@ var keymapActionCatalog = []KeymapAction{
 	keymapAction("composer", "Composer", "toggle_shortcuts", "Show or hide the composer shortcut overlay.", []string{"?", "shift-?"}),
 	keymapAction("composer", "Composer", "history_search_previous", "Open history search or move to the previous match.", []string{"ctrl-r"}),
 	keymapAction("composer", "Composer", "history_search_next", "Move to the next history search match.", []string{"ctrl-s"}),
+	keymapAction("composer", "Composer", "undo", "Undo the last edit to the composer draft.", defaultComposerUndoBindings()),
+	keymapAction("composer", "Composer", "redo", "Redo an undone composer edit.", defaultComposerRedoBindings()),
 	keymapAction("editor", "Editor", "insert_newline", "Insert a newline in the editor.", []string{"ctrl-j", "ctrl-m", "enter", "shift-enter", "alt-enter"}),
 	keymapAction("editor", "Editor", "move_left", "Move the cursor left.", []string{"left", "ctrl-b"}),
 	keymapAction("editor", "Editor", "move_right", "Move the cursor right.", []string{"right", "ctrl-f"}),
@@ -306,6 +309,35 @@ func KeymapActionLabel(action string) string {
 
 func keymapAction(context string, contextLabel string, action string, description string, defaultBindings []string) KeymapAction {
 	return keymapGatedAction(context, contextLabel, action, description, defaultBindings, "")
+}
+
+// defaultComposerUndoBindings mirrors Rust #61954: Ctrl+Z on Windows, Alt+Z
+// elsewhere (Super+Z is also available on macOS), and F7 everywhere.
+func defaultComposerUndoBindings() []string {
+	var bindings []string
+	if runtime.GOOS == "windows" {
+		bindings = append(bindings, "ctrl-z")
+	} else {
+		bindings = append(bindings, "alt-z")
+		if runtime.GOOS == "darwin" {
+			bindings = append(bindings, "super-z")
+		}
+	}
+	return append(bindings, "f7")
+}
+
+// defaultComposerRedoBindings adds Shift to every undo default, so redo mirrors
+// the platform's undo chord (Rust #61954). Modifiers stay in the normalized
+// ctrl-alt-shift-super order.
+func defaultComposerRedoBindings() []string {
+	switch runtime.GOOS {
+	case "windows":
+		return []string{"ctrl-shift-z", "shift-f7"}
+	case "darwin":
+		return []string{"alt-shift-z", "shift-super-z", "shift-f7"}
+	default:
+		return []string{"alt-shift-z", "shift-f7"}
+	}
 }
 
 func keymapGatedAction(context string, contextLabel string, action string, description string, defaultBindings []string, requiredFeature string) KeymapAction {

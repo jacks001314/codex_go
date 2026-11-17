@@ -5110,7 +5110,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 				if m.asyncQuestions.Expanded() && m.asyncQuestions.HasOptions() {
 					m.asyncQuestions.SelectOther()
 				}
+				m.beginComposerPasteEdit()
 				m.insertComposerPaste(pasted)
+				m.finishComposerEdit()
 				m.extendComposerPasteWindow(m.currentTime())
 				m.refreshSlashPopup()
 				return m, m.refreshSkillPopup()
@@ -5384,6 +5386,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		if m.applyVimModeKey(msg, keySpec) {
 			return m, nil
 		}
+		if m.applyComposerEditHistoryKey(keySpec) {
+			return m, nil
+		}
 		if m.handleReturnToLatestKey(msg) {
 			return m, nil
 		}
@@ -5579,9 +5584,11 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	}
 	var composerCmd bubbletea.Cmd
 	composerBefore := m.composer.Value()
+	m.beginComposerEdit(message)
 	if handled, prefixCmd := m.handleComposerPrefixKey(message); handled {
 		composerCmd = prefixCmd
 		m.syncComposerElements(composerBefore)
+		m.finishComposerEdit()
 		m.refreshSlashPopup()
 		return m, bubbletea.Batch(cmd, composerCmd)
 	}
@@ -5589,6 +5596,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		if handled, selectionCmd := m.applyComposerSelectionKey(key); handled {
 			m.syncComposerPrefixAfterEdit(composerBefore)
 			m.syncComposerElements(composerBefore)
+			m.finishComposerEdit()
 			m.refreshSlashPopup()
 			return m, bubbletea.Batch(cmd, selectionCmd)
 		}
@@ -5596,6 +5604,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	m.composer, composerCmd = m.composer.Update(mousemsg.OriginalMessage(keymsg.OriginalMessage(message)))
 	m.syncComposerPrefixAfterEdit(composerBefore)
 	m.syncComposerElements(composerBefore)
+	m.finishComposerEdit()
 	m.refreshSlashPopup()
 	skillPopupCmd := m.refreshSkillPopup()
 	return m, bubbletea.Batch(cmd, composerCmd, skillPopupCmd)

@@ -41,8 +41,8 @@ import (
 // #57223 adds global.select_transcript as a config-only TuiKeymap field, so it
 // stays out of this catalog (Rust keeps it out of KEYMAP_ACTIONS too), and
 // pager.mark_markdown (#61422) joined the catalog with its table-cell consumer,
-// taking it to 173.
-const keymapCatalogEntryCount = 173
+// taking it to 173, and composer.undo/composer.redo (#61954) took it to 175.
+const keymapCatalogEntryCount = 175
 
 // rustOnlyKeymapActions: Rust actions this Go tree does not register and whose
 // behavior is genuinely missing (still blocked). T-b14 landed agents.fork and
@@ -59,6 +59,11 @@ var rustOnlyKeymapActions = map[string]string{
 var goOnlyKeymapActions = map[string]string{
 	"agents.toggle_pin":    "Go-only agents dashboard action (tui/tea/agents_overview.go:446)",
 	"global.open_warnings": "Go-only warnings viewer shortcut (f2)",
+	// #61954 lands composer.undo/composer.redo upstream after the pinned
+	// a394ff9c reference and after the local checkout's main, so the parser
+	// cannot see them yet; drop these rows when the reference advances.
+	"composer.undo": "upstream #61954 (origin/main); reference checkout lags the pin",
+	"composer.redo": "upstream #61954 (origin/main); reference checkout lags the pin",
 }
 
 // acceptedKeymapRenames records upstream actions that only exist in Go under a

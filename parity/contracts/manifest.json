@@ -3072,6 +3072,27 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestEditHistoryCommitRecordsChangesOnlyLikeRust;TestEditHistoryStepTransfersSnapshotsLikeRust;TestEditHistoryBoundsUndoStepsLikeRust"
+  },
+  {
+   "id": "composer-undo-redo",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/bottom_pane/chat_composer/vim_history.rs",
+    "tui/src/bottom_pane/chat_composer.rs",
+    "tui/src/bottom_pane/mod.rs",
+    "tui/src/keymap.rs",
+    "tui/src/keymap_setup.rs"
+   ],
+   "goPaths": [
+    "tui/tea/edit_history.go",
+    "tui/tea/composer_undo_like_rust_test.go",
+    "tui/tea/model.go",
+    "tui/keymap.go",
+    "keymapschema/keymapschema.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestComposerUndoGroupsTypingLikeRust;TestComposerUndoGroupsBackspacesLikeRust;TestComposerUndoKeepsPasteSeparateLikeRust;TestComposerUndoInvalidatesRedoAndConsumesEmptyLikeRust;TestEditHistoryCommitRecordsChangesOnlyLikeRust;TestEditHistoryStepTransfersSnapshotsLikeRust;TestEditHistoryBoundsUndoStepsLikeRust"
   }
   ]
 }

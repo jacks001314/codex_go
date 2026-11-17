@@ -1,6 +1,11 @@
 package tea
 
-import bottompane "codex_go/tui/bottom_pane"
+import (
+	bubbletea "charm.land/bubbletea/v2"
+
+	bottompane "codex_go/tui/bottom_pane"
+	keymsg "codex_go/tui/keymsg"
+)
 
 // maxEditHistorySteps bounds the composer undo history (Rust MAX_UNDO_STEPS).
 const maxEditHistorySteps = 64
@@ -32,7 +37,17 @@ type editHistory struct {
 	redo            []composerDraftSnapshot
 	pending         bool
 	pendingSnapshot composerDraftSnapshot
+	group           editGroup
 }
+
+// editGroup names a run of related keystrokes that undo as one step.
+type editGroup int
+
+const (
+	editGroupNone editGroup = iota
+	editGroupTyping
+	editGroupBackspace
+)
 
 // begin opens an edit transaction when none is active and reports whether this
 // call created it. Insert sessions and multi-key commands reuse the outer
@@ -59,6 +74,7 @@ func (h *editHistory) commit(current composerDraftSnapshot) bool {
 	h.undo = append(h.undo, h.pendingSnapshot)
 	h.trim()
 	h.redo = nil
+	h.group = editGroupNone
 	return true
 }
 
@@ -77,7 +93,31 @@ func (h *editHistory) step(direction editDirection, current composerDraftSnapsho
 	*from = (*from)[:len(*from)-1]
 	*to = append(*to, current)
 	h.trim()
+	h.group = editGroupNone
 	return snapshot, true
+}
+
+// beginGroupedEdit opens or continues a grouped transaction: contiguous typing
+// or Backspaces share one undo step, while any other edit closes the open group
+// (Rust #61954).
+func (h *editHistory) beginGroupedEdit(group editGroup, current composerDraftSnapshot) {
+	if h.pending {
+		if h.group == group {
+			return
+		}
+		h.commit(current)
+	}
+	h.begin(current)
+	h.group = group
+}
+
+// beginStandaloneEdit closes any open group and opens a transaction the caller
+// commits after the edit, so it cannot merge with neighbouring typing.
+func (h *editHistory) beginStandaloneEdit(current composerDraftSnapshot) {
+	if h.pending {
+		h.commit(current)
+	}
+	h.begin(current)
 }
 
 // trim bounds the undo stack, dropping the oldest steps first.
@@ -180,4 +220,71 @@ func (m *Model) resetEditHistory() {
 // clears is shared, so plain editing resets the same state.
 func (m *Model) resetVimEditHistory() {
 	m.resetEditHistory()
+}
+
+// beginComposerEdit opens the composer edit transaction for one incoming
+// message. Contiguous typing and Backspaces share a step; pastes and one-off
+// edits get their own (Rust #61954's non-Vim path). Vim mode drives its own
+// transactions from vim_mode.go.
+func (m *Model) beginComposerEdit(message bubbletea.Msg) {
+	if m == nil || m.vimMode {
+		return
+	}
+	key, ok := message.(keymsg.KeyMsg)
+	if !ok {
+		m.editHistory.beginStandaloneEdit(m.currentDraftSnapshot())
+		return
+	}
+	switch {
+	case key.Type == keymsg.KeyRunes && key.Paste:
+		m.editHistory.beginStandaloneEdit(m.currentDraftSnapshot())
+	case key.Type == keymsg.KeyRunes:
+		m.editHistory.beginGroupedEdit(editGroupTyping, m.currentDraftSnapshot())
+	case key.Type == keymsg.KeyBackspace:
+		m.editHistory.beginGroupedEdit(editGroupBackspace, m.currentDraftSnapshot())
+	default:
+		m.editHistory.beginStandaloneEdit(m.currentDraftSnapshot())
+	}
+}
+
+// finishComposerEdit commits a standalone edit so it cannot merge with the next
+// typing run. Grouped typing and Backspace transactions stay open.
+func (m *Model) finishComposerEdit() {
+	if m == nil || m.vimMode {
+		return
+	}
+	if m.editHistory.pending && m.editHistory.group == editGroupNone {
+		m.commitEdit()
+	}
+}
+
+// beginComposerPasteEdit opens a standalone transaction for one bracketed
+// paste. Vim mode keeps its insert-session transaction instead.
+func (m *Model) beginComposerPasteEdit() {
+	if m == nil || m.vimMode {
+		return
+	}
+	m.editHistory.beginStandaloneEdit(m.currentDraftSnapshot())
+}
+
+// applyComposerEditHistoryKey handles non-Vim undo and redo. Both keys are
+// consumed even when the history is empty (Rust #61954).
+func (m *Model) applyComposerEditHistoryKey(keySpec string) bool {
+	if m == nil || m.vimMode {
+		return false
+	}
+	switch {
+	case m.keyMatches("composer", "redo", keySpec):
+		m.commitEdit()
+		m.applyRedo()
+	case m.keyMatches("composer", "undo", keySpec):
+		m.commitEdit()
+		m.applyUndo()
+	default:
+		return false
+	}
+	m.editHistory.group = editGroupNone
+	m.refreshSlashPopup()
+	m.refreshSkillPopup()
+	return true
 }
