@@ -116,11 +116,9 @@ func TestStatuslineProviderFooterLifecycleLikeRust(t *testing.T) {
 	if got := model.statusLineContent(); got != statuslineProviderInitializing {
 		t.Fatalf("initializing footer = %q", got)
 	}
-	next := runProviderCmd(model, model.ensureProviderFooterCmd())
-	next = runProviderCmd(model, next)
-	if next != nil {
-		_ = next()
-	}
+	// The read installs the tree and schedules the steady-state poll; the poll
+	// tick itself is covered by the #61981 tests.
+	_ = runProviderCmd(model, runProviderCmd(model, model.ensureProviderFooterCmd()))
 	if resolves != 1 || reads != 1 {
 		t.Fatalf("resolves/reads = %d/%d", resolves, reads)
 	}

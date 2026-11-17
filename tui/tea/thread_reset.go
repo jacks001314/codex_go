@@ -36,7 +36,7 @@ func (m *Model) resetThreadScopedState() {
 	// attached; the provider snapshot stops advertising approval and service
 	// tier until the new thread's settings arrive.
 	m.threadSettingsConfirmed = false
-	m.statuslineProviderRead = nil
+	m.retireStatuslineProviderRead()
 	m.statusLineExtension = nil
 	// Rust ChatWidget::set_current_cwd/session_flow clear the cached project
 	// root whenever the transcript switches threads.

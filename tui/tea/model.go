@@ -4500,8 +4500,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case statuslineProviderResolveMsg:
 		return m, m.applyStatuslineProviderResolve(msg)
 	case statuslineProviderReadMsg:
-		m.applyStatuslineProviderRead(msg)
-		return m, nil
+		return m, m.applyStatuslineProviderRead(msg)
+	case statuslineProviderPollMsg:
+		return m, m.applyStatuslineProviderPoll(msg)
 	case AuthRecoveryMsg:
 		m.applyAuthRecoveryMessage(msg)
 		return m, nil

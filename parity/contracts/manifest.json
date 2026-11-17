@@ -3265,6 +3265,26 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestRestoredHistoryPrewarmCandidateLikeRust;TestColdResumePrewarmsRestoredFileImagesLikeRust;TestColdResumeRestoredPrewarmWithoutPersistedContinuationLikeRust;TestColdResumePrewarmFallsBackToBaseLikeRust"
+  },
+  {
+   "id": "tui-statusline-provider-polling",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/statusline_provider.rs",
+    "tui/src/app/event_dispatch.rs",
+    "tui/src/chatwidget/statusline_state.rs",
+    "tui/src/app/status_line_settings.rs"
+   ],
+   "goPaths": [
+    "tui/tea/statusline_provider_footer.go",
+    "tui/tea/statusline_provider_state.go",
+    "tui/tea/model.go",
+    "tui/tea/thread_reset.go",
+    "tui/tea/statusline_provider_poll_like_rust_test.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestStatuslineProviderPollsWithFreshStateLikeRust;TestStatuslineProviderInvalidContentStopsPollingLikeRust;TestStatuslineProviderRPCErrorStopsPollingLikeRust;TestStatuslineProviderRetireCancelsOutstandingReadsLikeRust;TestStatuslineProviderLateReplyAfterDeadlineFailsLikeRust;TestStatuslineProviderHungReadStopsAtDeadlineLikeRust;TestStatuslineProviderLookupDeadlineAndCancelLikeRust"
   }
 
 

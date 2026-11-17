@@ -28,6 +28,16 @@ const (
 	statuslineProviderInitializing  = "Initializing…"
 )
 
+// Rust #61981 reads the provider again one second after each successful read and
+// bounds a read with a one-second deadline. Both are variables only so tests can
+// compress them the way Rust's tests pause the tokio clock.
+var (
+	statuslineProviderPollInterval = 1 * time.Second
+	statuslineProviderReadDeadline = 1 * time.Second
+)
+
+var errStatuslineProviderReadTimeout = errors.New("resource read timed out")
+
 // StatuslineProviderReadRequest identifies the saved provider a host resolves
 // for one displayed thread and working directory.
 type StatuslineProviderReadRequest struct {
@@ -76,6 +86,11 @@ type activeStatuslineProviderRead struct {
 	name    string
 	uri     string
 	started bool
+	// ctx is cancelled when the reader is retired (thread switch, selection
+	// change, disconnect), mirroring Rust's CancellationToken in
+	// ActiveStatuslineRead's Drop.
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 func (r *activeStatuslineProviderRead) isCurrent(m *Model) bool {
@@ -107,6 +122,12 @@ type statuslineProviderReadMsg struct {
 	server   string
 	contents []StatuslineProviderContent
 	err      error
+}
+
+// statuslineProviderPollMsg wakes one polling iteration after the delay Rust
+// sleeps between successful reads.
+type statuslineProviderPollMsg struct {
+	token uint64
 }
 
 // statuslineReadyGate broadcasts MCP server readiness to the resolving
@@ -195,7 +216,7 @@ func (m *Model) syncProviderFooterSelection() {
 	selection := m.selectedStatuslineProvider()
 	if selection == nil {
 		if m.statuslineProviderRead != nil {
-			m.statuslineProviderRead = nil
+			m.retireStatuslineProviderRead()
 			// Only provider-owned content is cleared; a host that installed
 			// extension content directly keeps it.
 			m.statusLineExtension = nil
@@ -209,6 +230,7 @@ func (m *Model) syncProviderFooterSelection() {
 	if m.statuslineProviderToken == 0 {
 		m.statuslineProviderToken = 1
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	read := &activeStatuslineProviderRead{
 		token:    m.statuslineProviderToken,
 		threadID: strings.TrimSpace(m.State.ThreadID),
@@ -216,9 +238,26 @@ func (m *Model) syncProviderFooterSelection() {
 		tool:     selection.Tool,
 		hostCWD:  m.statusLineCWD(),
 		name:     selection.Tool,
+		ctx:      ctx,
+		cancel:   cancel,
+	}
+	if m.statuslineProviderRead != nil {
+		m.statuslineProviderRead.cancel()
 	}
 	m.statuslineProviderRead = read
 	m.setProviderFooterText(statuslineProviderInitializing)
+}
+
+// retireStatuslineProviderRead cancels the outstanding resolve/read work and
+// forgets it. Rust drops ActiveStatuslineRead, whose Drop cancels the token.
+func (m *Model) retireStatuslineProviderRead() {
+	if m == nil || m.statuslineProviderRead == nil {
+		return
+	}
+	if m.statuslineProviderRead.cancel != nil {
+		m.statuslineProviderRead.cancel()
+	}
+	m.statuslineProviderRead = nil
 }
 
 // ensureProviderFooterCmd starts the read whose selection was staged by
@@ -252,8 +291,12 @@ func (m *Model) statuslineProviderResolveCmd(read *activeStatuslineProviderRead)
 		Server:           read.server,
 		Tool:             read.tool,
 	}
+	parent := read.ctx
+	if parent == nil {
+		parent = context.Background()
+	}
 	return func() bubbletea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), statuslineProviderLookupTimeout)
+		ctx, cancel := context.WithTimeout(parent, statuslineProviderLookupTimeout)
 		defer cancel()
 		for {
 			provider, err := resolve(ctx, request)
@@ -290,8 +333,14 @@ func (m *Model) statuslineProviderReadCmd(read *activeStatuslineProviderRead) bu
 	if readResource == nil {
 		return nil
 	}
+	// Rust captures the snapshot on the widget thread, then reads it under a
+	// one-second deadline that starts after the snapshot is produced.
 	snapshot := m.statuslineState()
 	token := read.token
+	ctx := read.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	request := StatuslineProviderResourceRequest{
 		ThreadID: read.threadID,
 		Server:   read.server,
@@ -299,7 +348,15 @@ func (m *Model) statuslineProviderReadCmd(read *activeStatuslineProviderRead) bu
 		Snapshot: snapshot,
 	}
 	return func() bubbletea.Msg {
-		contents, err := readResource(context.Background(), request)
+		readCtx, cancel := context.WithTimeout(ctx, statuslineProviderReadDeadline)
+		defer cancel()
+		started := time.Now()
+		contents, err := readResource(readCtx, request)
+		// A reply can arrive just after the deadline; Rust treats that as a
+		// timeout so a slow provider cannot keep the footer on stale content.
+		if err == nil && time.Since(started) >= statuslineProviderReadDeadline {
+			err = errStatuslineProviderReadTimeout
+		}
 		return statuslineProviderReadMsg{
 			token:    token,
 			threadID: request.ThreadID,
@@ -308,6 +365,37 @@ func (m *Model) statuslineProviderReadCmd(read *activeStatuslineProviderRead) bu
 			err:      err,
 		}
 	}
+}
+
+// statuslineProviderPollCmd schedules the next read one second after a
+// successful one (Rust #61981). The delay runs as a bubbletea command so the
+// next read captures the then-current statusline state.
+func (m *Model) statuslineProviderPollCmd(read *activeStatuslineProviderRead) bubbletea.Cmd {
+	if m == nil || read == nil || m.onReadStatuslineProvider == nil {
+		return nil
+	}
+	token := read.token
+	return bubbletea.Tick(statuslineProviderPollInterval, func(time.Time) bubbletea.Msg {
+		return statuslineProviderPollMsg{token: token}
+	})
+}
+
+// applyStatuslineProviderPoll starts the read that follows a successful poll
+// using the state the thread has right now (Rust rebuilds the snapshot for
+// every read).
+func (m *Model) applyStatuslineProviderPoll(msg statuslineProviderPollMsg) bubbletea.Cmd {
+	if m == nil || m.State == nil {
+		return nil
+	}
+	read := m.statuslineProviderRead
+	if read == nil || msg.token != read.token {
+		return nil
+	}
+	if !read.isCurrent(m) {
+		m.syncProviderFooterSelection()
+		return m.ensureProviderFooterCmd()
+	}
+	return m.statuslineProviderReadCmd(read)
 }
 
 // applyStatuslineProviderResolve continues a read once the provider is known:
@@ -339,29 +427,31 @@ func (m *Model) applyStatuslineProviderResolve(msg statuslineProviderResolveMsg)
 
 // applyStatuslineProviderRead installs the provider's UI tree, or the Rust
 // failure copy when the response is missing, malformed, or for another backend.
-func (m *Model) applyStatuslineProviderRead(msg statuslineProviderReadMsg) {
+// A successful read schedules the next poll (Rust #61981).
+func (m *Model) applyStatuslineProviderRead(msg statuslineProviderReadMsg) bubbletea.Cmd {
 	if m == nil || m.State == nil {
-		return
+		return nil
 	}
 	read := m.statuslineProviderRead
 	if read == nil || msg.token != read.token || msg.threadID != read.threadID ||
 		msg.server != read.server {
-		return
+		return nil
 	}
 	if !read.isCurrent(m) {
 		m.syncProviderFooterSelection()
-		return
+		return m.ensureProviderFooterCmd()
 	}
 	if msg.err != nil {
 		m.setProviderFooterError(read.name)
-		return
+		return nil
 	}
 	tree, err := decodeStatuslineProviderTree(read.uri, msg.contents)
 	if err != nil {
 		m.setProviderFooterError(read.name)
-		return
+		return nil
 	}
 	m.SetExtensionStatusLine(&tree)
+	return m.statuslineProviderPollCmd(read)
 }
 
 // decodeStatuslineProviderTree mirrors Rust's decode_tree: exactly one text
