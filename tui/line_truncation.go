@@ -81,3 +81,81 @@ func TruncateWithEllipsis(text string, maxWidth int) string {
 	}
 	return TruncateToWidth(text, maxWidth-1) + "…"
 }
+
+// MiddleLabel mirrors Rust line_truncation::middle_label: a label too wide for
+// its column keeps both ends and loses the middle, so the distinguishing
+// directory or extension stays visible.
+func MiddleLabel(text string, width int) string {
+	return middleLabelWithSuffix(text, width, 0)
+}
+
+// DocumentLabel mirrors Rust line_truncation::document_label. Parts are ordered
+// from the filename toward the root, matching the sidebar document tabs. A tab
+// too narrow for the whole path keeps the directory suffix next to the file
+// name so sibling tabs stay distinguishable.
+func DocumentLabel(parts []string, width int) string {
+	reversed := make([]string, 0, len(parts))
+	for index := len(parts) - 1; index >= 0; index-- {
+		reversed = append(reversed, parts[index])
+	}
+	name := strings.Join(reversed, "/")
+	if DisplayWidth(name) <= width {
+		return name
+	}
+	if len(parts) < 2 || width < 4 {
+		return FilenameLabel(name, width)
+	}
+	directory := parts[len(parts)-1]
+	budget := width / 2
+	if directoryWidth := DisplayWidth(directory); directoryWidth < budget {
+		budget = directoryWidth
+	}
+	directory = MiddleLabel(directory, budget)
+	filename := FilenameLabel(parts[0], width-DisplayWidth(directory)-1)
+	return directory + "/" + filename
+}
+
+// FilenameLabel mirrors Rust line_truncation::filename_label: middle_label that
+// always keeps the extension, when the name has one.
+func FilenameLabel(name string, width int) string {
+	suffixWidth := 0
+	if index := strings.LastIndex(name, "."); index >= 0 {
+		ext := name[index+1:]
+		if !strings.ContainsAny(ext, `/\`) {
+			suffixWidth = DisplayWidth(ext) + 1
+		}
+	}
+	return middleLabelWithSuffix(name, width, suffixWidth)
+}
+
+func middleLabelWithSuffix(text string, width int, suffixWidth int) string {
+	if width <= 0 {
+		return ""
+	}
+	if DisplayWidth(text) <= width {
+		return text
+	}
+	prefix := (width - 1) / 2
+	if suffixWidth < width-1 && prefix > width-1-suffixWidth {
+		prefix = width - 1 - suffixWidth
+	}
+	label, rest, prefixWidth := TakePrefixByWidth(text, prefix)
+	remaining := width - prefixWidth - 1
+	suffix := len(rest)
+	offsets := make([]int, 0, 8)
+	widths := make([]int, 0, 8)
+	graphemes := uniseg.NewGraphemes(rest)
+	for graphemes.Next() {
+		from, _ := graphemes.Positions()
+		offsets = append(offsets, from)
+		widths = append(widths, DisplayWidth(graphemes.Str()))
+	}
+	for index := len(offsets) - 1; index >= 0; index-- {
+		if widths[index] > remaining {
+			break
+		}
+		remaining -= widths[index]
+		suffix = offsets[index]
+	}
+	return label + "…" + rest[suffix:]
+}
