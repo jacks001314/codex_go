@@ -164,9 +164,14 @@ func dynamicTurnSummary(turnRecord *appserver.Turn, includeOutputs bool, outputC
 	if turnRecord == nil {
 		return map[string]any{}
 	}
-	items := make([]any, 0, len(turnRecord.Items))
-	for index := len(turnRecord.Items) - 1; index >= 0; index-- {
+	items := make([]any, 0, dynamicReadItemsPerTurn)
+	for index := len(turnRecord.Items) - 1; index >= 0 && len(items) < dynamicReadItemsPerTurn; index-- {
 		items = append(items, dynamicItemSummary(turnRecord.Items[index], includeOutputs, outputChars))
+	}
+	// Rust take()s the newest items and then reverses them back into
+	// chronological order.
+	for left, right := 0, len(items)-1; left < right; left, right = left+1, right-1 {
+		items[left], items[right] = items[right], items[left]
 	}
 	var errorValue any
 	if turnRecord.Error != nil {
@@ -651,6 +656,60 @@ func (e *dynamicToolExecutor) threadTurnsPage(threadID string, cursor *string, l
 	return page.Data, page.NextCursor, nil
 }
 
+// readThreadTurnsPage mirrors Rust's read_thread paging (#61955): a paginated
+// thread requests turn metadata without items, then loads the newest
+// dynamicReadItemsPerTurn items of each turn through thread/items/list and
+// restores chronological order before the summary keeps the newest items.
+func (e *dynamicToolExecutor) readThreadTurnsPage(threadID string, cursor *string, limit int, paginated bool) ([]appserver.Turn, *string, error) {
+	if !paginated {
+		return e.threadTurnsPage(threadID, cursor, limit)
+	}
+	pageLimit := limit
+	params := appserver.ThreadTurnsListParams{
+		ThreadID:      strings.TrimSpace(threadID),
+		Cursor:        cursor,
+		Limit:         &pageLimit,
+		SortDirection: appserver.SortDesc,
+		ItemsView:     appserver.TurnItemsNotLoaded,
+	}
+	var page appserver.TurnsPage
+	if err := e.request(appserver.MethodThreadTurnsList, params, &page); err != nil {
+		if !isHistoryPaginationUnsupportedError(err) {
+			return nil, nil, err
+		}
+		return e.threadTurnsPageFromRead(threadID, cursor, limit)
+	}
+	turns := page.Data
+	for index := range turns {
+		items, err := e.newestTurnItems(threadID, turns[index].ID, dynamicReadItemsPerTurn)
+		if err != nil {
+			return nil, nil, err
+		}
+		turns[index].Items = items
+	}
+	return turns, page.NextCursor, nil
+}
+
+// newestTurnItems returns the newest items of one turn in chronological order.
+func (e *dynamicToolExecutor) newestTurnItems(threadID string, turnID string, limit int) ([]appserver.ThreadItem, error) {
+	pageLimit := limit
+	params := appserver.ThreadItemsListParams{
+		ThreadID:      strings.TrimSpace(threadID),
+		TurnID:        &turnID,
+		Limit:         &pageLimit,
+		SortDirection: appserver.SortDesc,
+	}
+	var page appserver.ThreadItemsListResponse
+	if err := e.request(appserver.MethodThreadItemsList, params, &page); err != nil {
+		return nil, err
+	}
+	items := make([]appserver.ThreadItem, 0, len(page.Data))
+	for index := len(page.Data) - 1; index >= 0; index-- {
+		items = append(items, page.Data[index].Item)
+	}
+	return items, nil
+}
+
 func (e *dynamicToolExecutor) threadTurnsPageFromRead(threadID string, cursor *string, limit int) ([]appserver.Turn, *string, error) {
 	var response appserver.ThreadReadResponse
 	if err := e.request(appserver.MethodThreadRead, appserver.ThreadReadParams{
@@ -700,7 +759,7 @@ func (e *dynamicToolExecutor) latestTurnAndItems(threadID string) (*appserver.Tu
 		return nil, nil, nil
 	}
 	latest := turns[0]
-	limit := 20
+	limit := dynamicReadItemsPerTurn
 	params := appserver.ThreadItemsListParams{
 		ThreadID:      strings.TrimSpace(threadID),
 		TurnID:        &latest.ID,

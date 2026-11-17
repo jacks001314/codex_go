@@ -16,8 +16,11 @@ const (
 	dynamicMaxListLimit         = 50
 	dynamicDefaultReadTurnLimit = 1
 	dynamicMaxReadTurnLimit     = 10
-	dynamicDefaultOutputChars   = 2000
-	dynamicMaxOutputChars       = 20000
+	// dynamicReadItemsPerTurn mirrors Rust's READ_ITEMS_PER_TURN (#61955): the
+	// read_thread summary keeps only the newest items of each turn.
+	dynamicReadItemsPerTurn   = 20
+	dynamicDefaultOutputChars = 2000
+	dynamicMaxOutputChars     = 20000
 	// Leave room below the harness's default 10,000-byte fallback budget,
 	// including tool wrappers (Rust #47100).
 	dynamicMaxResponseBytes = 8000

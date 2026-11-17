@@ -238,7 +238,8 @@ func (e *dynamicToolExecutor) readThreadTool(params appserver.DynamicToolCallPar
 	if err != nil {
 		return nil, err
 	}
-	turns, nextCursor, err := e.threadTurnsPage(arguments.ThreadID, arguments.Cursor, turnLimit)
+	paginated := thread.HistoryMode == appserver.ThreadHistoryPaginated
+	turns, nextCursor, err := e.readThreadTurnsPage(arguments.ThreadID, arguments.Cursor, turnLimit, paginated)
 	if err != nil {
 		return nil, err
 	}

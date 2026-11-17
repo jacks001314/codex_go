@@ -2850,6 +2850,22 @@
    "phase": "P1",
    "status": "complete",
    "verifier": "TestCodeModeCatalogRevisionEndToEndLikeRust;TestCodeModeCatalogRevisionHostValidationLikeRust;TestCodeModeCatalogAdmissionCacheLikeRust"
+  },
+  {
+   "id": "read-thread-item-bound",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/dynamic_tools.rs"
+   ],
+   "goPaths": [
+    "app/dynamic_tools.go",
+    "app/dynamic_tools_helpers.go",
+    "app/dynamic_tools_specs.go",
+    "app/dynamic_tools_read_thread_items_like_rust_test.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestReadThreadBoundsPaginatedTurnItemsLikeRust"
   }
   ]
 }
