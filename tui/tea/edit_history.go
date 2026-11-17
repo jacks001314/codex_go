@@ -1,6 +1,8 @@
 package tea
 
 import (
+	"time"
+
 	bubbletea "charm.land/bubbletea/v2"
 
 	bottompane "codex_go/tui/bottom_pane"
@@ -9,6 +11,18 @@ import (
 
 // maxEditHistorySteps bounds the composer undo history (Rust MAX_UNDO_STEPS).
 const maxEditHistorySteps = 64
+
+// maxEditHistoryBytes bounds the bytes kept across both stacks (Rust
+// MAX_UNDO_BYTES, raised to 8 MiB with #61954 so a large paste stays undoable).
+const maxEditHistoryBytes = 8 * 1024 * 1024
+
+// maxTypingSpan and maxTypingGap split a typing run into separate undo steps:
+// Rust continues one step only while the whole run stays under a second and the
+// next keystroke arrives within half a second.
+const (
+	maxTypingSpan = time.Second
+	maxTypingGap  = 500 * time.Millisecond
+)
 
 // composerDraftSnapshot captures everything a composer edit can change: text,
 // structured text elements and attachments. Restoring one returns the exact
@@ -19,6 +33,47 @@ type composerDraftSnapshot struct {
 	elements    []ComposerTextElement
 	attachments []bottompane.ComposerAttachment
 }
+
+// historyBytes estimates the snapshot's cost the way Rust's
+// `ComposerDraft::history_bytes` does: the text plus the attachments and
+// structured elements it keeps alive.
+func (s composerDraftSnapshot) historyBytes() int {
+	bytes := len(s.value)
+	for _, element := range s.elements {
+		bytes += len(element.Placeholder) + 16
+	}
+	for _, attachment := range s.attachments {
+		bytes += len(attachment.Path) + len(attachment.URL) + len(attachment.DisplayName) + 16
+	}
+	return bytes
+}
+
+// typingRun is the open typing step: when it began, when it last advanced, and
+// the cursor it last reached (Rust `EditHistory::typing`).
+type typingRun struct {
+	start  time.Time
+	last   time.Time
+	cursor int
+}
+
+// backspaceRun is the last backward deletion, kept so a quick follow-up
+// continues the same step (Rust `EditHistory::backspace`).
+type backspaceRun struct {
+	last   time.Time
+	cursor int
+}
+
+// typingEditKind names the grouped edit the current key began (Rust
+// `TypingEdit`).
+type typingEditKind int
+
+const (
+	typingEditNone typingEditKind = iota
+	typingEditStart
+	typingEditContinue
+	typingEditBackspaceStart
+	typingEditBackspaceContinue
+)
 
 // editDirection selects which stack an edit-history step pops from.
 type editDirection int
@@ -37,17 +92,11 @@ type editHistory struct {
 	redo            []composerDraftSnapshot
 	pending         bool
 	pendingSnapshot composerDraftSnapshot
-	group           editGroup
+	typing          *typingRun
+	backspace       *backspaceRun
+	edit            typingEditKind
+	editCursor      int
 }
-
-// editGroup names a run of related keystrokes that undo as one step.
-type editGroup int
-
-const (
-	editGroupNone editGroup = iota
-	editGroupTyping
-	editGroupBackspace
-)
 
 // begin opens an edit transaction when none is active and reports whether this
 // call created it. Insert sessions and multi-key commands reuse the outer
@@ -74,7 +123,6 @@ func (h *editHistory) commit(current composerDraftSnapshot) bool {
 	h.undo = append(h.undo, h.pendingSnapshot)
 	h.trim()
 	h.redo = nil
-	h.group = editGroupNone
 	return true
 }
 
@@ -82,6 +130,9 @@ func (h *editHistory) commit(current composerDraftSnapshot) bool {
 // (Rust `EditHistory::step`).
 func (h *editHistory) step(direction editDirection, current composerDraftSnapshot) (composerDraftSnapshot, bool) {
 	h.pending = false
+	h.typing = nil
+	h.backspace = nil
+	h.edit = typingEditNone
 	from, to := &h.undo, &h.redo
 	if direction == editRedo {
 		from, to = &h.redo, &h.undo
@@ -91,24 +142,88 @@ func (h *editHistory) step(direction editDirection, current composerDraftSnapsho
 	}
 	snapshot := (*from)[len(*from)-1]
 	*from = (*from)[:len(*from)-1]
-	*to = append(*to, current)
+	// A draft too large to keep would blow the byte budget; Rust clears the
+	// destination stack instead of pushing it.
+	if current.historyBytes() <= maxEditHistoryBytes {
+		*to = append(*to, current)
+	} else {
+		*to = nil
+	}
 	h.trim()
-	h.group = editGroupNone
 	return snapshot, true
 }
 
-// beginGroupedEdit opens or continues a grouped transaction: contiguous typing
-// or Backspaces share one undo step, while any other edit closes the open group
-// (Rust #61954).
-func (h *editHistory) beginGroupedEdit(group editGroup, current composerDraftSnapshot) {
-	if h.pending {
-		if h.group == group {
+// beginTypingEdit opens a typing step, or continues the open one when Rust's
+// window still holds: the run started under a second ago, the previous
+// keystroke is under half a second old, and the cursor is where that keystroke
+// left it.
+func (h *editHistory) beginTypingEdit(current composerDraftSnapshot, cursor int, now time.Time) {
+	if h.pending || h.edit != typingEditNone {
+		return
+	}
+	if h.typing != nil &&
+		now.Sub(h.typing.start) < maxTypingSpan &&
+		now.Sub(h.typing.last) < maxTypingGap &&
+		cursor == h.typing.cursor {
+		h.edit = typingEditContinue
+		h.editCursor = cursor
+		return
+	}
+	h.edit = typingEditStart
+	h.editCursor = cursor
+	h.begin(current)
+}
+
+// beginBackspaceEdit opens a backward-deletion step, continuing the previous
+// one only when the Backspaces arrive close together and keep moving left.
+func (h *editHistory) beginBackspaceEdit(current composerDraftSnapshot, cursor int, now time.Time) {
+	if h.pending || h.edit != typingEditNone {
+		return
+	}
+	h.typing = nil
+	h.editCursor = cursor
+	if h.backspace != nil && now.Sub(h.backspace.last) < maxTypingGap && cursor == h.backspace.cursor {
+		h.edit = typingEditBackspaceContinue
+		return
+	}
+	h.edit = typingEditBackspaceStart
+	h.begin(current)
+}
+
+// finishTypingEdit records how the grouped keystroke changed the draft. A
+// continuation only extends the run when it moved the cursor the expected way;
+// otherwise the next keystroke starts a new step (Rust `finish_edit`).
+func (h *editHistory) finishTypingEdit(current composerDraftSnapshot, cursor int, now time.Time) {
+	switch h.edit {
+	case typingEditContinue:
+		h.edit = typingEditNone
+		if h.typing != nil && cursor > h.typing.cursor {
+			h.typing.last = now
+			h.typing.cursor = cursor
+		} else {
+			h.typing = nil
+		}
+	case typingEditBackspaceContinue:
+		previous := h.editCursor
+		h.edit = typingEditNone
+		if cursor < previous {
+			h.backspace = &backspaceRun{last: now, cursor: cursor}
+		} else {
+			h.backspace = nil
+		}
+	case typingEditStart, typingEditBackspaceStart:
+		kind := h.edit
+		h.edit = typingEditNone
+		if !h.commit(current) {
+			h.typing = nil
 			return
 		}
-		h.commit(current)
+		if kind == typingEditStart {
+			h.typing = &typingRun{start: now, last: now, cursor: cursor}
+		} else {
+			h.backspace = &backspaceRun{last: now, cursor: cursor}
+		}
 	}
-	h.begin(current)
-	h.group = group
 }
 
 // beginStandaloneEdit closes any open group and opens a transaction the caller
@@ -117,6 +232,9 @@ func (h *editHistory) beginStandaloneEdit(current composerDraftSnapshot) {
 	if h.pending {
 		h.commit(current)
 	}
+	h.typing = nil
+	h.backspace = nil
+	h.edit = typingEditNone
 	h.begin(current)
 }
 
@@ -124,6 +242,22 @@ func (h *editHistory) beginStandaloneEdit(current composerDraftSnapshot) {
 func (h *editHistory) trim() {
 	if len(h.undo) > maxEditHistorySteps {
 		h.undo = h.undo[len(h.undo)-maxEditHistorySteps:]
+	}
+	total := 0
+	for _, snapshot := range h.undo {
+		total += snapshot.historyBytes()
+	}
+	for _, snapshot := range h.redo {
+		total += snapshot.historyBytes()
+	}
+	for total > maxEditHistoryBytes && (len(h.undo) > 0 || len(h.redo) > 0) {
+		if len(h.undo) > 0 {
+			total -= h.undo[0].historyBytes()
+			h.undo = h.undo[1:]
+			continue
+		}
+		total -= h.redo[0].historyBytes()
+		h.redo = h.redo[1:]
 	}
 }
 
@@ -239,21 +373,26 @@ func (m *Model) beginComposerEdit(message bubbletea.Msg) {
 	case key.Type == keymsg.KeyRunes && key.Paste:
 		m.editHistory.beginStandaloneEdit(m.currentDraftSnapshot())
 	case key.Type == keymsg.KeyRunes:
-		m.editHistory.beginGroupedEdit(editGroupTyping, m.currentDraftSnapshot())
+		m.editHistory.beginTypingEdit(m.currentDraftSnapshot(), m.composerCursor(), m.currentTime())
 	case key.Type == keymsg.KeyBackspace:
-		m.editHistory.beginGroupedEdit(editGroupBackspace, m.currentDraftSnapshot())
+		m.editHistory.beginBackspaceEdit(m.currentDraftSnapshot(), m.composerCursor(), m.currentTime())
 	default:
 		m.editHistory.beginStandaloneEdit(m.currentDraftSnapshot())
 	}
 }
 
-// finishComposerEdit commits a standalone edit so it cannot merge with the next
-// typing run. Grouped typing and Backspace transactions stay open.
+// finishComposerEdit records how the keystroke changed the draft. A typing or
+// Backspace run stays open only while Rust's window holds; a standalone edit
+// commits immediately so it cannot merge with the next typing run.
 func (m *Model) finishComposerEdit() {
 	if m == nil || m.vimMode {
 		return
 	}
-	if m.editHistory.pending && m.editHistory.group == editGroupNone {
+	if m.editHistory.edit != typingEditNone {
+		m.editHistory.finishTypingEdit(m.currentDraftSnapshot(), m.composerCursor(), m.currentTime())
+		return
+	}
+	if m.editHistory.pending {
 		m.commitEdit()
 	}
 }
@@ -275,15 +414,14 @@ func (m *Model) applyComposerEditHistoryKey(keySpec string) bool {
 	}
 	switch {
 	case m.keyMatches("composer", "redo", keySpec):
-		m.commitEdit()
+		m.finishComposerEdit()
 		m.applyRedo()
 	case m.keyMatches("composer", "undo", keySpec):
-		m.commitEdit()
+		m.finishComposerEdit()
 		m.applyUndo()
 	default:
 		return false
 	}
-	m.editHistory.group = editGroupNone
 	m.refreshSlashPopup()
 	m.refreshSkillPopup()
 	return true
