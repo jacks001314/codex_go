@@ -587,14 +587,20 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	discoverStatuslineProviders := interactiveRemoteStatuslineProviderDiscovery(ctx, endpoint, root)
 	// Rust #61920: the chooser's Files group inventories the owning thread over
 	// the app-server, one backwards page per request.
-	sidebarFilesSource := newRemoteSidebarFilesSource(ctx, endpoint)
-	sidebarFileHost := newRemoteSidebarFilesHost(
-		sidebarFilesSource,
-		func() string { return strings.TrimSpace(state.CWD) },
-		func() string {
-			return sidebarPreviewUnavailableForRemote(sidebarFilesSource.platformFamilyName(), paramsMode.UsesRemoteWorkspace())
-		},
-	)
+	// Rust refresh_sidebar_files returns early for a Cloud session, which the
+	// client does not page through thread/items/list.
+	var onSidebarFiles codextea.SidebarFilesFunc
+	if paramsMode != ThreadParamsModeCloud {
+		sidebarFilesSource := newRemoteSidebarFilesSource(ctx, endpoint)
+		sidebarFileHost := newRemoteSidebarFilesHost(
+			sidebarFilesSource,
+			func() string { return strings.TrimSpace(state.CWD) },
+			func() string {
+				return sidebarPreviewUnavailableForRemote(sidebarFilesSource.platformFamilyName(), paramsMode.UsesRemoteWorkspace())
+			},
+		)
+		onSidebarFiles = sidebarFileHost.snapshot
+	}
 	options := codextea.Options{
 		Profile:                      interactiveStringFromSharedProfile(root),
 		NoAltScreen:                  interactiveNoAltScreen(root, settings, terminalAppOverSSH),
@@ -678,7 +684,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnLoadTranscriptPreview:     interactiveRemoteTranscriptPreviewHandler(ctx, endpoint),
 		OnReadSessionTranscript:     interactiveRemoteSessionTranscriptHandler(ctx, endpoint, showRawReasoning),
 		LoadOlderHistory:            interactiveRemoteOlderHistoryLoader(ctx, endpoint),
-		OnSidebarFiles:              sidebarFileHost.snapshot,
+		OnSidebarFiles:              onSidebarFiles,
 		OnAcknowledgeSessionRead:    interactiveRemoteSessionReadAcknowledgeHandler(ctx, endpoint),
 		OnRenameThread:              renameThreadHandler,
 		OnUpdateDaybreak:            interactiveRemoteDaybreakUpdateHandler(ctx, endpoint),
