@@ -1,7 +1,10 @@
 package tea
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 
 	codextui "codex_go/tui"
 )
@@ -93,5 +96,40 @@ func TestSideContextLabelHidesToggleWithoutBindingLikeRust(t *testing.T) {
 	model.activeSide.ShowingSide = false
 	if got := model.sideContextLabel(); got != "" {
 		t.Fatalf("hidden side label without a toggle binding = %q, want empty", got)
+	}
+}
+
+// Rust bottom_pane/footer.rs `side_conversation_context_line` splits the label
+// on " · ", paints "Side" bold magenta, keeps the remaining prose magenta, and
+// renders each "… to switch/close/archive" / "… for side" segment as a bold key
+// binding followed by secondary action text.
+func TestSideContextLinePaintsRustFooterSpansLikeRust(t *testing.T) {
+	restore := codextui.SetStdoutColorLevelForTest(codextui.ColorANSI256)
+	defer restore()
+
+	model := sideContextLabelModel(t)
+	label := model.sideContextLabel()
+	line := model.renderSideContextLine(label, 120)
+	if got := ansi.Strip(line); got != label {
+		t.Fatalf("styled side context line text = %q, want %q", got, label)
+	}
+	if !strings.HasPrefix(line, "\x1b[1;38;5;5mSide\x1b[0m ") {
+		t.Fatalf("side context line does not start with bold magenta Side: %q", line)
+	}
+	if !strings.Contains(line, "\x1b[1mctrl+/\x1b[0m to switch") {
+		t.Fatalf("toggle binding is not painted as a bold key hint: %q", line)
+	}
+	// The action verb keeps the secondary style, never the key-hint bold.
+	if strings.Contains(line, "\x1b[1m to switch") {
+		t.Fatalf("action verb inherited the key-hint style: %q", line)
+	}
+	// The long-form parent prose stays magenta rather than dim footer grey.
+	if !strings.Contains(line, "38;5;5mfrom main thread") {
+		t.Fatalf("parent prose is not magenta: %q", line)
+	}
+
+	narrow := model.renderSideContextLine(label, 20)
+	if width := ansi.StringWidth(ansi.Strip(narrow)); width > 20 {
+		t.Fatalf("narrow side context line is %d columns wide: %q", width, ansi.Strip(narrow))
 	}
 }

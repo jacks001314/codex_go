@@ -6009,10 +6009,10 @@ func (m *Model) viewString() string {
 	// A notice shares the composer's rows, so a bottom-pane view (modal or
 	// picker) replaces it entirely.
 	if strings.TrimSpace(m.notice) != "" && m.modal == nil {
-		sections = append(sections, m.footerStyle.Render(m.notice))
+		sections = append(sections, m.noticeRow(m.notice))
 	}
 	if sideLabel := strings.TrimSpace(m.sideContextLabel()); sideLabel != "" && sideLabel != strings.TrimSpace(m.notice) {
-		sections = append(sections, m.footerStyle.Render(fitTerminalLine(sideLabel, m.width)))
+		sections = append(sections, m.noticeRow(sideLabel))
 	}
 	if agentLabel := strings.TrimSpace(m.activeAgentLabel); agentLabel != "" && agentLabel != strings.TrimSpace(m.notice) {
 		sections = append(sections, m.footerStyle.Render(fitTerminalLine(agentLabel, m.width)))

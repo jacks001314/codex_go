@@ -16,6 +16,7 @@ import (
 	"time"
 
 	bubbletea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	appsapi "codex_go/apps"
 	"codex_go/appserver"
@@ -3408,7 +3409,7 @@ func TestModelSideCommandStartsRuntimeSideConversation(t *testing.T) {
 	if len(state.Messages) != 0 {
 		t.Fatalf("side transcript should start empty, got %#v", state.Messages)
 	}
-	if view := model.viewString(); !strings.Contains(view, "Side from main thread") || !strings.Contains(view, "ctrl+/ to switch") {
+	if view := ansi.Strip(model.viewString()); !strings.Contains(view, "Side from main thread") || !strings.Contains(view, "ctrl+/ to switch") {
 		t.Fatalf("side context missing:\n%s", view)
 	}
 

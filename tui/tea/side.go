@@ -1017,6 +1017,80 @@ func (m *Model) sideParentIsMain(parentThreadID string) bool {
 	return m.isPrimaryThread(parentThreadID)
 }
 
+// noticeRow renders one composer-adjacent notice row. The side conversation
+// context label belongs to Rust's dedicated context line, so it keeps its own
+// styling instead of the generic dim footer treatment.
+func (m *Model) noticeRow(text string) string {
+	if m == nil {
+		return text
+	}
+	trimmed := strings.TrimSpace(text)
+	if trimmed != "" && m.activeSide != nil && trimmed == strings.TrimSpace(m.sideContextLabel()) {
+		return m.renderSideContextLine(trimmed, m.width)
+	}
+	return m.footerStyle.Render(text)
+}
+
+// sideActionSuffixes are the footer segments Rust treats as key hints: the
+// leading text is a key binding and the suffix is the action it performs
+// (bottom_pane/footer.rs side_conversation_context_line).
+var sideActionSuffixes = []string{" to switch", " to close", " to archive", " for side"}
+
+// renderSideContextLine paints the side-chat context label the way Rust's
+// `side_conversation_context_line` does: "Side" is bold magenta, separators and
+// action verbs are secondary text, and every key binding is bold and undimmed.
+func (m *Model) renderSideContextLine(label string, width int) string {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return ""
+	}
+	level := codextui.DetectStdoutColorLevel()
+	magentaIndex := uint8(5)
+	magenta := codextui.StyleSpec{Foreground: codextui.TerminalColor{Index: &magentaIndex}}
+	magentaBold := magenta
+	magentaBold.Bold = true
+	keyStyle := codextui.StyleSpec{Bold: true}
+	secondary := codextui.SecondaryTextStyle(level)
+	paint := func(text string, spec codextui.StyleSpec) string {
+		if text == "" {
+			return ""
+		}
+		prefix := codextui.SGRForStyleQuiet(spec, level)
+		if prefix == "" {
+			return text
+		}
+		return prefix + text + "\x1b[0m"
+	}
+
+	var line strings.Builder
+	rest := label
+	if strings.HasPrefix(rest, "Side ") {
+		line.WriteString(paint("Side", magentaBold))
+		line.WriteString(" ")
+		rest = strings.TrimPrefix(rest, "Side ")
+	}
+	for index, part := range strings.Split(rest, " \u00b7 ") {
+		if index > 0 {
+			line.WriteString(paint(" \u00b7 ", secondary))
+		}
+		matched := false
+		for _, action := range sideActionSuffixes {
+			keys, ok := strings.CutSuffix(part, action)
+			if !ok {
+				continue
+			}
+			line.WriteString(paint(keys, keyStyle))
+			line.WriteString(paint(action, secondary))
+			matched = true
+			break
+		}
+		if !matched {
+			line.WriteString(paint(part, magenta))
+		}
+	}
+	return fitTerminalLine(line.String(), width)
+}
+
 func (m *Model) showSideCommandMessage(commandName string, userMessage string, message string) {
 	if m == nil || m.State == nil {
 		return
