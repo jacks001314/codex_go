@@ -3212,6 +3212,38 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestResolveTurnUserInputsCapturesLocalMediaLikeRust;TestResolveTurnUserInputsKeepsRustErrorTextLikeRust;TestReadBoundedLocalMediaEnforcesRustBound;TestAudioMimeForPathMatchesRustExtensionTable;TestTurnUserInputCapturedPayloadStaysOffTheWire;TestTurnStartCapturesLocalAttachmentsBeforeAdmissionLikeRust;TestLocalAudioInputContentBlocksMatchRustLikeRust"
+  },
+  {
+   "id": "tcp-tunnel-ssh-transport",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tcp-tunnel/src/lib.rs",
+    "tcp-tunnel/src/ssh.rs",
+    "tcp-tunnel/README.md",
+    "cli/src/main.rs"
+   ],
+   "goPaths": [
+    "tcptunnel/args.go",
+    "tcptunnel/lib.go",
+    "tcptunnel/http2.go",
+    "tcptunnel/transport.go",
+    "tcptunnel/ssh.go",
+    "tcptunnel/systemproxy_windows.go",
+    "tcptunnel/systemproxy_darwin.go",
+    "tcptunnel/systemproxy_other.go",
+    "tcptunnel/tokenfile_unix.go",
+    "tcptunnel/tokenfile_other.go",
+    "tcptunnel/tokenopen_windows.go",
+    "tcptunnel/tokenopen_other.go",
+    "tcptunnel/args_like_rust_test.go",
+    "tcptunnel/ssh_like_rust_test.go",
+    "tcptunnel/http2_like_rust_test.go",
+    "tcptunnel/transport_like_rust_test.go",
+    "app/tcp_tunnel.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestTcpTunnelClapDiagnosticsLikeRust;TestTcpTunnelArgsParseLikeRust;TestSSHDestinationRoutesOAuthAndLegacyLikeRust;TestOAuthBearerMatchesRust;TestSafeTunnelErrorSanitizesLikeRust;TestReadTokenFileIsOneUseLikeRust;TestRunSSHProxyRefusesBeforeLoadingCredentials;TestHTTP2AdmitsConnectAndForwardsLikeRust;TestHTTP2RejectsBeforeUploadLikeRust;TestHTTP2CertificateFailureIsNamedLikeRust;TestProxyOnlyEgressKeepsCredentialsInsideTLSLikeRust;TestSystemProxySelectionLikeRust;TestTransportPrefersAdmittedQUICLikeRust;TestTransportFallsBackToHTTP2WhenUDPBlockedLikeRust;TestTransportAdmissionRejectionIsTerminalLikeRust;TestOpenNeverLoadsCredentialsBeforeTLSLikeRust"
   }
 
 

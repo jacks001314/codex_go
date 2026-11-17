@@ -1,356 +1,193 @@
 package tcptunnel
 
-// Go parity for Rust's tcp-tunnel ssh_tests.rs and the SSH half of lib_tests.rs
-// (Rust #60568): route selection, credential boundaries, binary stdio relay,
-// half-close propagation, gateway EOF, rejection by status, and ERS v1/v2 tunnel
-// JWTs for Portals listeners.
-
 import (
-	"bufio"
 	"bytes"
 	"context"
-	"crypto/tls"
-	"crypto/x509"
-
-	"io"
-	"net"
+	"errors"
 	"net/http"
-	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/quic-go/quic-go"
-	"github.com/quic-go/quic-go/http3"
 )
 
-// sshTestProxy is a local HTTP/3 endpoint with a scripted CONNECT handler.
-type sshTestProxy struct {
-	addr  string
-	roots *x509.CertPool
-}
-
-func newSSHTestProxy(t *testing.T, handler http.HandlerFunc) *sshTestProxy {
-	t.Helper()
-	certificate, roots := selfSignedCertificate(t)
-	packet, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+// TestSSHDestinationRoutesOAuthAndLegacyLikeRust mirrors Rust's
+// `routes_oauth_and_legacy_without_ambiguous_authority`: the OAuth route names
+// the environment and published port, the legacy route carries no extension
+// headers, and the bearer is always present.
+func TestSSHDestinationRoutesOAuthAndLegacyLikeRust(t *testing.T) {
+	oauth, err := ParseArgs([]string{"--environment-id", "ccarenv_test", "--port", "2222"})
 	if err != nil {
-		t.Fatalf("ListenUDP() error = %v", err)
+		t.Fatalf("ParseArgs(oauth) error = %v", err)
 	}
-	listener, err := quic.Listen(packet, &tls.Config{
-		Certificates: []tls.Certificate{certificate},
-		NextProtos:   []string{"h3"},
-	}, &quic.Config{})
+	destination, err := oauth.sshDestination()
 	if err != nil {
-		t.Fatalf("quic.Listen() error = %v", err)
+		t.Fatalf("sshDestination(oauth) error = %v", err)
 	}
-	server := &http3.Server{Handler: handler}
-	go func() {
-		for {
-			conn, err := listener.Accept(context.Background())
-			if err != nil {
-				return
-			}
-			go func() { _ = server.ServeQUICConn(conn) }()
-		}
-	}()
-	t.Cleanup(func() {
-		_ = listener.Close()
-		_ = packet.Close()
-	})
-	return &sshTestProxy{addr: packet.LocalAddr().String(), roots: roots}
-}
-
-// target is the CONNECT authority pair for this proxy, and session is the
-// transport a test drives directly (RunSSHProxy only trusts the built-in
-// gateway, so relay coverage goes through bridgeStreams like Rust's tests).
-func (p *sshTestProxy) target(t *testing.T) *ProxyTarget {
-	t.Helper()
-	proxyURL, err := url.Parse("https://" + p.addr)
-	if err != nil {
-		t.Fatalf("url.Parse() error = %v", err)
-	}
-	target, err := ParseProxyTarget(proxyURL, []string{"https://" + p.addr}, "127.0.0.1:22")
-	if err != nil {
-		t.Fatalf("ParseProxyTarget() error = %v", err)
-	}
-	return target
-}
-
-func (p *sshTestProxy) session(t *testing.T) *session {
-	t.Helper()
-	created := newSession(p.target(t))
-	created.tlsConfig = &tls.Config{NextProtos: []string{"h3"}, RootCAs: p.roots}
-	created.transport.TLSClientConfig = created.tlsConfig
-	// Exercise the segmentation-offload-free dial path everywhere.
-	created.noGSO = true
-	return created
-}
-
-// TestSSHDestinationRoutesByGatewayAuthorityAndPublishedPort mirrors Rust's
-// connect_routes_by_gateway_authority_and_published_port.
-func TestSSHDestinationRoutesByGatewayAuthorityAndPublishedPort(t *testing.T) {
-	named, err := ParseArgs([]string{"--environment-id", "ccarenv_test-1", "--port", "2222"})
-	if err != nil {
-		t.Fatalf("ParseArgs(named) error = %v", err)
-	}
-	explicit, err := ParseArgs([]string{"--proxy-url", PublicGateway, "--target", "ccarenv_test-1:2222"})
-	if err != nil {
-		t.Fatalf("ParseArgs(explicit) error = %v", err)
-	}
-	namedDestination, err := named.SSHDestination()
-	if err != nil {
-		t.Fatalf("SSHDestination(named) error = %v", err)
-	}
-	explicitDestination, err := explicit.SSHDestination()
-	if err != nil {
-		t.Fatalf("SSHDestination(explicit) error = %v", err)
-	}
-	if *namedDestination.Target != *explicitDestination.Target {
-		t.Fatalf("named target = %#v, explicit = %#v", *namedDestination.Target, *explicitDestination.Target)
-	}
-	for name, want := range map[string]string{
-		"x-portals-auth-mode":      "oauth",
-		"x-portals-environment-id": "ccarenv_test-1",
-		"x-portals-port":           "2222",
-	} {
-		if got := namedDestination.Headers.Get(name); got != want {
-			t.Fatalf("%s = %q, want %q", name, got, want)
-		}
-		if got := explicitDestination.Headers.Get(name); got != want {
-			t.Fatalf("explicit %s = %q, want %q", name, got, want)
-		}
-	}
-	if namedDestination.Target.Authority != "codex-portals.api.openai.com:443" {
-		t.Fatalf("authority = %q", namedDestination.Target.Authority)
-	}
-	bearer, err := oauthBearer("local-fixture==")
+	bearer, err := oauthBearer("fixture==")
 	if err != nil {
 		t.Fatalf("oauthBearer() error = %v", err)
 	}
-	if bearer != "Bearer local-fixture==" {
-		t.Fatalf("oauthBearer() = %q", bearer)
+	request := destination.Target.request(requestSpec{headers: destination.Headers, bearer: bearer})
+	if request.Method != http.MethodConnect {
+		t.Fatalf("method = %q, want CONNECT", request.Method)
 	}
-}
+	if request.Host != "codex-portals.api.openai.com:443" {
+		t.Fatalf("authority = %q", request.Host)
+	}
+	if got := request.Header.Get("x-portals-environment-id"); got != "ccarenv_test" {
+		t.Fatalf("environment header = %q", got)
+	}
+	if got := request.Header.Get("x-portals-port"); got != "2222" {
+		t.Fatalf("port header = %q", got)
+	}
+	if got := request.Header.Get("x-portals-auth-mode"); got != "oauth" {
+		t.Fatalf("auth mode header = %q", got)
+	}
+	if got := request.Header.Get("Authorization"); got != "Bearer fixture==" {
+		t.Fatalf("authorization = %q", got)
+	}
 
-// TestSSHEnvironmentIDDefaultsToPort22 mirrors Rust's
-// environment_id_defaults_to_ssh_and_rejects_ambiguous_routes.
-func TestSSHEnvironmentIDDefaultsToPort22(t *testing.T) {
-	named, err := ParseArgs([]string{"--environment-id", "ccarenv_test"})
+	defaults, err := ParseArgs([]string{"--environment-id", "env"})
 	if err != nil {
-		t.Fatalf("ParseArgs() error = %v", err)
+		t.Fatalf("ParseArgs(defaults) error = %v", err)
 	}
-	destination, err := named.SSHDestination()
+	destination, err = defaults.sshDestination()
 	if err != nil {
-		t.Fatalf("SSHDestination() error = %v", err)
+		t.Fatalf("sshDestination(defaults) error = %v", err)
 	}
 	if got := destination.Headers.Get("x-portals-port"); got != "22" {
-		t.Fatalf("x-portals-port = %q, want 22", got)
+		t.Fatalf("default port header = %q", got)
 	}
-	for _, argv := range [][]string{
-		{"--environment-id", "env", "--port", "0"},
-		{"--environment-id", "env", "--port", "65536"},
-		{"--environment-id", "env", "--target", "other:22"},
-		{"--environment-id", "env", "--auth-token-stdin", "--proxy-origins-file", "origins"},
-		{"--target", "env:22"},
-	} {
-		if _, err := ParseArgs(argv); err == nil {
-			t.Fatalf("ParseArgs(%v) succeeded, want error", argv)
-		}
+
+	legacy, err := ParseArgs([]string{"--token-file", "/private/token", "--target", "10.0.0.1:22"})
+	if err != nil {
+		t.Fatalf("ParseArgs(legacy) error = %v", err)
+	}
+	destination, err = legacy.sshDestination()
+	if err != nil {
+		t.Fatalf("sshDestination(legacy) error = %v", err)
+	}
+	if destination.Target.Authority != "10.0.0.1:22" || len(destination.Headers) != 0 {
+		t.Fatalf("legacy destination = %#v", destination)
+	}
+
+	ipv6, err := ParseArgs([]string{"--token-file", "f", "--target", "[::1]:22"})
+	if err != nil {
+		t.Fatalf("ParseArgs(ipv6) error = %v", err)
+	}
+	if _, err := ipv6.sshDestination(); err == nil || err.Error() != "invalid legacy CONNECT target" {
+		t.Fatalf("sshDestination(ipv6) error = %v", err)
+	}
+
+	zero, err := ParseArgs([]string{"--token-file", "f", "--target", "10.0.0.1:0"})
+	if err != nil {
+		t.Fatalf("ParseArgs(zero) error = %v", err)
+	}
+	if _, err := zero.sshDestination(); err == nil || err.Error() != "invalid legacy CONNECT target" {
+		t.Fatalf("sshDestination(zero port) error = %v", err)
 	}
 }
 
-// TestSSHRejectsInvalidRoutesBeforeReadingOAuth mirrors Rust's
-// invalid_routes_fail_before_reading_oauth_or_writing_stdout.
-func TestSSHRejectsInvalidRoutesBeforeReadingOAuth(t *testing.T) {
-	for _, testCase := range []struct{ proxyURL, target string }{
-		{PublicGateway, ":22"},
-		{PublicGateway, "env"},
-		{PublicGateway, "env:0"},
-		{PublicGateway, "env:65536"},
-		{PublicGateway, "id\r\nother: value:22"},
-		{"https://codex-portals.api.openai.com.bad", "valid:22"},
-		{"https://codex-portals.api.openai.com:4443", "valid:22"},
-	} {
-		args, err := ParseArgs([]string{"--proxy-url", testCase.proxyURL, "--target", testCase.target})
-		if err != nil {
-			t.Fatalf("ParseArgs(%q, %q) error = %v", testCase.proxyURL, testCase.target, err)
-		}
-		var output bytes.Buffer
-		err = runSSHProxy(context.Background(), args, func(context.Context) (string, error) {
-			t.Fatalf("unexpected credential lookup for %q/%q", testCase.proxyURL, testCase.target)
-			return "", nil
-		}, strings.NewReader(""), &output, newSession)
-		if err == nil {
-			t.Fatalf("runSSHProxy(%q, %q) error = nil", testCase.proxyURL, testCase.target)
-		}
-		if output.Len() != 0 {
-			t.Fatalf("runSSHProxy(%q, %q) wrote %q", testCase.proxyURL, testCase.target, output.String())
-		}
-	}
-}
-
-// TestSSHRejectsInvalidOAuthCredentialsWithoutEchoingThem mirrors Rust's
-// rejects_invalid_oauth_credentials_without_echoing_them.
-func TestSSHRejectsInvalidOAuthCredentialsWithoutEchoingThem(t *testing.T) {
+// TestOAuthBearerMatchesRust checks the token charset, the trailing-padding
+// allowance and the errors that must never echo the credential.
+func TestOAuthBearerMatchesRust(t *testing.T) {
 	for _, token := range []string{"", "=", "private=secret", "private\r\nvalue", "private secret"} {
-		_, err := oauthBearer(token)
-		if err == nil || err.Error() != "invalid OAuth access token" {
-			t.Fatalf("oauthBearer(%q) error = %v", token, err)
+		if _, err := oauthBearer(token); err == nil {
+			t.Fatalf("oauthBearer(%q) returned no error", token)
+		} else if strings.Contains(err.Error(), token) && token != "" {
+			t.Fatalf("oauthBearer(%q) error echoes the token: %v", token, err)
 		}
-		if strings.Contains(err.Error(), "private") {
-			t.Fatalf("oauthBearer(%q) echoed the credential: %v", token, err)
-		}
+	}
+	bearer, err := oauthBearer("fixture==")
+	if err != nil || bearer != "Bearer fixture==" {
+		t.Fatalf("oauthBearer(valid) = %q, %v", bearer, err)
 	}
 }
 
-// TestSSHStdioRelaysBinaryAndPropagatesHalfClose mirrors the first half of
-// Rust's stdio_propagates_half_close_and_exits_on_gateway_eof_or_rejection.
-func TestSSHStdioRelaysBinaryAndPropagatesHalfClose(t *testing.T) {
-	received := make(chan string, 1)
-	proxy := newSSHTestProxy(t, func(w http.ResponseWriter, r *http.Request) {
-		flusher, _ := w.(http.Flusher)
-		w.WriteHeader(http.StatusOK)
-		if flusher != nil {
-			flusher.Flush()
-		}
-		_, _ = w.Write([]byte("\x00\xff"))
-		if flusher != nil {
-			flusher.Flush()
-		}
-		body, _ := io.ReadAll(r.Body)
-		received <- string(body)
-		_, _ = w.Write([]byte("after FIN"))
-	})
-	session := proxy.session(t)
-	defer session.close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := session.connect(ctx); err != nil {
-		t.Fatalf("connect() error = %v", err)
+// TestSafeTunnelErrorSanitizesLikeRust keeps only the HTTP status of a rejected
+// CONNECT.
+func TestSafeTunnelErrorSanitizesLikeRust(t *testing.T) {
+	sanitized := safeTunnelError(errors.New("peer supplied secret"))
+	if strings.Contains(sanitized.Error(), "secret") {
+		t.Fatalf("safeTunnelError leaked peer text: %v", sanitized)
 	}
-	var output bytes.Buffer
-	if err := bridgeStreams(ctx, session, strings.NewReader("request"), &output, session.target, http.Header{}, "Bearer fixture", bridgeProxyCommand); err != nil {
-		t.Fatalf("bridgeStreams() error = %v", err)
+	if got := safeTunnelError(rejection(403)).Error(); !strings.Contains(got, "403") {
+		t.Fatalf("safeTunnelError(rejection) = %q", got)
 	}
-	if got := <-received; got != "request" {
-		t.Fatalf("gateway read %q, want request", got)
+	if got := safeTunnelError(tunnelTimeout()).Error(); got != "SSH tunnel setup timed out" {
+		t.Fatalf("safeTunnelError(timeout) = %q", got)
 	}
-	if want := "\x00\xffafter FIN"; output.String() != want {
-		t.Fatalf("output = %q, want %q", output.String(), want)
+	if err := safeTunnelError(nil); err != nil {
+		t.Fatalf("safeTunnelError(nil) = %v", err)
 	}
 }
 
-// TestSSHExitsOnGatewayEOFWhileStdinStaysOpen mirrors Rust's remote-EOF case:
-// OpenSSH still holds stdin open, yet the relay must finish and report the
-// bytes the gateway sent.
-func TestSSHExitsOnGatewayEOFWhileStdinStaysOpen(t *testing.T) {
-	proxy := newSSHTestProxy(t, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("bye"))
-	})
-	session := proxy.session(t)
-	defer session.close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := session.connect(ctx); err != nil {
-		t.Fatalf("connect() error = %v", err)
+// TestReadTokenFileIsOneUseLikeRust mirrors Rust's private token-file contract:
+// bounded size, regular file, removed before the token is returned.
+func TestReadTokenFileIsOneUseLikeRust(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "token")
+	if err := os.WriteFile(path, []byte("fixture=="), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
 	}
-	stdinReader, stdinWriter := io.Pipe()
-	defer stdinWriter.Close()
-	var output bytes.Buffer
-	done := make(chan error, 1)
-	go func() {
-		done <- bridgeStreams(ctx, session, stdinReader, &output, session.target, http.Header{}, "Bearer fixture", bridgeProxyCommand)
-	}()
-	select {
-	case err := <-done:
+	token, err := readTokenFile(path)
+	if err != nil {
+		t.Fatalf("readTokenFile() error = %v", err)
+	}
+	if token != "fixture==" {
+		t.Fatalf("token = %q", token)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("token file still exists after read: %v", err)
+	}
+
+	oversized := filepath.Join(directory, "oversized")
+	if err := os.WriteFile(oversized, bytes.Repeat([]byte("a"), MaxTokenBytes+1), 0o600); err != nil {
+		t.Fatalf("WriteFile(oversized) error = %v", err)
+	}
+	if _, err := readTokenFile(oversized); err == nil || err.Error() != "invalid private token file" {
+		t.Fatalf("readTokenFile(oversized) error = %v", err)
+	}
+	// Rust opens the handle first; on Windows a directory cannot be opened the
+	// same way, so the failure surfaces while opening instead of in metadata.
+	if _, err := readTokenFile(directory); err == nil {
+		t.Fatalf("readTokenFile(directory) returned no error")
+	} else if err.Error() != "invalid private token file" && !strings.Contains(err.Error(), "opening private token file") {
+		t.Fatalf("readTokenFile(directory) error = %v", err)
+	}
+	if _, err := readTokenFile(filepath.Join(directory, "missing")); err == nil || !strings.Contains(err.Error(), "opening private token file") {
+		t.Fatalf("readTokenFile(missing) error = %v", err)
+	}
+}
+
+// TestRunSSHProxyRefusesBeforeLoadingCredentials mirrors Rust's
+// `rejects_bad_origin_and_route_before_loading_credentials`.
+func TestRunSSHProxyRefusesBeforeLoadingCredentials(t *testing.T) {
+	cases := [][]string{
+		{"--environment-id", "bad\r\nvalue"},
+		{"--environment-id", "valid", "--proxy-url", "https://codex-portals.api.openai.com.attacker.net"},
+		{"--environment-id", "valid", "--proxy-url", "https://codex-portals.api.openai.com:4443"},
+	}
+	for _, argv := range cases {
+		args, err := ParseArgs(argv)
 		if err != nil {
-			t.Fatalf("bridgeStreams() error = %v", err)
+			t.Fatalf("ParseArgs(%v) error = %v", argv, err)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("bridgeStreams() did not exit on gateway EOF while stdin stayed open")
-	}
-	if output.String() != "bye" {
-		t.Fatalf("output = %q, want bye", output.String())
-	}
-}
-
-// TestSSHReportsRejectedConnectByStatusOnly mirrors Rust's rejection case: the
-// peer's error text never reaches the caller.
-func TestSSHReportsRejectedConnectByStatusOnly(t *testing.T) {
-	proxy := newSSHTestProxy(t, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte("peer secret text"))
-	})
-	session := proxy.session(t)
-	defer session.close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := session.connect(ctx); err != nil {
-		t.Fatalf("connect() error = %v", err)
-	}
-	var output bytes.Buffer
-	err := bridgeStreams(ctx, session, strings.NewReader(""), &output, session.target, http.Header{}, "Bearer fixture", bridgeProxyCommand)
-	if err == nil {
-		t.Fatal("bridgeStreams() error = nil, want rejection")
-	}
-	if err.Error() != "MASQUE CONNECT rejected with status 401" {
-		t.Fatalf("error = %q, want the HTTP status only", err.Error())
-	}
-	if strings.Contains(err.Error(), "peer secret") || output.Len() != 0 {
-		t.Fatalf("rejection leaked peer text: %v / %q", err, output.String())
-	}
-	if mapped := sshStreamError(err); mapped == nil || mapped.Error() != err.Error() {
-		t.Fatalf("sshStreamError() = %v, want the rejection", mapped)
-	}
-}
-
-// Mirrors Rust #61428: a Portals listener requires OAuth CONNECT metadata and
-// rejects a missing or non-OAuth declaration before reading any credential.
-func TestPortalsListenerRequiresOAuthMetadataLikeRust(t *testing.T) {
-	for _, metadata := range []string{"[]", `[["x-portals-auth-mode","bearer"]]`} {
-		input := newControlInput(bufioReader(metadata+"\nopaque-token\n"), true, PublicGateway)
-		if got := <-input.metadata; got.err == nil || !strings.Contains(got.err.Error(), "Portals requires OAuth CONNECT metadata") {
-			t.Fatalf("metadata = %#v, want the OAuth requirement", got)
+		lookups := 0
+		var stdout bytes.Buffer
+		err = RunSSHProxy(context.Background(), args, func(context.Context) (string, error) {
+			lookups++
+			return "fixture", nil
+		}, strings.NewReader(""), &stdout)
+		if err == nil {
+			t.Fatalf("RunSSHProxy(%v) returned no error", argv)
 		}
-		if token, ok := <-input.tokens; ok {
-			t.Fatalf("credential read after rejection: %#v", token)
+		if lookups != 0 {
+			t.Fatalf("RunSSHProxy(%v) loaded credentials before route validation", argv)
 		}
-	}
-	// A gateway request that supplies no metadata at all fails the same way.
-	input := newControlInput(bufioReader("opaque-token\n"), false, PublicGateway)
-	if got := <-input.metadata; got.err == nil || !strings.Contains(got.err.Error(), "Portals requires OAuth CONNECT metadata") {
-		t.Fatalf("metadata = %#v, want the OAuth requirement", got)
-	}
-}
-
-// Mirrors Rust #61428: OAuth metadata satisfies the gateway contract, so every
-// token is an opaque bearer, including values that look like ERS tunnel JWTs.
-func TestPortalsListenerAcceptsOpaqueBearerWithOAuthMetadataLikeRust(t *testing.T) {
-	tokens := []string{"opaque-token", "header.claims.signature", "a.b"}
-	input := newControlInput(bufioReader(`[["x-portals-auth-mode","oauth"]]`+"\n"+strings.Join(tokens, "\n")+"\n"), true, PublicGateway)
-	if got := <-input.metadata; got.err != nil {
-		t.Fatal(got.err)
-	}
-	for _, want := range tokens {
-		got := <-input.tokens
-		if got.err != nil || got.auth != "Bearer "+want {
-			t.Fatalf("token = %#v, want %q as an opaque bearer", got, want)
+		if stdout.Len() != 0 {
+			t.Fatalf("RunSSHProxy(%v) wrote %q", argv, stdout.String())
 		}
 	}
 }
-
-// Mirrors Rust #61428: only known Portals gateways require the OAuth metadata.
-func TestOtherOriginsDoNotRequireOAuthMetadataLikeRust(t *testing.T) {
-	input := newControlInput(bufioReader("[]\nopaque-token\n"), true, "https://proxy.example")
-	if got := <-input.metadata; got.err != nil {
-		t.Fatal(got.err)
-	}
-	if got := <-input.tokens; got.err != nil || got.auth != "Bearer opaque-token" {
-		t.Fatalf("token = %#v", got)
-	}
-}
-
-// bufioReader builds the buffered control stream the tunnel reads.
-func bufioReader(value string) *bufio.Reader { return bufio.NewReader(strings.NewReader(value)) }

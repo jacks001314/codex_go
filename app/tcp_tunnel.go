@@ -1,10 +1,10 @@
 package app
 
-// The hidden tcp-tunnel command has two modes (Rust #60568): a listener that
-// reads its bearer from stdin, and an OpenSSH ProxyCommand relay that uses the
-// ChatGPT OAuth login. The OAuth mode enforces the application network policy
-// before the gateway connection and refuses any credential other than a
-// ChatGPT login.
+// The hidden tcp-tunnel command is an OpenSSH ProxyCommand relay. Desktop
+// supplies a one-use bearer through a private `--token-file`, which bypasses
+// config, network policy and OAuth exactly like Rust. The OAuth mode enforces
+// the application network policy before the gateway connection and refuses any
+// credential other than a ChatGPT login.
 
 import (
 	"context"
@@ -27,8 +27,8 @@ func runTcpTunnel(ctx context.Context, parsed *cli.Parsed, stdin io.Reader, stdo
 		return errors.New("missing tcp-tunnel arguments")
 	}
 	args := &parsed.TcpTunnel.Args
-	if args.AuthTokenStdin {
-		return tcptunnel.Run(ctx, args, stdin, stdout, stderr)
+	if args.UsesTokenFile() {
+		return tcptunnel.RunSSHProxyFromFile(ctx, args, stdin, stdout)
 	}
 	return runTcpTunnelSSH(ctx, args, stdin, stdout)
 }

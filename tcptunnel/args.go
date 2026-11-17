@@ -1,10 +1,9 @@
-// Package tcptunnel implements the hidden `codex tcp-tunnel` command: loopback
-// TCP forwarding and single-session OpenSSH stdio relaying through an HTTP/3
-// CONNECT proxy, mirroring Rust's `codex-tcp-tunnel` crate. Listener bearera
-// credentials and optional extension headers enter only through stdin; SSH
-// stdio mode uses the ChatGPT OAuth login after verifying the gateway. The
-// listener survives transport loss, but individual TCP streams are never
-// replayed.
+// Package tcptunnel implements the hidden `codex tcp-tunnel` command: a
+// single-stream OpenSSH ProxyCommand relay through one authenticated CONNECT to
+// the verified Cloud Portals gateway. OpenSSH owns SSH authentication, host-key
+// verification and every byte that crosses stdio; the helper only hands the
+// signed-in account's credential to a gateway shipped with the CLI. Selection,
+// HTTP/2 fallback and system HTTPS proxy support mirror Rust #61975/#61964.
 package tcptunnel
 
 import (
@@ -17,46 +16,35 @@ import (
 	"strings"
 )
 
-// DefaultListenAddr matches Rust's `listen_addr` default.
-const DefaultListenAddr = "127.0.0.1:0"
-
 // DefaultSSHPort is the published Portals SSH port used when
-// `--environment-id` omits `--port` (Rust #60568).
+// `--environment-id` omits `--port`.
 const DefaultSSHPort = 22
 
-// Args mirrors Rust's `codex_tcp_tunnel::Args`.
+// Args mirrors Rust's `codex_tcp_tunnel::Args`. Every field is parsed by clap
+// in Rust, so ParseArgs reproduces clap's validation and diagnostics.
 type Args struct {
-	// ProxyURL is the HTTPS origin of the HTTP/3 proxy. With EnvironmentID it
-	// defaults to the public Portals gateway.
+	// ProxyURL is the verified HTTPS gateway origin.
 	ProxyURL string
-	// ProxyOriginsFile lists one exact approved HTTPS proxy origin per line.
-	// Listener mode only.
-	ProxyOriginsFile string
-	// Target is the CONNECT target authority in listener mode, or the
-	// ENV:PORT SSH destination in OAuth mode.
-	Target string
-	// EnvironmentID opens an SSH stdio tunnel to this canonical Portals
-	// environment instead of starting a loopback listener.
+	// EnvironmentID names the canonical Cloud environment to reach.
 	EnvironmentID string
-	// Port is the published SSH port for EnvironmentID; zero means the
-	// default of 22.
+	// Port is the published SSH port for EnvironmentID; zero means 22.
 	Port int
-	// ListenAddr is the loopback listener address. An empty value means the
-	// Rust default of 127.0.0.1:0.
-	ListenAddr string
-	// AuthTokenStdin starts a listener and reads its bearer from stdin.
-	// Otherwise the command relays SSH over stdio using the Codex login.
-	AuthTokenStdin bool
-	// AuthTokenUpdatesStdin reads replacement bearers from stdin and stops when
-	// the controlling pipe closes. Requires AuthTokenStdin.
-	AuthTokenUpdatesStdin bool
-	// ConnectHeadersStdin reads a JSON list of extension-header name/value
-	// pairs before the first bearer. Requires AuthTokenStdin.
-	ConnectHeadersStdin bool
-	// DiagnosticsJSON emits credential-safe JSON diagnostics on stderr instead
-	// of human-readable errors (Rust #50131).
-	DiagnosticsJSON bool
+	// Target is the ERS-issued legacy CONNECT authority. It must be an IPv4
+	// socket address and requires a private token file.
+	Target string
+	// TokenFile is a one-use bearer in a private file supplied by Desktop. It
+	// is never read from SSH stdin.
+	TokenFile string
+
+	// set tracks clap presence for optional values whose empty string is still
+	// a supplied value (`--environment-id ""`, `--token-file ""`).
+	environmentIDSet bool
+	tokenFileSet     bool
 }
+
+// UsesTokenFile reports whether `--token-file` was supplied, matching Rust's
+// `args.token_file.is_some()` dispatch.
+func (a *Args) UsesTokenFile() bool { return a != nil && a.tokenFileSet }
 
 // Diagnostic mirrors a clap argument diagnostic for the hidden `tcp-tunnel`
 // command so the CLI can print the same block, trailing hint and exit status as
@@ -71,146 +59,125 @@ type Diagnostic struct {
 
 func (d *Diagnostic) Error() string { return d.Message }
 
-const (
-	tcpTunnelUnexpectedUsage = "Usage: codex tcp-tunnel [OPTIONS]"
-)
-const tcpTunnelGroupUsage = "Usage: codex tcp-tunnel <--proxy-url <PROXY_URL>|--proxy-origins-file <PROXY_ORIGINS_FILE>|--target <TARGET>|--environment-id <ENVIRONMENT_ID>|--port <PORT>|--listen-addr <LISTEN_ADDR>|--auth-token-stdin|--auth-token-updates-stdin|--connect-headers-stdin|--diagnostics-json>"
+const tcpTunnelUnexpectedUsage = "Usage: codex tcp-tunnel [OPTIONS]"
 
 // tcpTunnelValueFlags maps the value-taking flags to clap's placeholders.
 var tcpTunnelValueFlags = map[string]string{
-	"--proxy-url":          "<PROXY_URL>",
-	"--proxy-origins-file": "<PROXY_ORIGINS_FILE>",
-	"--target":             "<TARGET>",
-	"--environment-id":     "<ENVIRONMENT_ID>",
-	"--port":               "<PORT>",
-	"--listen-addr":        "<LISTEN_ADDR>",
+	"--proxy-url":      "<PROXY_URL>",
+	"--environment-id": "<ENVIRONMENT_ID>",
+	"--port":           "<PORT>",
+	"--target":         "<TARGET>",
+	"--token-file":     "<TOKEN_FILE>",
 }
 
 // ParseArgs parses the `codex tcp-tunnel` argument list with clap's shape: long
-// options with a separated or `=`-attached value, the same conditional
-// requirements introduced by Rust #60568 (`--proxy-url` and `--target` are
-// required unless `--environment-id` is present, listener-only options
-// require `--auth-token-stdin`, and `--auth-token-stdin` requires
-// `--proxy-origins-file`), and clap's value parsers for the proxy URL, the
-// port and the listen address.
+// options with a separated or `=`-attached value, clap's value parsers for the
+// proxy URL, the published port and the legacy socket address, and clap's
+// conditional requirements (`--environment-id` unless `--target`, `--port`
+// requires `--environment-id`, `--target` requires `--token-file` and
+// conflicts with `--environment-id`).
 func ParseArgs(argv []string) (*Args, error) {
-	args := &Args{}
+	args := &Args{ProxyURL: PublicGateway}
 	seen := map[string]bool{}
 	var consumed []string
-	valueFlags, boolFlags := 0, 0
 	for i := 0; i < len(argv); i++ {
 		arg := argv[i]
 		name, value, hasValue := strings.Cut(arg, "=")
-		if placeholder, takesValue := tcpTunnelValueFlags[name]; takesValue {
-			var parsed string
-			if hasValue {
-				parsed = value
-			} else {
-				if i+1 >= len(argv) {
-					return nil, &Diagnostic{Message: "a value is required for '" + name + " " + placeholder + "' but none was supplied"}
-				}
-				i++
-				parsed = argv[i]
-			}
-			if reason, ok := tcpTunnelValueProblem(name, parsed); !ok {
-				return nil, &Diagnostic{Message: "invalid value '" + parsed + "' for '" + name + " " + placeholder + "': " + reason}
-			}
-			switch name {
-			case "--proxy-url":
-				args.ProxyURL = parsed
-			case "--proxy-origins-file":
-				args.ProxyOriginsFile = parsed
-			case "--target":
-				args.Target = parsed
-			case "--environment-id":
-				args.EnvironmentID = parsed
-			case "--port":
-				args.Port, _ = strconv.Atoi(parsed)
-			case "--listen-addr":
-				args.ListenAddr = parsed
-			}
-			seen[name] = true
-			consumed = append(consumed, name)
-			valueFlags++
-			continue
-		}
-		switch name {
-		case "--auth-token-stdin", "--auth-token-updates-stdin", "--connect-headers-stdin", "--diagnostics-json":
-			if hasValue {
-				return nil, &Diagnostic{
-					Message: "unexpected value '" + value + "' for '" + name + "' found; no more were expected",
-					Usage:   tcpTunnelUnexpectedValueUsage(name, valueFlags, boolFlags),
-				}
-			}
-			switch name {
-			case "--auth-token-stdin":
-				args.AuthTokenStdin = true
-			case "--auth-token-updates-stdin":
-				args.AuthTokenUpdatesStdin = true
-			case "--connect-headers-stdin":
-				args.ConnectHeadersStdin = true
-			case "--diagnostics-json":
-				args.DiagnosticsJSON = true
-			}
-			consumed = append(consumed, name)
-			boolFlags++
-		default:
+		placeholder, takesValue := tcpTunnelValueFlags[name]
+		if !takesValue {
 			reported := arg
 			if hasValue && strings.HasPrefix(arg, "--") {
 				reported = name
 			}
 			return nil, &Diagnostic{Message: "unexpected argument '" + reported + "' found", Usage: tcpTunnelUnexpectedUsage}
 		}
+		if seen[name] {
+			return nil, &Diagnostic{
+				Message: "the argument '" + name + " " + placeholder + "' cannot be used multiple times",
+				Usage:   tcpTunnelUnexpectedUsage,
+			}
+		}
+		var parsed string
+		if hasValue {
+			parsed = value
+		} else {
+			if i+1 >= len(argv) {
+				return nil, &Diagnostic{Message: "a value is required for '" + name + " " + placeholder + "' but none was supplied"}
+			}
+			next := argv[i+1]
+			if len(next) > 1 && next[0] == '-' {
+				// clap refuses to consume a flag-shaped token as a value: a
+				// known flag reports the missing value, anything else is an
+				// unexpected argument. A bare "-" is still a value.
+				nextName, _, _ := strings.Cut(next, "=")
+				if _, known := tcpTunnelValueFlags[nextName]; known {
+					return nil, &Diagnostic{Message: "a value is required for '" + name + " " + placeholder + "' but none was supplied"}
+				}
+				return nil, &Diagnostic{Message: "unexpected argument '" + next + "' found", Usage: tcpTunnelUnexpectedUsage}
+			}
+			i++
+			parsed = argv[i]
+		}
+		if reason, ok := tcpTunnelValueProblem(name, parsed); !ok {
+			return nil, &Diagnostic{Message: "invalid value '" + parsed + "' for '" + name + " " + placeholder + "': " + reason}
+		}
+		switch name {
+		case "--proxy-url":
+			args.ProxyURL = parsed
+		case "--environment-id":
+			args.EnvironmentID = parsed
+			args.environmentIDSet = true
+		case "--port":
+			args.Port, _ = strconv.Atoi(parsed)
+		case "--target":
+			args.Target = parsed
+		case "--token-file":
+			args.TokenFile = parsed
+			args.tokenFileSet = true
+		}
+		seen[name] = true
+		consumed = append(consumed, name)
 	}
 	if conflict := tcpTunnelConflict(args, consumed); conflict != nil {
 		return nil, conflict
 	}
-	missing := tcpTunnelMissing(args)
-	if len(missing) > 0 {
+	if missing := tcpTunnelMissing(args, consumed); len(missing) > 0 {
+		// clap prunes a requirement implied by `--port` once it conflicts with a
+		// supplied `--target` and every other requirement is satisfied.
+		if len(missing) == 1 && missing[0] == "--environment-id" && args.Target != "" && !args.environmentIDSet {
+			return args, nil
+		}
 		return nil, &Diagnostic{
 			Message: tcpTunnelRequiredMessage(missing),
-			Usage:   "Usage: codex tcp-tunnel" + tcpTunnelSmartUsage(args, consumed, missing),
+			Usage:   "Usage: codex tcp-tunnel" + tcpTunnelUsage(args, consumed, missing),
 		}
-	}
-	if args.EnvironmentID != "" && strings.TrimSpace(args.ProxyURL) == "" {
-		args.ProxyURL = PublicGateway
 	}
 	return args, nil
 }
 
-// tcpTunnelConflict reproduces clap's conflict validation for the two
-// conflicting pairs in Rust's Args definition. clap validates the matcher in
-// argv order and reports the earlier argument as the former one.
+// tcpTunnelConflict reproduces clap's conflict validation for the pair
+// `--environment-id` / `--target`. clap reports the argument that appears
+// first in argv as the one that cannot be used with the other. Requirements
+// implied by `--port` are dropped when they conflict with a supplied argument,
+// which is why only explicitly supplied pairs are reported.
 func tcpTunnelConflict(args *Args, consumed []string) *Diagnostic {
-	present := func(name string) bool {
-		for _, used := range consumed {
-			if used == name {
-				return true
-			}
-		}
-		return false
+	if !args.environmentIDSet || args.Target == "" {
+		return nil
 	}
-	conflicts := map[string][]string{
-		"--environment-id":   {"--target", "--auth-token-stdin"},
-		"--target":           {"--environment-id"},
-		"--auth-token-stdin": {"--environment-id"},
+	first, second := "--environment-id", "--target"
+	if tcpTunnelArgIndex(consumed, "--target") < tcpTunnelArgIndex(consumed, "--environment-id") {
+		first, second = second, first
 	}
+	kept := make([]string, 0, len(consumed))
 	for _, used := range consumed {
-		for _, other := range conflicts[used] {
-			if !present(other) {
-				continue
-			}
-			if tcpTunnelArgIndex(consumed, other) < tcpTunnelArgIndex(consumed, used) {
-				continue
-			}
-			usage := "Usage: codex tcp-tunnel" + tcpTunnelConflictUsage(args, consumed, other)
-			return &Diagnostic{
-				Message: "the argument '" + tcpTunnelStylized(used) + "' cannot be used with '" + tcpTunnelStylized(other) + "'",
-				Usage:   usage,
-			}
+		if used != second {
+			kept = append(kept, used)
 		}
 	}
-	return nil
+	return &Diagnostic{
+		Message: "the argument '" + tcpTunnelStylized(first) + "' cannot be used with '" + tcpTunnelStylized(second) + "'",
+		Usage:   "Usage: codex tcp-tunnel" + tcpTunnelUsage(args, kept, nil),
+	}
 }
 
 func tcpTunnelArgIndex(consumed []string, name string) int {
@@ -230,58 +197,52 @@ func tcpTunnelStylized(name string) string {
 }
 
 // tcpTunnelMissing lists the arguments clap reports in
-// "the following required arguments were not provided", in clap's order: the
-// requirement chain (`--environment-id`, `--proxy-origins-file`,
-// `--auth-token-stdin`) followed by the conditionally required
-// `--proxy-url` and `--target`.
-func tcpTunnelMissing(args *Args) []string {
-	present := map[string]bool{
-		"--proxy-url":                strings.TrimSpace(args.ProxyURL) != "",
-		"--proxy-origins-file":       strings.TrimSpace(args.ProxyOriginsFile) != "",
-		"--target":                   strings.TrimSpace(args.Target) != "",
-		"--environment-id":           strings.TrimSpace(args.EnvironmentID) != "",
-		"--port":                     args.Port != 0,
-		"--listen-addr":              strings.TrimSpace(args.ListenAddr) != "",
-		"--auth-token-stdin":         args.AuthTokenStdin,
-		"--auth-token-updates-stdin": args.AuthTokenUpdatesStdin,
-		"--connect-headers-stdin":    args.ConnectHeadersStdin,
-		"--diagnostics-json":         args.DiagnosticsJSON,
-	}
+// "the following required arguments were not provided", in requirement order:
+// the `--port` / `--target` requirements first (in argv order) and the
+// unconditional `--environment-id` last when neither route was supplied.
+func tcpTunnelMissing(args *Args, consumed []string) []string {
 	var missing []string
-	add := func(name string, required bool) {
-		if required && !present[name] {
-			missing = append(missing, tcpTunnelStylized(name))
+	add := func(name string) {
+		for _, present := range missing {
+			if present == name {
+				return
+			}
+		}
+		missing = append(missing, name)
+	}
+	for _, used := range consumed {
+		switch used {
+		case "--port":
+			if !args.environmentIDSet {
+				add("--environment-id")
+			}
+		case "--target":
+			if !args.tokenFileSet {
+				add("--token-file")
+			}
 		}
 	}
-	add("--environment-id", present["--port"])
-	authRequired := present["--proxy-origins-file"] || present["--listen-addr"] ||
-		present["--auth-token-updates-stdin"] || present["--connect-headers-stdin"] ||
-		present["--diagnostics-json"]
-	add("--proxy-origins-file", present["--auth-token-stdin"] || authRequired)
-	add("--auth-token-stdin", authRequired)
-	add("--proxy-url", !present["--environment-id"])
-	add("--target", !present["--environment-id"])
+	if !args.environmentIDSet && args.Target == "" {
+		add("--environment-id")
+	}
 	return missing
 }
 
 func tcpTunnelRequiredMessage(missing []string) string {
 	message := "the following required arguments were not provided:"
 	for _, name := range missing {
-		message += "\n  " + name
+		message += "\n  " + tcpTunnelStylized(name)
 	}
 	return message
 }
 
-// tcpTunnelSmartUsage reproduces the shape of clap's smart usage block: the
-// gathered requirement (`--environment-id` when `--port` is used) first,
-// then listener options the caller already supplied, then the remaining
-// requirement chain, then the other supplied options in argv order, and finally
-// the conditionally required `--proxy-url` / `--target` pair.
-func tcpTunnelSmartUsage(args *Args, consumed []string, missing []string) string {
-	inMissing := map[string]bool{}
-	for _, entry := range missing {
-		name := strings.SplitN(entry, " ", 2)[0]
-		inMissing[name] = true
+// tcpTunnelUsage reproduces clap's smart usage block: supplied arguments in
+// argv order, with a requirement implied by a supplied argument inserted just
+// before it, and an unconditional missing requirement appended last.
+func tcpTunnelUsage(args *Args, consumed []string, missing []string) string {
+	needed := map[string]bool{}
+	for _, name := range missing {
+		needed[name] = true
 	}
 	printed := map[string]bool{}
 	usage := ""
@@ -292,89 +253,40 @@ func tcpTunnelSmartUsage(args *Args, consumed []string, missing []string) string
 		printed[name] = true
 		usage += " " + tcpTunnelStylized(name)
 	}
-	if args.Port != 0 {
+	for _, used := range consumed {
+		switch used {
+		case "--port":
+			if needed["--environment-id"] {
+				emit("--environment-id")
+			}
+		case "--target":
+			if needed["--token-file"] {
+				emit("--token-file")
+			}
+		}
+	}
+	for _, used := range consumed {
+		emit(used)
+	}
+	if needed["--environment-id"] && tcpTunnelArgIndex(consumed, "--port") == len(consumed) {
 		emit("--environment-id")
 	}
-	for _, used := range consumed {
-		if used == "--proxy-origins-file" || used == "--auth-token-stdin" {
-			emit(used)
-		}
-	}
-	for _, name := range []string{"--proxy-origins-file", "--auth-token-stdin"} {
-		if inMissing[name] {
-			emit(name)
-		}
-	}
-	for _, used := range consumed {
-		emit(used)
-	}
-	for _, name := range []string{"--proxy-url", "--target"} {
-		if inMissing[name] {
-			emit(name)
-		}
-	}
-	return usage
-}
-
-// tcpTunnelConflictUsage reproduces clap's conflict usage: the supplied
-// arguments except the conflicting one, each preceded by the requirement it
-// pulls in when that requirement is not itself supplied.
-func tcpTunnelConflictUsage(args *Args, consumed []string, conflicting string) string {
-	kept := make([]string, 0, len(consumed))
-	for _, used := range consumed {
-		if used != conflicting {
-			kept = append(kept, used)
-		}
-	}
-	usage := ""
-	printed := map[string]bool{}
-	emit := func(name string) {
-		if printed[name] {
-			return
-		}
-		printed[name] = true
-		usage += " " + tcpTunnelStylized(name)
-	}
-	for _, used := range kept {
-		requirement := ""
-		switch used {
-		case "--proxy-origins-file":
-			requirement = "--auth-token-stdin"
-		case "--port":
-			requirement = "--environment-id"
-		}
-		if requirement == "" || containsString(kept, requirement) {
-			continue
-		}
-		emit(requirement)
-	}
-	for _, used := range kept {
-		emit(used)
+	if needed["--token-file"] {
+		emit("--token-file")
 	}
 	_ = args
 	return usage
 }
 
-// tcpTunnelUnexpectedValueUsage mirrors clap's usage block for a value attached
-// to a boolean flag: clap lists the required options plus the offending flag
-// while at most one other option was consumed, and falls back to its option
-// summary otherwise.
-func tcpTunnelUnexpectedValueUsage(name string, valueFlags, boolFlags int) string {
-	if boolFlags == 0 && valueFlags <= 1 {
-		return "Usage: codex tcp-tunnel " + name
-	}
-	return tcpTunnelGroupUsage
-}
-
 // tcpTunnelValueProblem runs clap's value parser for the flag: the URL parser
-// Rust uses (`url::Url`), `std::net::SocketAddr` for the listen address and
-// `NonZeroU16` for the SSH port. The reason strings match the underlying
-// crates so the diagnostic is identical.
+// Rust uses (`url::Url`), `NonZeroU16` for the published port and
+// `std::net::SocketAddr` for the legacy target. The reason strings match the
+// underlying crates so the diagnostic is identical.
 func tcpTunnelValueProblem(name, value string) (string, bool) {
 	switch name {
 	case "--proxy-url":
 		return tcpTunnelURLProblem(value)
-	case "--listen-addr":
+	case "--target":
 		if _, err := netip.ParseAddrPort(value); err != nil {
 			return "invalid socket address syntax", false
 		}
@@ -443,38 +355,7 @@ type ProxyTarget struct {
 
 // Addr is the proxy's host:port dial address.
 func (t ProxyTarget) Addr() string {
-	return net.JoinHostPort(t.Host, fmt.Sprintf("%d", t.Port))
-}
-
-// ParseTrustedOrigins mirrors Rust's `parse_trusted_origins`: one exact HTTPS
-// origin per non-empty line, no path, credentials, query, or fragment.
-func ParseTrustedOrigins(origins string) ([]string, error) {
-	trusted := []string{}
-	for _, line := range strings.Split(origins, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		parsed, err := url.Parse(line)
-		if err != nil {
-			return nil, fmt.Errorf("invalid trusted proxy origin")
-		}
-		path := parsed.Path
-		if path == "" {
-			// Go reports an empty path for an origin; Rust's `Url::parse`
-			// normalizes it to "/".
-			path = "/"
-		}
-		if parsed.Scheme != "https" || parsed.User != nil || parsed.RawQuery != "" ||
-			parsed.Fragment != "" || path != "/" || line != originOf(parsed) {
-			return nil, fmt.Errorf("trusted proxy origins must be exact HTTPS origins")
-		}
-		trusted = append(trusted, line)
-	}
-	if len(trusted) == 0 {
-		return nil, fmt.Errorf("no trusted proxy origins")
-	}
-	return trusted, nil
+	return net.JoinHostPort(t.Host, strconv.Itoa(t.Port))
 }
 
 // ParseProxyTarget mirrors Rust's `ProxyTarget::parse`: the proxy URL must be
@@ -488,7 +369,7 @@ func ParseProxyTarget(proxyURL *url.URL, trustedOrigins []string, target string)
 		return nil, fmt.Errorf("proxy URL must use HTTPS")
 	}
 	if proxyURL.User != nil || proxyURL.RawQuery != "" || proxyURL.Fragment != "" ||
-		(proxyURL.Path != "" && proxyURL.Path != "/") {
+		(proxyURL.Path != "" && proxyURL.Path != "/") || proxyURL.Host == "" {
 		return nil, fmt.Errorf("proxy URL must be an HTTPS origin")
 	}
 	if !containsString(trustedOrigins, originOf(proxyURL)) {
@@ -517,8 +398,6 @@ func ParseProxyTarget(proxyURL *url.URL, trustedOrigins []string, target string)
 		return nil, fmt.Errorf("invalid CONNECT target")
 	} else if parsedPort == 0 {
 		return nil, fmt.Errorf("CONNECT target must include a nonzero port")
-	} else if parsedPort > 65535 {
-		return nil, fmt.Errorf("invalid CONNECT target")
 	}
 	return &ProxyTarget{Host: host, Port: port, Authority: target}, nil
 }

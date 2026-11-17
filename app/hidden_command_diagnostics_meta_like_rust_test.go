@@ -32,14 +32,14 @@ func TestHiddenCommandDiagnosticsMetaLikeRust(t *testing.T) {
 		{
 			name: "tcp-tunnel missing required",
 			args: []string{"tcp-tunnel"},
-			// Upstream made --proxy-origins-file an optional listener-mode input
-			// (`requires = "auth_token_stdin"`), so a bare invocation only lacks
-			// the proxy URL and target.
-			want: "error: the following required arguments were not provided:\n  --proxy-url <PROXY_URL>\n  --target <TARGET>\n\nUsage: codex tcp-tunnel --proxy-url <PROXY_URL> --target <TARGET>\n\nFor more information, try '--help'.\n",
+			// Rust #61975 reduced the helper to one SSH route: either
+			// --environment-id (optionally with --port) or a legacy --target
+			// that requires --token-file.
+			want: "error: the following required arguments were not provided:\n  --environment-id <ENVIRONMENT_ID>\n\nUsage: codex tcp-tunnel --environment-id <ENVIRONMENT_ID>\n\nFor more information, try '--help'.\n",
 		},
 		{
 			name: "tcp-tunnel invalid proxy url",
-			args: []string{"tcp-tunnel", "--proxy-url", "bad", "--proxy-origins-file", "y", "--target", "z"},
+			args: []string{"tcp-tunnel", "--proxy-url", "bad", "--environment-id", "env"},
 			want: "error: invalid value 'bad' for '--proxy-url <PROXY_URL>': relative URL without a base\n\nFor more information, try '--help'.\n",
 		},
 	}

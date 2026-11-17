@@ -1,8 +1,8 @@
-package tcptunnel
+// Single-stream OpenSSH ProxyCommand. Only the verified gateway receives
+// credentials. OpenSSH owns SSH authentication, host-key verification, and all
+// stdio bytes.
 
-// Single-stream OpenSSH ProxyCommand mode (Rust #60568). Only the verified
-// gateway receives credentials; OpenSSH owns SSH authentication, host-key
-// verification and every byte that crosses stdio.
+package tcptunnel
 
 import (
 	"context"
@@ -12,19 +12,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
-
-	"github.com/quic-go/quic-go"
 )
-
-// PublicGateway is the built-in Portals gateway. Only gateways shipped with the
-// CLI may receive the signed-in account's credential.
-const PublicGateway = "https://codex-portals.api.openai.com"
-
-// GatewayOrigins lists the gateways allowed to receive OAuth credentials.
-var GatewayOrigins = []string{PublicGateway}
 
 // SSHDestination is the validated gateway route and the Portals headers that
 // describe one SSH session.
@@ -35,58 +28,59 @@ type SSHDestination struct {
 	Headers http.Header
 }
 
-// SSHDestination validates the `--environment-id` / `--target ENV:PORT` route and
-// rejects anything the built-in gateway must not receive.
-func (a *Args) SSHDestination() (*SSHDestination, error) {
+// sshDestination validates the OAuth or legacy route before any network I/O.
+// The OAuth route names a canonical environment; the legacy route is an
+// ERS-issued IPv4 CONNECT authority that requires a private token file.
+func (a *Args) sshDestination() (*SSHDestination, error) {
 	if a == nil {
 		return nil, errors.New("missing tunnel arguments")
-	}
-	environmentID := strings.TrimSpace(a.EnvironmentID)
-	port := a.Port
-	if environmentID == "" {
-		target := strings.TrimSpace(a.Target)
-		index := strings.LastIndex(target, ":")
-		if index < 0 {
-			return nil, errors.New("SSH target must be ENV:PORT")
-		}
-		id, rawPort := target[:index], target[index+1:]
-		parsed, err := strconv.ParseUint(rawPort, 10, 16)
-		if err != nil || parsed == 0 {
-			return nil, errors.New("invalid SSH target port")
-		}
-		environmentID, port = id, int(parsed)
-	}
-	if port == 0 {
-		port = DefaultSSHPort
-	}
-	if len(environmentID) < 1 || len(environmentID) > 256 || !validEnvironmentID(environmentID) {
-		return nil, errors.New("invalid environment ID")
 	}
 	proxyURL, err := url.Parse(strings.TrimSpace(a.ProxyURL))
 	if err != nil {
 		return nil, errors.New("invalid proxy URL")
 	}
+	if a.Target != "" {
+		address, err := netip.ParseAddrPort(a.Target)
+		if err != nil || !address.Addr().Is4() || address.Port() == 0 || !a.tokenFileSet {
+			return nil, errors.New("invalid legacy CONNECT target")
+		}
+		target, err := ParseProxyTarget(proxyURL, GatewayOrigins, address.String())
+		if err != nil {
+			return nil, err
+		}
+		return &SSHDestination{Target: target, Headers: http.Header{}}, nil
+	}
+	environmentID := a.EnvironmentID
+	if !a.environmentIDSet {
+		return nil, errors.New("missing environment ID")
+	}
+	if len(environmentID) < 1 || len(environmentID) > 256 || !validEnvironmentID(environmentID) {
+		return nil, errors.New("invalid environment ID")
+	}
 	host := proxyURL.Hostname()
 	if host == "" {
 		return nil, errors.New("missing gateway host")
 	}
-	portInURL := 443
+	port := 443
 	if raw := proxyURL.Port(); raw != "" {
 		parsed, err := parsePort(raw)
 		if err != nil {
 			return nil, errors.New("invalid proxy URL port")
 		}
-		portInURL = parsed
+		port = parsed
 	}
-	authority := net.JoinHostPort(host, strconv.Itoa(portInURL))
-	target, err := ParseProxyTarget(proxyURL, GatewayOrigins, authority)
+	target, err := ParseProxyTarget(proxyURL, GatewayOrigins, net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
 		return nil, err
+	}
+	publishedPort := a.Port
+	if publishedPort == 0 {
+		publishedPort = DefaultSSHPort
 	}
 	headers := http.Header{}
 	headers.Set("x-portals-auth-mode", "oauth")
 	headers.Set("x-portals-environment-id", environmentID)
-	headers.Set("x-portals-port", strconv.Itoa(port))
+	headers.Set("x-portals-port", strconv.Itoa(publishedPort))
 	return &SSHDestination{Target: target, Headers: headers}, nil
 }
 
@@ -119,124 +113,117 @@ func oauthBearer(token string) (string, error) {
 		}
 	}
 	if !valid {
-		return "", errors.New("invalid OAuth access token")
+		return "", errors.New("invalid access token")
 	}
-	return bearerHeader(token)
+	bearer := "Bearer " + token
+	if !validHeaderValue(bearer) {
+		return "", errors.New("invalid access token")
+	}
+	return bearer, nil
 }
 
-// RunSSHProxy relays one SSH session over HTTP/3 CONNECT. The access token is
-// polled only after the gateway connection is verified, so a misrouted proxy
-// never triggers a credential lookup.
+func validHeaderValue(value string) bool {
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if c < 0x20 || c == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// RunSSHProxy relays one SSH session through one authenticated CONNECT. The
+// access token is polled only after a gateway connection has passed TLS
+// verification, so a misrouted proxy never triggers a credential lookup.
 func RunSSHProxy(ctx context.Context, args *Args, accessToken func(context.Context) (string, error), stdin io.Reader, stdout io.Writer) error {
-	return runSSHProxy(ctx, args, accessToken, stdin, stdout, newSession)
-}
-
-// runSSHProxy is RunSSHProxy with an injectable transport so tests can trust
-// a local HTTP/3 proxy.
-func runSSHProxy(ctx context.Context, args *Args, accessToken func(context.Context) (string, error), stdin io.Reader, stdout io.Writer, newSessionFn sessionFactory) error {
-	destination, err := args.SSHDestination()
+	destination, err := args.sshDestination()
 	if err != nil {
 		return err
 	}
-	session := newSessionFn(destination.Target)
-	// Linux can advertise UDP segmentation on paths where batched packets are
-	// lost; single datagrams keep bulk SSH transfers moving there. Go's QUIC
-	// transport only batches when the underlying socket exposes the batch
-	// interfaces, so hiding them mirrors Rust's segmentation-offload opt-out.
-	session.noGSO = true
-	defer session.close()
-
-	connectCtx, cancel := context.WithTimeout(ctx, proxyConnectTimeout)
-	err = session.connect(connectCtx)
-	connectTimedOut := connectCtx.Err() == context.DeadlineExceeded
-	cancel()
-	if err != nil {
-		if connectTimedOut {
-			return classify(err, CodeTimeout)
-		}
-		return err
-	}
-
-	token, err := accessToken(ctx)
+	config, err := tlsConfig()
 	if err != nil {
 		return err
 	}
-	bearer, err := oauthBearer(token)
-	if err != nil {
-		return err
-	}
-	if err := bridgeStreams(ctx, session, stdin, stdout, destination.Target, destination.Headers, bearer, bridgeProxyCommand); err != nil {
-		return sshStreamError(err)
-	}
-	return nil
-}
-
-// sshStreamError reports a rejected CONNECT by HTTP status and hides every
-// other peer-supplied detail, which may contain arbitrary text.
-func sshStreamError(err error) error {
-	var coded *codeError
-	if errors.As(err, &coded) && coded.code == CodeRejected {
-		return err
-	}
-	return fmt.Errorf("SSH tunnel stream failed")
-}
-
-// packetConnWithoutBatch hides quic-go's batched send path from the UDP socket,
-// which disables UDP segmentation offload for SSH tunnels.
-type packetConnWithoutBatch struct {
-	net.PacketConn
-}
-
-// dialProxyWithoutGSO dials the proxy over a socket that never exposes batch
-// writes.
-func (s *session) dialProxyWithoutGSO(ctx context.Context, tlsConfig *tls.Config, quicConf *quic.Config) (*quic.Conn, error) {
-	if tlsConfig == nil {
-		tlsConfig = &tls.Config{NextProtos: []string{"h3"}}
-	}
-	if quicConf == nil {
-		quicConf = &quic.Config{}
-	}
-	peers, err := net.DefaultResolver.LookupHost(ctx, s.target.Host)
-	if err != nil {
-		return nil, fmt.Errorf("connecting to MASQUE proxy: %w", err)
-	}
-	lastErr := errors.New("MASQUE proxy resolved to no addresses")
-	lastTimeout := false
-	for _, peer := range peers {
-		config := tlsConfig.Clone()
-		if config.ServerName == "" {
-			config.ServerName = s.target.Host
-		}
-		remote, err := net.ResolveUDPAddr("udp", net.JoinHostPort(peer, strconv.Itoa(s.target.Port)))
+	tunnel, err := newTransportConfig(config).open(ctx, destination.Target, func(ctx context.Context) (requestSpec, error) {
+		token, err := accessToken(ctx)
 		if err != nil {
-			lastErr = err
-			continue
+			return requestSpec{}, err
 		}
-		local := &net.UDPAddr{}
-		if ip := net.ParseIP(peer); ip != nil && ip.To4() == nil {
-			local = &net.UDPAddr{IP: net.IPv6unspecified}
-		}
-		udp, err := net.ListenUDP("udp", local)
+		bearer, err := oauthBearer(token)
 		if err != nil {
-			lastErr = err
-			continue
+			return requestSpec{}, err
 		}
-		transport := &quic.Transport{Conn: packetConnWithoutBatch{udp}}
-		attemptCtx, cancel := context.WithTimeout(ctx, quicHandshakeTimeout)
-		conn, err := transport.Dial(attemptCtx, remote, config, quicConf)
-		timedOut := attemptCtx.Err() == context.DeadlineExceeded
-		cancel()
-		if err != nil {
-			_ = transport.Close()
-			lastErr = err
-			lastTimeout = timedOut
-			continue
+		return requestSpec{headers: destination.Headers, bearer: bearer}, nil
+	})
+	if err != nil {
+		return safeTunnelError(err)
+	}
+	return safeTunnelError(tunnel.relay(stdin, stdout))
+}
+
+// RunSSHProxyFromFile reads a one-use bearer from a private file, mirroring
+// Rust's `run_ssh_proxy_from_file`. The file is opened, checked, removed and
+// read only after the gateway has passed TLS verification.
+func RunSSHProxyFromFile(ctx context.Context, args *Args, stdin io.Reader, stdout io.Writer) error {
+	if args == nil {
+		return errors.New("missing tunnel arguments")
+	}
+	path := args.TokenFile
+	if !args.tokenFileSet {
+		return errors.New("missing token file")
+	}
+	return RunSSHProxy(ctx, args, func(context.Context) (string, error) {
+		return readTokenFile(path)
+	}, stdin, stdout)
+}
+
+// readTokenFile mirrors Rust's private token-file contract: a regular file
+// smaller than the token bound, private on Unix, removed before the token is
+// read so a crashed helper cannot replay it.
+func readTokenFile(path string) (string, error) {
+	file, err := openTokenFile(path)
+	if err != nil {
+		return "", fmt.Errorf("opening private token file: %w", err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() || info.Size() >= MaxTokenBytes {
+		return "", errors.New("invalid private token file")
+	}
+	if problem := tokenFilePrivacyProblem(info.Mode()); problem != "" {
+		return "", errors.New(problem)
+	}
+	if err := os.Remove(path); err != nil {
+		return "", fmt.Errorf("removing one-use token file: %w", err)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, MaxTokenBytes))
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// tlsConfig mirrors Rust's native-root client configuration: system trust
+// anchors, TLS 1.2 or newer, and no client certificate.
+func tlsConfig() (*tls.Config, error) {
+	return &tls.Config{MinVersion: tls.VersionTLS12}, nil
+}
+
+// safeTunnelError keeps only the HTTP status of a rejected CONNECT and hides
+// every other peer-supplied detail.
+func safeTunnelError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var setup *setupError
+	if errors.As(err, &setup) {
+		if setup.status != nil {
+			return rejection(*setup.status)
 		}
-		s.keepTransport(transport)
-		return conn, nil
+		return tunnelTimeout()
 	}
-	if lastTimeout {
-		return nil, classify(lastErr, CodeHandshakeTimeout)
-	}
-	return nil, fmt.Errorf("QUIC handshake failed: %w", lastErr)
+	return streamError()
 }

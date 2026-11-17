@@ -78,7 +78,7 @@ func TestTcpTunnelSSHRefusesUntrustedGateway(t *testing.T) {
 	}
 	args, err := tcptunnel.ParseArgs([]string{
 		"--proxy-url", "https://codex-portals.api.openai.com.bad",
-		"--target", "env:22",
+		"--environment-id", "env",
 	})
 	if err != nil {
 		t.Fatalf("ParseArgs() error = %v", err)

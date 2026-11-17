@@ -60,20 +60,20 @@ func TestHiddenCommandClapDiagnosticsLikeRust(t *testing.T) {
 		{
 			name:    "tcp-tunnel missing required",
 			args:    []string{"tcp-tunnel"},
-			message: "the following required arguments were not provided:\n  --proxy-url <PROXY_URL>\n  --target <TARGET>",
-			usage:   "Usage: codex tcp-tunnel --proxy-url <PROXY_URL> --target <TARGET>",
+			message: "the following required arguments were not provided:\n  --environment-id <ENVIRONMENT_ID>",
+			usage:   "Usage: codex tcp-tunnel --environment-id <ENVIRONMENT_ID>",
 		},
 		{
-			name:    "tcp-tunnel echoes consumed flags",
-			args:    []string{"tcp-tunnel", "--connect-headers-stdin", "--listen-addr", "127.0.0.1:80"},
-			message: "the following required arguments were not provided:\n  --proxy-origins-file <PROXY_ORIGINS_FILE>\n  --auth-token-stdin\n  --proxy-url <PROXY_URL>\n  --target <TARGET>",
-			usage:   "Usage: codex tcp-tunnel --proxy-origins-file <PROXY_ORIGINS_FILE> --auth-token-stdin --connect-headers-stdin --listen-addr <LISTEN_ADDR> --proxy-url <PROXY_URL> --target <TARGET>",
+			name:    "tcp-tunnel port requires environment id",
+			args:    []string{"tcp-tunnel", "--port", "22"},
+			message: "the following required arguments were not provided:\n  --environment-id <ENVIRONMENT_ID>",
+			usage:   "Usage: codex tcp-tunnel --environment-id <ENVIRONMENT_ID> --port <PORT>",
 		},
 		{
-			name:    "tcp-tunnel requires auth for updates",
-			args:    []string{"tcp-tunnel", "--target", "z", "--auth-token-updates-stdin"},
-			message: "the following required arguments were not provided:\n  --proxy-origins-file <PROXY_ORIGINS_FILE>\n  --auth-token-stdin\n  --proxy-url <PROXY_URL>",
-			usage:   "Usage: codex tcp-tunnel --proxy-origins-file <PROXY_ORIGINS_FILE> --auth-token-stdin --target <TARGET> --auth-token-updates-stdin --proxy-url <PROXY_URL>",
+			name:    "tcp-tunnel legacy target requires token file",
+			args:    []string{"tcp-tunnel", "--target", "10.0.0.1:22"},
+			message: "the following required arguments were not provided:\n  --token-file <TOKEN_FILE>",
+			usage:   "Usage: codex tcp-tunnel --token-file <TOKEN_FILE> --target <TARGET>",
 		},
 		{
 			name:    "tcp-tunnel unknown flag",
@@ -88,28 +88,28 @@ func TestHiddenCommandClapDiagnosticsLikeRust(t *testing.T) {
 		},
 		{
 			name:    "tcp-tunnel relative proxy url",
-			args:    []string{"tcp-tunnel", "--proxy-url", "bad", "--proxy-origins-file", "y", "--target", "z"},
+			args:    []string{"tcp-tunnel", "--proxy-url", "bad", "--environment-id", "env"},
 			message: "invalid value 'bad' for '--proxy-url <PROXY_URL>': relative URL without a base",
 		},
 		{
 			name:    "tcp-tunnel empty host",
-			args:    []string{"tcp-tunnel", "--proxy-url", "https://", "--proxy-origins-file", "y", "--target", "z"},
+			args:    []string{"tcp-tunnel", "--proxy-url", "https://", "--environment-id", "env"},
 			message: "invalid value 'https://' for '--proxy-url <PROXY_URL>': empty host",
 		},
 		{
 			name:    "tcp-tunnel invalid port",
-			args:    []string{"tcp-tunnel", "--proxy-url", "https://p.example:abc", "--proxy-origins-file", "y", "--target", "z"},
+			args:    []string{"tcp-tunnel", "--proxy-url", "https://p.example:abc", "--environment-id", "env"},
 			message: "invalid value 'https://p.example:abc' for '--proxy-url <PROXY_URL>': invalid port number",
 		},
 		{
 			name:    "tcp-tunnel invalid ipv6",
-			args:    []string{"tcp-tunnel", "--proxy-url", "https://[::1", "--proxy-origins-file", "y", "--target", "z"},
+			args:    []string{"tcp-tunnel", "--proxy-url", "https://[::1", "--environment-id", "env"},
 			message: "invalid value 'https://[::1' for '--proxy-url <PROXY_URL>': invalid IPv6 address",
 		},
 		{
-			name:    "tcp-tunnel invalid listen address",
-			args:    []string{"tcp-tunnel", "--proxy-url", "https://p.example", "--proxy-origins-file", "y", "--target", "z", "--listen-addr", "bad"},
-			message: "invalid value 'bad' for '--listen-addr <LISTEN_ADDR>': invalid socket address syntax",
+			name:    "tcp-tunnel invalid legacy target",
+			args:    []string{"tcp-tunnel", "--target", "bad", "--token-file", "f"},
+			message: "invalid value 'bad' for '--target <TARGET>': invalid socket address syntax",
 		},
 		{
 			name:    "tcp-tunnel invalid ssh port",
@@ -118,21 +118,15 @@ func TestHiddenCommandClapDiagnosticsLikeRust(t *testing.T) {
 		},
 		{
 			name:    "tcp-tunnel environment id conflicts with target",
-			args:    []string{"tcp-tunnel", "--environment-id", "env", "--target", "other:22"},
+			args:    []string{"tcp-tunnel", "--environment-id", "env", "--target", "10.0.0.1:22"},
 			message: "the argument '--environment-id <ENVIRONMENT_ID>' cannot be used with '--target <TARGET>'",
 			usage:   "Usage: codex tcp-tunnel --environment-id <ENVIRONMENT_ID>",
 		},
 		{
-			name:    "tcp-tunnel boolean value",
-			args:    []string{"tcp-tunnel", "--auth-token-stdin=x"},
-			message: "unexpected value 'x' for '--auth-token-stdin' found; no more were expected",
-			usage:   "Usage: codex tcp-tunnel --auth-token-stdin",
-		},
-		{
-			name:    "tcp-tunnel boolean value with consumed options",
-			args:    []string{"tcp-tunnel", "--proxy-url", "https://p.example", "--proxy-origins-file", "y", "--auth-token-stdin=x"},
-			message: "unexpected value 'x' for '--auth-token-stdin' found; no more were expected",
-			usage:   "Usage: codex tcp-tunnel <--proxy-url <PROXY_URL>|--proxy-origins-file <PROXY_ORIGINS_FILE>|--target <TARGET>|--environment-id <ENVIRONMENT_ID>|--port <PORT>|--listen-addr <LISTEN_ADDR>|--auth-token-stdin|--auth-token-updates-stdin|--connect-headers-stdin|--diagnostics-json>",
+			name:    "tcp-tunnel duplicate flag",
+			args:    []string{"tcp-tunnel", "--environment-id", "env", "--port", "22", "--port", "23"},
+			message: "the argument '--port <PORT>' cannot be used multiple times",
+			usage:   "Usage: codex tcp-tunnel [OPTIONS]",
 		},
 	}
 	for _, testCase := range cases {
