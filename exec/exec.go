@@ -516,7 +516,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		ApprovalPolicy:                 approvalPolicy,
 		ExecPermissionApprovalsEnabled: features.Enabled(cfg.FeatureSettings(), "exec_permission_approvals"),
 		RequestPermissionsToolEnabled:  features.Enabled(cfg.FeatureSettings(), "request_permissions_tool"),
-	}, r.now(), cfg.IncludeEnvironmentContextTime())
+	}, r.now(), cfg.IncludeEnvironmentContextTime(), features.Enabled(cfg.FeatureSettings(), "utc_environment_date"))
 	historyInputItems := resumeInputItemsWithPolicy(resumeContext, execModelTruncationPolicy(&modelInfo))
 	if resumeContext != nil {
 		// Rust #43795: a resumed session re-establishes the selected effort.
@@ -2794,12 +2794,13 @@ func execStartupInputItems(
 	promptOptions sandbox.PermissionPromptProfileOptions,
 	now time.Time,
 	includeEnvironmentContextTime bool,
+	utcDate bool,
 ) []any {
 	items := make([]any, 0, 2)
 	if item := developerMessageInputItem(execPermissionsInstructions(req, permissions, promptOptions)); item != nil {
 		items = append(items, item)
 	}
-	if item := model.UserMessageInputItem(execEnvironmentContext(req, permissions, now, includeEnvironmentContextTime)); item != nil {
+	if item := model.UserMessageInputItem(execEnvironmentContext(req, permissions, now, includeEnvironmentContextTime, utcDate)); item != nil {
 		items = append(items, item)
 	}
 	return items
@@ -2847,7 +2848,7 @@ func execPermissionsInstructions(
 // writes nothing for a None value, so with the flag off both elements disappear
 // entirely instead of rendering as empty elements. An unset flag is true
 // (core/src/config/mod.rs:4161).
-func execEnvironmentContext(req *Request, permissions *config.SandboxPermissionProfileResolution, now time.Time, includeEnvironmentContextTime bool) string {
+func execEnvironmentContext(req *Request, permissions *config.SandboxPermissionProfileResolution, now time.Time, includeEnvironmentContextTime bool, utcDate bool) string {
 	cwd := absoluteRequestCWD(req)
 	shell := defaultEnvironmentShellName()
 	if now.IsZero() {
@@ -2862,7 +2863,11 @@ func execEnvironmentContext(req *Request, permissions *config.SandboxPermissionP
 		if timezone == "" {
 			timezone = time.Local.String()
 		}
-		fmt.Fprintf(&b, "  <current_date>%s</current_date>\n", xmlEscape(now.Format("2006-01-02")))
+		if utcDate {
+			fmt.Fprintf(&b, "  <current_date_utc>%s</current_date_utc>\n", xmlEscape(now.UTC().Format("2006-01-02")))
+		} else {
+			fmt.Fprintf(&b, "  <current_date>%s</current_date>\n", xmlEscape(now.Format("2006-01-02")))
+		}
 		fmt.Fprintf(&b, "  <timezone>%s</timezone>\n", xmlEscape(timezone))
 	}
 	fmt.Fprintf(&b, "  <filesystem><workspace_roots><root>%s</root></workspace_roots>%s</filesystem>\n", xmlEscape(cwd), execPermissionProfileXML(permissions))

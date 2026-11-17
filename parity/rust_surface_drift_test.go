@@ -24,7 +24,9 @@ func TestRustFeatureKeySurfaceAgainstGo(t *testing.T) {
 
 	// Re-anchored to upstream a394ff9cf6: Rust #61213 landed, so Go's Apps
 	// catalog instruction gate now matches the upstream feature table.
-	knownGoOnly := []string{}
+	// Rust #61897 (utc_environment_date) landed after the a394ff9cf6 anchor;
+	// the Go port carries the key so the behavior is gated identically.
+	knownGoOnly := []string{"utc_environment_date"}
 	knownRustOnly := []string{}
 	assertKnownSurfaceDiff(t, "feature key", rustKeys, goKeys, knownRustOnly, knownGoOnly)
 }

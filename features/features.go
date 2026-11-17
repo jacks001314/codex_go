@@ -357,6 +357,9 @@ var Registry = []Spec{
 	// default (#56163).
 	{Key: "reasoning_effort_override", Stage: StageStable, DefaultEnabled: true},
 	{Key: "current_time_reminder", Stage: StageUnderDevelopment},
+	// Rust (codex-rs/features/src/lib.rs #61897): compute the model-visible
+	// environment date in UTC and render it as <current_date_utc>.
+	{Key: "utc_environment_date", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs #45825): report failed clock reads to
 	// the model without failing the turn.
 	{Key: "nonfatal_clock_read_errors", Stage: StageUnderDevelopment, DefaultEnabled: false},

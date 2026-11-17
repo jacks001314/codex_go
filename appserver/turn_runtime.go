@@ -8095,16 +8095,17 @@ func (r *RuntimeRouter) compactEnvironmentContext(ctx context.Context, record *s
 		managedNetwork = cfg.Requirements.Network
 	}
 	contextParams := r.environmentContextParams(request.ThreadID, params)
+	utcEnvironmentDate := features.Enabled(cfg.FeatureSettings(), "utc_environment_date")
 	// Rust renders the whole world state for a compaction window (render_full),
 	// so a value that disappeared is already explicit and no unavailable marker
 	// is emitted; the snapshot still records what the model will see.
-	section := r.environmentWorldStateSectionForTurn(ctx, contextParams, current, localTimezoneName(), "", cfg.IncludeEnvironmentContextTime(), perEnvironment, managedNetwork)
+	section := r.environmentWorldStateSectionForTurn(ctx, contextParams, current, localTimezoneName(), "", cfg.IncludeEnvironmentContextTime(), utcEnvironmentDate, perEnvironment, managedNetwork)
 	// No diff is rendered here, so the host roster is not read (Rust resolves it
 	// only for an emitted environment fragment).
 	if _, err := r.recordEnvironmentWorldState(record, section, false, false, nil); err != nil {
 		return nil, err
 	}
-	text := r.turnEnvironmentContextTextWithOptions(ctx, contextParams, current, localTimezoneName(), "", cfg.IncludeEnvironmentContextTime(), environmentWorldStateRemovals{}, perEnvironment, managedNetwork)
+	text := r.turnEnvironmentContextTextWithOptions(ctx, contextParams, current, localTimezoneName(), "", cfg.IncludeEnvironmentContextTime(), utcEnvironmentDate, environmentWorldStateRemovals{}, perEnvironment, managedNetwork)
 	return append(items, compact.Item{
 		ID: "environment-context-" + safeIdentifier(request.TurnID), Type: "message", Role: "user", Kind: "environment_context", Text: text, Created: created,
 	}), nil
@@ -9796,7 +9797,8 @@ func (r *RuntimeRouter) turnEnvironmentContextInputItemForTurn(ctx context.Conte
 	if cfg != nil && cfg.Requirements != nil {
 		managedNetwork = cfg.Requirements.Network
 	}
-	section := r.environmentWorldStateSectionForTurn(ctx, params, current, localTimezoneName(), shellVersion, cfg.IncludeEnvironmentContextTime(), perEnvironment, managedNetwork)
+	utcEnvironmentDate := features.Enabled(cfg.FeatureSettings(), "utc_environment_date")
+	section := r.environmentWorldStateSectionForTurn(ctx, params, current, localTimezoneName(), shellVersion, cfg.IncludeEnvironmentContextTime(), utcEnvironmentDate, perEnvironment, managedNetwork)
 	// Rust reads the host roster only after the environment diff selected its
 	// updates (WorldState::resolve_host_roster), so a turn whose environment
 	// context did not change must not consult the agent session reader.
@@ -9939,7 +9941,7 @@ func (r *RuntimeRouter) turnEnvironmentContextText(params *turn.TurnStartParams,
 }
 
 func (r *RuntimeRouter) turnEnvironmentContextTextWithContext(ctx context.Context, params *turn.TurnStartParams, date *time.Time, timezone string, shellVersion string, includeTime bool, removals environmentWorldStateRemovals) string {
-	return r.turnEnvironmentContextTextWithOptions(ctx, params, date, timezone, shellVersion, includeTime, removals, false, nil)
+	return r.turnEnvironmentContextTextWithOptions(ctx, params, date, timezone, shellVersion, includeTime, false, removals, false, nil)
 }
 
 // turnEnvironmentContextTextWithOptions renders Rust's EnvironmentsState. The
@@ -9948,8 +9950,8 @@ func (r *RuntimeRouter) turnEnvironmentContextTextWithContext(ctx context.Contex
 // network rules. Shared managed network requirements become
 // <thread_network_requirements> so they are not mistaken for an environment's
 // own domains.
-func (r *RuntimeRouter) turnEnvironmentContextTextWithOptions(ctx context.Context, params *turn.TurnStartParams, date *time.Time, timezone string, shellVersion string, includeTime bool, removals environmentWorldStateRemovals, perEnvironment bool, networkRequirements *config.NetworkRequirements) string {
-	section := r.environmentWorldStateSectionForTurn(ctx, params, date, timezone, shellVersion, includeTime, perEnvironment, networkRequirements)
+func (r *RuntimeRouter) turnEnvironmentContextTextWithOptions(ctx context.Context, params *turn.TurnStartParams, date *time.Time, timezone string, shellVersion string, includeTime bool, utcDate bool, removals environmentWorldStateRemovals, perEnvironment bool, networkRequirements *config.NetworkRequirements) string {
+	section := r.environmentWorldStateSectionForTurn(ctx, params, date, timezone, shellVersion, includeTime, utcDate, perEnvironment, networkRequirements)
 	threadID := ""
 	if params != nil {
 		threadID = strings.TrimSpace(params.ThreadID)

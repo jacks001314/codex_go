@@ -49,10 +49,14 @@ type environmentWorldStateSection struct {
 	PerEnvironment bool                                        `json:"per_environment,omitempty"`
 	ShellVersion   string                                      `json:"shell_version,omitempty"`
 	CurrentDate    string                                      `json:"current_date,omitempty"`
-	Timezone       string                                      `json:"timezone,omitempty"`
-	Network        string                                      `json:"network,omitempty"`
-	Filesystem     string                                      `json:"filesystem,omitempty"`
-	Subagents      string                                      `json:"subagents,omitempty"`
+	// Changing the time basis must emit an update even when the date stays
+	// the same, so the snapshot records which clock produced the date
+	// (core/src/context/world_state/environment.rs #61897).
+	CurrentDateIsUTC bool   `json:"current_date_is_utc,omitempty"`
+	Timezone         string `json:"timezone,omitempty"`
+	Network          string `json:"network,omitempty"`
+	Filesystem       string `json:"filesystem,omitempty"`
+	Subagents        string `json:"subagents,omitempty"`
 }
 
 // environmentWorldStateRemovals reports section values that were visible
@@ -86,6 +90,7 @@ type renderedEnvironmentWorldState struct {
 	shellVersionRemoved bool
 	currentDate         string
 	currentDateRemoved  bool
+	currentDateIsUTC    bool
 	timezone            string
 	network             string
 	filesystem          string
@@ -150,7 +155,7 @@ func (s environmentWorldStateSection) normalized() environmentWorldStateSection 
 // turn's selected environments. The captured environment shell, working
 // directory, and (with per_environment_context) its own network and filesystem
 // rules are the values the model is about to see.
-func (r *RuntimeRouter) environmentWorldStateSectionForTurn(ctx context.Context, params *turn.TurnStartParams, date *time.Time, timezone string, shellVersion string, includeTime bool, perEnvironment bool, networkRequirements *config.NetworkRequirements) environmentWorldStateSection {
+func (r *RuntimeRouter) environmentWorldStateSectionForTurn(ctx context.Context, params *turn.TurnStartParams, date *time.Time, timezone string, shellVersion string, includeTime bool, utcDate bool, perEnvironment bool, networkRequirements *config.NetworkRequirements) environmentWorldStateSection {
 	section := environmentWorldStateSection{
 		Environments:   map[string]environmentWorldStateEnvironment{},
 		PerEnvironment: perEnvironment,
@@ -159,7 +164,12 @@ func (r *RuntimeRouter) environmentWorldStateSectionForTurn(ctx context.Context,
 	if includeTime {
 		section.Timezone = timezone
 		if date != nil {
-			section.CurrentDate = date.In(time.Local).Format("2006-01-02")
+			if utcDate {
+				section.CurrentDate = date.UTC().Format("2006-01-02")
+				section.CurrentDateIsUTC = true
+			} else {
+				section.CurrentDate = date.In(time.Local).Format("2006-01-02")
+			}
 		}
 	}
 	environments := r.unifiedExecEnvironmentsForTurn(params)
@@ -263,15 +273,16 @@ func (s environmentWorldStateSection) renderFull(removals environmentWorldStateR
 		updates[id] = environmentWorldStateUpdate{environment: environment}
 	}
 	rendered := renderedEnvironmentWorldState{
-		updates:        updates,
-		legacySingle:   !s.PerEnvironment && isLegacySingleEnvironment(s.Environments),
-		includePrimary: len(s.Environments) > 1,
-		shellVersion:   s.ShellVersion,
-		currentDate:    s.CurrentDate,
-		timezone:       s.Timezone,
-		network:        s.Network,
-		filesystem:     s.Filesystem,
-		subagents:      strings.TrimSpace(subagents),
+		updates:          updates,
+		legacySingle:     !s.PerEnvironment && isLegacySingleEnvironment(s.Environments),
+		includePrimary:   len(s.Environments) > 1,
+		shellVersion:     s.ShellVersion,
+		currentDate:      s.CurrentDate,
+		currentDateIsUTC: s.CurrentDateIsUTC,
+		timezone:         s.Timezone,
+		network:          s.Network,
+		filesystem:       s.Filesystem,
+		subagents:        strings.TrimSpace(subagents),
 	}
 	if removals.ShellVersion {
 		rendered.shellVersion = ""
@@ -297,6 +308,7 @@ func (s environmentWorldStateSection) renderDiff(previous environmentWorldStateS
 	turnContextValuesChanged := formatChanged ||
 		current.ShellVersion != previous.ShellVersion ||
 		current.CurrentDate != previous.CurrentDate ||
+		current.CurrentDateIsUTC != previous.CurrentDateIsUTC ||
 		current.Timezone != previous.Timezone ||
 		current.Network != previous.Network ||
 		current.Filesystem != previous.Filesystem
@@ -336,12 +348,22 @@ func (s environmentWorldStateSection) renderDiff(previous environmentWorldStateS
 		shellVersionRemoved: current.ShellVersion == "" && previous.ShellVersion != "",
 		currentDate:         current.CurrentDate,
 		currentDateRemoved:  current.CurrentDate == "" && previous.CurrentDate != "",
+		currentDateIsUTC:    currentDateBasis(current, previous),
 		timezone:            current.Timezone,
 		network:             current.Network,
 		filesystem:          current.Filesystem,
 		subagents:           roster,
 	}
 	return current, rendered.body()
+}
+
+// currentDateBasis keeps the previous clock basis when the date disappeared, so
+// the unavailable marker names the element the model actually saw (#61897).
+func currentDateBasis(current, previous environmentWorldStateSection) bool {
+	if current.CurrentDate != "" {
+		return current.CurrentDateIsUTC
+	}
+	return previous.CurrentDateIsUTC
 }
 
 // sameDiffValue mirrors Rust's EnvironmentSnapshot::has_same_diff_value: a
@@ -441,10 +463,14 @@ func (r renderedEnvironmentWorldState) body() string {
 	} else {
 		pushEnvironmentElement(&b, "shell_version", r.shellVersion)
 	}
+	dateElement := "current_date"
+	if r.currentDateIsUTC {
+		dateElement = "current_date_utc"
+	}
 	if r.currentDateRemoved {
-		b.WriteString("  <current_date status=\"unavailable\" />\n")
+		b.WriteString("  <" + dateElement + " status=\"unavailable\" />\n")
 	} else {
-		pushEnvironmentElement(&b, "current_date", r.currentDate)
+		pushEnvironmentElement(&b, dateElement, r.currentDate)
 	}
 	pushEnvironmentElement(&b, "timezone", r.timezone)
 	if r.network != "" {

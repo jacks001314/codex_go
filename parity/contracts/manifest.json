@@ -2732,6 +2732,25 @@
    "verifier": "TestRuntimeAgentControllerV2SpawnCopiesPaginatedParentHistoryLikeRust"
   },
   {
+   "id": "utc-environment-date",
+   "kind": "source-surface",
+   "rustPaths": [
+    "core/src/context/world_state/environment.rs",
+    "core/src/session/world_state.rs",
+    "features/src/lib.rs"
+   ],
+   "goPaths": [
+    "appserver/environment_world_state.go",
+    "appserver/turn_runtime.go",
+    "exec/exec.go",
+    "features/features.go",
+    "appserver/environment_utc_date_like_rust_test.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestEnvironmentContextUTCDateLikeRust"
+  },
+  {
    "id": "network-proxy-tool-call-attribution",
    "kind": "source-surface",
    "rustPaths": [

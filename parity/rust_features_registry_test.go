@@ -149,6 +149,9 @@ func TestFeaturesRegistryMatchesRust(t *testing.T) {
 	// corresponding registry key so the implemented behavior can be gated.
 	knownAheadOfAnchor := map[string]bool{
 		"catalog_apps_instructions": true,
+		// The anchor predates Rust #61897; the UTC environment date port keeps
+		// its upstream key so the behavior stays gated the same way.
+		"utc_environment_date": true,
 	}
 	for key := range goByKey {
 		if _, ok := rustSpecs[key]; !ok {
