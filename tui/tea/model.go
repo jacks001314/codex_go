@@ -1822,6 +1822,9 @@ type Options struct {
 	OnListSideChats SideChatListFunc
 	// OnReadSideChatPrompts reads the latest user prompts for the visible rows.
 	OnReadSideChatPrompts SideChatPromptFunc
+	// OnSidebarFiles snapshots the chooser's file inventory; nil leaves the
+	// Files group empty.
+	OnSidebarFiles SidebarFilesFunc
 	// OnOpenSideChat attaches a saved side chat that is not retained in memory.
 	OnOpenSideChat       SideOpenFunc
 	OnReadReviewBranches ReviewBranchesReaderFunc
@@ -3101,6 +3104,7 @@ type Model struct {
 	onCloseSide                       SideCloseFunc
 	onListSideChats                   SideChatListFunc
 	onReadSideChatPrompts             SideChatPromptFunc
+	onSidebarFiles                    SidebarFilesFunc
 	onOpenSideChat                    SideOpenFunc
 	onReadReviewBranches              ReviewBranchesReaderFunc
 	onReadReviewCommits               ReviewCommitsReaderFunc
@@ -3143,9 +3147,21 @@ type Model struct {
 	sidebarChoice         int
 	// sidebarChoices caches the saved side chats from the last discovery, and
 	// sidebarPrompts the latest user prompt per visible chat (Rust #60319).
-	sidebarChoices          []SideChatChoice
-	sidebarPrompts          map[string]string
-	sidebarPromptsRequest   uint64
+	sidebarChoices        []SideChatChoice
+	sidebarPrompts        map[string]string
+	sidebarPromptsRequest uint64
+	// sidebarFiles is the chooser's Files inventory (Rust sidebar_files::Files),
+	// together with the workspace and preview constraints its rows paint.
+	sidebarFiles                  []markdown.SidebarFileLink
+	sidebarFilesLoading           bool
+	sidebarFilesCwd               string
+	sidebarFilePreviewUnavailable string
+	sidebarFilesRequest           uint64
+	// sidebarChooserScroll mirrors Rust ChooserScroll: the wheel can move the
+	// viewport away from the keyboard selection.
+	sidebarChooserScroll    sidebarChooserScroll
+	sidebarShowingFilePath  bool
+	sidebarFilePathScroll   int
 	sidebarDiscovery        SideChatDiscoveryKind
 	sidebarDiscoveryRetry   bool
 	sidebarDiscoveryError   string
@@ -3893,6 +3909,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onCloseSide:                      options.OnCloseSide,
 		onListSideChats:                  options.OnListSideChats,
 		onReadSideChatPrompts:            options.OnReadSideChatPrompts,
+		onSidebarFiles:                   options.OnSidebarFiles,
 		onOpenSideChat:                   options.OnOpenSideChat,
 		onReadReviewBranches:             options.OnReadReviewBranches,
 		onReadReviewCommits:              options.OnReadReviewCommits,
@@ -5031,6 +5048,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, m.applySideChatsLoaded(msg)
 	case SideChatPromptsLoadedMsg:
 		return m, m.applySideChatPrompts(msg)
+	case SidebarFilesLoadedMsg:
+		return m, m.applySidebarFilesLoaded(msg)
 	case SideOpenResultMsg:
 		return m, m.applySideOpenResult(msg)
 	case WorkingDirectoryChangeResultMsg:

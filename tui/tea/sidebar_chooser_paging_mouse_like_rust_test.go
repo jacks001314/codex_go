@@ -11,9 +11,9 @@ import (
 	mousemsg "codex_go/tui/mousemsg"
 )
 
-// Rust #59928: page_up/page_down move the chooser by one painted window of
-// chat rows (sidebar_chooser::page_size) instead of a fixed constant, so a tall
-// pane pages further than a short one and the selection stays painted.
+// Rust sidebar_chooser::navigate: page_down lands on the last choice in the
+// painted window and page_up walks back, so a tall pane pages further than a
+// short one and the selection always stays painted.
 func TestSidebarChooserPagesByVisibleRowsLikeRust(t *testing.T) {
 	model, _ := newSidebarTabsModel(t)
 	for index := 1; index <= 60; index++ {
@@ -34,24 +34,33 @@ func TestSidebarChooserPagesByVisibleRowsLikeRust(t *testing.T) {
 	for _, height := range []int{20, 50} {
 		model.transcript.Height = height
 		model.sidebarChoice = 0
-		layout := model.sidebarChooserLayoutFor(width, height)
-		visible := len(layout.visible)
-		if visible <= 0 {
+		model.sidebarChooserScroll = sidebarChooserScroll{}
+		rows := model.sidebarChoiceRowsFor(width, height)
+		visible := rows.visible(model.sidebarChooserScroll, 0)
+		if len(visible) <= 1 {
 			t.Fatalf("panel height %d painted no choice rows", height)
 		}
-		if visible == 5 {
+		if len(visible) == 5 {
 			t.Fatalf("panel height %d painted the old fixed page size of 5 rows", height)
+		}
+		// Rust navigate PageDown: the last choice that starts within one window
+		// height below the new-chat row.
+		boundary := rows.choices[0].start + rows.height
+		want := 0
+		for index, span := range rows.choices {
+			if span.start <= boundary {
+				want = index
+			}
 		}
 		if handled, _ := model.updateSidebarChooserKey(key(keymsg.KeyCtrlF)); !handled {
 			t.Fatalf("page_down was not handled at panel height %d", height)
 		}
-		if model.sidebarChoice != visible {
-			t.Fatalf("page_down at panel height %d moved to row %d, want one window of %d chat rows",
-				height, model.sidebarChoice, visible)
+		if model.sidebarChoice != want {
+			t.Fatalf("page_down at panel height %d moved to row %d, want %d", height, model.sidebarChoice, want)
 		}
 		// Rust choice_rows keeps the selection inside the painted window.
 		painted := false
-		for _, chat := range model.sidebarChooserLayoutFor(width, height).visible {
+		for _, chat := range model.sidebarChoiceRowsFor(width, height).visible(model.sidebarChooserScroll, model.sidebarChoice) {
 			if chat.index == model.sidebarChoice {
 				painted = true
 			}
@@ -59,10 +68,11 @@ func TestSidebarChooserPagesByVisibleRowsLikeRust(t *testing.T) {
 		if !painted {
 			t.Fatalf("panel height %d painted the selection outside its window", height)
 		}
-		if handled, _ := model.updateSidebarChooserKey(key(keymsg.KeyCtrlB)); !handled || model.sidebarChoice != 0 {
-			t.Fatalf("page_up at panel height %d handled=%t row=%d, want row 0", height, handled, model.sidebarChoice)
+		moved := model.sidebarChoice
+		if handled, _ := model.updateSidebarChooserKey(key(keymsg.KeyCtrlB)); !handled || model.sidebarChoice >= moved {
+			t.Fatalf("page_up at panel height %d handled=%t row=%d, want a row above %d", height, handled, model.sidebarChoice, moved)
 		}
-		window[height] = visible
+		window[height] = len(visible)
 	}
 	if window[20] == window[50] {
 		t.Fatalf("both panel heights paged %d rows; the step is not driven by the visible window", window[20])

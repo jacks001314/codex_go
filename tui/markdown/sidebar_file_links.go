@@ -30,6 +30,17 @@ type SidebarFileLink struct {
 	Location *SidebarSourceLocation
 }
 
+// IsMarkdownFile mirrors Rust markdown_render::is_markdown_file: the sidebar
+// groups the inventory as "Markdown files" only when every entry is one.
+func IsMarkdownFile(path string) bool {
+	index := strings.LastIndex(path, ".")
+	if index < 0 {
+		return false
+	}
+	extension := path[index+1:]
+	return strings.EqualFold(extension, "md") || strings.EqualFold(extension, "markdown")
+}
+
 // SidebarFileLinks collects the local file links a Markdown document mentions,
 // in document order. Both links and images count (Rust Tag::Link/Tag::Image).
 func SidebarFileLinks(source string) []SidebarFileLink {

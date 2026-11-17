@@ -153,8 +153,19 @@ func TestSidebarChooserPagingAccountsForPreviewRowsLikeRust(t *testing.T) {
 	if withPreviews < 1 || withPreviews >= len(choices)+1 {
 		t.Fatalf("visible rows with previews = %d, want a window smaller than %d rows", withPreviews, len(choices)+1)
 	}
-	if handled, _ := model.updateSidebarChooserKey(key(keymsg.KeyCtrlF)); !handled || model.sidebarChoice != withPreviews {
-		t.Fatalf("page_down handled=%t selection=%d, want %d preview rows", handled, model.sidebarChoice, withPreviews)
+	rows := model.sidebarChoiceRowsFor(model.sidebarTabStripWidth(), 20)
+	boundary := rows.choices[0].start + rows.height
+	lastVisible := 0
+	for index, span := range rows.choices {
+		if span.start <= boundary {
+			lastVisible = index
+		}
+	}
+	if lastVisible < 2 {
+		t.Fatalf("page window reached %d, want a multi-row window", lastVisible)
+	}
+	if handled, _ := model.updateSidebarChooserKey(key(keymsg.KeyCtrlF)); !handled || model.sidebarChoice != lastVisible {
+		t.Fatalf("page_down handled=%t selection=%d, want the window's last row %d", handled, model.sidebarChoice, lastVisible)
 	}
 }
 
@@ -301,13 +312,14 @@ func TestSidebarChooserClickActivatesPreviewRowLikeRust(t *testing.T) {
 	// narrower than WIDE_WIDTH, so New side chat owns rows 4-5, row 6 is the
 	// gap before the group header on row 7, row 8 is blank, and the chats start
 	// on row 9. Each chat owns a title row plus its prompt preview.
-	layout := model.sidebarChooserLayoutFor(model.sidebarTabStripWidth(), model.sidebarChooserPanelHeight())
-	if layout.newChat != (sidebarChooserSpan{start: 4, end: 6}) || layout.group != 7 ||
-		layout.chats != (sidebarChooserSpan{start: 9, end: 23}) {
-		t.Fatalf("chooser rows = newChat %+v group %d chats %+v", layout.newChat, layout.group, layout.chats)
+	rows := model.sidebarChoiceRowsFor(model.sidebarTabStripWidth(), model.sidebarChooserPanelHeight())
+	if rows.choices[0] != (sidebarChooserSpan{start: 4, end: 6}) || rows.chatsHeader != 7 ||
+		rows.choices[1] != (sidebarChooserSpan{start: 9, end: 11}) ||
+		rows.choices[2] != (sidebarChooserSpan{start: 11, end: 13}) {
+		t.Fatalf("chooser rows = %+v header %d", rows.choices, rows.chatsHeader)
 	}
-	if len(layout.visible) != 2 || layout.visible[1].index != 2 || layout.visible[1].rows.start != 11 {
-		t.Fatalf("visible chats = %+v, want the second chat on row 11", layout.visible)
+	if visible := rows.visible(model.sidebarChooserScroll, 0); len(visible) != 3 || visible[2].index != 2 || visible[2].rows.start != 11 {
+		t.Fatalf("visible chats = %+v, want the second chat on row 11", visible)
 	}
 	left, _, _, ok := model.sidePaneLayout(model.width)
 	if !ok {

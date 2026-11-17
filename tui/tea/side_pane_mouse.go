@@ -130,6 +130,40 @@ func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd)
 			}
 		}
 	}
+	// Rust side_focus.rs: the wheel over the pane scrolls the chooser viewport
+	// (or the full-path view) in fixed three-row steps, independent of the
+	// configurable transcript scroll speed.
+	if m != nil && m.sidebarChooserVisible() && m.sidebarChooserFocused {
+		if rows, wheel := m.transcriptWheelRows(msg); wheel {
+			if left, _, _, ok := m.sidePaneLayout(firstPositive(m.width, defaultWidth)); ok {
+				dividerWidth := ansi.StringWidth(sideWorkspaceDivider)
+				if msg.X >= left+dividerWidth {
+					delta := 3
+					if rows < 0 {
+						delta = -3
+					}
+					if m.sidebarShowingFilePath {
+						if file, ok := m.sidebarChooserFile(m.sidebarChoice); ok {
+							action := "move_down"
+							if delta < 0 {
+								action = "move_up"
+							}
+							m.sidebarFilePathScroll = scrollSidebarFilePath(
+								m.sidebarTabStripWidth(),
+								m.sidebarChooserPanelHeight(),
+								file.Path,
+								m.sidebarFilePathScroll,
+								action,
+							)
+						}
+					} else if msg.Y < max(m.transcript.Height, 1)-1 {
+						m.wheelScrollSidebarChooser(delta)
+					}
+					return true, nil
+				}
+			}
+		}
+	}
 	if m == nil || m.State == nil || m.activeSide == nil || !m.sideWorkspaceEnabled() || m.sideZoomed {
 		return false, nil
 	}

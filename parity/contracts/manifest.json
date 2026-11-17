@@ -3430,8 +3430,28 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestActivationKeyGuardBoundsLegacyPressesLikeRust;TestActivationKeyGuardStopsOnAnotherKeyLikeRust;TestActivationKeyGuardSwallowsHeldEnterAcrossPickerLikeRust"
+  },
+
+
+  {
+   "id": "sidebar-chooser-files-and-paths",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/sidebar_chooser.rs",
+    "tui/src/line_truncation.rs",
+    "tui/src/app/sidebar.rs",
+    "tui/src/app/sidebar_files.rs",
+    "tui/src/markdown_render/local_links.rs"
+   ],
+   "goPaths": [
+    "tui/tea/sidebar_chooser.go",
+    "tui/tea/sidebar_chooser_rows.go",
+    "tui/line_truncation.go",
+    "tui/tea/sidebar_chooser_files_like_rust_test.go"
+   ],
+   "phase": "P3",
+   "status": "partial",
+   "verifier": "TestSidebarChooserFilesGroupLikeRust;TestSidebarChooserNarrowFileRowsLikeRust;TestSidebarChooserMarkdownFilesHeaderLikeRust;TestSidebarChooserFileRowsInertWithoutPreviewLikeRust;TestSidebarChooserWheelScrollsFilesLikeRust;TestSidebarChooserFilePathViewLikeRust;TestSidebarChooserKeepsFileSelectionWhenInventoryChangesLikeRust;TestMiddleLabelKeepsBothEndsLikeRust;TestFilenameLabelKeepsExtensionLikeRust;TestDocumentLabelJoinsPartsTowardRootLikeRust;TestDocumentLabelKeepsDirectorySuffixWhenNarrowLikeRust"
   }
-
-
   ]
 }

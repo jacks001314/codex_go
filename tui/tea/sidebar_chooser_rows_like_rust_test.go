@@ -37,7 +37,7 @@ func TestSidebarChooserLoadingRowsLikeRust(t *testing.T) {
 		t.Fatalf("loading row = %q", rows[3])
 	}
 	newChat := rows[4]
-	if !strings.HasPrefix(newChat, " › + New side chat") || !strings.HasSuffix(newChat, "Start from the main chat") {
+	if !strings.HasPrefix(newChat, " › + New side chat") || !strings.HasSuffix(newChat, "Start from this conversation") {
 		t.Fatalf("new-chat row = %q", newChat)
 	}
 	// The inline subtitle ends at the body's last usable column, so the row
@@ -73,7 +73,7 @@ func TestSidebarChooserFailedRetryRowsLikeRust(t *testing.T) {
 	if rows[3] != " Permission denied by storage" {
 		t.Fatalf("error row = %q", rows[3])
 	}
-	if rows[4] != "   + New side chat" || rows[5] != "     Start from the main chat" {
+	if rows[4] != "   + New side chat" || rows[5] != "     Start from this conversation" {
 		t.Fatalf("new-chat rows = %q / %q", rows[4], rows[5])
 	}
 	if strings.TrimSpace(rows[6]) != "" || strings.TrimSpace(rows[7]) != "" {

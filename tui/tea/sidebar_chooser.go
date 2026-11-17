@@ -9,6 +9,7 @@ import (
 
 	codextui "codex_go/tui"
 	"codex_go/tui/keymsg"
+	"codex_go/tui/markdown"
 )
 
 // sidebarLoadingGlyph mirrors Rust motion::loading_glyph for the chooser's
@@ -56,11 +57,12 @@ const (
 	// Rust #60319 sidebar_chooser.rs: the new-chat row explains where a side
 	// chat starts, the chooser waits for the first main-chat turn, and a failed
 	// discovery offers an inline retry row.
-	sidebarNewChatSubtitle     = "Start from the main chat"
-	sidebarWaitingSideChats    = "You can start a side chat after your first message in the main chat."
-	sidebarRetryingChatsTitle  = "Retrying…"
-	sidebarRetryChatsTitle     = "Retry loading side chats"
-	sidebarSideChatsGroupTitle = "Side chats"
+	sidebarNewChatSubtitle          = "Available after your first message"
+	sidebarNewChatSubtitleAvailable = "Start from this conversation"
+	sidebarWaitingSideChats         = "You can start a side chat after your first message in the main chat."
+	sidebarRetryingChatsTitle       = "Retrying…"
+	sidebarRetryChatsTitle          = "Retry loading side chats"
+	sidebarSideChatsGroupTitle      = "Side chats"
 	// Rust sidebar_chooser.rs WIDE_WIDTH: the new-chat subtitle shares the row
 	// with its title only when the body is this wide.
 	sidebarChooserWideWidth = 58
@@ -123,6 +125,18 @@ type SideChatListFunc func(parentThreadID string) ([]SideChatChoice, error)
 // SideChatPromptFunc reads the latest user prompt for the visible chats.
 type SideChatPromptFunc func(threadIDs []string) map[string]string
 
+// SidebarFilesSnapshot is one chooser inventory snapshot (Rust
+// sidebar_files::Files plus the pane's preview constraint).
+type SidebarFilesSnapshot struct {
+	Files              []markdown.SidebarFileLink
+	Loading            bool
+	CWD                string
+	PreviewUnavailable string
+}
+
+// SidebarFilesFunc snapshots the files the owning conversation mentioned.
+type SidebarFilesFunc func(parentThreadID string) SidebarFilesSnapshot
+
 // SideOpenFunc attaches a saved side chat so the sidebar can show it.
 type SideOpenFunc func(parentThreadID, sideThreadID string) (AgentThreadSwitchResponse, error)
 
@@ -137,6 +151,14 @@ type SideChatPromptsLoadedMsg struct {
 	ParentThreadID string
 	RequestID      uint64
 	Prompts        map[string]string
+}
+
+// SidebarFilesLoadedMsg replaces the chooser's Files group. Hosts may also
+// send it unprompted after a completed patch or generated image.
+type SidebarFilesLoadedMsg struct {
+	ParentThreadID string
+	RequestID      uint64
+	Snapshot       SidebarFilesSnapshot
 }
 
 type SideOpenResultMsg struct {
@@ -245,6 +267,9 @@ func (m *Model) openSidebarChooser() bubbletea.Cmd {
 	m.sidebarChooserOpen = true
 	m.sidebarChooserParent = parentThreadID
 	m.sidebarChooserFocused = true
+	m.sidebarChooserScroll = sidebarChooserScroll{}
+	m.sidebarShowingFilePath = false
+	m.sidebarFilePathScroll = 0
 	m.sidebarTabHover = -1
 	m.sidebarAddHover = false
 	// Rust #60319 App::show(Chooser): the selection starts on the chat that is
@@ -265,7 +290,7 @@ func (m *Model) openSidebarChooser() bubbletea.Cmd {
 	if discovery == nil {
 		discovery = m.refreshStatusControlsCmd()
 	}
-	return batchSideCommands(cmd, discovery)
+	return batchSideCommands(cmd, discovery, m.requestSidebarFiles())
 }
 
 func (m *Model) closeSidebarChooser() bubbletea.Cmd {
@@ -279,6 +304,9 @@ func (m *Model) closeSidebarChooser() bubbletea.Cmd {
 	m.sidebarChooserFocused = false
 	m.sidebarChooserParent = ""
 	m.sidebarChoice = 0
+	m.sidebarChooserScroll = sidebarChooserScroll{}
+	m.sidebarShowingFilePath = false
+	m.sidebarFilePathScroll = 0
 	m.sidebarTabHover = -1
 	m.sidebarAddHover = false
 	m.notice = ""
@@ -364,55 +392,6 @@ var sidebarChooserListActions = []string{
 	"move_up", "move_down", "move_left", "move_right", "page_up", "page_down", "jump_top", "jump_bottom", "accept", "cancel",
 }
 
-// sidebarChooserPageSize mirrors Rust sidebar_chooser::page_size: a page is
-// measured in painted chat rows (prompt previews included), and page_down from
-// the new-chat row steps by the chats the window already shows.
-func (m *Model) sidebarChooserPageSize(action string) int {
-	if m == nil {
-		return 1
-	}
-	choices := m.sidebarChooserChoices()
-	count := m.sidebarChooserChoiceCountFor(choices)
-	choice := m.sidebarChooserClampedChoice()
-	layout := m.sidebarChooserLayoutFor(m.sidebarTabStripWidth(), m.sidebarChooserPanelHeight())
-	rows := layout.chats.len()
-	size := 1
-	switch action {
-	case "page_up":
-		indices := make([]int, 0, choice)
-		for index := choice - 1; index >= 0; index-- {
-			indices = append(indices, index)
-		}
-		size = m.fittingSidebarChooserRows(indices, rows, choices)
-	case "page_down":
-		if choice == 0 {
-			size = len(layout.visible)
-		} else {
-			indices := make([]int, 0, count-choice)
-			for index := choice; index < count; index++ {
-				indices = append(indices, index)
-			}
-			size = m.fittingSidebarChooserRows(indices, rows, choices)
-		}
-	}
-	return max(size, 1)
-}
-
-// fittingSidebarChooserRows counts the leading choices whose painted rows fit
-// in height (Rust ChatTabs::fitting_choices).
-func (m *Model) fittingSidebarChooserRows(indices []int, height int, choices []SideChatChoice) int {
-	used := 0
-	fitted := 0
-	for _, index := range indices {
-		used += m.sidebarChooserRowHeight(index, choices)
-		if used > height {
-			break
-		}
-		fitted++
-	}
-	return fitted
-}
-
 // sidebarChooserPanelHeight is the pane height the chooser paints into;
 // renderSideWorkspace hands renderSidebarChooser the transcript viewport.
 func (m *Model) sidebarChooserPanelHeight() int {
@@ -451,29 +430,47 @@ func (m *Model) updateSidebarChooserKey(msg keymsg.KeyMsg) (bool, bubbletea.Cmd)
 	}
 	action := sidebarChooserListAction(msg)
 	if action == "" {
+		// Rust side_focus: `p` toggles the full-path view while a file row is
+		// selected (or while the view is already showing).
+		if msg.String() == "p" && (m.sidebarShowingFilePath ||
+			(m.sidebarChooserSelectionVisible() && m.sidebarChooserSelectedFile())) {
+			m.sidebarShowingFilePath = !m.sidebarShowingFilePath
+			m.sidebarFilePathScroll = 0
+			m.refreshTranscript()
+			return true, nil
+		}
 		return false, nil
 	}
-	if !m.sidebarChatCreationAvailable() && action != "cancel" {
-		// Rust #60319: before the first main-chat turn the chooser explains the
-		// wait and consumes every list action except Cancel.
+	if m.sidebarShowingFilePath {
+		// Rust: every list action except Cancel scrolls the wrapped path and is
+		// consumed; Cancel closes the path view instead of the chooser.
+		if action == "cancel" {
+			m.sidebarShowingFilePath = false
+			m.sidebarFilePathScroll = 0
+			m.refreshTranscript()
+			return true, nil
+		}
+		if file, ok := m.sidebarChooserFile(m.sidebarChoice); ok {
+			m.sidebarFilePathScroll = scrollSidebarFilePath(
+				m.sidebarTabStripWidth(),
+				m.sidebarChooserPanelHeight(),
+				file.Path,
+				m.sidebarFilePathScroll,
+				action,
+			)
+			m.refreshTranscript()
+		}
 		return true, nil
 	}
-	last := m.sidebarChooserChoiceCount() - 1
-	clamp := func(choice int) int {
-		if choice < 0 {
-			return 0
-		}
-		if choice > last {
-			return max(last, 0)
-		}
-		return choice
+	if !m.sidebarChatCreationAvailable() && action != "cancel" && len(m.sidebarFiles) == 0 {
+		// Rust #60319: before the first main-chat turn the chooser explains the
+		// wait and consumes every list action except Cancel. Files already in
+		// the inventory stay reachable.
+		return true, nil
 	}
 	switch action {
-	case "move_up":
-		m.moveSidebarChooserChoice(-1)
-		return true, nil
-	case "move_down":
-		m.moveSidebarChooserChoice(1)
+	case "move_up", "move_down", "page_up", "page_down", "jump_top", "jump_bottom":
+		m.navigateSidebarChooser(action)
 		return true, nil
 	case "move_left", "move_right":
 		// Rust app/side_focus.rs: a horizontal list move with a chat selected is
@@ -490,18 +487,6 @@ func (m *Model) updateSidebarChooserKey(msg keymsg.KeyMsg) (bool, bubbletea.Cmd)
 			return true, nil
 		}
 		return true, m.backToSelectedSideChat(keySpecFromKeyMsg(msg))
-	case "page_up":
-		m.sidebarChoice = clamp(m.sidebarChoice - m.sidebarChooserPageSize(action))
-		return true, nil
-	case "page_down":
-		m.sidebarChoice = clamp(m.sidebarChoice + m.sidebarChooserPageSize(action))
-		return true, nil
-	case "jump_top":
-		m.sidebarChoice = 0
-		return true, nil
-	case "jump_bottom":
-		m.sidebarChoice = clamp(last)
-		return true, nil
 	case "accept":
 		// Rust #60319 guard_chooser_key: a held activation key must not reach
 		// the view the chooser just opened.
@@ -528,15 +513,13 @@ func (m *Model) moveSidebarChooserChoice(delta int) {
 	if m == nil || !m.sidebarChooserVisible() || !m.sidebarChooserFocused {
 		return
 	}
-	last := m.sidebarChooserChoiceCount() - 1
-	next := m.sidebarChoice + delta
-	if next < 0 {
-		next = 0
+	action := "move_up"
+	if delta > 0 {
+		action = "move_down"
 	}
-	if next > last {
-		next = max(last, 0)
+	for step := 0; step < max(delta, -delta); step++ {
+		m.navigateSidebarChooser(action)
 	}
-	m.sidebarChoice = next
 }
 
 // sidebarPaneSelectedChatID is the chat the pane was last showing (Rust
@@ -853,6 +836,12 @@ func (m *Model) acceptSidebarChooser() bubbletea.Cmd {
 	case m.sidebarChooserIsRetryRow(m.sidebarChoice, choices):
 		return m.requestSideChatDiscovery(true)
 	default:
+		if _, file := m.sidebarChooserFile(m.sidebarChoice); file {
+			// Rust opens the file in a document tab (sidebar_document.rs). The
+			// Go pane has no document tabs yet, so the row stays selectable but
+			// inert until that port lands (#61889/#61890).
+			return nil
+		}
 		choice, ok := m.sidebarChooserChat(m.sidebarChoice)
 		if !ok {
 			return nil
@@ -1161,12 +1150,24 @@ func (m *Model) sidebarChooserRows(width int, height int) []string {
 		set(2, "Starting side conversation...")
 		return finish()
 	}
-	set(2, sidebarChooserTitle)
-	if !m.sidebarChatCreationAvailable() {
+	choiceRows := m.sidebarChoiceRowsFor(width, height)
+	waiting := !m.sidebarChatCreationAvailable() && len(m.sidebarFiles) == 0
+	top := 0
+	if !waiting {
+		top = choiceRows.top(m.sidebarChooserScroll, m.sidebarChooserClampedChoice())
+	}
+	paintAt := func(offset int, text string) {
+		y := offset - top
+		if y >= sidebarChooserBodyStart && y < sidebarChooserBodyStart+choiceRows.height {
+			set(y, text)
+		}
+	}
+	paintAt(2, "\x1b[1m"+sidebarChooserTitle+"\x1b[22m")
+	if waiting {
 		// Rust paints the waiting note wrapped from FIRST_CHOICE_ROW and skips
 		// discovery entirely until the parent has its first user turn.
 		for offset, text := range wrapSidebarChooserText(sidebarWaitingSideChats, sidebarChooserBodyWidth(width)) {
-			set(sidebarChooserFirstChoiceRow+offset, "\x1b[2m"+text+"\x1b[22m")
+			paintAt(sidebarChooserFirstChoiceRow+offset, "\x1b[2m"+text+"\x1b[22m")
 		}
 		return finish()
 	}
@@ -1176,83 +1177,207 @@ func (m *Model) sidebarChooserRows(width int, height int) []string {
 		if len(m.sidebarChooserChoices()) > 0 {
 			label = "Refreshing side chats…"
 		}
-		set(3, "\x1b[2m"+m.sidebarLoadingGlyph()+" "+label+"\x1b[22m")
+		paintAt(3, "\x1b[2m"+m.sidebarLoadingGlyph()+" "+label+"\x1b[22m")
 	case SideChatDiscoveryFailed:
-		set(3, "\x1b[31m"+m.sidebarDiscoveryError+"\x1b[39m")
+		paintAt(3, "\x1b[31m"+m.sidebarDiscoveryError+"\x1b[39m")
+	default:
+		if m.sidebarFilesLoading {
+			paintAt(3, "\x1b[2mLoading older files…\x1b[22m")
+		}
 	}
-	m.paintSidebarChooserBody(width, footer+1, set)
+	m.paintSidebarChooserBody(width, height, choiceRows, top, set)
+	// Rust keeps the scroll arrows in the right margin, outside the clickable
+	// list rows.
+	if choiceRows.height > 0 && width >= 3 {
+		if top > 0 {
+			set(sidebarChooserBodyStart, "\x1b[2m↑\x1b[22m")
+		}
+		if top < choiceRows.maxTop() {
+			set(footer-1, "\x1b[2m↓\x1b[22m")
+		}
+	}
 	return finish()
 }
 
-// paintSidebarChooserBody paints the new-chat entry, the group header and the
-// visible chat rows from sidebarChooserLayoutFor, so the renderer and the
-// pointer hit test agree on every row (Rust sidebar_chooser::paint).
-func (m *Model) paintSidebarChooserBody(width int, height int, set func(int, string)) {
-	layout := m.sidebarChooserLayoutFor(width, height)
+// paintSidebarChooserBody is Rust sidebar_chooser::paint after the header rows:
+// the new-chat entry, the group headers, the visible chats, the retry row and
+// the file inventory, all offset by the shared scroll top.
+func (m *Model) paintSidebarChooserBody(width int, height int, rows sidebarChoiceRows, top int, set func(int, string)) {
 	choices := m.sidebarChooserChoices()
+	choice := m.sidebarChooserClampedChoice()
 	bodyWidth := sidebarChooserBodyWidth(width)
+	if m.sidebarShowingFilePath {
+		m.paintSidebarChooserFilePath(width, height, bodyWidth, set)
+		return
+	}
+	paintAt := func(offset int, text string) {
+		y := offset - top
+		if y >= sidebarChooserBodyStart && y < sidebarChooserBodyStart+rows.height {
+			set(y, text)
+		}
+	}
 	marker := func(index int) string {
-		if index == m.sidebarChoice {
+		if index == choice {
 			return "› "
 		}
 		return "  "
 	}
-	// Rust row_style paints the selection marker as a single character; the
-	// retry row then adds three spaces before its label.
 	markerCell := func(index int) string {
-		if index == m.sidebarChoice {
+		if index == choice {
 			return "›"
 		}
 		return " "
 	}
-	if layout.newChat.len() > 0 {
+	// New side chat: Rust paints the subtitle inline when the body is wide and
+	// on its own indented row otherwise.
+	{
 		title := marker(0) + sidebarNewChatTitle
-		if layout.wide {
-			detail := sidebarNewChatSubtitle
+		detail := sidebarNewChatSubtitle
+		if m.sidebarChatCreationAvailable() {
+			detail = sidebarNewChatSubtitleAvailable
+		}
+		if rows.wide {
 			pad := max(bodyWidth-1-codextui.DisplayWidth(detail), codextui.DisplayWidth(title))
 			title += strings.Repeat(" ", pad-codextui.DisplayWidth(title))
-			set(layout.newChat.start, truncateSidebarChooserRow(title+detail, bodyWidth))
+			paintAt(sidebarChooserFirstChoiceRow, truncateSidebarChooserRow(title+detail, bodyWidth))
 		} else {
-			set(layout.newChat.start, title)
-			set(layout.newChat.start+1, "    "+sidebarNewChatSubtitle)
+			paintAt(sidebarChooserFirstChoiceRow, truncateSidebarChooserRow(title, bodyWidth))
+			paintAt(sidebarChooserFirstChoiceRow+1, truncateSidebarChooserRow("    "+detail, bodyWidth))
 		}
 	}
-	if layout.group >= 0 && len(choices) > 0 {
-		set(layout.group, sidebarSideChatsGroupTitle+"  "+strconv.Itoa(len(choices)))
+	if rows.chatsHeader >= 0 {
+		paintAt(rows.chatsHeader, "\x1b[2m"+sidebarSideChatsGroupTitle+"  "+strconv.Itoa(len(choices))+"\x1b[22m")
 	}
-	for _, visible := range layout.visible {
+	if rows.filesHeader >= 0 {
+		group := "Files"
+		markdownOnly := len(m.sidebarFiles) > 0
+		for _, file := range m.sidebarFiles {
+			if !markdown.IsMarkdownFile(file.Path) {
+				markdownOnly = false
+				break
+			}
+		}
+		if markdownOnly {
+			group = "Markdown files"
+		}
+		paintAt(rows.filesHeader, "\x1b[2m"+group+"  "+strconv.Itoa(len(m.sidebarFiles))+"\x1b[22m")
+	}
+	for _, visible := range rows.visible(m.sidebarChooserScroll, choice) {
 		index := visible.index
 		if m.sidebarChooserIsRetryRow(index, choices) {
 			label := sidebarRetryChatsTitle
 			if m.sidebarDiscovery == SideChatDiscoveryLoading {
 				label = sidebarRetryingChatsTitle
 			}
-			set(visible.rows.start, markerCell(index)+"   "+label)
+			paintAt(visible.rows.start, truncateSidebarChooserRow(markerCell(index)+"   "+label, bodyWidth))
 			continue
 		}
-		choice, ok := m.sidebarChooserChat(index)
+		if file, ok := m.sidebarChooserFile(index); ok {
+			m.paintSidebarFileRow(file, markerCell(index), rows.wide, bodyWidth, visible.rows, paintAt)
+			continue
+		}
+		chat, ok := m.sidebarChooserChat(index)
 		if !ok {
 			continue
 		}
-		label := sideChatChoiceLabel(choice, index, len(choices))
+		label := sideChatChoiceLabel(chat, index, len(choices))
 		if m.threadLabelCloud(m.sidebarParentThreadID(), m.backendID) {
 			label = codextui.ThreadLabelPrefix(true) + label
 		}
 		row := marker(index) + "○ " + label
-		if status := m.sideOpenStatusLabel(choice.ThreadID); status != "" {
+		if status := m.sideOpenStatusLabel(chat.ThreadID); status != "" {
 			// Rust reserves the status width before truncating the title so the
 			// pending state stays visible on narrow panes.
 			budget := max(bodyWidth-6, 1)
 			titleWidth := max(budget-codextui.DisplayWidth(status), budget/3)
 			row = marker(index) + "○ " + truncateSidebarChooserRow(label, max(titleWidth, 1)) + "  " + status
 		}
-		set(visible.rows.start, truncateSidebarChooserRow(row, bodyWidth))
+		paintAt(visible.rows.start, truncateSidebarChooserRow(row, bodyWidth))
 		if visible.rows.len() == 2 {
-			if prompt := m.sidebarChooserPrompt(choice); prompt != "" {
-				set(visible.rows.start+1, truncateSidebarChooserRow("    "+prompt, bodyWidth))
+			if prompt := m.sidebarChooserPrompt(chat); prompt != "" {
+				paintAt(visible.rows.start+1, truncateSidebarChooserRow("    "+prompt, bodyWidth))
 			}
 		}
 	}
+}
+
+// paintSidebarFileRow is Rust paint's file arm: the relative path split into
+// directory and file name, summarised from both ends when the pane is narrow.
+func (m *Model) paintSidebarFileRow(file markdown.SidebarFileLink, marker string, wide bool, bodyWidth int, lines sidebarChooserSpan, paintAt func(int, string)) {
+	path := sidebarChooserRelativePath(m.sidebarFilesCwd, file.Path)
+	directory, name := splitSidebarFilePath(path)
+	if m.sidebarFilePreviewUnavailable != "" {
+		directory = m.sidebarFilePreviewUnavailable
+	}
+	width := max(bodyWidth-4, 0)
+	if wide {
+		name = codextui.FilenameLabel(name, max(width-5, 0))
+		directoryWidth := max(width-codextui.DisplayWidth(name)-2, 0)
+		directory = codextui.MiddleLabel(directory, directoryWidth)
+		paintAt(lines.start, truncateSidebarChooserRow(marker+" · "+name+"  "+directory, bodyWidth))
+		return
+	}
+	name = codextui.FilenameLabel(name, width)
+	paintAt(lines.start, truncateSidebarChooserRow(marker+" · "+name, bodyWidth))
+	if lines.start+1 < lines.end {
+		directory = codextui.MiddleLabel(directory, width)
+		paintAt(lines.start+1, truncateSidebarChooserRow("    "+directory, bodyWidth))
+	}
+}
+
+// paintSidebarChooserFilePath is Rust paint's full_path view: the caption, a
+// blank row and the wrapped path window above the footer.
+func (m *Model) paintSidebarChooserFilePath(width int, height int, bodyWidth int, set func(int, string)) {
+	file, ok := m.sidebarChooserFile(m.sidebarChooserClampedChoice())
+	if !ok {
+		return
+	}
+	pathRows, visible := sidebarChooserFilePathLayout(width, height, file.Path)
+	top := 0
+	if limit := max(len(pathRows)-visible, 0); m.sidebarFilePathScroll > limit {
+		top = limit
+	} else {
+		top = max(m.sidebarFilePathScroll, 0)
+	}
+	row := 2
+	if height > 2 {
+		set(row, "\x1b[1mFile path\x1b[22m")
+		set(row+1, "")
+		row += 2
+	}
+	for index := top; index < len(pathRows) && index < top+visible; index++ {
+		set(row, truncateSidebarChooserRow(pathRows[index], bodyWidth))
+		row++
+	}
+}
+
+// sidebarChooserRelativePath shows a path relative to the pane's workspace when
+// it lives underneath it, and otherwise keeps the original destination.
+func sidebarChooserRelativePath(cwd string, path string) string {
+	cwd = strings.TrimRight(strings.TrimSpace(cwd), "/\\")
+	if cwd == "" || path == "" {
+		return path
+	}
+	if len(path) <= len(cwd) {
+		return path
+	}
+	if !strings.EqualFold(path[:len(cwd)], cwd) {
+		return path
+	}
+	rest := path[len(cwd):]
+	if rest[0] != '/' && rest[0] != '\\' {
+		return path
+	}
+	return strings.TrimLeft(rest, "/\\")
+}
+
+// splitSidebarFilePath is Rust `path.rsplit_once(['/', '\\'])`: a bare file name
+// lives at the project root.
+func splitSidebarFilePath(path string) (string, string) {
+	if index := strings.LastIndexAny(path, "/\\"); index >= 0 {
+		return path[:index], path[index+1:]
+	}
+	return "Project root", path
 }
 
 func truncateSidebarChooserRow(text string, width int) string {
@@ -1314,9 +1439,21 @@ func (m *Model) sidebarChooserFooter(width int) string {
 	if m == nil {
 		return ""
 	}
+	if m.sidebarShowingFilePath {
+		hints := make([]string, 0, 2)
+		if key := m.sidebarChooserListHint("cancel"); key != "" {
+			hints = append(hints, key+" back")
+		}
+		if key := m.sidebarChooserListHint("move_down"); key != "" {
+			hints = append(hints, key+" scroll")
+		}
+		return fitSidebarChooserHints(hints, width)
+	}
 	available := m.sidebarChatCreationAvailable()
+	fileSelected := m.sidebarChooserSelectedFile()
+	visible := m.sidebarChooserSelectionVisible()
 	hints := make([]string, 0, 4)
-	if available {
+	if visible && (available || fileSelected) && (!fileSelected || m.sidebarFilePreviewUnavailable == "") {
 		if key := m.sidebarChooserListHint("accept"); key != "" {
 			hints = append(hints, key+" "+m.sidebarChooserAcceptLabel())
 		}
@@ -1324,7 +1461,10 @@ func (m *Model) sidebarChooserFooter(width int) string {
 	if key := m.sidebarChooserListHint("cancel"); key != "" {
 		hints = append(hints, key+" "+m.sidebarChooserCancelLabel())
 	}
-	if available {
+	if fileSelected && visible && m.sidebarChooserFilePathKeyAvailable() {
+		hints = append(hints, "p path")
+	}
+	if available || len(m.sidebarFiles) > 0 {
 		up := m.sidebarChooserListHint("move_up")
 		down := m.sidebarChooserListHint("move_down")
 		if up != "" && down != "" {
@@ -1335,6 +1475,23 @@ func (m *Model) sidebarChooserFooter(width int) string {
 		hints = append(hints, key+" hide pane")
 	}
 	return fitSidebarChooserHints(hints, width)
+}
+
+// sidebarChooserFilePathKeyAvailable is Rust file_path_key_available: `p` only
+// opens the path view when no list binding claims the key.
+func (m *Model) sidebarChooserFilePathKeyAvailable() bool {
+	if m == nil {
+		return false
+	}
+	for _, action := range sidebarChooserListActions {
+		bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, "list", action)
+		for _, binding := range bindings {
+			if strings.TrimSpace(binding) == "p" {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // fitSidebarChooserHints drops whole hints that do not fit and marks the cut
@@ -1479,6 +1636,7 @@ func (m *Model) applySideChatsLoaded(msg SideChatsLoadedMsg) bubbletea.Cmd {
 		return nil
 	}
 	selected := m.sidebarChooserSelectedThreadID()
+	selectedFile := m.sidebarChooserSelectedFilePath()
 	keepNew := m.sidebarChoice == 0 && len(m.sidebarChooserChoices()) > 0
 	if msg.Err != nil {
 		m.sidebarDiscovery = SideChatDiscoveryFailed
@@ -1499,6 +1657,7 @@ func (m *Model) applySideChatsLoaded(msg SideChatsLoadedMsg) bubbletea.Cmd {
 	} else if !keepNew {
 		m.sidebarChoice = 0
 	}
+	m.restoreSidebarFileSelection(selectedFile)
 	m.clampSidebarChoice()
 	m.refreshTranscript()
 	return m.requestVisibleSideChatPrompts()
@@ -1519,6 +1678,99 @@ func (m *Model) applySideChatPrompts(msg SideChatPromptsLoadedMsg) bubbletea.Cmd
 	}
 	m.refreshTranscript()
 	return nil
+}
+
+// requestSidebarFiles refreshes the chooser's Files group (Rust
+// refresh_sidebar_files on opening the chooser).
+func (m *Model) requestSidebarFiles() bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	parentThreadID := strings.TrimSpace(m.sidebarChooserParent)
+	if parentThreadID == "" || m.onSidebarFiles == nil {
+		m.sidebarFilesLoading = false
+		return nil
+	}
+	m.sidebarFilesRequest++
+	request := m.sidebarFilesRequest
+	m.sidebarFilesLoading = true
+	load := m.onSidebarFiles
+	return func() bubbletea.Msg {
+		return SidebarFilesLoadedMsg{ParentThreadID: parentThreadID, RequestID: request, Snapshot: load(parentThreadID)}
+	}
+}
+
+// applySidebarFilesLoaded replaces the Files group and keeps a selected file
+// selected when the inventory is reordered or extended (Rust
+// restore_file_selection).
+func (m *Model) applySidebarFilesLoaded(msg SidebarFilesLoadedMsg) bubbletea.Cmd {
+	if m == nil || !m.sidebarChooserOpen || strings.TrimSpace(msg.ParentThreadID) != m.sidebarChooserParent {
+		return nil
+	}
+	if msg.RequestID != 0 && msg.RequestID != m.sidebarFilesRequest {
+		return nil
+	}
+	selected := m.sidebarChooserSelectedFilePath()
+	m.sidebarFiles = mergeSidebarFileLinks(nil, msg.Snapshot.Files)
+	m.sidebarFilesLoading = msg.Snapshot.Loading
+	m.sidebarFilesCwd = strings.TrimSpace(msg.Snapshot.CWD)
+	m.sidebarFilePreviewUnavailable = strings.TrimSpace(msg.Snapshot.PreviewUnavailable)
+	m.restoreSidebarFileSelection(selected)
+	m.clampSidebarChoice()
+	if m.sidebarShowingFilePath && !m.sidebarChooserSelectedFile() {
+		m.sidebarShowingFilePath = false
+		m.sidebarFilePathScroll = 0
+	}
+	m.refreshTranscript()
+	return nil
+}
+
+// sidebarChooserSelectedFilePath is the path the Files group currently
+// highlights, or empty when a chat row is selected.
+func (m *Model) sidebarChooserSelectedFilePath() string {
+	if m == nil {
+		return ""
+	}
+	file, ok := m.sidebarChooserFile(m.sidebarChooserClampedChoice())
+	if !ok {
+		return ""
+	}
+	return file.Path
+}
+
+// restoreSidebarFileSelection points the selection back at a file after the
+// inventory changed (Rust SidebarPane::restore_file_selection).
+func (m *Model) restoreSidebarFileSelection(path string) {
+	if m == nil || path == "" {
+		return
+	}
+	for index, file := range m.sidebarFiles {
+		if file.Path == path {
+			m.sidebarChoice = m.sidebarChooserFileStart() + index
+			return
+		}
+	}
+}
+
+// mergeSidebarFileLinks keeps the inventory order and drops duplicate
+// destinations, filling in a location a later mention provided.
+func mergeSidebarFileLinks(base []markdown.SidebarFileLink, extra []markdown.SidebarFileLink) []markdown.SidebarFileLink {
+	out := make([]markdown.SidebarFileLink, 0, len(extra))
+	byPath := make(map[string]int, len(extra))
+	for _, file := range append(append([]markdown.SidebarFileLink{}, base...), extra...) {
+		if file.Path == "" {
+			continue
+		}
+		if index, ok := byPath[file.Path]; ok {
+			if out[index].Location == nil {
+				out[index].Location = file.Location
+			}
+			continue
+		}
+		byPath[file.Path] = len(out)
+		out = append(out, file)
+	}
+	return out
 }
 
 // requestVisibleSideChatPrompts fetches previews only for the chats the
@@ -1674,12 +1926,43 @@ func (m *Model) sidebarChooserChoiceCount() int {
 	return m.sidebarChooserChoiceCountFor(m.sidebarChooserChoices())
 }
 
-func (m *Model) sidebarChooserChoiceCountFor(choices []SideChatChoice) int {
-	count := len(choices) + 1
+// sidebarChooserFileStartFor is Rust ChatTabs::file_start: the new-chat row,
+// every saved chat, the optional retry row, and then the files.
+func (m *Model) sidebarChooserFileStartFor(choices []SideChatChoice) int {
+	start := len(choices) + 1
 	if m.sidebarChooserRetryVisible(choices) {
-		count++
+		start++
 	}
-	return count
+	return start
+}
+
+func (m *Model) sidebarChooserFileStart() int {
+	return m.sidebarChooserFileStartFor(m.sidebarChooserChoices())
+}
+
+// sidebarChooserFileOffset maps a chooser index onto the Files group (Rust
+// ChatTabs::file_offset).
+func (m *Model) sidebarChooserFileOffset(index int) (int, bool) {
+	if m == nil {
+		return 0, false
+	}
+	offset := index - m.sidebarChooserFileStart()
+	if offset < 0 || offset >= len(m.sidebarFiles) {
+		return 0, false
+	}
+	return offset, true
+}
+
+func (m *Model) sidebarChooserFile(index int) (markdown.SidebarFileLink, bool) {
+	offset, ok := m.sidebarChooserFileOffset(index)
+	if !ok {
+		return markdown.SidebarFileLink{}, false
+	}
+	return m.sidebarFiles[offset], true
+}
+
+func (m *Model) sidebarChooserChoiceCountFor(choices []SideChatChoice) int {
+	return m.sidebarChooserFileStartFor(choices) + len(m.sidebarFiles)
 }
 
 // sidebarChooserClampedChoice is the selection Rust's choice_rows measures:
@@ -1810,6 +2093,41 @@ func (m *Model) handleSidebarChooserMouseRow(screenY int) (bool, bubbletea.Cmd, 
 // FIRST_CHOICE_ROW and the footer hint owns the pane's last row.
 const sidebarChooserFirstChoiceRow = 4
 
+// sidebarChooserBodyWidth is Rust body_row: one leading inset column and two
+// reserved trailing columns.
+func sidebarChooserBodyWidth(width int) int {
+	return max(width-3, 1)
+}
+
+// sidebarChooserChoiceAtRow resolves one painted chooser row to a choice index
+// using the same layout the pane painted (Rust sidebar_chooser::choice_at).
+func (m *Model) sidebarChooserChoiceAtRow(row int) (int, bool) {
+	if m == nil {
+		return 0, false
+	}
+	rows := m.sidebarChoiceRowsFor(m.sidebarTabStripWidth(), m.sidebarChooserPanelHeight())
+	choice := m.sidebarChooserClampedChoice()
+	top := rows.top(m.sidebarChooserScroll, choice)
+	start := sidebarChooserBodyStart + top
+	end := start + rows.height
+	for _, visible := range rows.visible(m.sidebarChooserScroll, choice) {
+		first := max(visible.rows.start, start)
+		last := min(visible.rows.end, end)
+		span := sidebarChooserSpan{start: first, end: last}
+		if first >= last || !span.contains(row) {
+			continue
+		}
+		if _, file := m.sidebarChooserFile(visible.index); file && m.sidebarFilePreviewUnavailable != "" {
+			return 0, false
+		}
+		if visible.index == 0 && !m.sidebarChatCreationAvailable() {
+			return 0, false
+		}
+		return visible.index, true
+	}
+	return 0, false
+}
+
 // sidebarChooserSpan is a half-open range of painted chooser rows.
 type sidebarChooserSpan struct{ start, end int }
 
@@ -1831,141 +2149,19 @@ type sidebarChooserVisibleChat struct {
 	rows  sidebarChooserSpan
 }
 
-// sidebarChooserLayout mirrors Rust sidebar_chooser::ChoiceRows. The renderer
-// and the pointer hit test share it, so a click always lands on the row the
-// pane painted (Rust choice_rows / choice_at).
-type sidebarChooserLayout struct {
-	wide    bool
-	newChat sidebarChooserSpan
-	group   int
-	chats   sidebarChooserSpan
-	visible []sidebarChooserVisibleChat
-}
-
-// sidebarChooserBodyWidth is Rust body_row: one leading inset column and two
-// reserved trailing columns.
-func sidebarChooserBodyWidth(width int) int {
-	return max(width-3, 1)
-}
-
-func (m *Model) sidebarChooserLayoutFor(width int, height int) sidebarChooserLayout {
-	if m == nil {
-		return sidebarChooserLayout{group: -1}
-	}
-	choices := m.sidebarChooserChoices()
-	count := m.sidebarChooserChoiceCountFor(choices)
-	choice := m.sidebarChooserClampedChoice()
-	layout := sidebarChooserLayout{
-		wide:  sidebarChooserBodyWidth(width) >= sidebarChooserWideWidth,
-		group: -1,
-	}
-	newHeight := 1
-	if !layout.wide {
-		newHeight = 2
-	}
-	footer := sidebarChooserLayoutFooter(height, newHeight, count)
-	newEnd := min(sidebarChooserFirstChoiceRow+newHeight, footer)
-	afterGroup := 1
-	if len(choices) > 0 {
-		afterGroup = 2
-	}
-	if count > 1 && footer >= newEnd+1+afterGroup+m.sidebarChooserRowHeight(choice, choices) {
-		layout.group = newEnd + 1
-	}
-	newChatEnd := sidebarChooserFirstChoiceRow
-	if choice == 0 || layout.group >= 0 {
-		newChatEnd = max(newEnd, sidebarChooserFirstChoiceRow)
-	}
-	layout.newChat = sidebarChooserSpan{start: sidebarChooserFirstChoiceRow, end: newChatEnd}
-	chatStart := newChatEnd
-	if layout.group >= 0 {
-		chatStart = layout.group + afterGroup
-	}
-	layout.chats = sidebarChooserSpan{start: chatStart, end: footer}
-	layout.visible = m.sidebarChooserVisibleChats(layout, choice, count, choices)
-	return layout
-}
-
-// sidebarChooserLayoutFooter is Rust's footer row: the pane's last row, or an
-// unclipped row when the caller has no pane height yet.
-func sidebarChooserLayoutFooter(height int, newHeight int, count int) int {
-	if height > 0 {
-		return height - 1
-	}
-	return sidebarChooserFirstChoiceRow + newHeight + 2 + 2*count + 4
-}
-
-// sidebarChooserVisibleChats mirrors Rust ChoiceRows::visible_chats: the chat
-// window scrolls just far enough to keep the selection (and its prompt preview)
-// inside the painted rows.
-func (m *Model) sidebarChooserVisibleChats(layout sidebarChooserLayout, choice int, count int, choices []SideChatChoice) []sidebarChooserVisibleChat {
-	chatRows := layout.chats.len()
-	selected := max(choice, 1)
-	spare := max(chatRows-m.sidebarChooserRowHeight(selected, choices), 0)
-	indices := make([]int, 0, selected)
-	for index := selected - 1; index >= 1; index-- {
-		indices = append(indices, index)
-	}
-	first := selected - m.fittingSidebarChooserRows(indices, spare, choices)
-	cursor := layout.chats.start
-	visible := make([]sidebarChooserVisibleChat, 0, count)
-	for index := first; index < count; index++ {
-		if cursor >= layout.chats.end {
-			break
-		}
-		start := cursor
-		cursor++
-		if index >= 1 && index <= len(choices) && m.sidebarChooserPrompt(choices[index-1]) != "" {
-			cursor = min(cursor+1, layout.chats.end)
-		}
-		visible = append(visible, sidebarChooserVisibleChat{
-			index: index,
-			rows:  sidebarChooserSpan{start: start, end: cursor},
-		})
-	}
-	return visible
-}
-
-// sidebarChooserChoiceAtRow resolves one painted chooser row to a choice index
-// using the same layout the pane painted (Rust sidebar_chooser::choice_at).
-func (m *Model) sidebarChooserChoiceAtRow(row int) (int, bool) {
-	if m == nil {
-		return 0, false
-	}
-	layout := m.sidebarChooserLayoutFor(m.sidebarTabStripWidth(), m.sidebarChooserPanelHeight())
-	if layout.newChat.contains(row) {
-		return 0, true
-	}
-	for _, visible := range layout.visible {
-		if visible.rows.contains(row) {
-			return visible.index, true
-		}
-	}
-	return 0, false
-}
-
-// sidebarChooserRowHeight reports the painted rows of one choice row: prompt
-// previews give chats a second row (Rust ChatTabs::row_height).
-func (m *Model) sidebarChooserRowHeight(index int, choices []SideChatChoice) int {
-	if m == nil || index < 1 || index > len(choices) {
-		return 1
-	}
-	if m.sidebarChooserPrompt(choices[index-1]) != "" {
-		return 2
-	}
-	return 1
-}
-
 // sidebarChooserWindow returns the chat indexes the panel paints for a pane
 // height, sharing the layout with the renderer.
 func (m *Model) sidebarChooserWindow(height int) []int {
 	if m == nil {
 		return nil
 	}
-	layout := m.sidebarChooserLayoutFor(m.sidebarTabStripWidth(), height)
-	window := make([]int, 0, len(layout.visible))
-	for _, visible := range layout.visible {
-		window = append(window, visible.index)
+	rows := m.sidebarChoiceRowsFor(m.sidebarTabStripWidth(), height)
+	choice := m.sidebarChooserClampedChoice()
+	window := make([]int, 0, 8)
+	for _, visible := range rows.visible(m.sidebarChooserScroll, choice) {
+		if _, chat := m.sidebarChooserChat(visible.index); chat {
+			window = append(window, visible.index)
+		}
 	}
 	return window
 }
