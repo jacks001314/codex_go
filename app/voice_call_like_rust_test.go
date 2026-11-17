@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -25,6 +26,7 @@ func TestRemoteVoiceOwnedCallCreatesClientCallLikeRust(t *testing.T) {
 		authorization string
 		sessionID     string
 		threadID      string
+		voiceSession  string
 		contentType   string
 		body          string
 	}
@@ -40,6 +42,7 @@ func TestRemoteVoiceOwnedCallCreatesClientCallLikeRust(t *testing.T) {
 			authorization: request.Header.Get("Authorization"),
 			sessionID:     request.Header.Get("session-id"),
 			threadID:      request.Header.Get("thread-id"),
+			voiceSession:  request.Header.Get("voice-session-id"),
 			contentType:   request.Header.Get("Content-Type"),
 			body:          string(body),
 		}
@@ -102,12 +105,46 @@ func TestRemoteVoiceOwnedCallCreatesClientCallLikeRust(t *testing.T) {
 	if call.sessionID != "thread-voice" || call.threadID != "thread-voice" {
 		t.Fatalf("thread headers = session %q thread %q", call.sessionID, call.threadID)
 	}
+	// Rust #61908: one UUID v4 per call, carried on `voice-session-id` and
+	// forwarded as `voiceSessionId`; it must stay distinct from the thread ID.
+	if !canonicalUUIDv4.MatchString(call.voiceSession) {
+		t.Fatalf("voice-session-id = %q, want a canonical UUID v4", call.voiceSession)
+	}
+	if call.voiceSession == "thread-voice" {
+		t.Fatal("voice-session-id reused the thread ID")
+	}
+	if params.VoiceSessionID == nil || *params.VoiceSessionID != call.voiceSession {
+		t.Fatalf("voiceSessionId = %#v, want %q", params.VoiceSessionID, call.voiceSession)
+	}
 	if !strings.Contains(call.contentType, "multipart/form-data") {
 		t.Fatalf("content type = %q", call.contentType)
 	}
 	if !strings.Contains(call.body, "v=0 offer") || !strings.Contains(call.body, "server prompt") ||
 		!strings.Contains(call.body, "gpt-live-1.1-codex") || !strings.Contains(call.body, "marin") {
 		t.Fatalf("call body lost its session configuration:\n%s", call.body)
+	}
+}
+
+// canonicalUUIDv4 is lowercase hyphenated RFC 4122 output with the version and
+// variant nibbles fixed, matching `Uuid::to_string` for `Uuid::new_v4`.
+var canonicalUUIDv4 = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
+// Each call gets its own voice session id, so one thread can open several
+// realtime calls without merging their server-side voice sessions.
+func TestVoiceSessionIDsArePerCallLikeRust(t *testing.T) {
+	seen := make(map[string]bool)
+	for i := 0; i < 32; i++ {
+		id, err := newVoiceSessionID()
+		if err != nil {
+			t.Fatalf("newVoiceSessionID() error = %v", err)
+		}
+		if !canonicalUUIDv4.MatchString(id) {
+			t.Fatalf("newVoiceSessionID() = %q, want a canonical UUID v4", id)
+		}
+		if seen[id] {
+			t.Fatalf("newVoiceSessionID() repeated %q", id)
+		}
+		seen[id] = true
 	}
 }
 

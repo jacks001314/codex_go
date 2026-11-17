@@ -98,6 +98,11 @@ func negotiateVoiceOwnedCall(
 	}
 	headers.Set("session-id", threadID)
 	headers.Set("thread-id", threadID)
+	voiceSessionID, err := newVoiceSessionID()
+	if err != nil {
+		return empty, "", fmt.Errorf("generate voice session id: %w", err)
+	}
+	headers.Set("voice-session-id", voiceSessionID)
 	mergeHTTPHeadersLocal(headers, callAuth.Headers)
 
 	if client == nil {
@@ -106,6 +111,7 @@ func negotiateVoiceOwnedCall(
 	session := &realtime.SessionConfig{
 		ThreadID:              threadID,
 		RealtimeSessionID:     threadID,
+		VoiceSessionID:        voiceSessionID,
 		Model:                 firstNonEmptyLocal(strings.TrimSpace(settings.Model), voiceConfigString(loaded.Values, "experimental_realtime_ws_model")),
 		OutputModality:        realtime.OutputAudio,
 		Version:               realtime.VersionV3,
@@ -140,6 +146,7 @@ func negotiateVoiceOwnedCall(
 		OutputModality:        realtime.OutputAudio,
 		IncludeStartupContext: &includeStartupContext,
 		RealtimeSessionID:     &realtimeSessionID,
+		VoiceSessionID:        &voiceSessionID,
 		Transport:             realtime.ExistingCallTransport(callID),
 		Version:               &version,
 	}

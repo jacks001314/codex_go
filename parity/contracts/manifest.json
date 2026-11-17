@@ -3037,6 +3037,23 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestFlatSubgraphsAndCrossGroupEdgesLikeRust;TestSubgraphTitlesAndMembershipLikeRust;TestInvalidOrUnsupportedSubgraphsKeepSourceLikeRust;TestMermaidFencesUseNativeRendererForEveryFamily"
+  },
+  {
+   "id": "voice-session-id-per-call",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/realtime_call.rs",
+    "tui/src/app_server_session/realtime.rs",
+    "tui/src/app/event_dispatch.rs"
+   ],
+   "goPaths": [
+    "app/voice_call.go",
+    "app/voice_session_id.go",
+    "app/voice_call_like_rust_test.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestRemoteVoiceOwnedCallCreatesClientCallLikeRust;TestVoiceSessionIDsArePerCallLikeRust"
   }
   ]
 }
