@@ -53,8 +53,12 @@ func (f *preparedCloudSource) PrewarmDefaultThread(context.Context, string, stri
 	return f.Activate(context.Background(), "started")
 }
 
-func (f *preparedCloudSource) PrewarmThread(context.Context, string, string, *cloudclient.ProjectEnvironment) (*cloudclient.ThreadActivation, error) {
+func (f *preparedCloudSource) PrewarmThread(context.Context, string, string, *cloudclient.EnvironmentSelection) (*cloudclient.ThreadActivation, error) {
 	return f.Activate(context.Background(), "started")
+}
+
+func (f *preparedCloudSource) ListSavedEnvironments(context.Context) ([]cloudclient.SavedEnvironment, error) {
+	return nil, nil
 }
 
 func (f *preparedCloudSource) ListTurns(_ context.Context, request cloudclient.ListTurnsRequest) (cloudclient.HistoryPage[cloudclient.HistoryTurn], error) {

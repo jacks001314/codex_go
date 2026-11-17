@@ -41,7 +41,8 @@ type cloudSource interface {
 	UnarchiveThread(ctx context.Context, threadID string) (cloudclient.ThreadSnapshot, error)
 	ListThreads(ctx context.Context, query cloudclient.ThreadListQuery) (cloudclient.ThreadPage, error)
 	PrewarmDefaultThread(ctx context.Context, model string, modelProvider string) (*cloudclient.ThreadActivation, error)
-	PrewarmThread(ctx context.Context, model string, modelProvider string, project *cloudclient.ProjectEnvironment) (*cloudclient.ThreadActivation, error)
+	PrewarmThread(ctx context.Context, model string, modelProvider string, environment *cloudclient.EnvironmentSelection) (*cloudclient.ThreadActivation, error)
+	ListSavedEnvironments(ctx context.Context) ([]cloudclient.SavedEnvironment, error)
 	ListTurns(ctx context.Context, request cloudclient.ListTurnsRequest) (cloudclient.HistoryPage[cloudclient.HistoryTurn], error)
 	ListItems(ctx context.Context, request cloudclient.ListItemsRequest) (cloudclient.HistoryPage[cloudclient.HistoryItem], error)
 	AddUserMessage(ctx context.Context, request cloudclient.AddUserMessageRequest) (*cloudclient.Admission, error)
@@ -57,35 +58,49 @@ type RPCError struct {
 
 // Error implements error.
 // SetLocalProject records the host project the next cloud thread start should
-// provision (Rust #60007). Each start resolves the project from the caller's
-// working directory, so a nil project clears any previous selection.
+// provision in the default environment (Rust #60007). Each start resolves the
+// project from the caller's working directory, so a nil project clears any
+// previous selection.
 func (c *Client) SetLocalProject(project *cloudclient.ProjectEnvironment) {
+	c.SetEnvironmentSelection(cloudclient.ProjectEnvironmentSelection(project))
+}
+
+// SetEnvironmentSelection records the explicit environment the next cloud
+// thread start should use: a saved configuration or a project checkout in the
+// default environment (Rust #61956). A nil selection keeps the default.
+func (c *Client) SetEnvironmentSelection(environment *cloudclient.EnvironmentSelection) {
 	if c == nil {
 		return
 	}
-	c.projectMu.Lock()
-	c.localProject = cloneCloudProject(project)
-	c.projectMu.Unlock()
+	c.environmentMu.Lock()
+	c.environment = environment.Clone()
+	c.environmentMu.Unlock()
 }
 
-func (c *Client) localProjectSnapshot() *cloudclient.ProjectEnvironment {
+func (c *Client) environmentSnapshot() *cloudclient.EnvironmentSelection {
 	if c == nil {
 		return nil
 	}
-	c.projectMu.Lock()
-	defer c.projectMu.Unlock()
-	return cloneCloudProject(c.localProject)
+	c.environmentMu.Lock()
+	defer c.environmentMu.Unlock()
+	return c.environment.Clone()
 }
 
-func cloneCloudProject(project *cloudclient.ProjectEnvironment) *cloudclient.ProjectEnvironment {
-	if project == nil {
-		return nil
+// ListSavedEnvironments exposes saved environment discovery through this
+// connection's authenticated account (Rust #61956). A read that finishes after
+// the account changed is discarded instead of being delivered.
+func (c *Client) ListSavedEnvironments(ctx context.Context) ([]cloudclient.SavedEnvironment, error) {
+	if c == nil || c.source == nil {
+		return nil, cloudclient.ErrClientBuild
 	}
-	return &cloudclient.ProjectEnvironment{
-		Name:       project.Name,
-		OriginURLs: append([]string(nil), project.OriginURLs...),
-		CWD:        project.CWD,
+	environments, err := c.source.ListSavedEnvironments(ctx)
+	if err != nil {
+		return nil, err
 	}
+	if c.recoveryOptions.LoginCurrent != nil && !c.recoveryOptions.LoginCurrent() {
+		return nil, cloudclient.ErrInvalidCredentials
+	}
+	return environments, nil
 }
 
 func (e *RPCError) Error() string {
@@ -132,8 +147,8 @@ type Client struct {
 	recovery        idleRecovery
 	recoveryResults chan idleRecoveryResult
 
-	projectMu    sync.Mutex
-	localProject *cloudclient.ProjectEnvironment
+	environmentMu sync.Mutex
+	environment   *cloudclient.EnvironmentSelection
 
 	prepared chan *preparedRequest
 

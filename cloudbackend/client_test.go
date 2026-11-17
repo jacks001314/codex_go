@@ -21,17 +21,18 @@ type fakeCloud struct {
 	attach      func(ctx context.Context, threadID string) (<-chan cloudclient.Event, <-chan error, error)
 	listThreads func(ctx context.Context, query cloudclient.ThreadListQuery) (cloudclient.ThreadPage, error)
 	prewarm     func(ctx context.Context, model string, modelProvider string) (*cloudclient.ThreadActivation, error)
-	// prewarmProject records the host project of the last cloud thread start.
-	prewarmProject *cloudclient.ProjectEnvironment
-	listTurns      func(ctx context.Context, request cloudclient.ListTurnsRequest) (cloudclient.HistoryPage[cloudclient.HistoryTurn], error)
-	listItems      func(ctx context.Context, request cloudclient.ListItemsRequest) (cloudclient.HistoryPage[cloudclient.HistoryItem], error)
-	addMessage     func(ctx context.Context, request cloudclient.AddUserMessageRequest) (*cloudclient.Admission, error)
-	interrupt      func(ctx context.Context, request cloudclient.InterruptTurnRequest) error
-	archive        func(ctx context.Context, threadID string) error
-	unarchive      func(ctx context.Context, threadID string) (cloudclient.ThreadSnapshot, error)
-	setThreadName  func(ctx context.Context, threadID string, name string) error
-	readThreadName func(ctx context.Context, threadID string) (string, error)
-	closeHook      func()
+	// prewarmEnvironment records the environment of the last cloud thread start.
+	prewarmEnvironment *cloudclient.EnvironmentSelection
+	listEnvironments   func(ctx context.Context) ([]cloudclient.SavedEnvironment, error)
+	listTurns          func(ctx context.Context, request cloudclient.ListTurnsRequest) (cloudclient.HistoryPage[cloudclient.HistoryTurn], error)
+	listItems          func(ctx context.Context, request cloudclient.ListItemsRequest) (cloudclient.HistoryPage[cloudclient.HistoryItem], error)
+	addMessage         func(ctx context.Context, request cloudclient.AddUserMessageRequest) (*cloudclient.Admission, error)
+	interrupt          func(ctx context.Context, request cloudclient.InterruptTurnRequest) error
+	archive            func(ctx context.Context, threadID string) error
+	unarchive          func(ctx context.Context, threadID string) (cloudclient.ThreadSnapshot, error)
+	setThreadName      func(ctx context.Context, threadID string, name string) error
+	readThreadName     func(ctx context.Context, threadID string) (string, error)
+	closeHook          func()
 }
 
 func (f *fakeCloud) Activate(ctx context.Context, threadID string) (*cloudclient.ThreadActivation, error) {
@@ -76,17 +77,18 @@ func (f *fakeCloud) PrewarmDefaultThread(ctx context.Context, model string, mode
 	return f.prewarm(ctx, model, modelProvider)
 }
 
-func (f *fakeCloud) PrewarmThread(ctx context.Context, model string, modelProvider string, project *cloudclient.ProjectEnvironment) (*cloudclient.ThreadActivation, error) {
+func (f *fakeCloud) PrewarmThread(ctx context.Context, model string, modelProvider string, environment *cloudclient.EnvironmentSelection) (*cloudclient.ThreadActivation, error) {
 	f.mu.Lock()
-	if project == nil {
-		f.prewarmProject = nil
-	} else {
-		cloned := *project
-		cloned.OriginURLs = append([]string(nil), project.OriginURLs...)
-		f.prewarmProject = &cloned
-	}
+	f.prewarmEnvironment = environment.Clone()
 	f.mu.Unlock()
 	return f.PrewarmDefaultThread(ctx, model, modelProvider)
+}
+
+func (f *fakeCloud) ListSavedEnvironments(ctx context.Context) ([]cloudclient.SavedEnvironment, error) {
+	if f.listEnvironments == nil {
+		return nil, errors.New("no environment list configured")
+	}
+	return f.listEnvironments(ctx)
 }
 
 func (f *fakeCloud) ListTurns(ctx context.Context, request cloudclient.ListTurnsRequest) (cloudclient.HistoryPage[cloudclient.HistoryTurn], error) {

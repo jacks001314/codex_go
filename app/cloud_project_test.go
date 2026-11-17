@@ -77,3 +77,52 @@ func TestResolveCloudProjectFromCWDReadsGitOriginLikeRust(t *testing.T) {
 		t.Fatalf("projectless temp dir produced %#v", project)
 	}
 }
+
+// Rust #61956: a saved environment start never inspects the local working
+// directory, while a project start still resolves and retains it.
+func TestCloudThreadStartEnvironmentSelectionLikeRust(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not available")
+	}
+	repo := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "--quiet"},
+		{"remote", "add", "origin", "git@github.com:org/first.git"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	client := &remoteAppServerTUIClient{}
+	selection := client.resolveCloudEnvironment(context.Background(), cloudThreadStart{
+		savedEnvironment: "ws~asenvcfg_saved",
+		projectCWD:       repo,
+	})
+	if selection == nil || selection.SavedID != "ws~asenvcfg_saved" || selection.Project != nil {
+		t.Fatalf("saved selection = %#v", selection)
+	}
+	if remembered := client.rememberedHostProject(); remembered != nil {
+		t.Fatalf("saved start retained local project %#v", remembered)
+	}
+
+	selection = client.resolveCloudEnvironment(context.Background(), cloudThreadStart{projectCWD: repo})
+	if selection == nil || selection.Project == nil || selection.Project.Name != "first" || selection.Project.CWD != "/workspace/org/first" {
+		t.Fatalf("project selection = %#v", selection)
+	}
+	if remembered := client.rememberedHostProject(); remembered == nil || remembered.Name != "first" {
+		t.Fatalf("remembered project = %#v", remembered)
+	}
+
+	selection = client.resolveCloudEnvironment(context.Background(), cloudThreadStart{
+		savedEnvironment: "ws~asenvcfg_saved",
+		projectCWD:       t.TempDir(),
+	})
+	if selection == nil || selection.SavedID != "ws~asenvcfg_saved" || selection.Project != nil {
+		t.Fatalf("saved selection with project = %#v", selection)
+	}
+	if remembered := client.rememberedHostProject(); remembered == nil || remembered.Name != "first" {
+		t.Fatalf("saved start changed the retained project to %#v", remembered)
+	}
+}

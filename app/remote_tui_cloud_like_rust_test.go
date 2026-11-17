@@ -14,13 +14,15 @@ import (
 )
 
 type fakeCloudRequester struct {
-	notifications chan cloudbackend.Notification
-	answers       []string
-	closed        bool
-	project       *cloudclient.ProjectEnvironment
-	submitted     []turn.TurnStartParams
-	submitErr     *cloudbackend.RPCError
-	methods       []appserver.Method
+	notifications   chan cloudbackend.Notification
+	answers         []string
+	closed          bool
+	environment     *cloudclient.EnvironmentSelection
+	environments    []cloudclient.SavedEnvironment
+	environmentsErr error
+	submitted       []turn.TurnStartParams
+	submitErr       *cloudbackend.RPCError
+	methods         []appserver.Method
 }
 
 func (f *fakeCloudRequester) Request(_ context.Context, method appserver.Method, _ json.RawMessage) (json.RawMessage, *cloudbackend.RPCError) {
@@ -50,8 +52,15 @@ func (f *fakeCloudRequester) AnswerServerRequest(requestID string) error {
 	return nil
 }
 
-func (f *fakeCloudRequester) SetLocalProject(project *cloudclient.ProjectEnvironment) {
-	f.project = project
+func (f *fakeCloudRequester) SetEnvironmentSelection(environment *cloudclient.EnvironmentSelection) {
+	f.environment = environment
+}
+
+func (f *fakeCloudRequester) ListSavedEnvironments(context.Context) ([]cloudclient.SavedEnvironment, error) {
+	if f.environmentsErr != nil {
+		return nil, f.environmentsErr
+	}
+	return append([]cloudclient.SavedEnvironment(nil), f.environments...), nil
 }
 
 func (f *fakeCloudRequester) Close() { f.closed = true }
@@ -148,9 +157,9 @@ func readCloudTransportMessage(t *testing.T, transport *cloudAppServerTransport)
 	return message
 }
 
-// Rust #60007: the host project travels outside the app-server wire protocol
-// and reaches the cloud backend through the transport.
-func TestCloudTransportForwardsLocalProjectLikeRust(t *testing.T) {
+// Rust #60007/#61956: the Cloud environment choice travels outside the
+// app-server wire protocol and reaches the cloud backend through the transport.
+func TestCloudTransportForwardsEnvironmentSelectionLikeRust(t *testing.T) {
 	requester := &fakeCloudRequester{notifications: make(chan cloudbackend.Notification, 1)}
 	transport := newCloudAppServerTransport(context.Background(), requester)
 	defer transport.close()
@@ -160,12 +169,17 @@ func TestCloudTransportForwardsLocalProjectLikeRust(t *testing.T) {
 		OriginURLs: []string{"https://github.com/org/repo"},
 		CWD:        "/workspace/org/repo",
 	}
-	transport.SetLocalProject(project)
-	if requester.project == nil || requester.project.Name != "repo" || requester.project.CWD != "/workspace/org/repo" {
-		t.Fatalf("forwarded project = %#v", requester.project)
+	transport.SetEnvironmentSelection(cloudclient.ProjectEnvironmentSelection(project))
+	if requester.environment == nil || requester.environment.Project == nil ||
+		requester.environment.Project.Name != "repo" || requester.environment.Project.CWD != "/workspace/org/repo" {
+		t.Fatalf("forwarded environment = %#v", requester.environment)
 	}
-	transport.SetLocalProject(nil)
-	if requester.project != nil {
-		t.Fatalf("cleared project = %#v", requester.project)
+	transport.SetEnvironmentSelection(cloudclient.SavedEnvironmentSelection("ws~asenvcfg_saved"))
+	if requester.environment == nil || requester.environment.SavedID != "ws~asenvcfg_saved" || requester.environment.Project != nil {
+		t.Fatalf("forwarded saved environment = %#v", requester.environment)
+	}
+	transport.SetEnvironmentSelection(nil)
+	if requester.environment != nil {
+		t.Fatalf("cleared environment = %#v", requester.environment)
 	}
 }

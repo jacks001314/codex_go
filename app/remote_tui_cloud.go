@@ -135,9 +135,12 @@ type cloudAppServerRequester interface {
 	SubmitUserMessage(ctx context.Context, params turn.TurnStartParams) (cloudbackend.CloudUserMessageReceipt, *cloudbackend.RPCError)
 	Notifications() <-chan cloudbackend.Notification
 	AnswerServerRequest(requestID string) error
-	// SetLocalProject carries the host project outside the app-server wire
-	// protocol (Rust #60007).
-	SetLocalProject(project *cloudclient.ProjectEnvironment)
+	// SetEnvironmentSelection carries the Cloud environment choice outside the
+	// app-server wire protocol (Rust #60007/#61956).
+	SetEnvironmentSelection(environment *cloudclient.EnvironmentSelection)
+	// ListSavedEnvironments reads the saved environments of the account this
+	// connection is bound to (Rust #61956).
+	ListSavedEnvironments(ctx context.Context) ([]cloudclient.SavedEnvironment, error)
 	Close()
 }
 
@@ -234,12 +237,21 @@ func admitCloudUserMessage(ctx context.Context, admitter cloudQuestionAnswerAdmi
 	}
 }
 
-// SetLocalProject forwards the host project to the cloud backend for the next
-// thread start.
-func (t *cloudAppServerTransport) SetLocalProject(project *cloudclient.ProjectEnvironment) {
+// SetEnvironmentSelection forwards the Cloud environment choice to the backend
+// for the next thread start.
+func (t *cloudAppServerTransport) SetEnvironmentSelection(environment *cloudclient.EnvironmentSelection) {
 	if t != nil && t.client != nil {
-		t.client.SetLocalProject(project)
+		t.client.SetEnvironmentSelection(environment)
 	}
+}
+
+// ListSavedEnvironments delegates saved environment discovery to the bound
+// Cloud account.
+func (t *cloudAppServerTransport) ListSavedEnvironments(ctx context.Context) ([]cloudclient.SavedEnvironment, error) {
+	if t == nil || t.client == nil {
+		return nil, cloudclient.ErrClientBuild
+	}
+	return t.client.ListSavedEnvironments(ctx)
 }
 
 // cloudAppServerTransport bridges the TUI's byte-oriented transport onto the

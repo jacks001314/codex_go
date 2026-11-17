@@ -4080,29 +4080,37 @@ func (c *remoteAppServerTUIClient) initialize(ctx context.Context) error {
 }
 
 func (c *remoteAppServerTUIClient) startThread(ctx context.Context, root *cli.RootOptions, state *codextui.State) (string, error) {
+	hostCWD := ""
+	if state != nil {
+		hostCWD = strings.TrimSpace(state.CWD)
+	}
+	return c.startThreadWithEnvironment(ctx, root, state, cloudThreadStart{projectCWD: hostCWD})
+}
+
+// cloudThreadStart is the environment choice for a new Cloud thread
+// (Rust #61956 CloudThreadStart). A saved environment never inspects the local
+// working directory, so the start keeps the configured Cloud parameters.
+type cloudThreadStart struct {
+	// projectCWD is the displayed working directory used to resolve a local
+	// GitHub project in the default environment.
+	projectCWD string
+	// savedEnvironment selects a saved environment configuration by id.
+	savedEnvironment string
+}
+
+func (c *remoteAppServerTUIClient) startThreadWithEnvironment(ctx context.Context, root *cli.RootOptions, state *codextui.State, start cloudThreadStart) (string, error) {
 	params, err := c.remoteManagedThreadStartParams(ctx, root, state)
 	if err != nil {
 		return "", err
 	}
-	// Rust #60007: the Cloud host project is resolved from the displayed
-	// working directory for each start and kept off the wire protocol. A
-	// resumed cloud thread can replace the displayed cwd with the managed
-	// executor path, so the last attached local project is retained as a
-	// fallback when switching backends.
+	// Rust #60007/#61956: the Cloud environment choice is resolved for each
+	// start and kept off the wire protocol. A resumed cloud thread can replace
+	// the displayed cwd with the managed executor path, so the last attached
+	// local project is retained as a fallback when switching backends.
 	if setter, ok := c.transport.(interface {
-		SetLocalProject(*cloudclient.ProjectEnvironment)
+		SetEnvironmentSelection(*cloudclient.EnvironmentSelection)
 	}); ok {
-		hostCWD := ""
-		if state != nil {
-			hostCWD = strings.TrimSpace(state.CWD)
-		}
-		project := resolveCloudProjectFromCWD(ctx, hostCWD)
-		if project != nil {
-			c.rememberHostProject(project)
-		} else {
-			project = c.rememberedHostProject()
-		}
-		setter.SetLocalProject(project)
+		setter.SetEnvironmentSelection(c.resolveCloudEnvironment(ctx, start))
 	}
 	// Rust #57267: a cloud thread skips start_dynamic_tool_mcp entirely
 	// (app_server_session.rs:563), so a server-owned conversation never
@@ -4154,6 +4162,23 @@ func (c *remoteAppServerTUIClient) startThread(ctx context.Context, root *cli.Ro
 		c.send(codextea.ThreadEventMsg{Event: protocol.ThreadStarted(threadID)})
 	}
 	return threadID, nil
+}
+
+// resolveCloudEnvironment mirrors Rust's start_thread_with_environment: a
+// saved environment is used as-is and never inspects local Git state, while a
+// project checkout resolves the displayed cwd's GitHub project (falling back
+// to the retained one) in the default environment.
+func (c *remoteAppServerTUIClient) resolveCloudEnvironment(ctx context.Context, start cloudThreadStart) *cloudclient.EnvironmentSelection {
+	if saved := strings.TrimSpace(start.savedEnvironment); saved != "" {
+		return cloudclient.SavedEnvironmentSelection(saved)
+	}
+	project := resolveCloudProjectFromCWD(ctx, start.projectCWD)
+	if project != nil {
+		c.rememberHostProject(project)
+	} else {
+		project = c.rememberedHostProject()
+	}
+	return cloudclient.ProjectEnvironmentSelection(project)
 }
 
 // remoteDynamicToolsUnsupportedError mirrors Rust's start-thread downgrade

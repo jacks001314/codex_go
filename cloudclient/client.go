@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -106,6 +107,10 @@ func (e *RpcError) Error() string {
 type Client struct {
 	conn        *grpc.ClientConn
 	credentials Credentials
+	// origin backs the authenticated REST reads that share this connection's
+	// account (Rust #61956 saved environment catalog).
+	origin     *url.URL
+	httpClient *http.Client
 }
 
 // New validates the endpoint and credentials and builds the gRPC transport.
@@ -140,7 +145,24 @@ func New(endpoint string, credentials Credentials) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrClientBuild, err)
 	}
-	return &Client{conn: conn, credentials: credentials}, nil
+	origin := *parsed
+	return &Client{
+		conn:        conn,
+		credentials: credentials,
+		origin:      &origin,
+		httpClient:  newCloudRESTClient(),
+	}, nil
+}
+
+// newCloudRESTClient mirrors the native HTTP transport used for model and
+// environment catalog reads: no redirects, and a bounded total wait.
+func newCloudRESTClient() *http.Client {
+	return &http.Client{
+		Timeout: environmentCatalogTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 }
 
 func validatedEndpoint(parsed *url.URL) error {

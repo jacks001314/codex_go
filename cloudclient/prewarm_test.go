@@ -1,10 +1,25 @@
 package cloudclient
 
 import (
+	"bytes"
 	"testing"
 
 	"google.golang.org/protobuf/encoding/protowire"
 )
+
+// Rust #61956: a saved environment sends only its configuration id and still
+// defers executor readiness.
+func TestPrewarmRequestCarriesSavedEnvironmentAndDeferredFlagLikeRust(t *testing.T) {
+	got := encodePrewarmRequestWithEnvironment("", "", SavedEnvironmentSelection("ws~asenvcfg_saved"))
+	want := []byte{0x52, 0x17, 0x0a, 0x15, 0x0a, 0x13, 0x0a, 0x11}
+	want = append(want, []byte("ws~asenvcfg_saved")...)
+	want = append(want, 0xe2, 0x01, 0x07, 0x0a, 0x05)
+	want = append(want, []byte("codex")...)
+	want = append(want, 0xe8, 0x01, 0x01)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("saved prewarm request = %x, want %x", got, want)
+	}
+}
 
 func prewarmTestResponse(includeSandbox bool) []byte {
 	var response []byte
@@ -124,7 +139,7 @@ func TestPrewarmRequestIncludesProjectEnvironmentAndDeferredFlagLikeRust(t *test
 		OriginURLs: []string{"https://github.com/org/repo"},
 		CWD:        "/workspace/org/repo",
 	}
-	fields, err := parseWireFields(encodePrewarmRequestWithProject("", "", project))
+	fields, err := parseWireFields(encodePrewarmRequestWithEnvironment("", "", ProjectEnvironmentSelection(project)))
 	if err != nil {
 		t.Fatalf("parse project request: %v", err)
 	}

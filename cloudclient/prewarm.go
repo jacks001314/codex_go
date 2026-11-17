@@ -20,6 +20,52 @@ type ProjectEnvironment struct {
 	CWD string
 }
 
+// EnvironmentSelection is the explicit environment for a new Cloud thread:
+// either a saved environment configuration or a project checkout in the
+// default managed environment (Rust #61956 EnvironmentSelection).
+type EnvironmentSelection struct {
+	// SavedID selects a saved environment configuration by id.
+	SavedID string
+	// Project selects a checkout in the default managed environment. It is
+	// ignored when SavedID is set.
+	Project *ProjectEnvironment
+}
+
+// SavedEnvironmentSelection selects a saved environment configuration. The
+// hosted service prepares the environment; no local project is inspected.
+func SavedEnvironmentSelection(id string) *EnvironmentSelection {
+	return &EnvironmentSelection{SavedID: id}
+}
+
+// ProjectEnvironmentSelection selects a project checkout in the default
+// managed environment. A nil project keeps the default environment.
+func ProjectEnvironmentSelection(project *ProjectEnvironment) *EnvironmentSelection {
+	if project == nil {
+		return nil
+	}
+	cloned := *project
+	cloned.OriginURLs = append([]string(nil), project.OriginURLs...)
+	return &EnvironmentSelection{Project: &cloned}
+}
+
+// Clone copies the selection so a backend snapshot cannot observe later
+// mutations of the caller's project.
+func (e *EnvironmentSelection) Clone() *EnvironmentSelection {
+	if e == nil {
+		return nil
+	}
+	return &EnvironmentSelection{SavedID: e.SavedID, Project: cloneProjectEnvironment(e.Project)}
+}
+
+func cloneProjectEnvironment(project *ProjectEnvironment) *ProjectEnvironment {
+	if project == nil {
+		return nil
+	}
+	cloned := *project
+	cloned.OriginURLs = append([]string(nil), project.OriginURLs...)
+	return &cloned
+}
+
 // PrewarmDefaultThread prepares an ordinary coding thread in the default
 // managed environment. The mutation is sent once and is never retried: a
 // timeout or disconnect may leave a prepared thread whose identity was not
@@ -28,17 +74,18 @@ func (c *Client) PrewarmDefaultThread(ctx context.Context, model string, modelPr
 	return c.PrewarmThread(ctx, model, modelProvider, nil)
 }
 
-// PrewarmThread prepares a coding thread, deferring executor readiness for a
-// selected project checkout (Rust #60007/#60309). A nil project keeps the
-// default managed environment and omits deferred_environment.
-func (c *Client) PrewarmThread(ctx context.Context, model string, modelProvider string, project *ProjectEnvironment) (*ThreadActivation, error) {
+// PrewarmThread prepares a coding thread, deferring executor readiness for an
+// explicit environment: a saved configuration or a selected project checkout
+// (Rust #60007/#60309/#61956). A nil environment keeps the default managed
+// environment and omits deferred_environment.
+func (c *Client) PrewarmThread(ctx context.Context, model string, modelProvider string, environment *EnvironmentSelection) (*ThreadActivation, error) {
 	if c == nil || c.conn == nil {
 		return nil, ErrClientBuild
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	var response rawMessage
-	payload := encodePrewarmRequestWithProject(model, modelProvider, project)
+	payload := encodePrewarmRequestWithEnvironment(model, modelProvider, environment)
 	if err := c.conn.Invoke(c.outgoingContext(requestCtx), threadServicePrewarmMethod, rawMessage(payload), &response); err != nil {
 		return nil, mapCallError(requestCtx, err)
 	}
@@ -65,11 +112,11 @@ func pwAppendVarint(out []byte, number protowire.Number, value uint64) []byte {
 }
 
 func encodePrewarmRequest(model string, modelProvider string) []byte {
-	return encodePrewarmRequestWithProject(model, modelProvider, nil)
+	return encodePrewarmRequestWithEnvironment(model, modelProvider, nil)
 }
 
-func encodePrewarmRequestWithProject(model string, modelProvider string, project *ProjectEnvironment) []byte {
-	managed := encodeManagedEnvironment(project)
+func encodePrewarmRequestWithEnvironment(model string, modelProvider string, environment *EnvironmentSelection) []byte {
+	managed := encodeManagedEnvironment(environment)
 	selection := pwAppendBytes(nil, 1, managed)
 	environments := pwAppendBytes(nil, 1, selection)
 	out := pwAppendBytes(nil, 10, environments)
@@ -83,8 +130,9 @@ func encodePrewarmRequestWithProject(model string, modelProvider string, project
 	// integration so a prepared thread can expose its app tools immediately.
 	plugins := pwAppendString(nil, 1, "codex")
 	out = pwAppendBytes(out, 28, plugins)
-	if project != nil {
-		// Rust #60309: a selected project defers executor readiness.
+	if environment != nil {
+		// Rust #60309/#61956: any explicit environment defers executor
+		// readiness until the hosted service has prepared it.
 		out = pwAppendVarint(out, 29, 1)
 	}
 	return out
@@ -92,8 +140,16 @@ func encodePrewarmRequestWithProject(model string, modelProvider string, project
 
 // encodeManagedEnvironment mirrors Rust's wire::ManagedEnvironment (#60007):
 // tag 1 environment config id, tag 2 cwd, tag 3 overrides with the repository
-// origins (tag 1 values, origin_url tag 5) and the project name (tag 2).
-func encodeManagedEnvironment(project *ProjectEnvironment) []byte {
+// origins (tag 1 values, origin_url tag 5) and the project name (tag 2). A
+// saved environment carries only its configuration id (#61956).
+func encodeManagedEnvironment(environment *EnvironmentSelection) []byte {
+	if environment == nil {
+		return nil
+	}
+	if saved := trimPrewarmString(environment.SavedID); saved != "" {
+		return pwAppendString(nil, 1, saved)
+	}
+	project := environment.Project
 	if project == nil {
 		return nil
 	}

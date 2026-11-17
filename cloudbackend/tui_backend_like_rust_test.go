@@ -109,25 +109,27 @@ func TestCloudThreadStartPrewarmsWithLocalProjectLikeRust(t *testing.T) {
 	client := Connect(context.Background(), fake, json.RawMessage("{}"))
 	defer client.Close()
 
-	client.SetLocalProject(&cloudclient.ProjectEnvironment{
+	client.SetEnvironmentSelection(cloudclient.ProjectEnvironmentSelection(&cloudclient.ProjectEnvironment{
 		Name:       "repo",
 		OriginURLs: []string{"https://github.com/org/repo"},
 		CWD:        "/workspace/org/repo",
-	})
+	}))
 	if _, rpcErr := client.Request(context.Background(), appserver.MethodThreadStart, json.RawMessage(`{"ephemeral":false}`)); rpcErr != nil {
 		t.Fatalf("thread/start error = %#v", rpcErr)
 	}
-	if fake.prewarmProject == nil || fake.prewarmProject.Name != "repo" ||
-		fake.prewarmProject.CWD != "/workspace/org/repo" ||
-		len(fake.prewarmProject.OriginURLs) != 1 || fake.prewarmProject.OriginURLs[0] != "https://github.com/org/repo" {
-		t.Fatalf("prewarm project = %#v", fake.prewarmProject)
+	selection := fake.prewarmEnvironment
+	if selection == nil || selection.SavedID != "" || selection.Project == nil ||
+		selection.Project.Name != "repo" ||
+		selection.Project.CWD != "/workspace/org/repo" ||
+		len(selection.Project.OriginURLs) != 1 || selection.Project.OriginURLs[0] != "https://github.com/org/repo" {
+		t.Fatalf("prewarm environment = %#v", selection)
 	}
 
-	client.SetLocalProject(nil)
+	client.SetEnvironmentSelection(nil)
 	if _, rpcErr := client.Request(context.Background(), appserver.MethodThreadStart, json.RawMessage(`{"ephemeral":false}`)); rpcErr != nil {
 		t.Fatalf("second thread/start error = %#v", rpcErr)
 	}
-	if fake.prewarmProject != nil {
-		t.Fatalf("cleared project still prewarmed %#v", fake.prewarmProject)
+	if fake.prewarmEnvironment != nil {
+		t.Fatalf("cleared environment still prewarmed %#v", fake.prewarmEnvironment)
 	}
 }

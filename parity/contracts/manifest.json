@@ -2972,6 +2972,33 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestUsageAccountingExhaustedForTurnFailsOnlyThatTurnLikeRust;TestAgentLoopSettlesEachResponseWithItsOwnUsageLikeRust;TestAgentLoopKeepsSettledResponseWhenAccountingFailsLikeRust;TestResponsesRunnerPreemptionKeepsObservedCompletionLikeRust"
-  }
+  },
+ {
+  "id": "cloud-saved-environments",
+  "kind": "source-surface",
+  "rustPaths": [
+   "cloud-client/src/prewarm.rs",
+   "app-server-client/src/cloud.rs",
+   "app-server-client/src/lib.rs",
+   "app-server-client/src/cloud_backend/requests.rs",
+   "tui/src/app_server_session.rs"
+  ],
+  "goPaths": [
+   "cloudclient/environments.go",
+   "cloudclient/prewarm.go",
+   "cloudclient/client.go",
+   "cloudbackend/client.go",
+   "cloudbackend/requests.go",
+   "app/remote_tui.go",
+   "app/remote_tui_cloud.go",
+   "cloudclient/environments_like_rust_test.go",
+   "cloudclient/prewarm_test.go",
+   "cloudbackend/saved_environment_like_rust_test.go",
+   "app/cloud_project_test.go"
+  ],
+  "phase": "P2",
+  "status": "complete",
+  "verifier": "TestSavedEnvironmentCatalogFollowsEachScopeCursorLikeRust;TestSavedEnvironmentCatalogRejectsBadPagesLikeRust;TestPrewarmRequestCarriesSavedEnvironmentAndDeferredFlagLikeRust;TestCloudThreadStartUsesSavedEnvironmentLikeRust;TestSavedEnvironmentCatalogRequiresCurrentAccountLikeRust;TestCloudThreadStartEnvironmentSelectionLikeRust"
+ }
   ]
 }
