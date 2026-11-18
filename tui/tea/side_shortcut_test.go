@@ -3,6 +3,8 @@ package tea
 import (
 	"testing"
 
+	bubbletea "charm.land/bubbletea/v2"
+
 	codextui "codex_go/tui"
 	"codex_go/tui/keymsg"
 )
@@ -44,5 +46,33 @@ func TestCtrlSlashTerminalEncodingTogglesSideConversation(t *testing.T) {
 	}
 	if len(state.Messages) != 1 || state.Messages[0].Text != "side answer" {
 		t.Fatalf("side transcript = %#v", state.Messages)
+	}
+}
+
+// Terminals that honour modifyOtherKeys or the Kitty keyboard protocol send
+// Ctrl+/ as a printable slash rune carrying the ctrl modifier (CSI-u 47;5u
+// or modifyOtherKeys 27;5;47~) instead of the C0 unit-separator byte. Rust
+// matches the physical key, so the toggle must fire for that shape too.
+func TestCtrlSlashEnhancedKeyboardEncodingTogglesSideConversation(t *testing.T) {
+	kittyCtrlSlash := keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'/'}, Mod: bubbletea.ModCtrl}
+	if got := keySpecFromKeyMsg(kittyCtrlSlash); got != "ctrl-/" {
+		t.Fatalf("enhanced Ctrl+/ normalized to %q, want ctrl-/", got)
+	}
+
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-side")
+	state.AddMessage(codextui.RoleAssistant, "side answer")
+	model := NewModel(state, Options{})
+	model.activeSide = &activeSideConversation{
+		ParentThreadID: "thread-parent",
+		SideThreadID:   "thread-side",
+		ParentMessages: []codextui.Message{{Role: codextui.RoleUser, Text: "main question"}},
+		SideMessages:   cloneSideMessages(state.Messages),
+		ShowingSide:    true,
+	}
+
+	model.Update(kittyCtrlSlash)
+	if state.ThreadID != "thread-parent" || model.activeSide.ShowingSide {
+		t.Fatalf("enhanced Ctrl+/ left thread=%q showingSide=%t", state.ThreadID, model.activeSide.ShowingSide)
 	}
 }

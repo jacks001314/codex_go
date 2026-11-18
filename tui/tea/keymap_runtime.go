@@ -392,6 +392,13 @@ func baseKeySpecFromKeyMsg(message keymsg.KeyMsg) string {
 		}
 		r := key.Runes[0]
 		parts := []string{}
+		// Terminals that honour modifyOtherKeys or the Kitty keyboard protocol
+		// report Ctrl+/ as the printable '/' rune carrying the ctrl modifier
+		// instead of the C0 unit-separator byte. Rust matches the physical key,
+		// so keep the modifier here or `ctrl+/` bindings never fire.
+		if key.Mod.Contains(bubbletea.ModCtrl) {
+			parts = append(parts, "ctrl")
+		}
 		if key.Alt {
 			parts = append(parts, "alt")
 		}
