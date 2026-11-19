@@ -5,10 +5,13 @@ package appserver
 // without changing the source thread.
 
 type ThreadSampleParams struct {
-	ThreadID       string  `json:"threadId"`
-	ExpectedTurnID string  `json:"expectedTurnId"`
-	Prompt         string  `json:"prompt"`
-	Effort         *string `json:"effort,omitempty"`
+	ThreadID       string `json:"threadId"`
+	ExpectedTurnID string `json:"expectedTurnId"`
+	Prompt         string `json:"prompt"`
+	// Model overrides the model for this sample only (Rust #62419). Omitting it
+	// or passing null inherits the source thread's model.
+	Model  *string `json:"model,omitempty"`
+	Effort *string `json:"effort,omitempty"`
 	// ThreadSource overrides the ephemeral fork's thread source (#56364).
 	// ThreadSource is a wire string: "user", "subagent", "guardian_review",
 	// "memory_consolidation", or a feature name such as

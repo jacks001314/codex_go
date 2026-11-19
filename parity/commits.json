@@ -50930,6 +50930,23 @@
     "not_applicable: codex-rs/http-client/src/outbound_proxy.rs only widens a Rust test helper's argument so a direct system-proxy decision can be cached; Go's HTTP client has no system-proxy decision cache for tests to seed.",
     "plan: update/plan_2026_11_19.md batch 9"
    ]
+  },
+  {
+   "sha": "0bc1e7db9a6f033aa8d9b786f608e6bf5a403c96",
+   "subject": "Allow per-sample model overrides in `thread/sample` (#62419)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "appserver/thread_sample_protocol.go adds the optional `model` field to ThreadSampleParams; omitting it or passing null inherits the source thread's model.",
+    "appserver/thread_sample.go resolves the sample model as params.model, then the thread's configured model, and uses the selected model's info for the reasoning-effort gate while the requested effort still comes from params.effort.",
+    "appserver/thread_sample.go sends the resolved model on the sample's AgentRequest and in its Responses client metadata, so the override covers both the body and the reported metadata.",
+    "tests: appserver TestThreadSampleModelOverrideLikeRust asserts the overridden sample model, the inherited model on the next sample, and that the source thread record keeps its own model.",
+    "not_applicable: app-server-exports-experimental.json.zst is the Rust-generated schema fixture; Go regenerates its own protocol surface and compares it in the parity schema anchors.",
+    "plan: update/plan_2026_11_19.md batch 10"
+   ]
   }
  ]
 }

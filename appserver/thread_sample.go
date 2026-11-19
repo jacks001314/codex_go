@@ -96,7 +96,14 @@ func (r *RuntimeRouter) handleThreadSampleRuntime(request *Request) (*ThreadSamp
 	if err != nil {
 		return nil, invalidParams(err.Error())
 	}
-	modelInfo := r.modelInfoForRuntimeWithConfig(providerConfig.Model, cfg)
+	// Rust #62419: an explicit per-sample model replaces the source thread's
+	// model for this request only; the thread settings are never written back.
+	requestedModel := ""
+	if params.Model != nil {
+		requestedModel = strings.TrimSpace(*params.Model)
+	}
+	sampleModel := firstNonEmpty(requestedModel, providerConfig.Model)
+	modelInfo := r.modelInfoForRuntimeWithConfig(sampleModel, cfg)
 	instructions, err := appBaseInstructionsForConfig(cfg)
 	if err != nil {
 		return nil, invalidParams(err.Error())
@@ -185,7 +192,7 @@ func (r *RuntimeRouter) handleThreadSampleRuntime(request *Request) (*ThreadSamp
 		ThreadSource:         threadSource,
 		TurnTrigger:          turnTrigger,
 		CodexVersion:         appServerVersion(),
-		Model:                providerConfig.Model,
+		Model:                sampleModel,
 		ReasoningEffort:      effort,
 		ResponsesAPIMetadata: params.ResponsesAPIClientMetadata,
 	})
@@ -196,7 +203,7 @@ func (r *RuntimeRouter) handleThreadSampleRuntime(request *Request) (*ThreadSamp
 		Instructions:      instructions,
 		InputItems:        inputItems,
 		Tools:             tools,
-		Model:             providerConfig.Model,
+		Model:             sampleModel,
 		ProviderID:        providerConfig.ProviderID,
 		ThreadID:          threadID,
 		TurnID:            sampleTurnID,
