@@ -101,6 +101,9 @@ func configRequirementsFromValidatedMap(values map[string]any) (*ConfigRequireme
 	if err := liftPermissionsNetworkRequirement(values); err != nil {
 		return nil, err
 	}
+	if err := rejectReservedPermissionsCredentialsRequirement(values); err != nil {
+		return nil, err
+	}
 	if raw, ok := values["network_proxy"]; ok {
 		networkValues, ok := raw.(map[string]any)
 		if !ok {
@@ -124,6 +127,40 @@ func configRequirementsFromValidatedMap(values map[string]any) (*ConfigRequireme
 // requirements.toml `permissions.network` is reserved for shared network
 // constraints and cannot name a permission profile.
 const permissionsNetworkReservedProfileError = "`permissions.network` in requirements.toml is reserved for shared network constraints; rename the managed profile (for example, to `network-access`) and update `default_permissions`, `allowed_permission_profiles`, and `extends`; check saved session profile references. Profiles named `network` in config.toml remain valid"
+
+// permissionsCredentialsReservedProfileError mirrors Rust #62358:
+// `permissions.credentials` in requirements.toml is reserved for shared
+// credential policy and must be omitted until it accepts settings.
+const permissionsCredentialsReservedProfileError = "`permissions.credentials` in requirements.toml is reserved for shared credential policy; rename the managed profile (for example, to `credential-access`) and update `default_permissions`, `allowed_permission_profiles`, and `extends`; check saved session profile references. Profiles named `credentials` in config.toml remain valid"
+
+// rejectReservedPermissionsCredentialsRequirement enforces Rust #62358's
+// reserved credentials table. An empty table, or a legacy managed profile that
+// carries profile fields, is a migration error; any other shape is rejected as
+// an unknown field because the shared table accepts no settings yet. Profiles
+// named `credentials` in config.toml stay valid.
+func rejectReservedPermissionsCredentialsRequirement(values map[string]any) error {
+	permissions, ok := values["permissions"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	raw, present := permissions["credentials"]
+	if !present {
+		return nil
+	}
+	table, ok := raw.(map[string]any)
+	if !ok {
+		return fmt.Errorf("invalid type for permissions.credentials: expected table")
+	}
+	if len(table) == 0 {
+		return fmt.Errorf("%s", permissionsCredentialsReservedProfileError)
+	}
+	for _, key := range []string{"description", "extends", "workspace_roots", "filesystem", "network"} {
+		if _, reserved := table[key]; reserved {
+			return fmt.Errorf("%s", permissionsCredentialsReservedProfileError)
+		}
+	}
+	return fmt.Errorf("permissions.credentials: unknown field `%s`, there are no fields", sortedStringKeys(table)[0])
+}
 
 // liftPermissionsNetworkRequirement moves a `permissions.network` constraint
 // table to the top-level managed network requirement (Rust #58182), rejecting

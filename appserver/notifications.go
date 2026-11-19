@@ -828,6 +828,9 @@ type ItemGuardianApprovalReviewCompletedNotification struct {
 	Review              GuardianApprovalReview       `json:"review"`
 	Action              GuardianApprovalReviewAction `json:"action"`
 	guardianContextMode string
+	// guardianClassifierTurnID is host telemetry attribution for the
+	// classification request that produced this review (Rust #62125).
+	guardianClassifierTurnID string
 }
 
 // StrictReviewRequiredNotification mirrors Rust

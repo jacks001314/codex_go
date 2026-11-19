@@ -370,6 +370,7 @@ func (r *RuntimeRouter) emitGuardianV2ClassificationAnalytics(ctx context.Contex
 			RiskLevel:           risk,
 			DurationMS:          guardianV2DurationMS(notification.StartedAtMS, notification.CompletedAtMS),
 			GuardianContextMode: stringPtrIfNotEmpty(notification.guardianContextMode),
+			ClassifierTurnID:    stringPtrIfNotEmpty(notification.guardianClassifierTurnID),
 		},
 	})
 	sink.TrackCodexGuardianV2Event(ctx, event)

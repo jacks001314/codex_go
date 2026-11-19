@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "9a56c2b1aa994f696b144ba863200f4b73a74c0a",
+ "rustToInclusive": "5387162ef03157b27111c82ba5807078a66aa726",
  "commits": [
   {
    "sha": "27c05a52e0cdf93ef7db5a96ccaf88d6b9095472",
@@ -50392,6 +50392,106 @@
     "installed-plugin invalidation compares runtime identity, enablement, canonical ownership and the active bundle (directory version + persisted remote id); catalog release/policy/display changes keep live MCP sessions and cached skills.",
     "tests: plugin/remote_metadata_test.go, plugin/plugin_active_bundle_like_rust_test.go, appserver/plugin_reconcile_test.go, appserver/plugin_remote_metadata_test.go",
     "plan: update/plan_2026_11_19.md batch 2"
+   ]
+  },
+  {
+   "sha": "6c0cee502d215e5df2dd9a303cf2e252229c9e12",
+   "subject": "Add GPT-6.2 Sol and Astra to model catalogs (#62106)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "bundled catalog already carries gpt-6.2-sol (500k) and gpt-6.2-astra (272k) first with refreshed priorities/descriptions, gpt-6.1-sol at 500k, matching codex-rs/models-manager/models.json.",
+    "bedrock catalogs expose gpt-6.2 sol/astra (Mantle + Runtime global./us.) with the ultrafast tier; Vertex provider allowlist includes both gpt-6.2 slugs.",
+    "tests: model/bedrock_service_tiers_like_rust_test.go, model/bundled_models_catalog_like_rust_test.go, model/catalog_test.go (go test ./model -run 'Catalog|Bedrock|Vertex|GCP|Default' passes).",
+    "plan: update/plan_2026_11_19.md batch 3"
+   ]
+  },
+  {
+   "sha": "9c60cb0a27a93e6e3c21d06d63625a53109d8726",
+   "subject": "Include classifier turn IDs in Guardian v2 analytics (#62125)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "state.Event gained a host-only ClassifierTurnID plus ReviewStore.SetClassifierTurnID; the reviewer records the classification turn id at dispatch time, the completed-review notification carries it, and telemetry.GuardianV2Event emits it as classifier_turn_id.",
+    "tests: appserver TestGuardianClassificationRecordsClassifierTurnIDLikeRust and the guardian v2 router analytics assertion on classifier_turn_id",
+    "plan: update/plan_2026_11_19.md batch 4"
+   ]
+  },
+  {
+   "sha": "83c46d0a58950c63f1ceff9a79ccb31bc612ec07",
+   "subject": "Add audio transcription to the backend client (#62142)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "chatgptapi.CloudClient.TranscribeAudio posts one clip to <base>/transcribe as the single multipart file field (wav/mp3/m4a/webm/ogg), keeps shared plus runtime credentials, caps the reply at 64 KiB and returns the transcript text.",
+    "tests: chatgptapi TestTranscribeAudioPostsMultipartFileAndReturnsTextLikeRust and TestTranscribeAudioRejectsUnsupportedFormatLikeRust",
+    "plan: update/plan_2026_11_19.md batch 4"
+   ]
+  },
+  {
+   "sha": "1c2e4cd45f15ea7d9576d638f6a1112b8fa58f77",
+   "subject": "Limit recovery after repeated cloud reply stream disconnects (#62151)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "cloudbackend idle recovery counts replacement streams, delays each reopen by 500 ms per installed replacement, answers an exhausted sequence with the transcript/draft message, and clears the budget on reset or after a stream stays connected 15 s.",
+    "tests: cloudbackend TestIdleRecoveryDelaysReplacementsLikeRust, TestIdleRecoveryStopsAfterRepeatedDisconnectsLikeRust, TestIdleRecoveryClearsReplacementBudgetLikeRust",
+    "plan: update/plan_2026_11_19.md batch 4"
+   ]
+  },
+  {
+   "sha": "df975851bf906d71e5a1ead04f1eaec41d26ca16",
+   "subject": "Use the system clock for in-memory MCP message boards (#62284)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "agentboard's in-memory MCP launcher wraps the registered host so board timestamps come from the system clock after validating caller membership, so a failing runner clock cannot block a post.",
+    "tests: agentboard TestInMemoryMessageBoardMCPUsesSystemClockLikeRust",
+    "plan: update/plan_2026_11_19.md batch 4"
+   ]
+  },
+  {
+   "sha": "0ba514837d1ed6bee7a9c5729ad1942ef0b3573c",
+   "subject": "Measure plugin recommendation latency during initial context setup (#62326)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "turn preparation records codex.initial_context.plugin_recommendations_wait_ms, opens the info-level plugins.recommendations.load span, and the recommendation service opens plugins.recommendations.read_tooling_marker and plugins.recommendations.fetch_catalog children over the tracehook bridge.",
+    "tests: appserver TestTurnPreparationRecordsPluginRecommendationsWaitLikeRust, TestPluginRecommendationSpansUseRustNamesLikeRust; plugin TestSuggestedPluginListOpensRecommendationSpansLikeRust",
+    "plan: update/plan_2026_11_19.md batch 4"
+   ]
+  },
+  {
+   "sha": "5387162ef03157b27111c82ba5807078a66aa726",
+   "subject": "Reserve credential permission tables in Codex configuration (#62358)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "requirements.toml rejects permissions.credentials (empty or profile-shaped) with the migration guidance while accepting an empty credentials slot in named profiles; config.toml accepts [permissions.<profile>.credentials] as an empty table and reports settings there as an unknown field.",
+    "tests: config TestPermissionsCredentialsReservedInRequirementsLikeRust, TestPermissionsCredentialsProfileTableLikeRust",
+    "Rust loader/local.rs manages config-file permissions tables as legacy managed profiles; Go reads managed profiles only from requirements.toml and cloud layers, so no equivalent filter exists to change.",
+    "plan: update/plan_2026_11_19.md batch 4"
    ]
   }
  ]

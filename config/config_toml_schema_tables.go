@@ -324,7 +324,8 @@ var configPermissionsProfileFields = map[string]configFieldKind{
 		flattenEntries: true,
 		entry:          &configFieldKind{kind: configKindUntaggedEnum, expected: "FilesystemPermissionToml", allowBool: true, allowString: true},
 	},
-	"network": {kind: configKindStruct, expected: "NetworkToml", fields: configPermissionsNetworkFields},
+	"network":     {kind: configKindStruct, expected: "NetworkToml", fields: configPermissionsNetworkFields},
+	"credentials": {kind: configKindStruct, expected: "CredentialPermissionsToml"},
 }
 
 var configPermissionsFields = map[string]configFieldKind{}

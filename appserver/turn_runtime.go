@@ -11300,8 +11300,28 @@ func (r *RuntimeRouter) pluginInstallCandidatesForTurnContext(threadID string, c
 	if r == nil || r.services.Plugins == nil {
 		return nil
 	}
+	// Rust #62326 opens an info-level `plugins.recommendations.load` span around
+	// the recommendation work of initial context setup.
+	if loadCtx, span := startRecommendationsLoadSpan(r.requestTracer(), ctx); span != nil {
+		defer span.End()
+		ctx = loadCtx
+	}
 	r.configureSuggestedPluginProviderForTurn(cfg)
 	return plugin.ListDiscoverablePlugins(r.services.Plugins.DiscoverableInstallCandidatesContext(ctx), r.pluginDiscoverableConfigForTurn(threadID, cfg))
+}
+
+// startRecommendationsLoadSpan opens the recommendation load span and returns a
+// context carrying it, so the two remote reads nest under it. A router without
+// a tracing provider keeps the caller's context (Rust #62326).
+func startRecommendationsLoadSpan(tracer *telemetry.Tracer, ctx context.Context) (context.Context, *telemetry.Span) {
+	if tracer == nil {
+		return ctx, nil
+	}
+	span := tracer.StartSpan(plugin.RecommendationsLoadSpanName, nil)
+	if span == nil {
+		return ctx, nil
+	}
+	return telemetry.WithSpan(ctx, span), span
 }
 
 func pluginInstallRecommendationCandidates(candidates []plugin.DiscoverableInfo) []plugin.DiscoverableInfo {

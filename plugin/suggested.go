@@ -10,9 +10,30 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"codex_go/tracehook"
 )
 
 const RemoteGlobalMarketplaceName = "openai-curated-remote"
+
+// Info-level recommendation spans (Rust #62326). Rust names the whole
+// recommendation load plus its two remote reads so a slow recommendation
+// endpoint is visible in the initial-context trace.
+const (
+	RecommendationsLoadSpanName              = "plugins.recommendations.load"
+	RecommendationsReadToolingMarkerSpanName = "plugins.recommendations.read_tooling_marker"
+	RecommendationsFetchCatalogSpanName      = "plugins.recommendations.fetch_catalog"
+)
+
+// startRecommendationSpan opens one recommendation span under the span the
+// caller already carries, if any. A context without tracing stays unchanged.
+func startRecommendationSpan(ctx context.Context, name string) tracehook.Span {
+	parent := tracehook.SpanFromContext(ctx)
+	if parent == nil {
+		return nil
+	}
+	return parent.StartChildSpan(name, nil)
+}
 
 const suggestedPluginsTimeout = 5 * time.Second
 
@@ -302,7 +323,11 @@ func (s *PluginService) suggestedPluginList(ctx context.Context) (*SuggestedPlug
 	}
 	s.mu.Unlock()
 
+	markerSpan := startRecommendationSpan(ctx, RecommendationsReadToolingMarkerSpanName)
 	marker, markerKnown, markerErr := suggestedToolingChangedAtForProvider(ctx, provider)
+	if markerSpan != nil {
+		markerSpan.End()
+	}
 	if cached != nil {
 		// An absent, failed, or unchanged marker keeps the published catalog
 		// (Rust #61387). A changed marker falls through to a refresh.
@@ -331,7 +356,11 @@ func (s *PluginService) suggestedPluginList(ctx context.Context) (*SuggestedPlug
 	s.suggestedFetch = fetch
 	s.mu.Unlock()
 
+	catalogSpan := startRecommendationSpan(ctx, RecommendationsFetchCatalogSpanName)
 	fetched, err := provider.ListSuggestedPlugins(ctx)
+	if catalogSpan != nil {
+		catalogSpan.End()
+	}
 	if err != nil && cached != nil {
 		// Keep the last successful catalog when a refresh fails, matching
 		// Rust #61387's refresh_recommendations.

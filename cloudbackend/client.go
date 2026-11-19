@@ -510,6 +510,11 @@ func (c *Client) streamEnded(active *attachment, endErr error) {
 	// been installed long enough to prove that it stays open, and only when the
 	// end was transient.
 	stable := c.recovery.installed.IsZero() || time.Since(c.recovery.installed) >= idleRecoveryStableWindow
+	if stable {
+		// A stream that stayed open for a while ends one recovery sequence
+		// (Rust #62151), so the replacement budget starts over.
+		c.recovery.attempts = 0
+	}
 	observedIdle := c.recovery.observedIdle != nil && *c.recovery.observedIdle
 	c.recovery.state = idleReconnectInactive
 	c.recovery.root = ""

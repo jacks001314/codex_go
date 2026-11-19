@@ -19869,6 +19869,10 @@ func (r *RuntimeRouter) prepareTurnToolInputs(ctx context.Context, threadID stri
 	}
 	recommendations := make(chan []plugin.DiscoverableInfo, 1)
 	mcpPrepared := make(chan turnMCPPreparation, 1)
+	// Rust #62326 measures how long initial context setup waits for the plugin
+	// recommendation catalog, so a slow recommendations endpoint is visible
+	// next to the other initial-context timings.
+	recommendationsStartedAt := time.Now()
 	go func() {
 		var candidates []plugin.DiscoverableInfo
 		if r != nil {
@@ -19893,6 +19897,7 @@ func (r *RuntimeRouter) prepareTurnToolInputs(ctx context.Context, threadID stri
 		return nil, nil, nil, nil, ctx.Err()
 	case candidates = <-recommendations:
 	}
+	metrics.RecordDuration(metrics.PluginRecommendationsWaitMetric, time.Since(recommendationsStartedAt), nil)
 	var prepared turnMCPPreparation
 	select {
 	case <-ctx.Done():

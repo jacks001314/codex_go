@@ -42,6 +42,23 @@ type inMemoryBoardSession struct {
 	board *InMemoryBoard
 }
 
+// backendClockHost keeps the registered host authoritative for membership and
+// notification delivery while taking board timestamps from the MCP backend's
+// system clock (Rust #62284). A runner clock failure therefore cannot block a
+// post, matching the standalone SQLite backend.
+type backendClockHost struct {
+	Host
+}
+
+// CurrentTime validates caller membership before reading the system clock, so
+// the read keeps the same authorization behavior as the wrapped host.
+func (h backendClockHost) CurrentTime(ctx context.Context, caller string) (time.Time, error) {
+	if _, err := h.Host.AgentPath(ctx, caller); err != nil {
+		return time.Time{}, err
+	}
+	return time.Now().UTC(), nil
+}
+
 // LaunchInMemoryMessageBoardMCP starts a loopback HTTP MCP endpoint with a
 // generated bearer credential. The returned handle cancels itself when ctx is
 // done; callers register participating sessions with AddBoard.
@@ -104,6 +121,7 @@ func (l *InMemoryMessageBoardMCP) AddBoard(sessionID string, host Host) error {
 	if l.sessions[sessionID] != nil {
 		return fmt.Errorf("message-board session %q is already registered", sessionID)
 	}
+	host = backendClockHost{Host: host}
 	l.sessions[sessionID] = &inMemoryBoardSession{host: host, board: l.boards.Open(sessionID, host)}
 	return nil
 }

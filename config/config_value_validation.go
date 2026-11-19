@@ -72,11 +72,45 @@ func ValidateConfigDocumentValues(values map[string]any, document *ConfigDocumen
 			}
 		}
 	}
+	if err := validatePermissionCredentialsProfiles(values); err != nil {
+		return err
+	}
 	if servers, ok := values["mcp_servers"]; ok {
 		return validateMCPServersTable(servers, "mcp_servers")
 	}
 	if providers, ok := values["model_providers"].(map[string]any); ok {
 		return validateModelProvidersSemantics(providers)
+	}
+	return nil
+}
+
+// validatePermissionCredentialsProfiles enforces Rust #62358's reserved
+// `[permissions.<profile>.credentials]` table in config.toml: the empty table
+// is accepted so named profiles can reserve the slot, while any setting is an
+// unknown field because CredentialPermissionsToml has no fields yet.
+func validatePermissionCredentialsProfiles(values map[string]any) error {
+	permissions, ok := values["permissions"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	for _, name := range sortedConfigKeys(permissions) {
+		profile, ok := permissions[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		raw, present := profile["credentials"]
+		if !present {
+			continue
+		}
+		path := "permissions." + name + ".credentials"
+		table, ok := raw.(map[string]any)
+		if !ok {
+			return configInvalidType(raw, "struct CredentialPermissionsToml", path)
+		}
+		if len(table) == 0 {
+			continue
+		}
+		return &ConfigValueError{message: "unknown field `" + sortedConfigKeys(table)[0] + "`, there are no fields", path: path}
 	}
 	return nil
 }

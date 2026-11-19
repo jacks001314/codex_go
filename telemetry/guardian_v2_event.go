@@ -51,6 +51,10 @@ type GuardianV2Event struct {
 	// GuardianContextMode is present on classification events and absent from
 	// fast-decision events.
 	GuardianContextMode *string `json:"guardian_context_mode,omitempty"`
+	// ClassifierTurnID is the Responses client_metadata.turn_id reserved for the
+	// classification, shared across its request retries (Rust #62125). It is
+	// present on classification events once request preparation succeeded.
+	ClassifierTurnID *string `json:"classifier_turn_id,omitempty"`
 }
 
 // NewGuardianV2ClassificationEvent builds a classification event request.

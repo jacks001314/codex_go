@@ -20625,7 +20625,8 @@ func TestRuntimeRouterGuardianReviewCompletedEmitsReviewAnalyticsLikeRust(t *tes
 			Command: "rm -rf build",
 			CWD:     t.TempDir(),
 		},
-		guardianContextMode: "thread_owned",
+		guardianContextMode:      "thread_owned",
+		guardianClassifierTurnID: "classifier-turn-guardian-review",
 	})
 	reviewEvent := waitForReviewAnalyticsEvent(t, analyticsSink, "guardian-review-command")
 	reviewParams := reviewEvent.EventParams
@@ -20648,6 +20649,10 @@ func TestRuntimeRouterGuardianReviewCompletedEmitsReviewAnalyticsLikeRust(t *tes
 		classification.EventParams.GuardianContextMode == nil ||
 		*classification.EventParams.GuardianContextMode != "thread_owned" {
 		t.Fatalf("guardian classification event = %#v", classification)
+	}
+	if classification.EventParams.ClassifierTurnID == nil ||
+		*classification.EventParams.ClassifierTurnID != "classifier-turn-guardian-review" {
+		t.Fatalf("guardian classification turn id = %#v", classification.EventParams.ClassifierTurnID)
 	}
 	summary := router.toolItemReviewSummary(threadID, turnID, commandItemID)
 	if summary.ReviewCount != 1 ||

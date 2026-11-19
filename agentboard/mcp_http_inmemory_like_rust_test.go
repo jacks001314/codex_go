@@ -65,3 +65,84 @@ func TestInMemoryMessageBoardMCPSharesBoardAcrossTreeLikeRust(t *testing.T) {
 		t.Fatalf("launcher retained %d boards after shutdown", launcher.boards.Len())
 	}
 }
+
+// failingClockHost reproduces a runner whose clock read fails, which must not
+// stop the MCP board from timestamping a post (Rust #62284).
+type failingClockHost struct {
+	*testHost
+}
+
+func (h failingClockHost) CurrentTime(context.Context, string) (time.Time, error) {
+	return time.Time{}, invalid("runner clock unavailable")
+}
+
+// Mirrors Rust #62284: an in-memory board timestamps posts with the system
+// clock after validating membership, so a broken runner clock cannot block a
+// post and the timestamp still describes when it happened.
+func TestInMemoryMessageBoardMCPUsesSystemClockLikeRust(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	launcher, err := LaunchInMemoryMessageBoardMCP(ctx, InMemoryMessageBoardMCPOptions{})
+	if err != nil {
+		t.Fatalf("LaunchInMemoryMessageBoardMCP() error = %v", err)
+	}
+	host := failingClockHost{newTestHost(t, map[string]agent.AgentPath{
+		"thread-parent": agent.AgentPathRoot,
+		"thread-child":  agent.AgentPath("/root/worker"),
+	})}
+	if err := launcher.AddBoard("session-clock", host); err != nil {
+		t.Fatalf("AddBoard() error = %v", err)
+	}
+	response, decoded := postMCPJSON(t, launcher.Endpoint(), strings.TrimPrefix(launcher.AuthorizationHeader(), "Bearer "), "", `{"jsonrpc":"2.0","id":1,"method":"initialize"}`)
+	if response.StatusCode != 200 || decoded.Error != nil {
+		t.Fatalf("initialize = %d %#v", response.StatusCode, decoded)
+	}
+	sessionID := response.Header.Get(MessageBoardMCPSessionHeader)
+	before := time.Now().UTC()
+	posted := callInMemoryMCP(t, launcher.Endpoint(), launcher.AuthorizationHeader(), sessionID, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"post","arguments":{"text":"clock independent","new_channel_name":"general"},"_meta":{"threadId":"thread-child","sessionId":"session-clock"}}}`)
+	if posted.Error != nil {
+		t.Fatalf("child post error = %#v", posted.Error)
+	}
+	after := time.Now().UTC()
+	read := callInMemoryMCP(t, launcher.Endpoint(), launcher.AuthorizationHeader(), sessionID, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_posts","arguments":{"channel_name":"general"},"_meta":{"threadId":"thread-parent","sessionId":"session-clock"}}}`)
+	if read.Error != nil {
+		t.Fatalf("parent read error = %#v", read.Error)
+	}
+	createdAt := postCreatedAtFromSearchResult(t, read.Result)
+	if createdAt.Before(before) || createdAt.After(after) {
+		t.Fatalf("post created_at = %s, want within [%s, %s]", createdAt, before, after)
+	}
+	unknown := callInMemoryMCP(t, launcher.Endpoint(), launcher.AuthorizationHeader(), sessionID, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"post","arguments":{"text":"x","new_channel_name":"other"},"_meta":{"threadId":"stranger","sessionId":"session-clock"}}}`)
+	if unknown.Error == nil || !strings.Contains(unknown.Error.Message, "unknown agent") {
+		t.Fatalf("non-member post = %#v, want the membership failure", unknown.Error)
+	}
+}
+
+// postCreatedAtFromSearchResult decodes the single post timestamp a
+// search_posts result carries.
+func postCreatedAtFromSearchResult(t *testing.T, result any) time.Time {
+	t.Helper()
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal search result: %v", err)
+	}
+	var payload struct {
+		StructuredContent struct {
+			Results []struct {
+				CreatedAt string `json:"created_at"`
+			} `json:"results"`
+		} `json:"structuredContent"`
+	}
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("decode search result %s: %v", encoded, err)
+	}
+	results := payload.StructuredContent.Results
+	if len(results) != 1 {
+		t.Fatalf("search results = %d, want 1: %s", len(results), encoded)
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, results[0].CreatedAt)
+	if err != nil {
+		t.Fatalf("parse created_at %q: %v", results[0].CreatedAt, err)
+	}
+	return createdAt
+}

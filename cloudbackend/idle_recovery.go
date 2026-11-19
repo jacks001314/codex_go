@@ -30,6 +30,17 @@ const (
 	recoveryFailedReason = "Cloud could not restore the reply stream for this conversation."
 	// recoveryExhaustedReason reports that every bounded retry was transient.
 	recoveryExhaustedReason = "Cloud did not restore the reply stream after several attempts."
+	// recoveryKeepsDisconnectingReason reports that the quiet reopen replaced the
+	// stream too many times in a row (Rust #62151). The transcript and draft stay
+	// on screen, so the message says they are still available.
+	recoveryKeepsDisconnectingReason = "The cloud reply stream keeps disconnecting. Your transcript and draft are still here."
+	// idleRecoveryMaxReplacements bounds one recovery sequence. Every installed
+	// replacement delays the next reopen further, and the next loss stops the
+	// loop instead of reconnecting forever.
+	idleRecoveryMaxReplacements = 3
+	// idleRecoveryAttemptDelay is added per installed replacement before the next
+	// quiet Attach, so a flapping stream backs off instead of hammering Cloud.
+	idleRecoveryAttemptDelay = 500 * time.Millisecond
 )
 
 // idleRecoveryDelays is the retry schedule of one episode: an immediate
@@ -76,6 +87,10 @@ type idleRecovery struct {
 	// disconnectedThread is the conversation whose in-process client was told
 	// to hold input; the next live stream for it releases the hold.
 	disconnectedThread string
+	// attempts counts the replacement streams installed in the current recovery
+	// sequence. It is cleared when recovery state resets and when a stream
+	// disconnects only after staying connected long enough to be stable.
+	attempts int
 }
 
 type idleRecoveryResult struct {
@@ -222,19 +237,39 @@ func (c *Client) startIdleRecovery(threadID string) bool {
 	}
 	c.recovery.state = idleReconnectOpening
 	c.recovery.pending = true
+	// Rust #62151 answers a recovery request for a sequence that already
+	// installed three replacements with a message that keeps the transcript and
+	// draft in place, instead of attaching a fourth time.
+	if c.recovery.attempts >= idleRecoveryMaxReplacements {
+		results := c.recoveryResults
+		results <- idleRecoveryResult{threadID: threadID, failureReason: recoveryKeepsDisconnectingReason}
+		return true
+	}
 	ctx, cancel := context.WithTimeout(c.runCtx, idleRecoveryTotalTimeout)
 	results := c.recoveryResults
 	source := c.source
+	attempts := c.recovery.attempts
 	go func() {
 		defer cancel()
-		results <- attachWithRetry(ctx, source, threadID, loginCurrent)
+		results <- attachWithRetry(ctx, source, threadID, loginCurrent, attempts)
 	}()
 	return true
 }
 
 // attachWithRetry runs one recovery episode. It returns a connected stream with
 // at most one buffered event, or an unsuccessful result.
-func attachWithRetry(ctx context.Context, source cloudSource, threadID string, loginCurrent func() bool) idleRecoveryResult {
+func attachWithRetry(ctx context.Context, source cloudSource, threadID string, loginCurrent func() bool, attempts int) idleRecoveryResult {
+	// Rust #62151 delays each replacement by 500 ms per replacement already
+	// installed in this sequence, then attaches under the same login permit.
+	if attempts > 0 {
+		timer := time.NewTimer(time.Duration(attempts) * idleRecoveryAttemptDelay)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return idleRecoveryResult{threadID: threadID}
+		}
+	}
 	for _, delay := range idleRecoveryDelays {
 		if delay > 0 {
 			timer := time.NewTimer(delay)
@@ -321,6 +356,7 @@ func (c *Client) handleIdleRecoveryResult(result idleRecoveryResult) {
 		return
 	}
 	c.recovery.installed = time.Now()
+	c.recovery.attempts++
 	c.active = &attachment{threadID: result.threadID, events: result.events, errs: result.errs, cancel: result.cancel}
 	c.supersedeStreamLosses(result.threadID)
 	if result.first != nil {
@@ -376,6 +412,7 @@ func (c *Client) resetIdleRecovery() {
 	c.recovery.pending = false
 	c.recovery.installed = time.Time{}
 	c.recovery.observedIdle = nil
+	c.recovery.attempts = 0
 }
 
 // reportStreamLoss records one undelivered loss and queues its notification.

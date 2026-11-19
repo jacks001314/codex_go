@@ -1913,6 +1913,9 @@ reviewAttempt:
 		historyCheckpoint = session.reviewHistoryCheckpoint()
 		historyCheckpointReady = true
 	}
+	// Rust #62125: the classification event reports the Responses turn id the
+	// prepared request carries, shared across retries of this classification.
+	store.SetClassifierTurnID(event.ID, classificationTurnID)
 	history := r.guardianConversationHistoryValue(threadID, turnID)
 	reviewExecutionStartedAt := time.Now()
 	if reviewExecution != nil {
@@ -3501,7 +3504,8 @@ func (r *RuntimeRouter) notifyGuardianReviewEvent(threadID string, event *state.
 	r.notify(NotificationItemGuardianApprovalReviewCompleted, &ItemGuardianApprovalReviewCompletedNotification{
 		ThreadID: threadID, TurnID: event.TurnID, StartedAtMS: uint64(event.StartedAtMS), CompletedAtMS: uint64(completedAt), ReviewID: event.ID, TargetItemID: targetItemID,
 		DecisionSource: AutoReviewDecisionSourceAgent, Review: review, Action: action,
-		guardianContextMode: event.GuardianContextMode,
+		guardianContextMode:      event.GuardianContextMode,
+		guardianClassifierTurnID: event.ClassifierTurnID,
 	})
 }
 

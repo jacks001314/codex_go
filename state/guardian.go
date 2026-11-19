@@ -267,6 +267,10 @@ type Event struct {
 	// GuardianContextMode is host telemetry attribution, not part of the
 	// persisted or client-visible review event.
 	GuardianContextMode string `json:"-"`
+	// ClassifierTurnID is the Responses turn id this review's classification
+	// reserved (Rust #62125). Like GuardianContextMode it is host telemetry
+	// attribution, not part of the persisted or client-visible review event.
+	ClassifierTurnID string `json:"-"`
 }
 
 // GuardianReviewReason mirrors Rust's GuardianReviewReason
@@ -579,6 +583,27 @@ func (s *ReviewStore) SetGuardianContextMode(id string, mode string) bool {
 		return false
 	}
 	event.GuardianContextMode = mode
+	return true
+}
+
+// SetClassifierTurnID records the classifier turn id of the request that
+// actually ran for this review. Rust #62125 reports it only once request
+// preparation succeeded, so the reviewer records it at dispatch time.
+func (s *ReviewStore) SetClassifierTurnID(id string, turnID string) bool {
+	if s == nil {
+		return false
+	}
+	turnID = strings.TrimSpace(turnID)
+	if turnID == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	event := s.events[id]
+	if event == nil {
+		return false
+	}
+	event.ClassifierTurnID = turnID
 	return true
 }
 

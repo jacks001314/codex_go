@@ -223,3 +223,49 @@ func TestGuardianIsolatedAssessmentUsesDistinctTurnIdentityLikeRust(t *testing.T
 	}
 	assertGuardianClassificationIdentity(t, captured, turnID, "isolated-root")
 }
+
+// Mirrors Rust #62125: the review event records the classifier turn id that the
+// prepared Responses request carried, so analytics can correlate outcomes with
+// the classification request.
+func TestGuardianClassificationRecordsClassifierTurnIDLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	const threadID, turnID = "thread-guardian-classifier-turn-id", "turn-owner-classifier"
+	if err := router.registerActiveRuntimeTurn(threadID, turnID, func() {}, time.Now().UnixMilli(), &turn.TurnStartParams{
+		ThreadID:   threadID,
+		RootTurnID: "classifier-root",
+	}); err != nil {
+		t.Fatalf("registerActiveRuntimeTurn() error = %v", err)
+	}
+
+	var captured *model.AgentRequest
+	var events []*state.Event
+	reviewer := &modelGuardianReviewer{
+		agent: guardianAgentFunc(func(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+			copyRequest := *request
+			captured = &copyRequest
+			return &model.AgentResponse{Message: `{"riskLevel":"low","userAuthorization":"high","outcome":"allow","rationale":"ok"}`}, nil
+		}),
+		store:             state.NewReviewStore(),
+		trustedRootTurnID: router.guardianTrustedRootTurnIDForTurn,
+		notify: func(_ string, event *state.Event) {
+			events = append(events, event)
+		},
+	}
+	if _, _, err := reviewer.Review(context.Background(), threadID, turnID, "call-classifier", state.Action{Type: "command", Command: "ls", CWD: "/tmp"}); err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	want := strings.TrimSpace(captured.ClientMetadata["turn_id"])
+	if want == "" {
+		t.Fatalf("review request has no classifier turn id: %#v", captured.ClientMetadata)
+	}
+	recorded := ""
+	for _, event := range events {
+		if event == nil || event.Status == state.StatusInProgress {
+			continue
+		}
+		recorded = event.ClassifierTurnID
+	}
+	if recorded != want {
+		t.Fatalf("review event classifier turn id = %q, want %q", recorded, want)
+	}
+}
