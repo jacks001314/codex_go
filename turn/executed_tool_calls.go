@@ -92,15 +92,19 @@ type ExecutedToolCallRecorder struct {
 	// enabled, so a request carries every observation rather than the
 	// connector-only projection (Rust
 	// ExecutedToolCallRecorderState::include_general_metadata, #62392).
-	includeGeneralMetadata bool
-	// capturesResultBodies reports that the Apps connector result-body
-	// passthrough feature is on, which alone keeps the recorder alive and scopes
-	// request metadata to rows with a captured body (Rust #62392).
-	capturesResultBodies bool
+	includeGeneralMetadata atomic.Bool
+	// capturesResultBodies reports that this turn may retain result bodies, which
+	// requires an identifiable owner (Rust begin_turn's live ResultBodyTurn).
+	capturesResultBodies atomic.Bool
+	// resultBodyPassthrough reports that features.connector_tool_result_passthrough
+	// is on. With ordinary executed-tool metadata disabled it scopes every
+	// request to the rows that carry a captured body (Rust #62392).
+	resultBodyPassthrough atomic.Bool
 	// resultBodyTurn is the current turn's bounded body store. It is replaced at
 	// every turn start and dropped when the turn ends, so private bytes never
-	// outlive their turn.
-	resultBodyTurn *ResultBodyTurn
+	// outlive their turn. It is an atomic pointer because reclamation runs while
+	// the state lock is held (Rust ResultBodyTurn is reachable through a Weak).
+	resultBodyTurn atomic.Pointer[ResultBodyTurn]
 }
 
 // executedToolCallLifetime is the identity token of one enabled recorder state.
@@ -197,17 +201,38 @@ type retainedToolCallBinding struct {
 	// lateTruncatedIndices records which calls were updated by a late result, so
 	// ambiguous attribution can clear exactly that evidence again.
 	lateTruncatedIndices map[int]struct{}
+	// outputLive records that this binding's exec/wait output is still trusted,
+	// so its rows may carry private result bodies. A late result that arrives
+	// after the output lost its binding keeps no body
+	// (Rust RetainedToolCalls::output_item_id, #62423).
+	outputLive bool
+}
+
+// invalidateOutput reclaims the private bodies this binding travels with and
+// stops it from adopting new ones, because the output that justified sending
+// them is no longer trusted (Rust RetainedToolCalls::invalidate_output).
+func (b *retainedToolCallBinding) invalidateOutput(r *ExecutedToolCallRecorder) {
+	if b == nil {
+		return
+	}
+	if b.outputLive {
+		r.discardResultBodies(b.calls)
+	}
+	b.outputLive = false
 }
 
 // clearLateTruncatedMetadata removes the late-backfilled result evidence from a
 // binding whose attribution became ambiguous. Once cleared, the binding stops
 // accepting further late results (Rust RetainedToolCalls::clear_late_truncated_metadata).
-func (b *retainedToolCallBinding) clearLateTruncatedMetadata() {
+func (b *retainedToolCallBinding) clearLateTruncatedMetadata(discard func(*model.ExecutedToolCall)) {
 	if b == nil {
 		return
 	}
 	for index := range b.lateTruncatedIndices {
 		if index >= 0 && index < len(b.calls) {
+			if discard != nil {
+				discard(&b.calls[index].call)
+			}
 			b.calls[index].call.SetToolResultMetadata(model.ToolResultMetadata{})
 		}
 	}
@@ -517,7 +542,7 @@ func (r *ExecutedToolCallRecorder) AttachDirectCallToOutput(item any, call *mode
 	}
 	// Rust #62392: when only the connector passthrough is enabled, the recorder
 	// keeps just the calls that carry a captured result body.
-	if r.capturesResultBodies && !r.includeGeneralMetadata && call.ToolResultID() == "" {
+	if r.passthroughOnly() && call.ToolResultID() == "" {
 		return
 	}
 	complete := call.HasCompleteInventory()
@@ -668,7 +693,7 @@ func (r *ExecutedToolCallRecorder) recordNested(groupID string, callID string, c
 		// the backfilled evidence before losing the binding that identified it.
 		for _, binding := range r.allBindings() {
 			if _, ok := binding.truncatedCallIndexByID[trimmedCallID]; ok {
-				binding.clearLateTruncatedMetadata()
+				binding.clearLateTruncatedMetadata(r.discardResultBodyCall)
 			}
 		}
 	}
@@ -762,14 +787,23 @@ func (r *ExecutedToolCallRecorder) RecordToolResultSources(invocation *tool.Invo
 // disabled today, so this mirrors the Rust recorder for when it is enabled; the
 // snapshot is bounded and never trusted from serialized input.
 func (r *ExecutedToolCallRecorder) RecordToolResultMetadata(invocation *tool.Invocation, metadata any) bool {
-	if r == nil || invocation == nil || strings.TrimSpace(invocation.CallID) == "" || metadata == nil {
+	if metadata == nil {
+		return false
+	}
+	return r.BindToolResultMetadata(invocation, model.NewToolResultMetadata(metadata))
+}
+
+// BindToolResultMetadata records a prepared observation for a Code Mode call. It
+// accepts a body-only binding, where the provider supplied no `_meta` and only a
+// locally captured result body identifies the observation (Rust #62423).
+func (r *ExecutedToolCallRecorder) BindToolResultMetadata(invocation *tool.Invocation, bounded model.ToolResultMetadata) bool {
+	if r == nil || invocation == nil || strings.TrimSpace(invocation.CallID) == "" {
 		return false
 	}
 	if !strings.EqualFold(strings.TrimSpace(invocation.Source), "code_mode") {
 		return false
 	}
-	bounded := model.NewToolResultMetadata(metadata)
-	hasMetadata := bounded.IsSome()
+	hasMetadata := bounded.HasObservation()
 	callID := strings.TrimSpace(invocation.CallID)
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -791,7 +825,13 @@ func (r *ExecutedToolCallRecorder) RecordToolResultMetadata(invocation *tool.Inv
 					// binding's ambiguity checks (Rust drains the cell at attach).
 					return false
 				}
+				r.discardReplacedResultBody(&group.pending[index].call, bounded)
 				group.pending[index].call.SetToolResultMetadata(bounded)
+				if !group.truncatedMetadataBindingValid {
+					// A cell that may no longer bind rows to an output cannot keep
+					// this body either (Rust update closure's can_bind_body).
+					r.discardResultBodyCall(&group.pending[index].call)
+				}
 				return hasMetadata
 			}
 		}
@@ -816,7 +856,13 @@ func (r *ExecutedToolCallRecorder) updateBoundResultMetadata(runtimeCellID strin
 		if !ok {
 			continue
 		}
+		r.discardReplacedResultBody(&binding.calls[index].call, metadata)
 		binding.calls[index].call.SetToolResultMetadata(metadata)
+		if !binding.outputLive {
+			// The output is gone, so the row can never reach the backend; keep
+			// the observation without letting its body consume turn capacity.
+			r.discardResultBodyCall(&binding.calls[index].call)
+		}
 		return true
 	}
 	var candidate *retainedToolCallBinding
@@ -837,7 +883,11 @@ func (r *ExecutedToolCallRecorder) updateBoundResultMetadata(runtimeCellID strin
 		return false
 	}
 	candidate.lateTruncatedIndices[candidateIndex] = struct{}{}
+	r.discardReplacedResultBody(&candidate.calls[candidateIndex].call, metadata)
 	candidate.calls[candidateIndex].call.SetToolResultMetadata(metadata)
+	if !candidate.outputLive {
+		r.discardResultBodyCall(&candidate.calls[candidateIndex].call)
+	}
 	return true
 }
 
@@ -1065,9 +1115,50 @@ func (r *ExecutedToolCallRecorder) evictFinishedGroup(protectedGroupID string, n
 	if candidate == "" {
 		return false
 	}
+	if group := r.groups[candidate]; group != nil {
+		r.discardResultBodies(group.pending)
+	}
 	r.invalidateGroup(candidate)
 	delete(r.groups, candidate)
 	return true
+}
+
+// discardResultBodyCall releases the captured result body a recorded call points
+// at and drops the binding from the row. Every path that drops an observation's
+// binding calls it, so a body never outlives the row that justifies sending it
+// and the connector-only projection stops selecting that row
+// (Rust ResultBodyTurn::discard_call). Callers commonly hold the state lock, so
+// it never takes it.
+func (r *ExecutedToolCallRecorder) discardResultBodyCall(call *model.ExecutedToolCall) {
+	if r == nil || call == nil {
+		return
+	}
+	if id := strings.TrimSpace(call.ToolResultID()); id != "" {
+		if store := r.currentResultBodyTurn(); store != nil {
+			store.Discard(id)
+		}
+	}
+	call.ClearToolResultID()
+}
+
+// discardResultBodies releases the bodies of several recorded calls.
+func (r *ExecutedToolCallRecorder) discardResultBodies(calls []recordedToolCall) {
+	if r == nil || len(calls) == 0 {
+		return
+	}
+	for index := range calls {
+		r.discardResultBodyCall(&calls[index].call)
+	}
+}
+
+// discardReplacedResultBody releases a call's previous body when the observation
+// is replaced by one that names a different body (Rust record_result_metadata's
+// update closure, #62423).
+func (r *ExecutedToolCallRecorder) discardReplacedResultBody(previous *model.ExecutedToolCall, next model.ToolResultMetadata) {
+	if previous == nil || previous.ToolResultID() == "" || previous.ToolResultID() == next.ResultID() {
+		return
+	}
+	r.discardResultBodyCall(previous)
 }
 
 // AttachPendingToPrompt returns request-local clones with metadata attached.
@@ -1093,8 +1184,11 @@ func (r *ExecutedToolCallRecorder) attachPendingToPrompt(items []any, pruneDirec
 				present[itemID] = struct{}{}
 			}
 		}
-		for itemID := range r.directCalls {
+		for itemID, call := range r.directCalls {
 			if _, ok := present[itemID]; !ok {
+				// Rust discards the body with the record when the output leaves the
+				// live window (Rust #62392's direct_calls prune).
+				r.discardResultBodyCall(&call)
 				delete(r.directCalls, itemID)
 			}
 		}
@@ -1202,6 +1296,11 @@ func (r *ExecutedToolCallRecorder) attachPendingToPrompt(items []any, pruneDirec
 					reserved = len(group.pending)
 				}
 				available := group.pending[reserved:]
+				if !group.truncatedMetadataBindingValid {
+					// A cell that lost its output binding cannot send private
+					// bodies with this attachment (Rust #62423 output_item_id gate).
+					r.discardResultBodies(available)
+				}
 				if len(available) > 0 || groupFinished {
 					for _, pending := range available {
 						if !pending.call.HasCompleteInventory() {
@@ -1362,6 +1461,7 @@ func newRetainedToolCallBinding(groupID string, group *recordedToolCallGroup, or
 		runtimeCellID:          runtimeCellID,
 		calls:                  append([]recordedToolCall(nil), calls...),
 		complete:               complete,
+		outputLive:             group != nil && group.truncatedMetadataBindingValid,
 		callIndexByID:          map[string]int{},
 		truncatedCallIndexByID: map[string]int{},
 		lateTruncatedIndices:   map[int]struct{}{},
@@ -1400,7 +1500,7 @@ func (r *ExecutedToolCallRecorder) keepTruncatedBinding(group *recordedToolCallG
 // attribution ambiguous, so its late-backfilled evidence is cleared and no
 // further backfill is admitted (Rust #48222).
 func (r *ExecutedToolCallRecorder) invalidateUntrustedTruncatedBindings(out []any, outputCounts map[string]int, inputIndices map[string]*int) {
-	if !r.hasTruncatedBindings() {
+	if !r.hasTruncatedBindings() && !r.hasResultBodyBindings() {
 		return
 	}
 	untrusted := map[string]struct{}{}
@@ -1434,6 +1534,9 @@ func (r *ExecutedToolCallRecorder) invalidateUntrustedTruncatedBindings(out []an
 	}
 	for cellID := range untrusted {
 		if group := r.groups["cell:"+cellID]; group != nil {
+			if group.truncatedMetadataBindingValid {
+				r.discardResultBodies(group.pending)
+			}
 			group.truncatedMetadataBindingValid = false
 		}
 		for _, binding := range r.allBindings() {
@@ -1441,9 +1544,31 @@ func (r *ExecutedToolCallRecorder) invalidateUntrustedTruncatedBindings(out []an
 				continue
 			}
 			binding.complete = false
-			binding.clearLateTruncatedMetadata()
+			binding.invalidateOutput(r)
+			binding.clearLateTruncatedMetadata(r.discardResultBodyCall)
 		}
 	}
+}
+
+// hasResultBodyBindings reports whether any recorded call still points at a
+// captured body. Output validation has to run for those rows too, not only when
+// a truncated call needs late backfill (Rust #62423).
+func (r *ExecutedToolCallRecorder) hasResultBodyBindings() bool {
+	for _, group := range r.groups {
+		for index := range group.pending {
+			if group.pending[index].call.ToolResultID() != "" {
+				return true
+			}
+		}
+	}
+	for _, binding := range r.allBindings() {
+		for index := range binding.calls {
+			if binding.calls[index].call.ToolResultID() != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // hasTruncatedBindings reports whether late truncated backfill is in play: a
@@ -1495,9 +1620,13 @@ func (r *ExecutedToolCallRecorder) evictBinding() {
 			candidate = outputCallID
 		}
 	}
-	if _, retained := r.retained[candidate]; retained {
+	if binding, retained := r.retained[candidate]; retained {
+		r.discardResultBodies(binding.calls)
 		delete(r.retained, candidate)
 		return
+	}
+	if binding := r.provisional[candidate]; binding != nil {
+		r.discardResultBodies(binding.calls)
 	}
 	delete(r.provisional, candidate)
 }
@@ -1604,6 +1733,12 @@ func (r *ExecutedToolCallRecorder) invalidateGroup(groupID string) {
 		return
 	}
 	if group := r.groups[groupID]; group != nil {
+		// A cell that could bind a body to an output loses that permission, so its
+		// pending bodies are released now instead of travelling with a row whose
+		// output is no longer trusted (Rust RecordedCell::invalidate_binding).
+		if group.truncatedMetadataBindingValid {
+			r.discardResultBodies(group.pending)
+		}
 		group.truncatedMetadataBindingValid = false
 	}
 	// Retained bindings created from this grouping lose their completeness and
@@ -1614,7 +1749,8 @@ func (r *ExecutedToolCallRecorder) invalidateGroup(groupID string) {
 			continue
 		}
 		binding.complete = false
-		binding.clearLateTruncatedMetadata()
+		binding.invalidateOutput(r)
+		binding.clearLateTruncatedMetadata(r.discardResultBodyCall)
 	}
 	if cellID := strings.TrimPrefix(groupID, "cell:"); cellID != groupID {
 		if len(r.invalidCells) < maxPendingExecutedToolCalls {
@@ -1650,7 +1786,8 @@ func (r *ExecutedToolCallRecorder) dropReusedCell(cellID string) {
 			continue
 		}
 		binding.complete = false
-		binding.clearLateTruncatedMetadata()
+		binding.invalidateOutput(r)
+		binding.clearLateTruncatedMetadata(r.discardResultBodyCall)
 	}
 }
 

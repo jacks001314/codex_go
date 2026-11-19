@@ -77,6 +77,9 @@ func TestResultBodyTurnAttachmentsAddressRowsLikeRust(t *testing.T) {
 // completeness claim, while history keeps the full inventory.
 func TestScopeToolResultsForInputKeepsOnlyCapturedBodiesLikeRust(t *testing.T) {
 	recorder := NewExecutedToolCallRecorder()
+	// Rust's captures_result_bodies is the feature flag itself, so the projection
+	// only narrows once the passthrough feature is on (Rust ExecutedToolCalls::new).
+	recorder.SetResultBodyPassthrough(true)
 	recorder.BeginResultBodyTurn("turn-1", "chatgpt|acct", true)
 	id, ok := recorder.CaptureResultBody("turn-1", "chatgpt|acct", model.ToolResultBodySource{
 		Content: []any{map[string]any{"type": "text", "text": "body"}},
@@ -121,6 +124,7 @@ func TestScopeToolResultsForInputKeepsOnlyCapturedBodiesLikeRust(t *testing.T) {
 // metadata enabled the projection leaves the request untouched.
 func TestScopeToolResultsForInputKeepsGeneralMetadataLikeRust(t *testing.T) {
 	recorder := NewExecutedToolCallRecorder()
+	recorder.SetResultBodyPassthrough(true)
 	recorder.BeginResultBodyTurn("turn-1", "chatgpt|acct", true)
 	recorder.SetIncludeGeneralMetadata(true)
 	item := &model.AgentItem{Type: "function_call_output"}

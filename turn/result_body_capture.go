@@ -35,9 +35,7 @@ func (r *ExecutedToolCallRecorder) resultBodyTurnFor(turnID string, owner string
 	if r == nil || turnID == "" {
 		return nil
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	store := r.resultBodyTurn
+	store := r.currentResultBodyTurn()
 	if store == nil || store.TurnID() != turnID || store.Owner() != owner {
 		return nil
 	}
@@ -52,14 +50,21 @@ func (r *ExecutedToolCallRecorder) BeginResultBodyTurn(turnID string, owner stri
 	if r == nil {
 		return
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.capturesResultBodies = captures
+	r.capturesResultBodies.Store(captures)
 	if !captures || turnID == "" || owner == "" {
-		r.resultBodyTurn = nil
+		r.resultBodyTurn.Store(nil)
 		return
 	}
-	r.resultBodyTurn = NewResultBodyTurn(turnID, owner)
+	r.resultBodyTurn.Store(NewResultBodyTurn(turnID, owner))
+}
+
+// currentResultBodyTurn reports the store this recorder currently owns. Callers
+// may hold the state lock, so it never takes that lock itself.
+func (r *ExecutedToolCallRecorder) currentResultBodyTurn() *ResultBodyTurn {
+	if r == nil {
+		return nil
+	}
+	return r.resultBodyTurn.Load()
 }
 
 // SetIncludeGeneralMetadata records whether ordinary executed-tool metadata is
@@ -69,9 +74,7 @@ func (r *ExecutedToolCallRecorder) SetIncludeGeneralMetadata(include bool) {
 	if r == nil {
 		return
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.includeGeneralMetadata = include
+	r.includeGeneralMetadata.Store(include)
 }
 
 // IncludeGeneralMetadata reports whether ordinary executed-tool metadata is
@@ -80,9 +83,26 @@ func (r *ExecutedToolCallRecorder) IncludeGeneralMetadata() bool {
 	if r == nil {
 		return false
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.includeGeneralMetadata
+	return r.includeGeneralMetadata.Load()
+}
+
+// SetResultBodyPassthrough records whether the connector result-body passthrough
+// feature is on for this thread. It is independent of the turn's capture store,
+// so an account that cannot capture still hides ordinary executed-tool metadata.
+func (r *ExecutedToolCallRecorder) SetResultBodyPassthrough(enabled bool) {
+	if r == nil {
+		return
+	}
+	r.resultBodyPassthrough.Store(enabled)
+}
+
+// passthroughOnly reports the connector-only projection mode: the passthrough
+// feature is on while ordinary executed-tool metadata is not.
+func (r *ExecutedToolCallRecorder) passthroughOnly() bool {
+	if r == nil {
+		return false
+	}
+	return r.resultBodyPassthrough.Load() && !r.includeGeneralMetadata.Load()
 }
 
 // CapturesResultBodies reports whether the recorder keeps connector result
@@ -91,9 +111,7 @@ func (r *ExecutedToolCallRecorder) CapturesResultBodies() bool {
 	if r == nil {
 		return false
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.capturesResultBodies
+	return r.capturesResultBodies.Load()
 }
 
 // ResultBodyOwnerForTurn reports the credential instance that owns the current
@@ -102,9 +120,7 @@ func (r *ExecutedToolCallRecorder) ResultBodyOwnerForTurn(turnID string) string 
 	if r == nil || turnID == "" {
 		return ""
 	}
-	r.mu.Lock()
-	store := r.resultBodyTurn
-	r.mu.Unlock()
+	store := r.currentResultBodyTurn()
 	if store == nil || store.TurnID() != turnID {
 		return ""
 	}
@@ -115,6 +131,14 @@ func (r *ExecutedToolCallRecorder) ResultBodyOwnerForTurn(turnID string) string 
 // local ID its executed-tool row should carry. It reports false when the feature
 // is off, the turn has no store, or the result is not replayable.
 func (r *ExecutedToolCallRecorder) CaptureResultBody(turnID string, owner string, source model.ToolResultBodySource) (string, bool) {
+	return r.CaptureNestedResultBody(turnID, owner, source, "")
+}
+
+// CaptureNestedResultBody records a Code Mode child call's result body and pairs
+// it with that child call ID (Rust start_mcp_result_capture with a nested call
+// id, #62423). The caller must release the body again whenever the recorded row
+// loses its live output binding.
+func (r *ExecutedToolCallRecorder) CaptureNestedResultBody(turnID string, owner string, source model.ToolResultBodySource, nestedCallID string) (string, bool) {
 	if r == nil {
 		return "", false
 	}
@@ -122,7 +146,18 @@ func (r *ExecutedToolCallRecorder) CaptureResultBody(turnID string, owner string
 	if store == nil {
 		return "", false
 	}
-	return store.Record(source)
+	return store.RecordNested(source, nestedCallID)
+}
+
+// ReleaseResultBody releases one captured body by its local ID. The caller uses
+// it when the observation could not be bound to a recorded row.
+func (r *ExecutedToolCallRecorder) ReleaseResultBody(id string) {
+	if r == nil || id == "" {
+		return
+	}
+	if store := r.currentResultBodyTurn(); store != nil {
+		store.Discard(id)
+	}
 }
 
 // DiscardResultBody releases a captured body whose row left the request input.
@@ -142,9 +177,7 @@ func (r *ExecutedToolCallRecorder) ResultBodyAttachments(owner string, input []a
 	if r == nil {
 		return nil
 	}
-	r.mu.Lock()
-	store := r.resultBodyTurn
-	r.mu.Unlock()
+	store := r.currentResultBodyTurn()
 	if store == nil || store.Owner() != owner {
 		return nil
 	}
@@ -155,7 +188,7 @@ func (r *ExecutedToolCallRecorder) ResultBodyAttachments(owner string, input []a
 // executed-tool metadata is disabled. Rust keeps the full metadata otherwise, and
 // also when passthrough is off.
 func (r *ExecutedToolCallRecorder) ScopeToolResultsForInput(input []any) []any {
-	if r == nil || !r.CapturesResultBodies() || r.IncludeGeneralMetadata() {
+	if r == nil || !r.passthroughOnly() {
 		return input
 	}
 	return model.ScopeExecutedToolCallsForRequest(input)

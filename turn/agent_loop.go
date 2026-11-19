@@ -274,7 +274,12 @@ type AgentLoopRequest struct {
 	OnTokenUsage                    TokenUsageCallback
 	StreamHandler                   model.ResponsesStreamHandler
 	ExecutedToolCallMetadataEnabled bool
-	OnSteerCommitted                func(count int)
+	// ConnectorResultBodyPassthroughEnabled mirrors
+	// features.connector_tool_result_passthrough. It keeps the executed-tool-call
+	// recorder alive for connector-only metadata even when ordinary metadata is
+	// disabled (Rust #62392).
+	ConnectorResultBodyPassthroughEnabled bool
+	OnSteerCommitted                      func(count int)
 	// OnSteerInputItems, when set, receives the items a steer delivered as they
 	// are admitted into the running turn. Rust records admitted input in the
 	// hook runtime before it reaches a sampling request (`hook_runtime`), so the

@@ -50987,6 +50987,24 @@
     "The commit boxes a Rust async future in core/src/codex_thread.rs to bound compiler layout work; behavior is unchanged.",
     "Go has no async-function layout to bound: response item injection runs as a synchronous callback (turn.ToolDispatcher injectResponseItems), so there is nothing to box."
    ]
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "model/tool_result_body.go: ToolResultBody carries the Code Mode child call ID (WithNestedCallID/NestedCallIDJSON), CompactBytes counts it, and WithToolResults charges the body plus the `,\"tool_result_call_id\":` field to one budget deduction so both are emitted together or omitted together, exactly like Rust with_tool_results.",
+    "turn/result_body_turn.go: RecordNested retains a completed MCP result paired with its child call id; the per-turn entry and byte bounds are unchanged.",
+    "turn/tool_dispatcher.go: a successful nested Apps call captures its result body and binds it to the originating exec/wait output through BindToolResultMetadata; a row that never took the observation releases the body again (Rust start_mcp_result_capture plus the record closure).",
+    "turn/executed_tool_calls.go: BindToolResultMetadata accepts a body-only observation, every path that drops a binding reclaims the private bytes and clears the row local id, retained bindings track output liveness so a late result for an invalidated output keeps no body, and a cell that lost its output binding sends no bodies with its attachment.",
+    "turn/result_body_capture.go: the per-turn store and the passthrough/owner flags are read through atomics, because reclamation runs under the recorder lock; this also fixes a re-entrant lock in the passthrough-only projection that deadlocked AttachDirectCallToOutput.",
+    "turn/runtime.go, turn/agent_loop.go, appserver/turn_runtime.go: features.connector_tool_result_passthrough is refreshed on the recorder and passed to the turn, so the recorder stays alive for connector-only metadata when executed_tool_call_metadata is off, and a turn that cannot capture clears the previous store.",
+    "tests: turn TestCaptureNestedResultBodyPairsCallIDLikeRust, TestNestedResultBodyIsReclaimedWithItsOutputLikeRust, TestLateNestedResultForDeadOutputKeepsNoBodyLikeRust, TestInvalidCellBindingSendsNoBodiesLikeRust, TestRuntimeKeepsRecorderForConnectorPassthroughLikeRust, TestScopeToolResultsForInputKeepsOnlyCapturedBodiesLikeRust; model TestWithToolResultsPairsNestedCallIDWithBodyLikeRust (wire pair plus the exact MaxResponseMessageBytes boundary)."
+   ],
+   "kind": "feature",
+   "sha": "b5d9f7116e256e59f4a036c1c3e18979994598c4",
+   "status": "complete",
+   "subject": "Include nested Apps tool results in Code Mode sampling requests (#62423)"
   }
  ]
 }

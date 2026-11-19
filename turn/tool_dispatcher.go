@@ -133,6 +133,28 @@ func outputToolResultMetadata(output *tool.Output) any {
 	return output.ToolResultMetadata
 }
 
+// captureNestedConnectorResultBody retains the result body of a successful MCP
+// call made inside a Code Mode cell, paired with that child call's ID
+// (Rust start_mcp_result_capture with a nested call id, #62423).
+func (d *ToolDispatcher) captureNestedConnectorResultBody(invocation *tool.Invocation, output *tool.Output) (string, bool) {
+	if d == nil || d.executedToolCalls == nil || invocation == nil || output == nil {
+		return "", false
+	}
+	if output.ResultBodySource == nil || !output.Success {
+		return "", false
+	}
+	owner := d.executedToolCalls.ResultBodyOwnerForTurn(d.turnID)
+	if owner == "" {
+		return "", false
+	}
+	source := model.ToolResultBodySource{
+		Content:           output.ResultBodySource.Content,
+		StructuredContent: output.ResultBodySource.StructuredContent,
+		IsError:           output.ResultBodySource.IsError,
+	}
+	return d.executedToolCalls.CaptureNestedResultBody(d.turnID, owner, source, strings.TrimSpace(invocation.CallID))
+}
+
 // captureConnectorResultBody retains the result body of a successful direct MCP
 // call for the current turn (Rust capture_mcp_result, #62392). Code Mode calls
 // bind their bodies to the exec/wait output instead, so they are skipped here.
@@ -1223,8 +1245,20 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 				// records the raw `_meta` the handler exposed, before any lifecycle
 				// reporting or the early return below.
 				if d.executedToolCalls != nil && nested != nil && nestedOutput != nil && nestedErr == nil {
-					if metadata := nestedOutput.ToolResultMetadata; metadata != nil {
-						d.executedToolCalls.RecordToolResultMetadata(nested, metadata)
+					// Rust #62423: a nested Apps call keeps its result body, paired
+					// with this child call's ID, and binds it to the cell row that
+					// reaches the originating exec/wait output.
+					metadata := model.NewToolResultMetadata(nestedOutput.ToolResultMetadata)
+					resultBodyID, captured := d.captureNestedConnectorResultBody(nested, nestedOutput)
+					if captured {
+						metadata = metadata.WithResultID(resultBodyID)
+					}
+					if metadata.HasObservation() && !d.executedToolCalls.BindToolResultMetadata(nested, metadata) {
+						// The row never took the observation, so release the body
+						// instead of retaining bytes nothing can address.
+						if captured {
+							d.executedToolCalls.ReleaseResultBody(resultBodyID)
+						}
 					}
 				}
 				if nested != nil && !toolCallErrorForModel(nestedErr).IsFatal() {

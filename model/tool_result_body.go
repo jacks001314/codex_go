@@ -15,6 +15,9 @@ const (
 	// toolResultFieldPrefix precedes the injected body inside an executed-tool
 	// call row.
 	toolResultFieldPrefix = `,"tool_result":`
+	// toolResultCallIDFieldPrefix precedes the Code Mode child call ID that a
+	// nested body travels with (#62423).
+	toolResultCallIDFieldPrefix = `,"tool_result_call_id":`
 )
 
 // ToolResultBodySource is the host-side view of a completed MCP call used to
@@ -32,6 +35,39 @@ type ToolResultBodySource struct {
 // never reaches logs (Rust ToolResultBody, #62388).
 type ToolResultBody struct {
 	json string
+	// nestedCallIDJSON is the encoded Code Mode child call ID a nested result
+	// travelled with. It is set only for a call made inside a cell, so the
+	// receiver can pair the body with that child invocation (#62423).
+	nestedCallIDJSON string
+}
+
+// WithNestedCallID returns a copy that carries the Code Mode child call ID. The
+// ID travels with the private body so both fit the request budget or neither is
+// sent (Rust ToolResultBody::set_nested_call_id).
+func (b *ToolResultBody) WithNestedCallID(callID string) *ToolResultBody {
+	if b == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(callID)
+	if trimmed == "" {
+		return b
+	}
+	encoded, err := json.Marshal(trimmed)
+	if err != nil {
+		return b
+	}
+	clone := *b
+	clone.nestedCallIDJSON = string(encoded)
+	return &clone
+}
+
+// NestedCallIDJSON reports the encoded child call ID, if the body came from a
+// nested Code Mode call.
+func (b *ToolResultBody) NestedCallIDJSON() string {
+	if b == nil {
+		return ""
+	}
+	return b.nestedCallIDJSON
 }
 
 // ProjectToolResultBody projects only plaintext content and an object-valued
@@ -74,12 +110,13 @@ func ProjectToolResultBody(source ToolResultBodySource) *ToolResultBody {
 	return &ToolResultBody{json: string(encoded)}
 }
 
-// CompactBytes reports the body's encoded length.
+// CompactBytes reports the body's encoded length, including the child call ID it
+// travels with.
 func (b *ToolResultBody) CompactBytes() int {
 	if b == nil {
 		return 0
 	}
-	return len(b.json)
+	return len(b.json) + len(b.nestedCallIDJSON)
 }
 
 // JSON returns the encoded body.
@@ -219,13 +256,23 @@ func WithToolResults(body string, results []ToolResultAttachment) (string, bool)
 		if close <= cursor || close >= len(body) {
 			return "", false
 		}
-		cost := len(toolResultFieldPrefix) + attachment.Body.CompactBytes()
+		callIDPrefix := ""
+		if attachment.Body.NestedCallIDJSON() != "" {
+			callIDPrefix = toolResultCallIDFieldPrefix
+		}
+		// The body and the child call ID fit the request budget together or are
+		// omitted together (Rust with_tool_results, #62423).
+		cost := len(toolResultFieldPrefix) + len(callIDPrefix) + attachment.Body.CompactBytes()
 		if cost > remaining {
 			continue
 		}
 		enriched.WriteString(body[cursor:close])
 		enriched.WriteString(toolResultFieldPrefix)
 		enriched.WriteString(attachment.Body.JSON())
+		if callIDPrefix != "" {
+			enriched.WriteString(toolResultCallIDFieldPrefix)
+			enriched.WriteString(attachment.Body.NestedCallIDJSON())
+		}
 		cursor = close
 		remaining -= cost
 	}

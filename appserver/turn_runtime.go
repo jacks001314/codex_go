@@ -2106,7 +2106,8 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		OnIncompleteResponseUsage: func(usage model.AgentUsage) {
 			r.recordIncompleteResponseUsage(threadID, turnID, runConfig.Model, params, usage)
 		},
-		ExecutedToolCallMetadataEnabled: runConfig.ExecutedToolCallMetadataEnabled,
+		ExecutedToolCallMetadataEnabled:       runConfig.ExecutedToolCallMetadataEnabled,
+		ConnectorResultBodyPassthroughEnabled: runConfig.ConnectorResultBodyPassthroughEnabled,
 	}
 	result, err := runtime.Run(ctx, agentRequest)
 	// Rust #58877: the final pending-input check and closing steer admission form
@@ -2822,7 +2823,8 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 		OnWarning: func(message string) {
 			r.notify(NotificationWarning, &WarningNotification{ThreadID: stringPtrIfNotEmpty(threadID), Message: message})
 		},
-		ExecutedToolCallMetadataEnabled: runConfig.ExecutedToolCallMetadataEnabled,
+		ExecutedToolCallMetadataEnabled:       runConfig.ExecutedToolCallMetadataEnabled,
+		ConnectorResultBodyPassthroughEnabled: runConfig.ConnectorResultBodyPassthroughEnabled,
 	})
 	// Rust #53452: the review turn's task has finished, so its input admission
 	// closes while the final batch below is recorded.
@@ -9268,8 +9270,13 @@ type appTurnRunConfig struct {
 	AttestationProvider             codexapi.AttestationProvider
 	UnifiedExecEnabled              bool
 	ExecutedToolCallMetadataEnabled bool
-	LogAgentResponses               bool
-	ImageResizeNoticeEnabled        bool
+	// ConnectorResultBodyPassthroughEnabled mirrors
+	// features.connector_tool_result_passthrough. It keeps the executed-tool-call
+	// recorder alive for connector-only metadata even when ordinary metadata is
+	// disabled (Rust #62392).
+	ConnectorResultBodyPassthroughEnabled bool
+	LogAgentResponses                     bool
+	ImageResizeNoticeEnabled              bool
 	// MultiAgentVersion is the turn's resolved multi-agent version for turn
 	// analytics (Rust #51333, `turn_context.multi_agent_version`).
 	MultiAgentVersion string
@@ -9771,17 +9778,18 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 		DirectOnlyToolNamespaces:       cloneStringSlicePointer(params.DirectOnlyToolNamespaces),
 		// Rust #46501: the span carries the usage-tag document alongside the
 		// turn's resolved settings.
-		UsageTags:                       UsageTagsForTurn(cfg, cfg.FeatureSettings(), modelInfo, serviceTier),
-		Store:                           modelProviderConfig.Store,
-		AttestationProvider:             r.appServerAttestationProvider(),
-		UnifiedExecEnabled:              unifiedExecEnabled,
-		ExecutedToolCallMetadataEnabled: features.Enabled(cfg.FeatureSettings(), "executed_tool_call_metadata"),
-		LogAgentResponses:               cfg.Otel().AgentResponseLoggingEnabled(),
-		ImageResizeNoticeEnabled:        features.Enabled(cfg.FeatureSettings(), "image_resize_notice"),
-		Config:                          cfg,
-		ConfiguredTokenBudget:           configuredTokenBudget,
-		UseModelTokenBudgetDefaults:     useModelTokenBudgetDefaults,
-		TokenBudgetFeatureEnabled:       featureEnabled,
+		UsageTags:                             UsageTagsForTurn(cfg, cfg.FeatureSettings(), modelInfo, serviceTier),
+		Store:                                 modelProviderConfig.Store,
+		AttestationProvider:                   r.appServerAttestationProvider(),
+		UnifiedExecEnabled:                    unifiedExecEnabled,
+		ExecutedToolCallMetadataEnabled:       features.Enabled(cfg.FeatureSettings(), "executed_tool_call_metadata"),
+		ConnectorResultBodyPassthroughEnabled: features.Enabled(cfg.FeatureSettings(), "connector_tool_result_passthrough"),
+		LogAgentResponses:                     cfg.Otel().AgentResponseLoggingEnabled(),
+		ImageResizeNoticeEnabled:              features.Enabled(cfg.FeatureSettings(), "image_resize_notice"),
+		Config:                                cfg,
+		ConfiguredTokenBudget:                 configuredTokenBudget,
+		UseModelTokenBudgetDefaults:           useModelTokenBudgetDefaults,
+		TokenBudgetFeatureEnabled:             featureEnabled,
 		ClientMetadata: turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
 			InstallationID:             installationID,
 			SessionID:                  firstNonEmpty(lineage.SessionID, threadID),
@@ -13436,16 +13444,20 @@ func (r *RuntimeRouter) mcpResultBodyCaptureForTurn(cfg *config.Config, threadID
 	if r == nil || cfg == nil || strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
 		return nil
 	}
-	if !features.Enabled(cfg.FeatureSettings(), "connector_tool_result_passthrough") {
-		return nil
-	}
+	// Rust ExecutedToolCalls::refresh records the feature itself on the recorder,
+	// independently of whether this account may capture, because the
+	// connector-only projection is driven by the feature (Rust #62392).
+	passthrough := features.Enabled(cfg.FeatureSettings(), "connector_tool_result_passthrough")
 	snapshot := r.requireAccount().AuthSnapshot()
 	owner := model.ConnectorResultAuthOwner(snapshot)
 	if recorder := r.executedToolCallRecorder(threadID); recorder != nil {
 		recorder.SetIncludeGeneralMetadata(features.Enabled(cfg.FeatureSettings(), "executed_tool_call_metadata"))
-		recorder.BeginResultBodyTurn(strings.TrimSpace(turnID), owner, owner != "")
+		recorder.SetResultBodyPassthrough(passthrough)
+		// A turn that cannot capture still clears any earlier store, so private
+		// bytes never outlive the turn that captured them.
+		recorder.BeginResultBodyTurn(strings.TrimSpace(turnID), owner, passthrough && owner != "")
 	}
-	if owner == "" {
+	if !passthrough || owner == "" {
 		return nil
 	}
 	runtimeAuth := mcp.RuntimeAuthFromSnapshot(snapshot)

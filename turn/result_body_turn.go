@@ -54,6 +54,13 @@ func (t *ResultBodyTurn) TurnID() string {
 // ID. A result the receiver cannot replay, a full store, or an exhausted byte
 // budget simply yields no ID, so the caller attaches no observation.
 func (t *ResultBodyTurn) Record(source model.ToolResultBodySource) (string, bool) {
+	return t.RecordNested(source, "")
+}
+
+// RecordNested retains one completed MCP result made inside a Code Mode cell and
+// pairs it with that child call's ID, so a sampling request can send
+// `tool_result` and `tool_result_call_id` together (Rust #62423).
+func (t *ResultBodyTurn) RecordNested(source model.ToolResultBodySource, nestedCallID string) (string, bool) {
 	if t == nil {
 		return "", false
 	}
@@ -61,6 +68,7 @@ func (t *ResultBodyTurn) Record(source model.ToolResultBodySource) (string, bool
 	if body == nil {
 		return "", false
 	}
+	body = body.WithNestedCallID(nestedCallID)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if len(t.byID) >= maxPendingExecutedToolCalls || body.CompactBytes() > maxResultBodyBytes-t.bytes {

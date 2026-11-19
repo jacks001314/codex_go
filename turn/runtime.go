@@ -428,7 +428,9 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		return nil, model.ErrInvalidAgentRequest
 	}
 	var executedToolCalls *ExecutedToolCallRecorder
-	if request.ExecutedToolCallMetadataEnabled {
+	// Rust #62392: passthrough alone keeps the recorder alive and scopes its
+	// request metadata to the rows carrying a captured result body.
+	if request.ExecutedToolCallMetadataEnabled || request.ConnectorResultBodyPassthroughEnabled {
 		executedToolCalls = r.executedToolCalls
 	}
 	if r.router == nil {

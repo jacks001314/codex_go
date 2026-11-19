@@ -180,3 +180,43 @@ func TestToolResultMetadataKeepsBodyBindingWhileSheddingLikeRust(t *testing.T) {
 		t.Fatalf("serialized call leaked the local result id: %s", encoded)
 	}
 }
+
+// Mirrors Rust codex-api common_tests (#62423): a nested child call ID travels
+// with its result body under one shared wire budget, so the pair is emitted
+// together or dropped together.
+func TestWithToolResultsPairsNestedCallIDWithBodyLikeRust(t *testing.T) {
+	const callID = "private-\"id\\\n\u03bb"
+	body := mustToolResultBody(t, ToolResultBodySource{
+		Content: []any{map[string]any{"type": "text", "text": "private result"}},
+	}).WithNestedCallID(callID)
+	if body.NestedCallIDJSON() == "" {
+		t.Fatal("WithNestedCallID() dropped the child call ID")
+	}
+	if body.CompactBytes() != len(body.JSON())+len(body.NestedCallIDJSON()) {
+		t.Fatalf("CompactBytes() = %d, want the body plus its call ID", body.CompactBytes())
+	}
+	enriched, ok := WithToolResults(toolResultsRequestJSON, []ToolResultAttachment{{ItemIndex: 0, CallIndex: 0, Body: body}})
+	if !ok {
+		t.Fatal("WithToolResults reported no enrichment")
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(enriched), &decoded); err != nil {
+		t.Fatalf("enriched body is not valid JSON: %v", err)
+	}
+	row := decoded["input"].([]any)[0].(map[string]any)["internal_chat_message_metadata_passthrough"].(map[string]any)["executed_tool_calls"].([]any)[0].(map[string]any)
+	if row["tool_result_call_id"] != callID {
+		t.Fatalf("tool_result_call_id = %#v, want %q", row["tool_result_call_id"], callID)
+	}
+	if _, ok := row["tool_result"]; !ok {
+		t.Fatalf("the call ID was sent without its body: %#v", row)
+	}
+
+	// A request exactly at the budget keeps the pair; one byte more drops both.
+	padded := toolResultsRequestJSON + strings.Repeat(" ", MaxResponseMessageBytes-len(enriched))
+	if got, ok := WithToolResults(padded, []ToolResultAttachment{{ItemIndex: 0, CallIndex: 0, Body: body}}); !ok || len(got) != MaxResponseMessageBytes {
+		t.Fatalf("padded enrichment = (%d bytes, %v), want (%d, true)", len(got), ok, MaxResponseMessageBytes)
+	}
+	if _, ok := WithToolResults(padded+" ", []ToolResultAttachment{{ItemIndex: 0, CallIndex: 0, Body: body}}); ok {
+		t.Fatal("WithToolResults exceeded the message budget for a body and its call ID")
+	}
+}
