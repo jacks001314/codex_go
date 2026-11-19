@@ -126,6 +126,12 @@ type AgentRequest struct {
 	// modelRequestHooks carries the per-Run hook state shared by retries.
 	modelRequestHooks *modelRequestHooks
 	ClientMetadata    map[string]string
+	// ToolResults carries optional Apps result bodies for executed-tool rows in
+	// this request's input (Rust ResponsesOptions::tool_results, #62388). The
+	// bodies are spliced into the encoded request only for the resolved
+	// endpoint, stay out of diagnostics, and are dropped for a redirect that
+	// preserves the body. Codex's default request construction supplies none.
+	ToolResults []ToolResultAttachment
 	// MCPAttribution is the thread's cumulative MCP tools/call attribution
 	// snapshot (Rust CodexResponsesMetadata::mcp_attribution). It is body-only
 	// and reaches the request only when the resolved provider is granted

@@ -78,6 +78,11 @@ var Registry = []Spec{
 	{Key: "per_environment_context", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "js_repl", Stage: StageRemoved},
 	{Key: "executed_tool_call_metadata", Stage: StageUnderDevelopment},
+	// Rust #62392: capture eligible direct ChatGPT Apps result bodies and pass
+	// them through to the ChatGPT Responses endpoint for the originating turn.
+	// Off by default; enabling it alone scopes executed-tool metadata to calls
+	// with a captured result body.
+	{Key: "connector_tool_result_passthrough", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs) defines code_mode with
 	// default_enabled: false. An unset model tool_mode therefore resolves to
 	// direct mode unless code_mode is explicitly enabled; models that require

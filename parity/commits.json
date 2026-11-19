@@ -50695,6 +50695,23 @@
    ]
   },
   {
+   "sha": "f1b69864161866a111610c4b4351d397fb644b6f",
+   "subject": "Support optional Apps tool results in Responses requests (#62388)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "model.ToolResultBody projects an eligible MCP result into the receiver's shape: plaintext text blocks only (an encrypted or non-text block disqualifies the call), object-valued structuredContent within the receiver's depth limit, and a 1 MiB cap on the encoded body (Rust ToolResultBody::from_mcp_result).",
+    "model.ToolResultMetadata gained a local result-body binding that survives metadata shedding (retainResourceAccess, omitIfSmaller, clearValue, ClearToolResultMetadata) while the id itself never serializes; ExecutedToolCall.ToolResultID/ClearToolResultID and a body-only HasObservation mirror Rust's ResultObservation.",
+    "model.WithToolResults splices ,\"tool_result\": into the selected executed-tool rows of the encoded request without re-encoding it, keeps routing field order and tool schemas intact, and skips bodies that would exceed the 15 MiB outgoing message budget (Rust with_tool_results).",
+    "HTTP dispatch enriches each attempt's body, pins an enriched attempt to the configured origin, and re-issues the caller's original JSON when a 307/308 with a Location arrives; the WebSocket response.create frame is enriched the same way and bypasses payload tracing because Go never routes request bytes into diagnostics.",
+    "tests: model TestProjectToolResultBodyProjectsTextAndStructuredContentLikeRust, TestProjectToolResultBodyRejectsIneligibleResultsLikeRust, TestWithToolResultsAttachesBodyToSelectedRowLikeRust, TestWithToolResultsRefusesUnresolvableRowsLikeRust, TestWithToolResultsSkipsBodiesBeyondMessageBudgetLikeRust, TestToolResultMetadataKeepsBodyBindingWhileSheddingLikeRust, TestResponsesHTTPRequestAttachesToolResultsLikeRust, TestResponsesHTTPRedirectReissuesOriginalBodyWithoutToolResultsLikeRust, TestWebsocketToolResultsFrameBypassesPayloadTracingLikeRust",
+    "plan: update/plan_2026_11_19.md batch 7"
+   ]
+  },
+  {
    "sha": "c332754aa3a764ae89352aa5903119281ae32e5a",
    "subject": "Pause runtime sandbox integrity checks (#62389)",
    "kind": "security",

@@ -1588,6 +1588,13 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	afterPrewarm := request.PreviousResponseFromPrewarm
 	r.recordWebsocketContinuation(continuationMode, continuationReason, "generation", afterPrewarm)
 	message := marshalResponsesMessage(payload)
+	if len(request.ToolResults) > 0 {
+		// The enriched frame carries private connector results, so it bypasses
+		// payload tracing like Rust's skipped `tool_results` field (#62388).
+		if enriched, ok := WithToolResults(string(message), request.ToolResults); ok {
+			message = []byte(enriched)
+		}
+	}
 	// Rust #60841: never publish a request the peer already told us it cannot
 	// accept. Falling straight back to HTTP keeps the turn alive (#60840).
 	if session.maxMessageBytes > 0 && len(message) > session.maxMessageBytes {
@@ -2938,6 +2945,13 @@ func responsesToolsContainNamespaceFunction(tools []any, namespace string, name 
 }
 
 func (r *ResponsesAgentRunner) newResponsesHTTPRequest(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest, accept string) (*http.Request, error) {
+	return r.newResponsesHTTPRequestWithToolResults(ctx, request, apiRequest, accept, true)
+}
+
+// newResponsesHTTPRequestWithToolResults builds one attempt's request.
+// includeToolResults is false for the redirect fallback, which must start over
+// with the caller's original JSON (Rust #62388).
+func (r *ResponsesAgentRunner) newResponsesHTTPRequestWithToolResults(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest, accept string, includeToolResults bool) (*http.Request, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -2964,6 +2978,13 @@ func (r *ResponsesAgentRunner) newResponsesHTTPRequest(ctx context.Context, requ
 	body, err := json.Marshal(apiRequest)
 	if err != nil {
 		return nil, err
+	}
+	if includeToolResults && request != nil && len(request.ToolResults) > 0 {
+		// Authorized connector results ride along without re-encoding the
+		// ordinary request, so routing field order and tool schemas stay intact.
+		if enriched, ok := WithToolResults(string(body), request.ToolResults); ok {
+			body = []byte(enriched)
+		}
 	}
 	requestBody := body
 	contentEncoding := ""
@@ -3253,11 +3274,19 @@ func addBetaFeaturesHeader(headers http.Header, betaFeaturesHeader string) {
 }
 
 func (r *ResponsesAgentRunner) doResponsesHTTPRequest(httpRequest *http.Request) (*http.Response, error) {
+	return r.doResponsesHTTPRequestWithRedirectPolicy(httpRequest, false)
+}
+
+// doResponsesHTTPRequestWithRedirectPolicy sends one attempt. rejectRedirects
+// additionally pins an attempt whose body carries private connector results to
+// the configured origin, so a redirect can never forward those results (Rust
+// #62388 re-issues the original JSON instead of following the redirect).
+func (r *ResponsesAgentRunner) doResponsesHTTPRequestWithRedirectPolicy(httpRequest *http.Request, rejectRedirects bool) (*http.Response, error) {
 	client := r.HTTPClient
 	if client == nil {
 		client = http.DefaultClient
 	}
-	if r != nil && r.RejectRedirects {
+	if rejectRedirects || (r != nil && r.RejectRedirects) {
 		// A routed provider must never follow a redirect: the request carries the
 		// account-routing credential scoped to the discovered origin (Rust
 		// ClientRedirectPolicy::Reject).
@@ -3270,6 +3299,18 @@ func (r *ResponsesAgentRunner) doResponsesHTTPRequest(httpRequest *http.Request)
 		}
 	}
 	return client.Do(httpRequest)
+}
+
+// responsesRedirectPreservesBody reports a 307/308 that carries a Location, the
+// only redirect where an enriched body may not be replayed (Rust #62388).
+func responsesRedirectPreservesBody(response *http.Response, err error) bool {
+	if err != nil || response == nil {
+		return false
+	}
+	if response.StatusCode != http.StatusTemporaryRedirect && response.StatusCode != http.StatusPermanentRedirect {
+		return false
+	}
+	return strings.TrimSpace(response.Header.Get("Location")) != ""
 }
 
 // runResponsesHTTPRequestPreemptible mirrors Rust #48141 for the non-streaming
@@ -3322,11 +3363,12 @@ func (r *ResponsesAgentRunner) doResponsesHTTPRequestWithRetry(ctx context.Conte
 	// attempt latch plus the step cursor), not the transport retry budget, so an
 	// auth retry does not consume `maxRetries`.
 	transportRetries := uint64(0)
+	includeToolResults := true
 	for attempt := uint64(0); ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		httpRequest, err := r.newResponsesHTTPRequest(ctx, request, apiRequest, accept)
+		httpRequest, err := r.newResponsesHTTPRequestWithToolResults(ctx, request, apiRequest, accept, includeToolResults)
 		if err != nil {
 			return nil, err
 		}
@@ -3338,7 +3380,25 @@ func (r *ResponsesAgentRunner) doResponsesHTTPRequestWithRetry(ctx context.Conte
 			"accept":           accept,
 		})
 		attemptStartedAt := time.Now()
-		httpResponse, err := r.doResponsesHTTPRequest(httpRequest)
+		httpResponse, err := r.doResponsesHTTPRequestWithRedirectPolicy(httpRequest, includeToolResults && len(request.ToolResults) > 0)
+		// Rust #62388: a redirect that preserves the request body must start
+		// over without the private connector results. The richer attempt is
+		// discarded and the retry does not consume the transport budget.
+		if includeToolResults && responsesRedirectPreservesBody(httpResponse, err) {
+			responsesDiagnostic("http.tool_results_redirect", map[string]any{
+				"thread_id":    request.ThreadID,
+				"turn_id":      request.TurnID,
+				"http_attempt": attempt + 1,
+				"http_status":  httpResponse.StatusCode,
+			})
+			if httpResponse.Body != nil {
+				_, _ = io.Copy(io.Discard, httpResponse.Body)
+				_ = httpResponse.Body.Close()
+			}
+			includeToolResults = false
+			attempt--
+			continue
+		}
 		attemptDuration := time.Since(attemptStartedAt)
 		shouldRetry := shouldRetryResponsesHTTPRequest(httpResponse, err, retryTooManyRequests)
 		status := 0

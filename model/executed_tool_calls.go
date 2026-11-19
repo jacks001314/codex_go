@@ -167,6 +167,11 @@ func NewToolResultSourcesParseFailed() ToolResultSources {
 // never trusted from serialized input; its raw values never reach logs.
 type ToolResultMetadata struct {
 	value any
+	// resultID binds this observation to a locally captured result body. The
+	// binding survives metadata shedding and clearing, so an outgoing request
+	// can still attach the body after the provider's `_meta` was dropped
+	// (Rust #62388 ResultObservation::Bound).
+	resultID string
 }
 
 // NewToolResultMetadata captures the complete MCP `_meta` snapshot. Retention
@@ -177,6 +182,43 @@ func NewToolResultMetadata(metadata any) ToolResultMetadata {
 		return ToolResultMetadata{}
 	}
 	return ToolResultMetadata{value: metadata}
+}
+
+// WithResultID returns a copy bound to a locally captured result body.
+func (m ToolResultMetadata) WithResultID(id string) ToolResultMetadata {
+	m.setResultID(id)
+	return m
+}
+
+func (m *ToolResultMetadata) setResultID(id string) {
+	if m == nil {
+		return
+	}
+	m.resultID = strings.TrimSpace(id)
+}
+
+// ResultID reports the local result-body binding, if any. It is never
+// serialized: only the provider `_meta` value reaches the wire (Rust
+// ToolResultMetadata::result_id).
+func (m ToolResultMetadata) ResultID() string {
+	return m.resultID
+}
+
+// HasObservation reports whether this call keeps a provider `_meta` snapshot,
+// an omission marker, or only a local result-body binding. A body-only
+// observation is recorded even when the provider supplied no `_meta` (Rust
+// ToolResultMetadata::has_observation).
+func (m ToolResultMetadata) HasObservation() bool {
+	return m.value != nil || m.resultID != ""
+}
+
+// clearValue drops the provider's serialized `_meta` while retaining the host's
+// per-call body binding (Rust ToolResultMetadata::clear_value).
+func (m *ToolResultMetadata) clearValue() {
+	if m == nil {
+		return
+	}
+	*m = ToolResultMetadata{resultID: m.resultID}
 }
 
 // OmittedToolResultMetadata is the harness status marker used when raw metadata
@@ -221,7 +263,7 @@ func (m *ToolResultMetadata) omitIfSmaller(originalBytes int, overageBytes int) 
 	if m == nil || m.IsNone() || m.isOmittedDueToSizeLimit() {
 		return originalBytes
 	}
-	omitted := omittedToolResultMetadataForOverage(overageBytes)
+	omitted := omittedToolResultMetadataForOverage(overageBytes).WithResultID(m.resultID)
 	omittedBytes := jsonSize(omitted)
 	if omittedBytes < originalBytes {
 		*m = omitted
@@ -246,7 +288,7 @@ func (m *ToolResultMetadata) retainResourceAccess() bool {
 	if !present {
 		return false
 	}
-	*m = ToolResultMetadata{value: map[string]any{resourceAccessMetadataKey: value}}
+	*m = ToolResultMetadata{value: map[string]any{resourceAccessMetadataKey: value}, resultID: m.resultID}
 	return true
 }
 
@@ -273,9 +315,23 @@ func (c *ExecutedToolCall) SetToolResultMetadata(metadata ToolResultMetadata) bo
 	return c.toolResultMetadata.IsSome()
 }
 
-// HasToolResultMetadata reports whether a bounded `_meta` snapshot is attached.
+// HasToolResultMetadata reports whether a bounded `_meta` snapshot, an omission
+// marker, or a local result-body binding is attached.
 func (c ExecutedToolCall) HasToolResultMetadata() bool {
-	return c.toolResultMetadata.IsSome()
+	return c.toolResultMetadata.HasObservation()
+}
+
+// ToolResultID reports the local result-body binding recorded for this call.
+func (c ExecutedToolCall) ToolResultID() string {
+	return c.toolResultMetadata.ResultID()
+}
+
+// ClearToolResultID drops the local body binding without touching the attached
+// provider `_meta` (Rust ExecutedToolCall::clear_tool_result_id).
+func (c *ExecutedToolCall) ClearToolResultID() {
+	if c != nil {
+		c.toolResultMetadata.setResultID("")
+	}
 }
 
 // SetToolResultSources replaces the invocation's capture outcome, including
@@ -386,7 +442,7 @@ func (i *AgentItem) ExecutedToolCallCellID() string {
 // clears result metadata before dropping the record under the retention budget).
 func (c *ExecutedToolCall) ClearToolResultMetadata() {
 	if c != nil {
-		c.toolResultMetadata = ToolResultMetadata{}
+		c.toolResultMetadata.clearValue()
 	}
 }
 
@@ -721,7 +777,7 @@ func shedGenericResultMetadata(items []ExecutedToolCallCarrier, maxBytes int, wh
 				continue
 			}
 			before := jsonSize(*metadata)
-			*metadata = ToolResultMetadata{}
+			metadata.clearValue()
 			items[handle.itemIndex].ReplaceExecutedToolCalls(calls)
 			total -= before + len(`,"tool_result_metadata":`)
 			if total < 0 {
@@ -825,7 +881,7 @@ func shedRemainingResultMetadata(items []ExecutedToolCallCarrier, maxBytes int, 
 			continue
 		}
 		before := jsonSize(*metadata)
-		*metadata = ToolResultMetadata{}
+		metadata.clearValue()
 		items[handle.itemIndex].ReplaceExecutedToolCalls(calls)
 		total -= before + len(`,"tool_result_metadata":`)
 		if total < 0 {
@@ -1011,7 +1067,7 @@ func boundExecutedToolCallItemsWithBudget(items []ExecutedToolCallCarrier, maxMe
 		changed := false
 		for index := range calls {
 			if calls[index].HasToolResultMetadata() {
-				calls[index].toolResultMetadata = ToolResultMetadata{}
+				calls[index].toolResultMetadata.clearValue()
 				changed = true
 			}
 		}
