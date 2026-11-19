@@ -50947,6 +50947,46 @@
     "not_applicable: app-server-exports-experimental.json.zst is the Rust-generated schema fixture; Go regenerates its own protocol surface and compares it in the parity schema anchors.",
     "plan: update/plan_2026_11_19.md batch 10"
    ]
+  },
+  {
+   "sha": "aadb51b2b60c488a7aa047775876c196eb60cb2f",
+   "subject": "Test saved chat hover highlighting in the sidebar chooser (#62400)",
+   "kind": "test",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "tui/tea/sidebar_chooser_hover_like_rust_test.go already asserts the chooser's hover fill, the selected-row fill, and the absence of a hover row outside the pane, including rows backed by saved chat choices (sidebarChoices saved-1/saved-2).",
+    "tests: tui/tea TestSidebarChooserRowHoverLikeRust",
+    "not_applicable: the upstream commit adds only Rust TUI test files (app/tests.rs, app/tests/sidebar_chooser_hover_tests.rs); Go's sidebar chooser is a separate implementation with its own equivalent coverage."
+   ]
+  },
+  {
+   "sha": "cf881a627dd52e7aecef63416c1acd2a89c4dfbd",
+   "subject": "Enable network access in the shell snapshot filesystem test (#62415)",
+   "kind": "test",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "The commit only relaxes the sandbox network policy of Rust's core/src/shell_snapshot_sandbox_tests.rs harness; it changes no product behavior.",
+    "Go's shell snapshot coverage lives in shell/snapshot_literals_test.go and needs no sandboxed network access, so there is no Go harness to relax."
+   ]
+  },
+  {
+   "sha": "fc483d4b4d743045dd0fe969844c948152231296",
+   "subject": "Box the future returned by response item injection (#62420)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "The commit boxes a Rust async future in core/src/codex_thread.rs to bound compiler layout work; behavior is unchanged.",
+    "Go has no async-function layout to bound: response item injection runs as a synchronous callback (turn.ToolDispatcher injectResponseItems), so there is nothing to box."
+   ]
   }
  ]
 }
