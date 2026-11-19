@@ -76,11 +76,14 @@ func PrepareFileSystemPolicy(
 			denyPolicy.Paths = append(denyPolicy.Paths, entry.Path.Path)
 		}
 	}
+	logLaunch("phase=prepare_deny_parents")
 	// Rust #58168: MXC requires deny paths to have existing parents, and the
 	// directories must exist before deny globs are expanded.
 	if err := ensureDenyParentDirectories(denyPolicy.Paths); err != nil {
 		return nil, err
 	}
+	logLaunch("phase=resolve_filesystem_policy")
+	logLaunch("phase=resolve_deny_paths")
 	denied, err := windowssandbox.ResolveWindowsDenyReadPathsInEnvironment(
 		denyPolicy,
 		policyCWD,
@@ -95,6 +98,7 @@ func PrepareFileSystemPolicy(
 		deny.add(path)
 	}
 
+	logLaunch("phase=expand_volume_grants")
 	expandedWrite := expandVolumeRootPaths(write.values(), volumes)
 	for path := range deny.paths {
 		delete(expandedWrite, path)
@@ -108,10 +112,14 @@ func PrepareFileSystemPolicy(
 	for path := range deny.paths {
 		delete(expandedRead, path)
 	}
+	readGrants := sortedPathKeys(expandedRead)
+	writeGrants := sortedPathKeys(expandedWrite)
+	denyGrants := deny.values()
+	logLaunch(fmt.Sprintf("filesystem grants read=%d write=%d deny=%d", len(readGrants), len(writeGrants), len(denyGrants)))
 	return &FileSystemPolicy{
-		ReadWritePaths: sortedPathKeys(expandedWrite),
-		ReadOnlyPaths:  sortedPathKeys(expandedRead),
-		DeniedPaths:    deny.values(),
+		ReadWritePaths: writeGrants,
+		ReadOnlyPaths:  readGrants,
+		DeniedPaths:    denyGrants,
 	}, nil
 }
 

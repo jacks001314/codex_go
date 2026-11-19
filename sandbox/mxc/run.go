@@ -25,6 +25,9 @@ func RunMain(stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	exitCode, err := runHelper(stdin, stdout, stderr)
 	if err != nil {
+		// Rust #62439 records the failure in the runtime log before the helper
+		// publishes it on stderr.
+		logLaunch(fmt.Sprintf("launch failed: %v", err))
 		fmt.Fprintf(stderr, "%s%v\n", LauncherFailurePrefix, err)
 		return 1
 	}

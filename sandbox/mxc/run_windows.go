@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 	"unicode/utf16"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"codex_go/sandbox/windowssandbox"
 )
 
 // helperSupported reports whether this host can execute the native MXC
@@ -25,6 +28,9 @@ const NativeUnavailableMessage = "native MXC is unavailable on this executor"
 // runHelper resolves executor-local state and runs the decoded launcher
 // request (Rust `mxc_sandbox::windows::run`).
 func runHelper(stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	windowssandbox.InitRuntimeLog(runtimeLogCodexHome())
+	logLaunch("phase=prepare_request")
+	preparing := time.Now()
 	env, err := currentEnvironment()
 	if err != nil {
 		return 0, err
@@ -33,15 +39,34 @@ func runHelper(stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	logLaunch("phase=prepare_volumes kind=" + launchKind(request.Command))
 	commandCWD, err := os.Getwd()
 	if err != nil {
 		return 0, err
 	}
+	volumes, err := VolumeRoots(request.SandboxPolicyCWD, commandCWD)
+	if err != nil {
+		return 0, err
+	}
+	logLaunch(fmt.Sprintf("phase=prepare_known_folders volumes=%d", len(volumes)))
 	native, err := BuildRequest(request, commandCWD, env)
 	if err != nil {
 		return 0, err
 	}
+	logLaunch(fmt.Sprintf("phase=spawn prep_ms=%d", time.Since(preparing).Milliseconds()))
 	return launch(native, stdin, stdout, stderr)
+}
+
+// fsHelperArg marks the launcher request that runs the filesystem helper.
+const fsHelperArg = "--codex-run-as-fs-helper"
+
+// launchKind mirrors Rust #62439's prepare_volumes classification, so a stuck
+// grant preparation can be told apart from a stuck command launch.
+func launchKind(command []string) string {
+	if len(command) >= 2 && command[1] == fsHelperArg {
+		return "fs_helper"
+	}
+	return "command"
 }
 
 // launch hands a prepared request to the native launcher and propagates the

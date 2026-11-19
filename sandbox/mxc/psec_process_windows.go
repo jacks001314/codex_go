@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -164,6 +165,7 @@ func launchNative(request *NativeRequest) (int, error) {
 		environmentPointer = &environmentBlock[0]
 	}
 
+	spawning := time.Now()
 	var processInfo windows.ProcessInformation
 	creationFlags := uint32(windows.CREATE_SUSPENDED | windows.CREATE_UNICODE_ENVIRONMENT | windows.EXTENDED_STARTUPINFO_PRESENT)
 	if err := windows.CreateProcess(nil, commandLine, nil, nil, true, creationFlags, environmentPointer, workingDirectory, &startup.startup.StartupInfo, &processInfo); err != nil {
@@ -188,6 +190,8 @@ func launchNative(request *NativeRequest) (int, error) {
 		_ = windows.TerminateProcess(processInfo.Process, 1)
 		return 0, fmt.Errorf("ResumeThread: %w", err)
 	}
+	logLaunch(fmt.Sprintf("phase=wait spawn_ms=%d", time.Since(spawning).Milliseconds()))
+	waiting := time.Now()
 	if _, err := windows.WaitForSingleObject(processInfo.Process, windows.INFINITE); err != nil {
 		return 0, fmt.Errorf("waiting for the MXC command: %w", err)
 	}
@@ -195,6 +199,7 @@ func launchNative(request *NativeRequest) (int, error) {
 	if err := windows.GetExitCodeProcess(processInfo.Process, &exitCode); err != nil {
 		return 0, fmt.Errorf("GetExitCodeProcess: %w", err)
 	}
+	logLaunch(fmt.Sprintf("phase=finished outcome=exited code=%d wait_ms=%d", exitCode, time.Since(waiting).Milliseconds()))
 	return int(exitCode), nil
 }
 

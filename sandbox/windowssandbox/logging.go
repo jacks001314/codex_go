@@ -23,6 +23,17 @@ var (
 	setupLogFile *os.File
 )
 
+// runtimeLog holds the launcher process's pinned sandbox log directory and
+// its cached appender. Rust #62439 keeps one rolling appender per launcher
+// process instead of reopening the daily log for every note.
+var (
+	runtimeLogMu   sync.Mutex
+	runtimeLogDir  string
+	runtimeLogInit bool
+	runtimeLogDay  string
+	runtimeLogFile *os.File
+)
+
 // RetainSetupLog routes every later LogNoteInDir call into file and stops the
 // daily rolling-log fallback, mirroring Rust setup_log_writer plus append_line
 // (Rust #42342). Provisioning never appends to a caller-controlled log entry.
@@ -67,6 +78,89 @@ func writeSetupLogLine(line string) (bool, error) {
 	return true, err
 }
 
+// InitRuntimeLog pins the sandbox log directory for this launcher process.
+// Rust #62439 ignores a relative home so diagnostics never land in the
+// caller's working directory.
+func InitRuntimeLog(codexHome string) {
+	if !filepath.IsAbs(codexHome) {
+		return
+	}
+	runtimeLogMu.Lock()
+	defer runtimeLogMu.Unlock()
+	if runtimeLogInit {
+		return
+	}
+	dir := SandboxDir(codexHome)
+	_ = os.MkdirAll(dir, 0o700)
+	runtimeLogDir = dir
+	runtimeLogInit = true
+}
+
+// LogRuntimeNote appends a launcher diagnostic through the pinned
+// directory's cached appender. It is a no-op before InitRuntimeLog, which
+// keeps an unconfigured helper from writing anywhere.
+func LogRuntimeNote(note string) error {
+	dir := pinnedRuntimeLogDir()
+	if dir == "" {
+		return nil
+	}
+	return LogNoteInDir(dir, note)
+}
+
+// CloseRuntimeLog releases the cached appender and unpins the runtime log. The
+// launcher reaches this only through process exit; tests use it so a pinned
+// handle cannot outlive its temporary home.
+func CloseRuntimeLog() {
+	runtimeLogMu.Lock()
+	defer runtimeLogMu.Unlock()
+	if runtimeLogFile != nil {
+		_ = runtimeLogFile.Close()
+	}
+	runtimeLogFile = nil
+	runtimeLogDay = ""
+	runtimeLogDir = ""
+	runtimeLogInit = false
+}
+func pinnedRuntimeLogDir() string {
+	runtimeLogMu.Lock()
+	defer runtimeLogMu.Unlock()
+	if !runtimeLogInit {
+		return ""
+	}
+	return runtimeLogDir
+}
+
+// writeRuntimeLogLine reuses the pinned appender for the pinned directory and
+// reports whether it consumed the line. Once the slot is initialized a failed
+// open drops the note instead of falling back to a caller-controlled log.
+func writeRuntimeLogLine(baseDir string, line string) bool {
+	runtimeLogMu.Lock()
+	defer runtimeLogMu.Unlock()
+	if !runtimeLogInit || !sameLogDir(runtimeLogDir, baseDir) {
+		return false
+	}
+	now := time.Now().UTC()
+	day := now.Format("2006-01-02")
+	if runtimeLogFile != nil && runtimeLogDay != day {
+		_ = runtimeLogFile.Close()
+		runtimeLogFile = nil
+	}
+	if runtimeLogFile == nil {
+		file, err := os.OpenFile(LogFilePathForUTCDate(baseDir, now), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			return true
+		}
+		runtimeLogFile = file
+		runtimeLogDay = day
+	}
+	_, _ = runtimeLogFile.WriteString(line)
+	return true
+}
+
+func sameLogDir(left string, right string) bool {
+	return strings.EqualFold(filepath.Clean(left), filepath.Clean(right))
+}
+
 func CurrentLogFilePath(codexHome string) string {
 	return CurrentLogFilePathForCodexHome(codexHome)
 }
@@ -90,6 +184,9 @@ func LogNoteInDir(baseDir string, note string) error {
 	}
 	if strings.TrimSpace(baseDir) == "" {
 		return ErrInvalidRequest
+	}
+	if writeRuntimeLogLine(baseDir, line) {
+		return nil
 	}
 	if err := os.MkdirAll(baseDir, 0o700); err != nil {
 		return err
