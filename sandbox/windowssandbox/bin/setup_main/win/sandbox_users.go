@@ -1,12 +1,13 @@
 package win
 
 import (
+	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 	"io"
+	"math/big"
 
 	"codex_go/sandbox/windowssandbox"
-	"github.com/sethvargo/go-password/password"
 )
 
 const (
@@ -64,8 +65,56 @@ func EnsureSandboxUser(username string, password string, log io.Writer) error {
 	return EnsureLocalGroupMember(SandboxUsersGroup, username)
 }
 
+// sandboxPasswordClasses mirrors Rust's random_password (#62094). NetUserSetInfo
+// enforces the machine's password policy, and a draw from the combined alphabet
+// alone can still omit a class the policy requires.
+var sandboxPasswordClasses = [4]string{
+	"ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+	"abcdefghijklmnopqrstuvwxyz",
+	"0123456789",
+	"!@#$%^&*()-_=+",
+}
+
+// SandboxPasswordLength is the generated password length.
+const SandboxPasswordLength = 24
+
+// RandomSandboxPassword returns a password that always contains an uppercase
+// letter, a lowercase letter, a digit, and a symbol, in a shuffled order.
 func RandomSandboxPassword() (string, error) {
-	return password.Generate(24, 6, 6, false, false)
+	password := make([]byte, 0, SandboxPasswordLength)
+	for _, class := range sandboxPasswordClasses {
+		index, err := randomPasswordIndex(len(class))
+		if err != nil {
+			return "", err
+		}
+		password = append(password, class[index])
+	}
+	alphabet := sandboxPasswordClasses[0] + sandboxPasswordClasses[1] + sandboxPasswordClasses[2] + sandboxPasswordClasses[3]
+	for len(password) < SandboxPasswordLength {
+		index, err := randomPasswordIndex(len(alphabet))
+		if err != nil {
+			return "", err
+		}
+		password = append(password, alphabet[index])
+	}
+	for i := len(password) - 1; i > 0; i-- {
+		index, err := randomPasswordIndex(i + 1)
+		if err != nil {
+			return "", err
+		}
+		password[i], password[index] = password[index], password[i]
+	}
+	return string(password), nil
+}
+
+// randomPasswordIndex draws an unbiased index with the system CSPRNG, matching
+// Rust's OsRng gen_range.
+func randomPasswordIndex(n int) (int, error) {
+	value, err := rand.Int(rand.Reader, big.NewInt(int64(n)))
+	if err != nil {
+		return 0, err
+	}
+	return int(value.Int64()), nil
 }
 
 func WriteSandboxUserSecrets(codexHome string, offlineUser string, offlinePassword string, onlineUser string, onlinePassword string, forProvisioning bool) error {

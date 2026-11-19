@@ -50767,11 +50767,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "sandbox/windowssandbox/bin/setup_main/win/sandbox_users.go RandomSandboxPassword draws one character from each of Rust's four classes (uppercase, lowercase, digit, and !@#$%^&*()-_=+), fills to 24 characters from the combined alphabet, and shuffles, so the machine password policy NetUserSetInfo enforces always sees every class (Rust #62094).",
+    "Indices come from crypto/rand through rand.Int, matching Rust's OsRng gen_range, so the draw is unbiased and uses the system CSPRNG.",
+    "tests: win TestRandomSandboxPasswordMeetsSandboxAccountPolicyLikeRust checks length, the allowed alphabet, and all four classes across 256 draws"
    ],
-   "kind": "runtime",
+   "kind": "security",
    "sha": "04cfdee311a062e052f13594661376db1196e661",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Ensure Windows sandbox passwords include every character class (#62094)"
   },
   {
@@ -50967,11 +50969,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "windowsandboxservice/service_windows.go hardenServiceDACL replaces the sandbox service's DACL right after the start-pending status is reported and fails startup when the policy cannot be applied, mirroring Rust's harden_service_dacl (#62122).",
+    "The SDDL D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;CCLCSWRPLORC;;;AU) gives SYSTEM and the built-in administrators full control while other authenticated users keep query config, query status, enumerate dependents, start, interrogate, and READ_CONTROL for setup.",
+    "tests: windowsandboxservice TestSandboxServiceDACLMatchesRustLikeRust walks the parsed DACL and pins the three allowed ACEs, their trustees (S-1-5-18, S-1-5-32-544, S-1-5-11), and their masks"
    ],
-   "kind": "runtime",
+   "kind": "security",
    "sha": "84a93030e7399b25c694263f904963443a50f6e6",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Restrict control of the Windows sandbox service (#62122)"
   },
   {

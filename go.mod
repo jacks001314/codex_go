@@ -47,7 +47,6 @@ require (
 	github.com/pion/webrtc/v4 v4.2.20
 	github.com/quic-go/quic-go v0.59.1
 	github.com/rivo/uniseg v0.4.7
-	github.com/sethvargo/go-password v0.3.1
 	github.com/shurlinet/go-clatter v0.6.0
 	github.com/spf13/pflag v1.0.10
 	github.com/things-go/go-socks5 v0.1.1

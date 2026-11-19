@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"sync/atomic"
 	"syscall"
 
@@ -138,6 +139,9 @@ func runServiceMain(state *ServiceState) error {
 	if err := state.ReportStatus(ServiceStartPending, NoError); err != nil {
 		return err
 	}
+	if err := hardenServiceDACL(state.serviceName); err != nil {
+		return err
+	}
 	broker := serviceBroker
 	if broker == nil {
 		return errors.New("the sandbox provisioning broker is not wired")
@@ -155,6 +159,32 @@ func runServiceMain(state *ServiceState) error {
 	stopped.Record(0)
 	LogInformation(EventServiceStopped, "The Codex sandbox service has stopped.")
 	return state.ReportStatus(ServiceStopped, NoError)
+}
+
+// sandboxServiceDACL mirrors Rust's harden_service_dacl (#62122). SYSTEM and
+// elevated administrators control the service; other authenticated users keep
+// the query, start, and interrogate access that sandbox setup needs.
+const sandboxServiceDACL = "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;CCLCSWRPLORC;;;AU)"
+
+// hardenServiceDACL replaces the sandbox service's DACL at startup. Startup
+// fails when the policy cannot be applied, matching Rust.
+func hardenServiceDACL(serviceName string) error {
+	descriptor, err := windows.SecurityDescriptorFromString(sandboxServiceDACL)
+	if err != nil {
+		return fmt.Errorf("create sandbox service permissions: %w", err)
+	}
+	dacl, _, err := descriptor.DACL()
+	if err != nil {
+		return fmt.Errorf("read sandbox service policy: %w", err)
+	}
+	if dacl == nil {
+		return errors.New("read sandbox service policy: no DACL")
+	}
+	if err := windows.SetNamedSecurityInfo(serviceName, windows.SE_SERVICE, windows.DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
+		return fmt.Errorf("apply sandbox service permissions: %w", err)
+	}
+	runtime.KeepAlive(descriptor)
+	return nil
 }
 
 func serviceControlProcedure(control uintptr, _ uintptr, _ uintptr, _ uintptr) uintptr {
