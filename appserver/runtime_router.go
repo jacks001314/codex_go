@@ -19432,6 +19432,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	// Rust build_mcp_tool_call_request_meta: MCP tool calls report the turn's
 	// metadata document in `_meta`.
 	options.MCPTurnMetadata = r.mcpTurnMetadataProvider(threadID, strings.TrimSpace(turnID))
+	// Rust #62392: the turn captures eligible Apps result bodies for its own
+	// credential instance only, behind the passthrough feature.
+	options.MCPResultBodyCapture = r.mcpResultBodyCaptureForTurn(cfg, threadID, strings.TrimSpace(turnID))
 	if searchSelection.provider == modelSearchHosted {
 		options.MCPTurnMetadata = searchCallTurnMetadata(options.MCPTurnMetadata, searchSelection.context)
 	}

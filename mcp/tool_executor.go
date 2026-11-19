@@ -166,6 +166,11 @@ type ToolExecutorOptions struct {
 	// a host-owned apps server; the record itself is written by the tool
 	// dispatcher.
 	CaptureResultMetadata bool
+	// CaptureResultBody exposes the server's own result so the turn can retain an
+	// eligible connector result body (Rust #62392). The caller decides
+	// eligibility; the executor only snapshots the raw result before any
+	// rewriting.
+	CaptureResultBody bool
 	// SessionID and WindowID are the turn's session identity and conversation
 	// window identity (`{thread_id}:{window_number}`); every MCP request reports
 	// them as `sessionId` and `windowId` in `_meta` (Rust #45409). They default
@@ -242,6 +247,7 @@ type ToolExecutor struct {
 	authElicitation               *AuthElicitationOptions
 	toolApproval                  *ToolApprovalOptions
 	captureResultMetadata         bool
+	captureResultBody             bool
 	connectorAuthFailureObserver  func(callID string)
 	mcpSourceObserver             func(source McpCallSource)
 	toolInputSchemaMaxBytes       int
@@ -299,6 +305,7 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 	executor.authElicitation = options.AuthElicitation
 	executor.toolApproval = options.ToolApproval
 	executor.captureResultMetadata = options.CaptureResultMetadata
+	executor.captureResultBody = options.CaptureResultBody
 	executor.connectorAuthFailureObserver = options.ConnectorAuthFailureObserver
 	executor.mcpSourceObserver = options.MCPSourceObserver
 	executor.safeImageDecoder = options.SafeImageDecoder
@@ -517,6 +524,12 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 		}
 		return nil, err
 	}
+	// Rust captures the eligible connector result body from the server's own
+	// result, before elicitation or truncation can rewrite it (#62392).
+	var resultBody *tool.ResultBodySource
+	if e.captureResultBody {
+		resultBody = resultBodySourceFromMCPResponse(response)
+	}
 	// Rust maybe_request_codex_apps_auth_elicitation: a Codex Apps tool call that
 	// failed because the connector needs authentication can prompt the client to
 	// authorize it; on acceptance the model receives a completed result to retry.
@@ -567,8 +580,29 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 		Data:                data,
 		LogPreview:          mcpLogPreview(body),
 		ToolResultMetadata:  e.capturedResultMetadata(response),
+		ResultBodySource:    resultBody,
 		OutputBudgetApplied: true,
 	}, nil
+}
+
+// resultBodySourceFromMCPResponse snapshots the parts of the server result that
+// a connector result body may replay (Rust CallToolResult handed to
+// capture_mcp_result).
+func resultBodySourceFromMCPResponse(response *MCPToolCallResponse) *tool.ResultBodySource {
+	if response == nil {
+		return nil
+	}
+	blocks := make([]any, 0, len(response.Content))
+	for _, content := range response.Content {
+		// The raw block keeps the fields the projection validates, including the
+		// `_meta` marker for encrypted content.
+		blocks = append(blocks, content.Raw)
+	}
+	return &tool.ResultBodySource{
+		Content:           blocks,
+		StructuredContent: response.StructuredContent,
+		IsError:           mcpToolCallIsError(response),
+	}
 }
 
 // capturedResultMetadata mirrors Rust #46010: the raw MCP result `_meta` is

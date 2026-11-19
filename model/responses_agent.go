@@ -484,6 +484,10 @@ type responsesAgentRequest struct {
 	UseResponsesLite     bool                     `json:"-"`
 	IncludeTimingMetrics bool                     `json:"-"`
 	BetaFeaturesHeader   string                   `json:"-"`
+	// ToolResults carries the Apps result bodies selected for this request's
+	// physical input (Rust `options.tool_results`, #62392). The bodies are
+	// spliced into the encoded request and never serialized as a field.
+	ToolResults []ToolResultAttachment `json:"-"`
 }
 
 // responsesPromptCacheOptions mirrors Rust's PromptCacheOptions (#59480).
@@ -1382,6 +1386,106 @@ func toolResultMetadataDestinationAllowed(baseURL string) bool {
 	return strings.HasSuffix(host, ".chatgpt.com") || strings.HasSuffix(host, ".chatgpt-staging.com")
 }
 
+// ConnectorResultGatewayURL is the first-party ChatGPT Codex endpoint that
+// accepts connector result bodies (Rust CHATGPT_CODEX_BASE_URL).
+const ConnectorResultGatewayURL = ChatGPTCodexBaseURL
+
+// connectorResultStagingGatewayURL is the staging twin of the Codex endpoint
+// that accepts connector result bodies (Rust is_local_connector_result_gateway).
+const connectorResultStagingGatewayURL = "https://chatgpt-staging.com/backend-api/codex"
+
+// isLocalConnectorResultGateway reports whether baseURL is the backend that
+// accepts connector result bodies for the session's own ChatGPT credential
+// (Rust is_local_connector_result_gateway, #62392).
+func isLocalConnectorResultGateway(baseURL string) bool {
+	trimmed := strings.TrimSuffix(strings.TrimSpace(baseURL), "/")
+	return trimmed == ConnectorResultGatewayURL || trimmed == connectorResultStagingGatewayURL
+}
+
+// isResultBodyProviderHeader reports the provider headers that do not change
+// which credential or account serves the request, so a result body may still
+// ride along (Rust ExecutedToolCalls::is_result_body_provider_header).
+func isResultBodyProviderHeader(name string) bool {
+	return strings.EqualFold(name, "version") || strings.EqualFold(name, "x-openai-originator")
+}
+
+// connectorResultDestinationAllowed reports whether this request may carry
+// connector result bodies: a first-party ChatGPT credential against the Codex
+// gateway, with no provider configuration that could redirect the request.
+// Rust sampling_result_owner (#62392) and #62421 require an empty provider query
+// parameter map because query parameters can retarget a request whose URL and
+// headers still satisfy the other checks.
+func (r *ResponsesAgentRunner) connectorResultDestinationAllowed() bool {
+	if r == nil || r.Provider == nil || !r.includeInternalMetadata() || !r.usesCodexBackend() {
+		return false
+	}
+	if r.AuthSnapshot == nil {
+		return false
+	}
+	switch r.AuthSnapshot.Mode() {
+	case "chatgpt", "chatgptAuthTokens":
+	default:
+		return false
+	}
+	if len(r.Provider.QueryParams) > 0 || !isLocalConnectorResultGateway(r.Provider.BaseURL) {
+		return false
+	}
+	// ProviderInfo merges `http_headers` / `env_http_headers` into the resolved
+	// header set, so this covers static configuration and the runtime routing
+	// headers alike.
+	for name := range r.Provider.Headers {
+		if !connectorResultProviderHeaderAllowed(name) {
+			return false
+		}
+	}
+	return true
+}
+
+// ConnectorResultAuthOwner names the credential instance an auth snapshot
+// represents, so a captured result body is only reused for the same account and
+// credential class (Rust AuthOwner identity, #62392). An empty value means the
+// snapshot cannot identify an owner, and no body is attached.
+func ConnectorResultAuthOwner(snapshot *auth.AuthDotJSON) string {
+	if snapshot == nil {
+		return ""
+	}
+	mode := snapshot.Mode()
+	switch mode {
+	case "chatgpt", "chatgptAuthTokens":
+	default:
+		return ""
+	}
+	accountID := ""
+	if snapshot.Tokens != nil {
+		if value, ok := snapshot.Tokens["chatgpt_account_id"].(string); ok {
+			accountID = strings.TrimSpace(value)
+		}
+	}
+	if accountID == "" {
+		return ""
+	}
+	return mode + "|" + accountID
+}
+
+// connectorResultAuthOwner reports the owner of this runner's credential.
+func (r *ResponsesAgentRunner) connectorResultAuthOwner() string {
+	if r == nil {
+		return ""
+	}
+	return ConnectorResultAuthOwner(r.AuthSnapshot)
+}
+
+// connectorResultProviderHeaderAllowed allows the runtime-applied routing
+// headers plus the informative provider headers Rust still accepts.
+func connectorResultProviderHeaderAllowed(name string) bool {
+	switch {
+	case strings.EqualFold(name, AccountRoutingHeader), strings.EqualFold(name, ResidencyHeaderName):
+		return true
+	default:
+		return isResultBodyProviderHeader(name)
+	}
+}
+
 // includeInternalMetadata reports whether the resolved provider may receive
 // internal tool metadata: the provider definition's runtime-only grant, or the
 // first-party HTTPS destination check (Rust #48344's
@@ -1588,10 +1692,10 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	afterPrewarm := request.PreviousResponseFromPrewarm
 	r.recordWebsocketContinuation(continuationMode, continuationReason, "generation", afterPrewarm)
 	message := marshalResponsesMessage(payload)
-	if len(request.ToolResults) > 0 {
+	if results := toolResultsForRequest(request, apiRequest); len(results) > 0 {
 		// The enriched frame carries private connector results, so it bypasses
 		// payload tracing like Rust's skipped `tool_results` field (#62388).
-		if enriched, ok := WithToolResults(string(message), request.ToolResults); ok {
+		if enriched, ok := WithToolResults(string(message), results); ok {
 			message = []byte(enriched)
 		}
 	}
@@ -2589,6 +2693,16 @@ func (r *ResponsesAgentRunner) buildResponsesAgentRequest(request *AgentRequest,
 	if !r.ProviderCapabilities.CustomToolGrammar {
 		apiRequest.Input = FlattenTextCustomToolOutputsJSON(apiRequest.Input)
 	}
+	// Rust scopes executed-tool metadata and selects result bodies against the
+	// physical input of this request, after every layout and bounding step
+	// (#62392). A connector-only projection keeps the same items and indexes;
+	// it only narrows the metadata each item carries.
+	if request.ScopeToolResultsForInput != nil {
+		apiRequest.Input = request.ScopeToolResultsForInput(apiRequest.Input)
+	}
+	if request.ToolResultsForInput != nil && r.connectorResultDestinationAllowed() {
+		apiRequest.ToolResults = request.ToolResultsForInput(apiRequest.Input, r.connectorResultAuthOwner())
+	}
 	return apiRequest, nil
 }
 
@@ -2944,6 +3058,18 @@ func responsesToolsContainNamespaceFunction(tools []any, namespace string, name 
 	return false
 }
 
+// toolResultsForRequest prefers the bodies selected for this request's physical
+// input over any caller-supplied attachments (Rust #62392).
+func toolResultsForRequest(request *AgentRequest, apiRequest *responsesAgentRequest) []ToolResultAttachment {
+	if apiRequest != nil && len(apiRequest.ToolResults) > 0 {
+		return apiRequest.ToolResults
+	}
+	if request == nil {
+		return nil
+	}
+	return request.ToolResults
+}
+
 func (r *ResponsesAgentRunner) newResponsesHTTPRequest(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest, accept string) (*http.Request, error) {
 	return r.newResponsesHTTPRequestWithToolResults(ctx, request, apiRequest, accept, true)
 }
@@ -2979,11 +3105,13 @@ func (r *ResponsesAgentRunner) newResponsesHTTPRequestWithToolResults(ctx contex
 	if err != nil {
 		return nil, err
 	}
-	if includeToolResults && request != nil && len(request.ToolResults) > 0 {
+	if includeToolResults {
 		// Authorized connector results ride along without re-encoding the
 		// ordinary request, so routing field order and tool schemas stay intact.
-		if enriched, ok := WithToolResults(string(body), request.ToolResults); ok {
-			body = []byte(enriched)
+		if results := toolResultsForRequest(request, apiRequest); len(results) > 0 {
+			if enriched, ok := WithToolResults(string(body), results); ok {
+				body = []byte(enriched)
+			}
 		}
 	}
 	requestBody := body

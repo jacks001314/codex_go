@@ -210,6 +210,15 @@ func (i *Invocation) DecodeArguments(target any) error {
 	return json.Unmarshal([]byte(i.Payload.Arguments), target)
 }
 
+// ResultBodySource is the host-side view of a completed MCP result used to
+// project an optional connector result body. Content blocks stay JSON-shaped so
+// the projection can validate each block before replaying it.
+type ResultBodySource struct {
+	Content           []any
+	StructuredContent any
+	IsError           bool
+}
+
 type Output struct {
 	CallID      string         `json:"callId"`
 	ToolName    ToolName       `json:"toolName"`
@@ -237,6 +246,11 @@ type Output struct {
 	// destination-filtered `_meta` on its own, and harness metadata is stripped
 	// per destination (#44336).
 	ToolResultMetadata any `json:"-"`
+	// ResultBodySource is the server's own MCP result for a call that may supply
+	// a connector result body to the session (Rust `CallToolResult` passed to
+	// `capture_mcp_result`, #62392). The turn projects and bounds it before
+	// retaining anything, and the raw result never reaches the model or logs.
+	ResultBodySource *ResultBodySource `json:"-"`
 	// ContainsExternalContext mirrors Rust's
 	// `ToolOutput::contains_external_context`: the output carries context the
 	// model did not author, so a host that disables memories on external

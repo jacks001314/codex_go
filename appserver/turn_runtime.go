@@ -13428,6 +13428,59 @@ func runtimeDependenciesFromSkillDependencies(dependencies *SkillDependencies) [
 	return out
 }
 
+// mcpResultBodyCaptureForTurn resolves this turn's permission to retain Apps
+// connector result bodies (Rust TaskKind::Regular's begin_turn, #62392): the
+// feature must be enabled, the session must hold a ChatGPT runtime credential,
+// and the recorder keeps the bodies under the account that serves the turn.
+func (r *RuntimeRouter) mcpResultBodyCaptureForTurn(cfg *config.Config, threadID string, turnID string) *turn.McpResultBodyCapture {
+	if r == nil || cfg == nil || strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
+		return nil
+	}
+	if !features.Enabled(cfg.FeatureSettings(), "connector_tool_result_passthrough") {
+		return nil
+	}
+	snapshot := r.requireAccount().AuthSnapshot()
+	owner := model.ConnectorResultAuthOwner(snapshot)
+	if recorder := r.executedToolCallRecorder(threadID); recorder != nil {
+		recorder.SetIncludeGeneralMetadata(features.Enabled(cfg.FeatureSettings(), "executed_tool_call_metadata"))
+		recorder.BeginResultBodyTurn(strings.TrimSpace(turnID), owner, owner != "")
+	}
+	if owner == "" {
+		return nil
+	}
+	runtimeAuth := mcp.RuntimeAuthFromSnapshot(snapshot)
+	return &turn.McpResultBodyCapture{
+		Enabled:         true,
+		SessionAuthMode: sessionAuthModeForResultBody(snapshot),
+		RuntimeAuth:     resultBodyRuntimeAuthBinding(runtimeAuth),
+	}
+}
+
+// sessionAuthModeForResultBody maps a stored auth mode onto the credential class
+// the MCP layer reports (Rust AuthMode).
+func sessionAuthModeForResultBody(snapshot *auth.AuthDotJSON) string {
+	if snapshot == nil {
+		return ""
+	}
+	switch snapshot.Mode() {
+	case "chatgpt":
+		return string(mcp.SessionAuthChatGPT)
+	case "chatgptAuthTokens":
+		return string(mcp.SessionAuthChatGPTAuthTokens)
+	default:
+		return ""
+	}
+}
+
+// resultBodyRuntimeAuthBinding projects the MCP layer's runtime credential onto
+// the turn-side capture permission.
+func resultBodyRuntimeAuthBinding(runtimeAuth *mcp.RuntimeAuth) *turn.RuntimeAuthBinding {
+	if runtimeAuth == nil {
+		return nil
+	}
+	return &turn.RuntimeAuthBinding{UsesCodexBackend: runtimeAuth.UsesCodexBackend}
+}
+
 func (r *RuntimeRouter) runtimeMCPServerConfigsForSkills(cfg *config.Config) map[string]mcp.RuntimeServerConfig {
 	values := map[string]any{}
 	if cfg != nil && cfg.Values != nil {

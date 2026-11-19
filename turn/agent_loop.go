@@ -751,12 +751,24 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			// Rust #61562/#61587: the model runner pairs Pre/PostModelRequest
 			// hooks per opened response stream. One sampling iteration is one
 			// generation, so its request id stays stable across retries.
-			SamplingKind:                 model.SamplingKindSampling,
-			RequestID:                    uuid.NewString(),
-			OnModelRequest:               bridgeModelRequestHook(request.OnModelRequest, request.ThreadID, request.TurnID, request.CWD),
-			RequiredCyberAccessPrograms:  append([]string(nil), request.RequiredCyberAccessPrograms...),
-			ClientMetadata:               cloneStringMap(clientMetadata),
-			MCPAttribution:               l.mcpAttributionSnapshot(),
+			SamplingKind:                model.SamplingKindSampling,
+			RequestID:                   uuid.NewString(),
+			OnModelRequest:              bridgeModelRequestHook(request.OnModelRequest, request.ThreadID, request.TurnID, request.CWD),
+			RequiredCyberAccessPrograms: append([]string(nil), request.RequiredCyberAccessPrograms...),
+			ClientMetadata:              cloneStringMap(clientMetadata),
+			MCPAttribution:              l.mcpAttributionSnapshot(),
+			ToolResultsForInput: func(input []any, owner string) []model.ToolResultAttachment {
+				if l == nil || l.executedToolCalls == nil {
+					return nil
+				}
+				return l.executedToolCalls.ResultBodyAttachments(owner, input)
+			},
+			ScopeToolResultsForInput: func(input []any) []any {
+				if l == nil || l.executedToolCalls == nil {
+					return input
+				}
+				return l.executedToolCalls.ScopeToolResultsForInput(input)
+			},
 			Trace:                        request.Trace,
 			AttestationProvider:          request.AttestationProvider,
 			OutputSchema:                 request.OutputSchema,

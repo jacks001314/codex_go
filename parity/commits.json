@@ -50894,6 +50894,42 @@
     "tests: sandbox/integrity TestRunIntegrityChecks*",
     "plan: update/plan_2026_11_19.md batch 1"
    ]
+  },
+  {
+   "sha": "d1d1ba0b837d34f314b7f469896e8babbc91f949",
+   "subject": "Pass eligible connector results through to ChatGPT Responses (#62392)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "mcp/tool_executor.go snapshots the server's own result (content blocks plus structuredContent and is_error) through CaptureResultBody before auth elicitation or truncation rewrites it.",
+    "turn/result_body_turn.go keeps a per-turn store bounded to 256 bodies and 1 MiB, keys each body by a random local id, and selects attachments by inspecting the executed-tool rows of the exact input slice.",
+    "turn/result_body_capture.go binds the store to the credential instance that serves the turn; a request from another account attaches nothing, and starting a turn drops the previous bodies.",
+    "turn/tool_dispatcher.go attaches the local result id to the direct call's ToolResultMetadata after a successful call, and skips recording calls without a body when only passthrough is enabled.",
+    "turn/result_body_capture.go ScopeToolResultsForInput plus model.ScopeExecutedToolCallsForRequest project a connector-only metadata subset when ordinary executed-tool metadata is off, without moving or dropping items.",
+    "model/responses_agent.go selects result bodies from the physical request input after layout, bounding and scoping, and only for the ChatGPT credential against the Codex gateway.",
+    "turn/tools.go resolves mcpResultBodyCaptureAllowed per server from features.connector_tool_result_passthrough plus ServerConfig.PermitsResultBody.",
+    "tests: turn TestResultBodyTurnBoundsAndOwnerLikeRust, TestResultBodyTurnAttachmentsAddressRowsLikeRust, TestScopeToolResultsForInputKeepsOnlyCapturedBodiesLikeRust, TestScopeToolResultsForInputKeepsGeneralMetadataLikeRust, TestBeginResultBodyTurnReplacesStoreLikeRust, TestDispatcherCapturesConnectorResultBodyLikeRust, TestMCPResultBodyCaptureRequiresFeatureAndServerLikeRust; model TestBuildResponsesAgentRequestSelectsToolResultsLikeRust, TestToolResultsForRequestPrefersSelectedLikeRust; mcp TestResultBodySourceFromMCPResponseLikeRust",
+    "plan: update/plan_2026_11_19.md batch 9"
+   ]
+  },
+  {
+   "sha": "770c38d0b16efc78e7a1e77868605ab457b26401",
+   "subject": "Reject provider query parameters for connector result passthrough (#62421)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "model/responses_agent.go connectorResultDestinationAllowed rejects a non-empty provider query parameter map, because query parameters can retarget a request whose URL and headers still pass the other checks.",
+    "model/responses_agent.go checks the ChatGPT credential variants directly through AuthSnapshot.Mode() (chatgpt / chatgptAuthTokens), requires the Codex backend and first-party auth path, and requires the account identity that owns the captured bodies.",
+    "tests: model TestConnectorResultDestinationAllowedLikeRust covers the provider-url, api-key, provider-owned credential, static auth, unknown-header and query-parameter rejections plus the accepted runtime routing headers; TestConnectorResultAuthOwnerLikeRust covers the owner identity.",
+    "not_applicable: codex-rs/http-client/src/outbound_proxy.rs only widens a Rust test helper's argument so a direct system-proxy decision can be cached; Go's HTTP client has no system-proxy decision cache for tests to seed.",
+    "plan: update/plan_2026_11_19.md batch 9"
+   ]
   }
  ]
 }

@@ -94,7 +94,7 @@ func (d *ToolDispatcher) observeNonDispatchedItem(item *model.AgentItem) {
 // completeDirectCall attaches the prepared direct record to the invocation's own
 // output and releases the pending slot. Fatal errors release the slot without an
 // output, matching Rust's permit drop.
-func (d *ToolDispatcher) completeDirectCall(invocation *tool.Invocation, response *ToolResponseItem, resultMetadata any) {
+func (d *ToolDispatcher) completeDirectCall(invocation *tool.Invocation, response *ToolResponseItem, output *tool.Output) {
 	if d == nil || d.executedToolCalls == nil || invocation == nil {
 		return
 	}
@@ -107,16 +107,54 @@ func (d *ToolDispatcher) completeDirectCall(invocation *tool.Invocation, respons
 	if call != nil {
 		// Rust #46010 (parallel.rs): a late result's raw `_meta` is attached to
 		// the recorded call before the record reaches the invocation's output.
-		if resultMetadata != nil {
-			call.SetToolResultMetadata(model.NewToolResultMetadata(resultMetadata))
+		metadata := model.NewToolResultMetadata(outputToolResultMetadata(output))
+		// Rust #62392: an eligible connector result keeps a local body binding on
+		// the same record, so a follow-up request in this turn can attach the body.
+		if id, ok := d.captureConnectorResultBody(output); ok {
+			metadata = metadata.WithResultID(id)
 		}
-		if response != nil {
+		if metadata.HasObservation() {
+			call.SetToolResultMetadata(metadata)
+		}
+		if response != nil && call != nil {
 			d.executedToolCalls.AttachDirectCallToOutput(response, call, permit)
 		}
 	}
 	if permit != nil {
 		permit.Release()
 	}
+}
+
+// outputToolResultMetadata reports the raw `_meta` snapshot an output exposes.
+func outputToolResultMetadata(output *tool.Output) any {
+	if output == nil {
+		return nil
+	}
+	return output.ToolResultMetadata
+}
+
+// captureConnectorResultBody retains the result body of a successful direct MCP
+// call for the current turn (Rust capture_mcp_result, #62392). Code Mode calls
+// bind their bodies to the exec/wait output instead, so they are skipped here.
+func (d *ToolDispatcher) captureConnectorResultBody(output *tool.Output) (string, bool) {
+	if d == nil || d.executedToolCalls == nil || output == nil {
+		return "", false
+	}
+	if output.ResultBodySource == nil || !output.Success {
+		return "", false
+	}
+	// A body is only meaningful for the `_meta`-shaped Apps call that produced
+	// it: the recorder decides whether this turn keeps any.
+	source := model.ToolResultBodySource{
+		Content:           output.ResultBodySource.Content,
+		StructuredContent: output.ResultBodySource.StructuredContent,
+		IsError:           output.ResultBodySource.IsError,
+	}
+	owner := d.executedToolCalls.ResultBodyOwnerForTurn(d.turnID)
+	if owner == "" {
+		return "", false
+	}
+	return d.executedToolCalls.CaptureResultBody(d.turnID, owner, source)
 }
 
 // readinessFailureResult reports a readiness failure the model must see as the
@@ -1404,7 +1442,7 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 		HandlerExecuted: handlerExecuted,
 		Aborted:         aborted,
 	}
-	d.completeDirectCall(invocation, result.Response, output.ToolResultMetadata)
+	d.completeDirectCall(invocation, result.Response, output)
 	if d.onToolCompleted != nil {
 		d.onToolCompleted(toolCtx, result)
 	}

@@ -106,6 +106,10 @@ type ToolRegistryOptions struct {
 	// #45409). WindowID is the same `{thread_id}:{window_number}` string the
 	// turn's Responses client metadata reports as `x-codex-window-id`.
 	WindowID string
+	// MCPResultBodyCapture permits direct Apps calls to retain their connector
+	// result body for this turn (Rust connector_tool_result_passthrough,
+	// #62392). Nil leaves every call without a captured body.
+	MCPResultBodyCapture *McpResultBodyCapture
 	// MCPConnectorAuthFailureObserver reports a host-owned apps call whose raw
 	// result is a trusted connector authentication failure, so the caller can
 	// classify the call for analytics (Rust #45716). Nil leaves the report off.
@@ -1156,6 +1160,35 @@ func mcpResultMetadataCaptureAllowed(options *ToolRegistryOptions, serverName st
 		mcp.IsCodexAppsMCPServerName(serverName)
 }
 
+// mcpResultBodyCaptureAllowed reports whether one server's calls may retain
+// their connector result body (Rust PreparedMcpCall::permits_result_body,
+// #62392): the passthrough feature must be on, the caller must have allowed the
+// result-metadata capture this call rides with, and the server's transport and
+// auth must present only the runtime ChatGPT credential.
+func mcpResultBodyCaptureAllowed(options *ToolRegistryOptions, serverName string) bool {
+	capture := options.MCPResultBodyCapture
+	if capture == nil || !capture.Enabled || options.MCPService == nil {
+		return false
+	}
+	config, ok := options.MCPService.ServerConfigForServer(serverName)
+	if !ok {
+		return false
+	}
+	return config.PermitsResultBody(
+		mcp.SessionAuthMode(capture.SessionAuthMode),
+		resultBodyRuntimeAuth(capture.RuntimeAuth),
+	)
+}
+
+// resultBodyRuntimeAuth maps the turn's runtime credential binding onto the MCP
+// layer's view. A turn without one cannot supply result bodies.
+func resultBodyRuntimeAuth(binding *RuntimeAuthBinding) *mcp.RuntimeAuth {
+	if binding == nil {
+		return nil
+	}
+	return &mcp.RuntimeAuth{UsesCodexBackend: binding.UsesCodexBackend}
+}
+
 func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, tools []mcp.RuntimeToolInfo, exposure tool.Exposure) error {
 	tools = mcp.NormalizeRuntimeToolsForModel(tools)
 	// Rust's per-server opt-in marks every tool from the server as safe for
@@ -1167,6 +1200,9 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 		// Rust #46010: the raw result metadata is captured only when analytics is
 		// enabled and the call belongs to the host-owned apps server.
 		captureResultMetadata := mcpResultMetadataCaptureAllowed(options, info.ServerName)
+		// Rust #62392: a direct Apps call also retains its raw result for the
+		// turn's connector result-body store when the passthrough feature is on.
+		captureResultBody := captureResultMetadata && mcpResultBodyCaptureAllowed(options, info.ServerName)
 		var resolvedServer *mcp.ResolvedServer
 		if options.MCPService != nil {
 			if registration, ok := options.MCPService.ResolvedServerForServer(info.ServerName); ok {
@@ -1228,6 +1264,7 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 			ConfirmationPolicies:              mcpActorConfirmationPolicies(options.ModelConfirmationPolicies),
 			SuppressActorConfirmationPolicies: options.SuppressActorConfirmationPolicies,
 			CaptureResultMetadata:             captureResultMetadata,
+			CaptureResultBody:                 captureResultBody,
 			SessionID:                         options.SessionID,
 			WindowID:                          options.WindowID,
 			ConnectorAuthFailureObserver:      options.MCPConnectorAuthFailureObserver,

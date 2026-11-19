@@ -88,6 +88,19 @@ type ExecutedToolCallRecorder struct {
 	// been folded into the attribution recorder, so a resume or fork cannot
 	// re-seed it mid-thread.
 	mcpAttributionSeeded bool
+	// includeGeneralMetadata reports that ordinary executed-tool metadata is
+	// enabled, so a request carries every observation rather than the
+	// connector-only projection (Rust
+	// ExecutedToolCallRecorderState::include_general_metadata, #62392).
+	includeGeneralMetadata bool
+	// capturesResultBodies reports that the Apps connector result-body
+	// passthrough feature is on, which alone keeps the recorder alive and scopes
+	// request metadata to rows with a captured body (Rust #62392).
+	capturesResultBodies bool
+	// resultBodyTurn is the current turn's bounded body store. It is replaced at
+	// every turn start and dropped when the turn ends, so private bytes never
+	// outlive their turn.
+	resultBodyTurn *ResultBodyTurn
 }
 
 // executedToolCallLifetime is the identity token of one enabled recorder state.
@@ -500,6 +513,11 @@ func (r *ExecutedToolCallRecorder) AttachDirectCallToOutput(item any, call *mode
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.lifetime == nil || permit == nil || permit.lifetime != r.lifetime {
+		return
+	}
+	// Rust #62392: when only the connector passthrough is enabled, the recorder
+	// keeps just the calls that carry a captured result body.
+	if r.capturesResultBodies && !r.includeGeneralMetadata && call.ToolResultID() == "" {
 		return
 	}
 	complete := call.HasCompleteInventory()

@@ -236,6 +236,75 @@ func WithToolResults(body string, results []ToolResultAttachment) (string, bool)
 	return enriched.String(), true
 }
 
+// RequestInputExecutedToolCalls reports the executed-tool rows an in-memory
+// request item carries, including their local result-body bindings (Rust
+// ResponseItem::executed_tool_call_metadata). Serialized items cannot carry a
+// binding, so a decoded map yields none.
+func RequestInputExecutedToolCalls(item any) []ExecutedToolCall {
+	carrier, ok := item.(ExecutedToolCallCarrier)
+	if !ok || carrier == nil {
+		return nil
+	}
+	return carrier.ExecutedToolCalls()
+}
+
+// ScopeExecutedToolCallsForRequest returns the request input with executed-tool
+// metadata narrowed to the rows that carry a local result body (Rust
+// scope_request_metadata, #62392). Items keep their identity and position, so
+// result-body attachments still address the same indexes. A connector-only
+// subset cannot claim a cell's complete inventory, so the projection drops the
+// completeness marker and the cell association whenever it removed anything.
+func ScopeExecutedToolCallsForRequest(items []any) []any {
+	scoped := make([]any, len(items))
+	copy(scoped, items)
+	for index, item := range items {
+		carrier, ok := item.(ExecutedToolCallCarrier)
+		if !ok || carrier == nil {
+			continue
+		}
+		calls := carrier.ExecutedToolCalls()
+		if len(calls) == 0 {
+			continue
+		}
+		kept := make([]ExecutedToolCall, 0, len(calls))
+		for _, call := range calls {
+			if call.ToolResultID() == "" {
+				continue
+			}
+			kept = append(kept, call)
+		}
+		if len(kept) == len(calls) && carrierHasCompleteInventory(carrier) {
+			continue
+		}
+		clone := carrier.CloneForExecutedToolCallPrompt()
+		if clone == nil {
+			continue
+		}
+		clone.ReplaceExecutedToolCalls(kept)
+		if narrowed, ok := clone.(interface {
+			SetExecutedToolCallCell(string)
+			ClearExecutedToolCallsComplete()
+		}); ok {
+			narrowed.ClearExecutedToolCallsComplete()
+			if len(kept) == 0 {
+				narrowed.SetExecutedToolCallCell("")
+			}
+		}
+		scoped[index] = clone
+	}
+	return scoped
+}
+
+// carrierHasCompleteInventory reports whether a carrier claims the cell's full
+// ordered call inventory.
+func carrierHasCompleteInventory(carrier ExecutedToolCallCarrier) bool {
+	agentItem, ok := carrier.(*AgentItem)
+	if !ok || agentItem == nil {
+		return false
+	}
+	return agentItem.toolCallsComplete != nil && *agentItem.toolCallsComplete
+}
+
 // jsonFieldSpan returns the raw value stored under key in the JSON object body
 // and the value's byte offset within body.
 func jsonFieldSpan(body string, key string) (string, int, bool) {

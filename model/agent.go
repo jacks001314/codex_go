@@ -126,6 +126,20 @@ type AgentRequest struct {
 	// modelRequestHooks carries the per-Run hook state shared by retries.
 	modelRequestHooks *modelRequestHooks
 	ClientMetadata    map[string]string
+	// ToolResultsForInput selects the Apps result bodies for this request's
+	// physical input (Rust sampling_result_bodies, #62392). The runner calls it
+	// after the input layout, bounding and metadata scoping are final, and only
+	// for a first-party ChatGPT request against the Codex gateway that may carry
+	// internal metadata. It must return attachments whose indexes address that
+	// same slice.
+	// owner names the credential instance serving the request, so a captured
+	// body is only reused for the account and mode that captured it.
+	ToolResultsForInput func(input []any, owner string) []ToolResultAttachment
+	// ScopeToolResultsForInput projects executed-tool metadata for the request
+	// copy (Rust scope_request_metadata, #62392). The runner applies it to the
+	// physical input before encoding, so a connector-only projection never
+	// reaches persisted history. Nil leaves the metadata untouched.
+	ScopeToolResultsForInput func(input []any) []any
 	// ToolResults carries optional Apps result bodies for executed-tool rows in
 	// this request's input (Rust ResponsesOptions::tool_results, #62388). The
 	// bodies are spliced into the encoded request only for the resolved
