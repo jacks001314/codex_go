@@ -149,6 +149,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithRequestCountry(agent model.Age
 		modelReviewer.reviewEndpoint = r.guardianReviewEndpointForTurn
 		modelReviewer.specialty = r.guardianReviewModelSpecialtyForTurn
 		modelReviewer.maxToolCallLagFor = r.guardianMaxToolCallLagForTurn
+		modelReviewer.turnTrigger = r.analyticsTurnTriggerForTurn
 		modelReviewer.reviewTimeout = r.guardianReviewTimeoutForTurn
 		modelReviewer.nodeReplAutoReviewRequired = r.guardianReviewNodeReplAutoReviewRequiredForTurn
 		modelReviewer.fullAccess = r.guardianFullAccessForTurn

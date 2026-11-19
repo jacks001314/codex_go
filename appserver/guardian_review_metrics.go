@@ -53,6 +53,10 @@ type guardianReviewMetricAttribution struct {
 	TimeToFirstToken *time.Duration
 	// AttemptCount is the number of model attempts made for this review.
 	AttemptCount int
+	// TurnTrigger is the trigger recorded when the reviewed turn started.
+	// Missing or empty reports `unknown`; only a bounded set of automation
+	// triggers becomes `automation` and every other value `other` (Rust #62225).
+	TurnTrigger *string
 }
 
 // emitGuardianReviewMetrics mirrors emit_guardian_review_metrics.
@@ -69,9 +73,10 @@ func (r *modelGuardianReviewer) emitGuardianReviewMetrics(attribution guardianRe
 	if toolTag, ok := guardianReviewMCPToolTag(attribution.ReviewedAction); ok {
 		counterTags["tool"] = toolTag
 	}
-	// Rust's guardian_review_count carries context_changed; the duration and
-	// token histograms do not.
+	// Rust's guardian_review_count carries context_changed and turn_origin; the
+	// duration and token histograms do not.
 	counterTags["context_changed"] = guardianBoolTag(attribution.ContextChanged)
+	counterTags["turn_origin"] = guardianTurnOriginTag(attribution.TurnTrigger)
 	if durationMS < 0 {
 		durationMS = 0
 	}
@@ -340,6 +345,25 @@ type guardianTokenSample struct {
 	value     int
 }
 
+// guardianTurnOriginTag mirrors Rust #62225's trigger classification. The tag
+// describes where the turn came from, not what a later steer put into it, and
+// client-supplied trigger strings never become metric labels, so the label set
+// stays bounded.
+func guardianTurnOriginTag(trigger *string) string {
+	if trigger == nil {
+		return "unknown"
+	}
+	switch *trigger {
+	case "":
+		return "unknown"
+	case "automation", "mcp_event", "automation_cron_scheduled", "automation_cron_run_now",
+		"automation_heartbeat_scheduled", "automation_heartbeat_run_now":
+		return "automation"
+	default:
+		return "other"
+	}
+}
+
 // newGuardianReviewAttribution builds the per-review attribution: Rust's
 // GuardianReviewAnalyticsResult session half plus the reviewed action and
 // approval-request source. The zero outcome mirrors
@@ -359,6 +383,9 @@ func (r *modelGuardianReviewer) newGuardianReviewAttribution(threadID, turnID st
 		attribution.SessionKind, attribution.HadPriorContext = runner.reviewSessionAttribution()
 	} else {
 		attribution.SessionKind = "none"
+	}
+	if r.turnTrigger != nil {
+		attribution.TurnTrigger = r.turnTrigger(threadID, turnID)
 	}
 	attribution.ApprovalSource = "main_turn"
 	if r.subagentThread != nil && r.subagentThread(threadID) {

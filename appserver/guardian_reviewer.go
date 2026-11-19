@@ -198,9 +198,12 @@ type modelGuardianReviewer struct {
 	// maxToolCallLagFor, when set, resolves the bound for the review's turn
 	// (configured value -> model catalog default -> Rust's default).
 	maxToolCallLagFor func(threadID, turnID string) int
-	notify            func(threadID string, event *state.Event)
-	logAssessment     func(threadID string, event *state.Event)
-	interrupt         func(threadID, turnID, reason string)
+	// turnTrigger resolves the trigger recorded when the reviewed turn started,
+	// so the review counter can separate automation-triggered turns (Rust #62225).
+	turnTrigger   func(threadID, turnID string) *string
+	notify        func(threadID string, event *state.Event)
+	logAssessment func(threadID string, event *state.Event)
+	interrupt     func(threadID, turnID, reason string)
 	// activeTurnID resolves the turn Guardian denial accounting applies to
 	// (Rust #44866): a review dispatched by a cell from an earlier turn counts
 	// against the turn that is active now. Nil keeps the review's own turn.
