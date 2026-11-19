@@ -95,11 +95,33 @@ func TestGuardianReviewStaleRetrySkipsServiceBackoffLikeRust(t *testing.T) {
 	if !strings.Contains(message, "authorization changed before approval could be applied") {
 		t.Fatalf("message = %q, want the stale-authorization denial", message)
 	}
+	assertGuardianStaleAuthorizationGuidance(t, message)
 	if calls != guardianMaxReviewAttempts {
 		t.Fatalf("agent calls = %d, want %d (shared attempt budget)", calls, guardianMaxReviewAttempts)
 	}
 	if elapsed >= 200*time.Millisecond {
 		t.Fatalf("stale-context retries took %v, want no service backoff", elapsed)
+	}
+}
+
+// Rust #62099: a review abandoned after repeated authorization changes reports
+// stale-authorization guidance instead of the generic review-failure text, for
+// both repeated approvals and repeated denials.
+func assertGuardianStaleAuthorizationGuidance(t *testing.T, message string) {
+	t.Helper()
+	for _, want := range []string{
+		"authorization changed before approval could be applied",
+		"The action did not run",
+		"this is not a policy denial",
+		"retry once through Guardian",
+		"Do not bypass approval or repeatedly retry a failed review",
+	} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("message = %q, want %q", message, want)
+		}
+	}
+	if strings.Contains(message, "Do not bypass the approval check") {
+		t.Fatalf("message = %q, want the stale-authorization guidance without the generic review-failure text", message)
 	}
 }
 
@@ -163,6 +185,7 @@ func TestGuardianReviewStaleDenialsDoNotCountTowardDenialLimitLikeRust(t *testin
 	if decision != state.DecisionDenied || !strings.Contains(message, "authorization changed before approval could be applied") {
 		t.Fatalf("review = %q/%q, want the stale-authorization denial", decision, message)
 	}
+	assertGuardianStaleAuthorizationGuidance(t, message)
 	for denial := 1; denial <= state.MaxConsecutiveDenialsPerTurn; denial++ {
 		action := breaker.RecordDenial("turn-deny-budget")
 		if denial < state.MaxConsecutiveDenialsPerTurn && action.InterruptTurn {

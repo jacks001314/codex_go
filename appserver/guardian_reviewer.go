@@ -535,10 +535,24 @@ func guardianReviewFailureRationale(message string) string {
 	return "Automatic approval review failed: " + strings.TrimSpace(message)
 }
 
+// guardianStaleAuthorizationInstructions mirrors Rust's
+// STALE_AUTHORIZATION_INSTRUCTIONS (#62099): a review that could not finish
+// because authorization changed is guidance, not a policy denial.
+const guardianStaleAuthorizationInstructions = "The action did not run. Guardian could not complete its review because authorization " +
+	"changed; this is not a policy denial. If current instructions authorize the action, " +
+	"retry once through Guardian. If authorization is unclear, resolve that uncertainty before " +
+	"proceeding. Do not bypass approval or repeatedly retry a failed review."
+
 // guardianReviewFailureMessage mirrors Rust's failed-review rejection: the
 // rationale, then the review-failure instructions.
 func guardianReviewFailureMessage(message string) string {
 	return guardianReviewFailureRationale(message) + "\n" + guardianReviewFailureInstructions
+}
+
+// guardianStaleAuthorizationFailureMessage is the failed-review rejection for a
+// review abandoned after repeated authorization changes (Rust #62099).
+func guardianStaleAuthorizationFailureMessage(message string) string {
+	return guardianReviewFailureRationale(message) + "\n" + guardianStaleAuthorizationInstructions
 }
 
 // SetMaxToolCallLag configures the per-thread stale-score bound (Rust
@@ -1984,7 +1998,7 @@ reviewAttempt:
 		attribution.FailureReason = "stale_authorization"
 		emitReviewMetrics()
 		r.emitWarning(threadID, rationale)
-		return state.DecisionDenied, nil, guardianReviewFailureMessage(message), nil
+		return state.DecisionDenied, nil, guardianStaleAuthorizationFailureMessage(message), nil
 	}
 	if err != nil && attempts < guardianMaxReviewAttempts && isContextWindowExceededError(err) {
 		// Rust #41215 rolls the reviewer over before the next review. Go has no
