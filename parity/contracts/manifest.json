@@ -1,6 +1,6 @@
 {
  "schemaVersion": 1,
- "targetRustCommit": "59ac39addbbcd3499319c805a916846ca8ac5fef",
+ "targetRustCommit": "c764c44a0559b36e016efefcfeb473966162e5d5",
  "contracts": [
   {
    "id": "features",
@@ -2352,28 +2352,28 @@
    "phase": "P1",
    "status": "complete",
    "verifier": "TestGuardianRetrievalSearchesUnsubscribedPostsThroughCutoffLikeRust;TestGuardianSubscriptionToolsUseCapturedCatalogLikeRust;TestLocalBoardFixedReadViewFreezesCatalogAndCutoffLikeRust;TestGuardianChannelSelectionReplacesCatalogMembershipLikeRust;TestGuardianChannelSelectionPreservesLaterChannelsLikeRust;TestGuardianSubscriptionsReplacePreservesOutsideChannelsLikeRust"
-   },
-   {
-    "id": "world-state-skill-catalog-delta-grants",
-    "kind": "shared-fixtures",
-    "rustPaths": [
-     "ext/skills/src/catalog_delta.rs",
-     "ext/skills/src/render_dedup.rs",
-     "ext/skills/src/world_state_catalogs.rs",
-     "ext/skills/tests/skills_extension/catalog_delta_tests.rs",
-     "core/src/session/turn_context.rs"
-    ],
-    "goPaths": [
-     "appserver/skill_catalog_delta.go",
-     "appserver/skill_catalog_delta_grants_like_rust_test.go",
-     "appserver/permission_grants.go",
-     "prompt/skills_render.go",
-     "prompt/skills_catalog_policy.go",
-     "prompt/skills_grants_like_rust_test.go"
-    ],
-    "phase": "P2",
-    "status": "complete",
-    "verifier": "TestSkillCatalogGrantMarksExecutorAndRepoHostRowsLikeRust;TestSkillCatalogDeltaGrantWithdrawalAndRestorationLikeRust;TestSkillCatalogDeltaLegacyFilesystemRevalidatesMissingRowsOnceLikeRust;TestSkillCatalogDeltaUnavailableCatalogWithdrawsGrantsLikeRust;TestSkillCatalogDeltaGrantNotAppliedToPreviouslyShownUngrantedLikeRust;TestSkillFilesystemGrantsForTurnLikeRust"
+  },
+  {
+   "id": "world-state-skill-catalog-delta-grants",
+   "kind": "shared-fixtures",
+   "rustPaths": [
+    "ext/skills/src/catalog_delta.rs",
+    "ext/skills/src/render_dedup.rs",
+    "ext/skills/src/world_state_catalogs.rs",
+    "ext/skills/tests/skills_extension/catalog_delta_tests.rs",
+    "core/src/session/turn_context.rs"
+   ],
+   "goPaths": [
+    "appserver/skill_catalog_delta.go",
+    "appserver/skill_catalog_delta_grants_like_rust_test.go",
+    "appserver/permission_grants.go",
+    "prompt/skills_render.go",
+    "prompt/skills_catalog_policy.go",
+    "prompt/skills_grants_like_rust_test.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestSkillCatalogGrantMarksExecutorAndRepoHostRowsLikeRust;TestSkillCatalogDeltaGrantWithdrawalAndRestorationLikeRust;TestSkillCatalogDeltaLegacyFilesystemRevalidatesMissingRowsOnceLikeRust;TestSkillCatalogDeltaUnavailableCatalogWithdrawsGrantsLikeRust;TestSkillCatalogDeltaGrantNotAppliedToPreviouslyShownUngrantedLikeRust;TestSkillFilesystemGrantsForTurnLikeRust"
   },
   {
    "id": "tool-options-apply-patch-catalog-gate",
@@ -2542,7 +2542,7 @@
    ],
    "phase": "P1",
    "status": "complete",
-      "verifier": "TestOverlappingTurnsKeepTheirOwnCommandTrackingLikeRust;TestTerminalTurnNotificationsCarryStartTimeLikeRust"
+   "verifier": "TestOverlappingTurnsKeepTheirOwnCommandTrackingLikeRust;TestTerminalTurnNotificationsCarryStartTimeLikeRust"
   },
   {
    "id": "app-server-turn-diff-steering",
@@ -2773,11 +2773,11 @@
    ],
    "goPaths": [
     "agent/tools_v2.go",
-    "agent/send_message_acknowledgement_like_rust_test.go"
+    "agent/send_message_empty_success_like_rust_test.go"
    ],
    "phase": "P1",
    "status": "complete",
-   "verifier": "TestSendMessageAcknowledgesDeliveryLikeRust"
+   "verifier": "TestSendMessageReturnsEmptySuccessLikeRust"
   },
   {
    "id": "network-proxy-tool-call-attribution",
@@ -2959,32 +2959,32 @@
    "status": "complete",
    "verifier": "TestUsageAccountingExhaustedForTurnFailsOnlyThatTurnLikeRust;TestAgentLoopSettlesEachResponseWithItsOwnUsageLikeRust;TestAgentLoopKeepsSettledResponseWhenAccountingFailsLikeRust;TestResponsesRunnerPreemptionKeepsObservedCompletionLikeRust"
   },
- {
-  "id": "cloud-saved-environments",
-  "kind": "source-surface",
-  "rustPaths": [
-   "cloud-client/src/prewarm.rs",
-   "app-server-client/src/cloud.rs",
-   "app-server-client/src/lib.rs",
-   "app-server-client/src/cloud_backend/requests.rs",
-   "tui/src/app_server_session.rs"
-  ],
-  "goPaths": [
-   "cloudclient/environments.go",
-   "cloudclient/prewarm.go",
-   "cloudclient/client.go",
-   "cloudbackend/client.go",
-   "cloudbackend/requests.go",
-   "app/remote_tui.go",
-   "app/remote_tui_cloud.go",
-   "cloudclient/environments_like_rust_test.go",
-   "cloudclient/prewarm_test.go",
-   "cloudbackend/saved_environment_like_rust_test.go",
-   "app/cloud_project_test.go"
-  ],
-  "phase": "P2",
-  "status": "complete",
-  "verifier": "TestSavedEnvironmentCatalogFollowsEachScopeCursorLikeRust;TestSavedEnvironmentCatalogRejectsBadPagesLikeRust;TestPrewarmRequestCarriesSavedEnvironmentAndDeferredFlagLikeRust;TestCloudThreadStartUsesSavedEnvironmentLikeRust;TestSavedEnvironmentCatalogRequiresCurrentAccountLikeRust;TestCloudThreadStartEnvironmentSelectionLikeRust"
+  {
+   "id": "cloud-saved-environments",
+   "kind": "source-surface",
+   "rustPaths": [
+    "cloud-client/src/prewarm.rs",
+    "app-server-client/src/cloud.rs",
+    "app-server-client/src/lib.rs",
+    "app-server-client/src/cloud_backend/requests.rs",
+    "tui/src/app_server_session.rs"
+   ],
+   "goPaths": [
+    "cloudclient/environments.go",
+    "cloudclient/prewarm.go",
+    "cloudclient/client.go",
+    "cloudbackend/client.go",
+    "cloudbackend/requests.go",
+    "app/remote_tui.go",
+    "app/remote_tui_cloud.go",
+    "cloudclient/environments_like_rust_test.go",
+    "cloudclient/prewarm_test.go",
+    "cloudbackend/saved_environment_like_rust_test.go",
+    "app/cloud_project_test.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestSavedEnvironmentCatalogFollowsEachScopeCursorLikeRust;TestSavedEnvironmentCatalogRejectsBadPagesLikeRust;TestPrewarmRequestCarriesSavedEnvironmentAndDeferredFlagLikeRust;TestCloudThreadStartUsesSavedEnvironmentLikeRust;TestSavedEnvironmentCatalogRequiresCurrentAccountLikeRust;TestCloudThreadStartEnvironmentSelectionLikeRust"
   },
   {
    "id": "agents-overview-search-thread-id-branch",
@@ -3117,8 +3117,7 @@
    "phase": "P2",
    "status": "complete",
    "verifier": "TestBillingPlanPrefersKnownQuotaPlanInEitherReplyOrderLikeRust;TestBillingPlanIgnoresNonCodexQuotaLimitsLikeRust;TestRollingQuotaCannotRestoreObsoleteBillingPlanLikeRust;TestAccountUpdateDropsQuotaPlanLikeRust;TestBillingPlanClearsThreadUsageOnlyWhenUnavailableLikeRust;TestQuotaReadReArmsPendingStatusThreadUsageLikeRust;TestAgentsOverviewUsagePlanChangeRepricesCache"
-  }
-,
+  },
   {
    "id": "tui-config-mouse-scroll-speed",
    "kind": "source-surface",
@@ -3174,7 +3173,6 @@
    "status": "complete",
    "verifier": "TestStatuslineProviderDecodeRequiresOneMatchingJSONTextItem;TestStatuslineProviderFooterLifecycleLikeRust;TestStatuslineProviderReadsDropStaleResultsLikeRust;TestStatuslineProviderSelectionChangesLikeRust;TestStatuslineProviderWithoutHostHooksKeepsBuiltinLikeRust;TestStatuslineProviderThreadUsageSelectionLikeRust;TestStatusControlsProviderRequestsWorkspaceHeadlineWithoutItemsLikeRust;TestStatusControlsProviderOwnsStatusLineLikeRust;TestStatusControlsSelectionsStayItemBasedWithProviderLikeRust"
   },
-
   {
    "id": "turn-local-attachment-capture",
    "kind": "source-surface",
@@ -3417,8 +3415,6 @@
    "status": "complete",
    "verifier": "TestActivationKeyGuardBoundsLegacyPressesLikeRust;TestActivationKeyGuardStopsOnAnotherKeyLikeRust;TestActivationKeyGuardSwallowsHeldEnterAcrossPickerLikeRust"
   },
-
-
   {
    "id": "sidebar-chooser-files-and-paths",
    "kind": "source-surface",
@@ -3698,5 +3694,5 @@
    "status": "complete",
    "verifier": "TestResponsesWebsocketHandshakeCarriesSpanTraceLikeRust;TestResponsesWebsocketHandshakeFallsBackToRequestTraceLikeRust"
   }
-  ]
+ ]
 }
