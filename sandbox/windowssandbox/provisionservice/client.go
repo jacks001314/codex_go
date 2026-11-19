@@ -182,6 +182,9 @@ func (c *Client) send(request *Frame, timeout time.Duration) (Response, error) {
 	if err != nil {
 		_ = pipe.Close()
 		if isUnavailableExchangeError(err) {
+			if failure := classifyExchangeFailure(err, requestRegisteredCore(request, c)); failure != nil {
+				return Response{}, failure
+			}
 			return Response{Kind: ResponseUnavailable}, nil
 		}
 		return Response{}, err
@@ -271,6 +274,65 @@ func (c *Client) remainingTime(deadline time.Time) error {
 	return nil
 }
 
+// RegisteredServiceUnavailable is the registered Core refusal text (Rust
+// REGISTERED_SERVICE_UNAVAILABLE).
+const RegisteredServiceUnavailable = "app runtime provisioning service is unavailable; refusing helper fallback"
+
+// ServiceExchangeFailureKind names why a registered Core provisioning exchange
+// ended without a reply (Rust SetupErrorCode::RegisteredService*, #62192).
+type ServiceExchangeFailureKind string
+
+const (
+	ServiceExchangeTimedOut   ServiceExchangeFailureKind = "registered_service_timed_out"
+	ServiceExchangePipeClosed ServiceExchangeFailureKind = "registered_service_pipe_closed"
+)
+
+// ServiceExchangeFailure carries the transport class of a failed registered Core
+// exchange while keeping the refusal text callers already match on.
+type ServiceExchangeFailure struct {
+	Kind  ServiceExchangeFailureKind
+	Cause error
+}
+
+func (f *ServiceExchangeFailure) Error() string {
+	if f == nil {
+		return ""
+	}
+	return RegisteredServiceUnavailable
+}
+
+func (f *ServiceExchangeFailure) Unwrap() error {
+	if f == nil {
+		return nil
+	}
+	return f.Cause
+}
+
+// requestRegisteredCore reports whether the request asked for protected Core,
+// preferring the payload flag the way Rust reads it from the message.
+func requestRegisteredCore(request *Frame, c *Client) bool {
+	if request != nil && request.Message.Request != nil {
+		return request.Message.Request.RegisteredCore
+	}
+	return c.registeredCore()
+}
+
+// classifyExchangeFailure attaches the Rust setup error class for a registered
+// Core exchange that timed out or lost its pipe. Non-registered requests keep the
+// fallback path, and any other error is returned unchanged by the caller.
+func classifyExchangeFailure(err error, registeredCore bool) *ServiceExchangeFailure {
+	if err == nil || !registeredCore {
+		return nil
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, syscall.ETIMEDOUT) {
+		return &ServiceExchangeFailure{Kind: ServiceExchangeTimedOut, Cause: err}
+	}
+	if isResponseDisconnect(err) {
+		return &ServiceExchangeFailure{Kind: ServiceExchangePipeClosed, Cause: err}
+	}
+	return nil
+}
+
 // isUnavailableExchangeError matches Rust's exchange classification: a closed
 // or silent pipe and a timeout mean the caller may fall back.
 func isUnavailableExchangeError(err error) bool {
@@ -302,7 +364,7 @@ func isResponseDisconnect(err error) bool {
 
 func (c *Client) unavailable() (Outcome, error) {
 	if c.registeredCore() {
-		return Unavailable, errors.New("app runtime provisioning service is unavailable; refusing helper fallback")
+		return Unavailable, errors.New(RegisteredServiceUnavailable)
 	}
 	return Unavailable, nil
 }

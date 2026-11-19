@@ -2,6 +2,7 @@ package windowssandbox
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -18,14 +19,15 @@ type SandboxCredentials struct {
 }
 
 var (
-	runElevatedSetupForCredentials         = runAutomaticSetupForCredentials
-	runElevatedSetupFallbackForCredentials = RunElevatedSetup
-	runSetupRefreshForCredentials          = RunSetupRefreshForRequest
-	selectSandboxCredentialsForCredentials = SelectSandboxCredentials
-	sandboxAccountFlagsForCredentials      = readSandboxAccountFlags
-	provisionViaServiceForCredentials      = provisionWindowsSandboxViaService
-	loadInstallationForReadiness           = LoadInstallation
-	currentProcessPackageName              = CurrentProcessPackageFullName
+	runElevatedSetupForCredentials          = runAutomaticSetupForCredentials
+	runElevatedSetupFallbackForCredentials  = RunElevatedSetup
+	runSetupRefreshForCredentials           = RunSetupRefreshForRequest
+	selectSandboxCredentialsForCredentials  = SelectSandboxCredentials
+	sandboxAccountFlagsForCredentials       = readSandboxAccountFlags
+	provisionViaServiceForCredentials       = provisionWindowsSandboxViaService
+	loadInstallationForReadiness            = LoadInstallation
+	currentProcessPackageName               = CurrentProcessPackageFullName
+	registrationSetupRequiredForCredentials = registeredCoreRegistrationRequired
 )
 
 // runAutomaticSetupForCredentials prefers an installed provisioning service at
@@ -59,7 +61,26 @@ func runAutomaticSetupForCredentials(request *SandboxSetupRequest) error {
 func provisionWindowsSandboxViaService(codexHome string, settings provisionservice.Settings, listeners provisionservice.Listeners) (provisionservice.Outcome, error) {
 	client := provisionservice.NewClient()
 	client.RegisteredCore = RegisteredCoreRequested
-	return client.ProvisionWindowsSandbox(codexHome, settings, listeners)
+	outcome, err := client.ProvisionWindowsSandbox(codexHome, settings, listeners)
+	if err != nil {
+		return outcome, registeredServiceSetupFailure(err)
+	}
+	return outcome, nil
+}
+
+// registeredServiceSetupFailure attaches the distinct setup error code for a
+// timed out or closed registered Core exchange (Rust #62192), so metrics and
+// doctor can tell the two apart while the refusal text stays the same.
+func registeredServiceSetupFailure(err error) error {
+	var failure *provisionservice.ServiceExchangeFailure
+	if !errors.As(err, &failure) {
+		return err
+	}
+	code := SetupErrorRegisteredServicePipeClosed
+	if failure.Kind == provisionservice.ServiceExchangeTimedOut {
+		code = SetupErrorRegisteredServiceTimedOut
+	}
+	return NewSetupFailure(code, err.Error())
 }
 
 func RequireLogonSandboxCreds(codexHome string) (*SandboxCredentials, error) {
@@ -189,6 +210,13 @@ func requireLogonSandboxCredsForPermissions(
 		}
 	}
 
+	// Valid cached credentials must not skip setup when protected Core is
+	// requested but its registration is missing or stale (Rust #62141).
+	if identity != nil && registrationSetupRequiredForCredentials(codexHome) {
+		setupReason = "protected Core registration is missing or out of date"
+		identity = nil
+	}
+
 	request := &SandboxSetupRequest{
 		CodexHome:     codexHome,
 		CommandCWD:    commandCWD,
@@ -217,6 +245,9 @@ func requireLogonSandboxCredsForPermissions(
 		}
 		if err := runElevatedSetupForCredentials(request); err != nil {
 			return nil, err
+		}
+		if registrationSetupRequiredForCredentials(codexHome) {
+			return nil, fmt.Errorf("protected Core setup did not publish ready runtime ownership")
 		}
 		identity, err = selectSandboxCredentialsForCredentials(codexHome, networkIdentity)
 		if err != nil {
@@ -450,6 +481,17 @@ func registeredSetupIsReady(codexHome string) (bool, error) {
 		return false, err
 	}
 	return registration.ReadyForPackage(fullName), nil
+}
+
+// registeredCoreRegistrationRequired mirrors Rust's registration_required probe
+// (#62141): protected Core is requested, but the committed service receipt is
+// missing, stale, or unreadable.
+func registeredCoreRegistrationRequired(codexHome string) bool {
+	if !RegisteredCoreRequested() {
+		return false
+	}
+	ready, err := registeredSetupIsReady(codexHome)
+	return err != nil || !ready
 }
 
 // sandboxAccountDisabled reports an account the service receipt cannot rely on

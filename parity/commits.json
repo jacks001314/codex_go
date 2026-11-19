@@ -51180,11 +51180,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "sandbox/windowssandbox/identity.go adds a registeredCoreRegistrationRequired probe (RegisteredCoreRequested plus an unready registeredSetupIsReady receipt) and clears cached credentials when it fires, so valid cached credentials no longer skip setup while protected Core is unregistered (Rust #62141).",
+    "Setup now must end with a ready registration: the credential path fails with \"protected Core setup did not publish ready runtime ownership\" when the probe still fires after the elevated setup, matching Rust's ensure! guard.",
+    "tests: windowssandbox TestRequireLogonSandboxCredsRunsSetupForUnreadyCoreRegistrationLikeRust (ready keeps cached credentials, unready runs setup once, still-unready fails)"
    ],
    "kind": "runtime",
    "sha": "2ae806bdf71758a3affac508e06fe0a310ad685c",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Repair missing or stale Windows sandbox Core registration (#62141)"
   },
   {
@@ -51474,11 +51476,14 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "sandbox/windowssandbox/setup_error.go gains the registered_service_timed_out and registered_service_pipe_closed codes Rust added in #62192.",
+    "provisionservice/client.go classifies a registered Core exchange that ended without a reply into ServiceExchangeFailure with a timeout or pipe-closed kind, preserving the cause and the existing refusal text; non-registered requests keep the fallback path and unrelated errors keep no code.",
+    "windowssandbox maps that failure onto the matching SetupFailure code, and doctor now advises checking that the sandbox service is running and letting pending setup finish for those two codes.",
+    "tests: provisionservice TestRegisteredCoreExchangeClassificationLikeRust (timeout, syscall timeout, unexpected EOF, broken pipe, unregistered fallback, permission error), windowssandbox TestRegisteredServiceSetupFailureCodesLikeRust, doctor TestWindowsSandboxDoctorAdvisesRunningServiceForRegisteredExchangeFailuresLikeRust"
    ],
    "kind": "runtime",
    "sha": "b78fa4af8636859f4acc4d57420e41e923c84cdd",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Distinguish Windows sandbox provisioning timeouts and pipe closures (#62192)"
   },
   {

@@ -22,6 +22,8 @@ const (
 	SetupErrorOrchestratorHelperExitNonzero       SetupErrorCode = "orchestrator_helper_exit_nonzero"
 	SetupErrorOrchestratorHelperReportReadFailed  SetupErrorCode = "orchestrator_helper_report_read_failed"
 	SetupErrorOrchestratorHelperIncomplete        SetupErrorCode = "orchestrator_helper_incomplete"
+	SetupErrorRegisteredServiceTimedOut           SetupErrorCode = "registered_service_timed_out"
+	SetupErrorRegisteredServicePipeClosed         SetupErrorCode = "registered_service_pipe_closed"
 	SetupErrorHelperRequestArgsFailed             SetupErrorCode = "helper_request_args_failed"
 	SetupErrorHelperSandboxDirCreateFailed        SetupErrorCode = "helper_sandbox_dir_create_failed"
 	SetupErrorHelperLogFailed                     SetupErrorCode = "helper_log_failed"

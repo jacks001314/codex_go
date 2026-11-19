@@ -3151,9 +3151,20 @@ func applyWindowsSandboxDoctorDiagnostics(check *DoctorCheck, cfg *config.Config
 		check.Summary = "Windows sandbox setup failed"
 		check = check.
 			Detail("windows sandbox setup error: " + message).
-			Remediate("Re-run the Windows sandbox setup or restart the elevated sandbox service; contact your administrator if the failure persists.")
+			Remediate(windowsSandboxSetupRemediation(report.Code))
 	}
 	return check
+}
+
+// windowsSandboxSetupRemediation mirrors Rust's per-code advice for a recorded
+// Windows sandbox setup failure (#62192).
+func windowsSandboxSetupRemediation(code windowssandbox.SetupErrorCode) string {
+	switch code {
+	case windowssandbox.SetupErrorRegisteredServiceTimedOut, windowssandbox.SetupErrorRegisteredServicePipeClosed:
+		return "Check that the Codex sandbox service is running and let pending setup finish before retrying."
+	default:
+		return "Re-run the Windows sandbox setup or restart the elevated sandbox service; contact your administrator if the failure persists."
+	}
 }
 
 // windowsSandboxBackendForDoctor mirrors Rust's `sandbox backend` row: an MXC
