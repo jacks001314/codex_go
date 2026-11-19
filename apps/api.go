@@ -227,6 +227,7 @@ func (a AppToolApproval) RestrictTo(requested AppToolApproval) AppToolApproval {
 type AppToolConfig struct {
 	Enabled               *bool                `json:"enabled"`
 	ApprovalMode          *AppToolApproval     `json:"approval_mode"`
+	ApprovalsReviewer     *string              `json:"approvals_reviewer"`
 	AnalyticsResultSource *AppToolResultSource `json:"analytics_result_source,omitempty"`
 }
 
@@ -240,6 +241,23 @@ type AppToolResultSource struct {
 
 type AppToolsConfig map[string]AppToolConfig
 
+// ForTool matches a tool by its raw name first and falls back to its title
+// (Rust AppToolsConfig::for_tool, #62360).
+func (c AppToolsConfig) ForTool(name, title string) (AppToolConfig, bool) {
+	if len(c) == 0 {
+		return AppToolConfig{}, false
+	}
+	if tool, ok := c[strings.TrimSpace(name)]; ok {
+		return tool, true
+	}
+	if title = strings.TrimSpace(title); title != "" {
+		if tool, ok := c[title]; ok {
+			return tool, true
+		}
+	}
+	return AppToolConfig{}, false
+}
+
 // AppToolConfigFromMap parses a single app tool requirement map (Rust
 // AppToolRequirementToml). Unknown result formats are preserved as their raw
 // string so higher-priority rules still override lower ones.
@@ -251,6 +269,10 @@ func AppToolConfigFromMap(values map[string]any) AppToolConfig {
 	if raw, ok := values["approval_mode"].(string); ok {
 		mode := AppToolApproval(raw)
 		out.ApprovalMode = &mode
+	}
+	if raw, ok := values["approvals_reviewer"].(string); ok && strings.TrimSpace(raw) != "" {
+		reviewer := strings.TrimSpace(raw)
+		out.ApprovalsReviewer = &reviewer
 	}
 	if raw, ok := values["analytics_result_source"].(map[string]any); ok {
 		format, _ := raw["format"].(string)
@@ -270,6 +292,10 @@ func cloneAppToolConfig(config AppToolConfig) AppToolConfig {
 	if config.ApprovalMode != nil {
 		mode := *config.ApprovalMode
 		config.ApprovalMode = &mode
+	}
+	if config.ApprovalsReviewer != nil {
+		reviewer := *config.ApprovalsReviewer
+		config.ApprovalsReviewer = &reviewer
 	}
 	if config.AnalyticsResultSource != nil {
 		source := *config.AnalyticsResultSource

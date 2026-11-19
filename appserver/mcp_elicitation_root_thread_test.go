@@ -73,7 +73,7 @@ func subagentElicitationHandler(t *testing.T, profile *sandbox.PermissionProfile
 	t.Helper()
 	return &appserverMCPElicitationHandler{
 		reviewer: reviewer,
-		authority: func(string, string, string) mcpElicitationAuthority {
+		authority: func(string, string, string, string, string) mcpElicitationAuthority {
 			return mcpElicitationAuthority{
 				ApprovalPolicy:    approvalPolicy,
 				ApprovalsReviewer: "auto_review",

@@ -50609,6 +50609,22 @@
    ]
   },
   {
+   "sha": "1b80bd94127640438a78bd348e0f985fdb272766",
+   "subject": "Allow per-tool approval reviewers for Codex apps (#62360)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "apps.AppToolConfig gains approvals_reviewer and AppToolsConfig.ForTool matches the raw tool name before its title, which apps.AppToolConfigFromMap/cloneAppToolConfig and the app tool policy now share.",
+    "appserver resolves mcp reviewers through the typed apps config as tool, then account link, then connector, then _default, then validates each candidate against the managed allowed_approvals_reviewer requirement before falling back to the requirement value; the MCP tool approval handler passes the request's tool name and title and the elicitation path passes them only for a host-verified outer app invocation.",
+    "config.toml validates the new enum-shaped field and config/read serializes it, defaulting to null.",
+    "tests: appserver TestMCPApprovalsReviewerUsesAppToolLayerLikeRust, TestMCPApprovalsReviewerManagedRequirementsLikeRust, TestMCPToolApprovalReviewerResolvesAppToolLikeRust, TestMCPElicitationUsesVerifiedAppToolReviewerLikeRust; config TestAppToolApprovalsReviewerConfigLikeRust",
+    "plan: update/plan_2026_11_19.md batch 6"
+   ]
+  },
+  {
    "sha": "637c42947236017bc78da59d1a22916400ccae63",
    "subject": "Enable lazy startup for stdio MCP servers by default (#62366)",
    "kind": "runtime",

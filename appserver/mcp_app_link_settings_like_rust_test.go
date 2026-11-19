@@ -47,7 +47,7 @@ func TestMCPApprovalsReviewerUsesAppLinkLayerLikeRust(t *testing.T) {
 		{name: "custom server ignores link", server: "custom_server", connector: "calendar", link: "link-auto", want: "user"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := mcpApprovalsReviewerForElicitation(newConfig(), "user", tc.server, tc.connector, tc.link, ""); got != tc.want {
+			if got := mcpApprovalsReviewerForElicitation(newConfig(), "user", tc.server, tc.connector, tc.link, "", "", ""); got != tc.want {
 				t.Fatalf("reviewer = %q, want %q", got, tc.want)
 			}
 		})
@@ -57,7 +57,7 @@ func TestMCPApprovalsReviewerUsesAppLinkLayerLikeRust(t *testing.T) {
 	// from routing to Guardian.
 	restricted := newConfig()
 	restricted.Requirements = &config.ConfigRequirements{AllowedApprovalsReviewers: []config.ApprovalsReviewer{config.ApprovalsReviewer("user")}}
-	if got := mcpApprovalsReviewerForElicitation(restricted, "user", "codex_apps", "calendar", "link-auto", ""); got != "user" {
+	if got := mcpApprovalsReviewerForElicitation(restricted, "user", "codex_apps", "calendar", "link-auto", "", "", ""); got != "user" {
 		t.Fatalf("restricted reviewer = %q, want user", got)
 	}
 }

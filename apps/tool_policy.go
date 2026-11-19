@@ -179,21 +179,14 @@ func appToolPolicyFromConfig(
 	return AppToolPolicy{Enabled: enabled, Approval: approval}
 }
 
-// appToolConfigFor ports Rust's tool lookup: the tool name first, then the tool
-// title (the hosted catalog can key a tool by its display title).
+// appToolConfigFor ports Rust's tool lookup through AppToolsConfig::for_tool:
+// the tool name first, then the tool title (the hosted catalog can key a tool by
+// its display title).
 func appToolConfigFor(app AppConfig, hasApp bool, input AppToolPolicyInput) (AppToolConfig, bool) {
-	if !hasApp || len(app.Tools) == 0 {
+	if !hasApp {
 		return AppToolConfig{}, false
 	}
-	if tool, ok := app.Tools[strings.TrimSpace(input.ToolName)]; ok {
-		return tool, true
-	}
-	if title := strings.TrimSpace(input.ToolTitle); title != "" {
-		if tool, ok := app.Tools[title]; ok {
-			return tool, true
-		}
-	}
-	return AppToolConfig{}, false
+	return app.Tools.ForTool(input.ToolName, input.ToolTitle)
 }
 
 // appToolApprovalFor ports Rust's approval precedence: per-tool override, then

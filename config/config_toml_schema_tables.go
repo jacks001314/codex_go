@@ -28,8 +28,9 @@ var configAnalyticsFields = map[string]configFieldKind{
 }
 
 var configAppToolFields = map[string]configFieldKind{
-	"enabled":       {kind: configKindBool},
-	"approval_mode": {kind: configKindEnum, variants: []string{"auto", "prompt", "writes", "approve"}},
+	"enabled":            {kind: configKindBool},
+	"approval_mode":      {kind: configKindEnum, variants: []string{"auto", "prompt", "writes", "approve"}},
+	"approvals_reviewer": {kind: configKindEnum, variants: []string{"user", "auto_review", "guardian_subagent"}},
 }
 
 var configAppLinkFields = map[string]configFieldKind{

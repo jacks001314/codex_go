@@ -400,6 +400,9 @@ func normalizeAppsConfig(values map[string]any) {
 				tool = cloneMap(tool)
 				setDefaultJSONField(tool, "enabled", nil)
 				setDefaultJSONField(tool, "approval_mode", nil)
+				// Rust #62360: AppToolConfig carries a per-tool approvals_reviewer
+				// that serializes as null when unset.
+				setDefaultJSONField(tool, "approvals_reviewer", nil)
 				tools[toolName] = tool
 			}
 			app["tools"] = tools

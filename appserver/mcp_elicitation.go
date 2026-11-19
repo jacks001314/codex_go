@@ -18,7 +18,7 @@ type appserverMCPElicitationHandler struct {
 	broker    *ServerRequestBroker
 	service   *mcp.MCPService
 	reviewer  GuardianReviewer
-	authority func(string, string, string) mcpElicitationAuthority
+	authority func(threadID, serverName, connectorID, toolName, toolTitle string) mcpElicitationAuthority
 	persist   func(*mcp.MCPElicitationRequest, *MCPElicitationRequestResponse) error
 	record    func(*mcp.MCPElicitationRequest, *MCPElicitationRequestResponse)
 	// invalidateTiming drops the turn's captured critical path. An elicitation
@@ -65,7 +65,10 @@ func (h *appserverMCPElicitationHandler) HandleMCPElicitation(ctx context.Contex
 		if request != nil {
 			threadID = strings.TrimSpace(request.ThreadID)
 		}
-		authority = h.authority(threadID, mcpElicitationServerName(request), mcpElicitationConnectorID(request))
+		// Rust #62360: a verified app tool invocation contributes the tool's own
+		// approvals_reviewer, so the reviewer is resolved with the tool identity.
+		toolName, toolTitle := h.elicitationRegisteredToolIdentity(request)
+		authority = h.authority(threadID, mcpElicitationServerName(request), mcpElicitationConnectorID(request), toolName, toolTitle)
 	}
 	// Rust 4b0e2a0bff: tool-suggestion elicitations are never surfaced as
 	// form input; they stay on their existing decline path.
@@ -190,6 +193,31 @@ func (h *appserverMCPElicitationHandler) HandleMCPElicitation(ctx context.Contex
 		}
 	}
 	return h.requestMCPElicitation(ctx, request)
+}
+
+// elicitationRegisteredToolIdentity returns the tool name and title of the
+// verified outer app invocation behind one elicitation, so its per-tool
+// approvals_reviewer can apply (Rust #62360). Only the host's registered
+// invocation metadata is trusted: the provider-supplied elicitation arguments
+// never name the tool, and a live Browser invocation reviews its nested action
+// under its own identity.
+func (h *appserverMCPElicitationHandler) elicitationRegisteredToolIdentity(request *mcp.MCPElicitationRequest) (string, string) {
+	if h == nil || h.service == nil || request == nil {
+		return "", ""
+	}
+	serverName := mcpElicitationServerName(request)
+	if !mcp.IsCodexAppsMCPServerName(serverName) {
+		return "", ""
+	}
+	invocation, ok := h.service.LiveToolInvocation(serverName, mcpElicitationLiveCallID(request))
+	if !ok || strings.TrimSpace(invocation.ServerName) != serverName {
+		return "", ""
+	}
+	if mcpElicitationConnectorID(request) != strings.TrimSpace(invocation.ConnectorID) ||
+		mcpElicitationToolName(request) != strings.TrimSpace(invocation.ToolName) {
+		return "", ""
+	}
+	return strings.TrimSpace(invocation.ToolName), strings.TrimSpace(invocation.ToolTitle)
 }
 
 func (h *appserverMCPElicitationHandler) requestMCPElicitation(ctx context.Context, request *mcp.MCPElicitationRequest) (*mcp.MCPElicitationResponse, error) {

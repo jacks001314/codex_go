@@ -379,9 +379,10 @@ func (h *appserverMCPToolApprovalHandler) reviewViaGuardian(ctx context.Context,
 }
 
 // mcpToolApprovalReviewer resolves the reviewer for one MCP tool approval,
-// honoring the app account link's approvals_reviewer before the connector, the
-// apps default, and the thread-level reviewer (Rust #42056). Rust passes the
-// link only on this approval path; elicitation routing keeps link_id unset.
+// honoring the app tool's own approvals_reviewer before the account link's, the
+// connector's, the apps default, and the thread-level reviewer
+// (Rust #42056/#62360). Rust passes the link only on this approval path;
+// elicitation routing keeps link_id unset.
 func (h *appserverMCPToolApprovalHandler) mcpToolApprovalReviewer(request *mcp.MCPToolApprovalRequest) state.Reviewer {
 	if h == nil || h.router == nil || request == nil {
 		return state.ReviewerUser
@@ -397,7 +398,7 @@ func (h *appserverMCPToolApprovalHandler) mcpToolApprovalReviewer(request *mcp.M
 			model = strings.TrimSpace(threadSettingsModel(settings))
 		}
 	}
-	resolved := mcpApprovalsReviewerForElicitation(cfg, string(reviewer), request.Server, request.ConnectorID, request.LinkID, model)
+	resolved := mcpApprovalsReviewerForElicitation(cfg, string(reviewer), request.Server, request.ConnectorID, request.LinkID, model, request.Tool, request.ToolTitle)
 	return state.ReviewerFromString(resolved)
 }
 

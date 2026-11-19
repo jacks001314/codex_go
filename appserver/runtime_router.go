@@ -17407,7 +17407,7 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 		// their environment is selected and available for the thread.
 		config.AvailableEnvironment = append([]string(nil), availableEnvironment...)
 		config.EnvironmentAuthority = environmentAuthority.Clone()
-		r.applyMCPPermissionAuthority(config, threadID, r.currentMCPElicitationAuthority(threadID, "", "").PermissionProfile)
+		r.applyMCPPermissionAuthority(config, threadID, r.currentMCPElicitationAuthority(threadID, "", "", "", "").PermissionProfile)
 		return config
 	}
 	service := r.mcpRuntimes.serviceForThread(threadID, cfg, authRevision, environmentFingerprint, func(cfg *config.Config) *mcp.MCPService {
@@ -17518,7 +17518,7 @@ func (r *RuntimeRouter) effectiveMCPConfigForThread(threadID string) *config.Con
 	return cfg
 }
 
-func (r *RuntimeRouter) currentMCPElicitationAuthority(threadID, serverName, connectorID string) mcpElicitationAuthority {
+func (r *RuntimeRouter) currentMCPElicitationAuthority(threadID, serverName, connectorID, toolName, toolTitle string) mcpElicitationAuthority {
 	cfg := r.effectiveMCPConfigForThread(threadID)
 	authority := mcpElicitationAuthority{
 		ApprovalPolicy:        turnApprovalPolicyForTurn(cfg, nil),
@@ -17584,7 +17584,7 @@ func (r *RuntimeRouter) currentMCPElicitationAuthority(threadID, serverName, con
 	// per server/per connector from the apps config layers, validated against
 	// the managed approvals_reviewer requirements, before falling back to the
 	// thread-level reviewer.
-	authority.ApprovalsReviewer = mcpApprovalsReviewerForElicitation(cfg, authority.ApprovalsReviewer, serverName, connectorID, "", params.Model)
+	authority.ApprovalsReviewer = mcpApprovalsReviewerForElicitation(cfg, authority.ApprovalsReviewer, serverName, connectorID, "", params.Model, toolName, toolTitle)
 	return authority
 }
 
@@ -17675,10 +17675,12 @@ func (r *RuntimeRouter) publishedMCPServiceForThread(threadID string) *mcp.MCPSe
 // mcpApprovalsReviewerForElicitation mirrors Rust's
 // mcp_approvals_reviewer_from_layers (codex-rs/core/src/connectors.rs): a
 // model listed in auto_review.required_on_models always uses auto_review; for
-// the codex-apps MCP server the account link's approvals_reviewer, then the
-// connector's, then the apps default is used when the managed requirements
-// permit it; otherwise the thread-level reviewer applies.
-func mcpApprovalsReviewerForElicitation(cfg *config.Config, defaultReviewer, serverName, connectorID, linkID, model string) string {
+// the codex-apps MCP server the tool's own approvals_reviewer, then the account
+// link's, then the connector's, then the apps default is used when the managed
+// requirements permit it; otherwise the thread-level reviewer applies. toolName
+// and toolTitle are set only when the caller can verify the app tool invocation
+// (Rust #62360); the raw tool name wins over its title.
+func mcpApprovalsReviewerForElicitation(cfg *config.Config, defaultReviewer, serverName, connectorID, linkID, model, toolName, toolTitle string) string {
 	defaultReviewer = strings.TrimSpace(defaultReviewer)
 	if defaultReviewer == "" {
 		defaultReviewer = "user"
@@ -17686,53 +17688,75 @@ func mcpApprovalsReviewerForElicitation(cfg *config.Config, defaultReviewer, ser
 	if autoReviewRequiredForModel(cfg, model) {
 		return string(config.ApprovalsReviewerAutoReview)
 	}
-	if !mcp.IsCodexAppsMCPServerName(serverName) {
+	reviewer := ""
+	if mcp.IsCodexAppsMCPServerName(serverName) {
+		reviewer = connectorApprovalsReviewerFromConfig(cfg, connectorID, linkID, toolName, toolTitle)
+	}
+	// Rust #62360 accepts the app reviewer only when the managed requirements
+	// allow it, then validates the thread-level reviewer the same way, and only
+	// then falls back to the requirement's own value.
+	if reviewer != "" && approvalsReviewerAllowedByRequirements(cfg, reviewer) {
+		return reviewer
+	}
+	if approvalsReviewerAllowedByRequirements(cfg, defaultReviewer) {
 		return defaultReviewer
 	}
-	reviewer := connectorApprovalsReviewerFromConfig(cfg, connectorID, linkID)
-	if reviewer == "" {
-		return defaultReviewer
+	if fallback := approvalsReviewerRequirementFallback(cfg); fallback != "" {
+		return fallback
 	}
-	if !approvalsReviewerAllowedByRequirements(cfg, reviewer) {
-		return defaultReviewer
-	}
-	return reviewer
+	return defaultReviewer
 }
 
 // connectorApprovalsReviewerFromConfig reads the approvals_reviewer from the
-// effective apps config: the account link's entry (Rust #42056), then the
-// connector-specific entry, then the `_default` entry. Mirrors Rust
-// apps_config_from_layer_stack.
-func connectorApprovalsReviewerFromConfig(cfg *config.Config, connectorID, linkID string) string {
+// effective apps config: the tool's own entry (Rust #62360), then the account
+// link's entry (Rust #42056), then the connector-specific entry, then the
+// `_default` entry. Mirrors Rust apps_config_from_layer_stack.
+func connectorApprovalsReviewerFromConfig(cfg *config.Config, connectorID, linkID, toolName, toolTitle string) string {
 	if cfg == nil || cfg.Values == nil {
 		return ""
 	}
-	raw, ok := cfg.Values["apps"].(map[string]any)
-	if !ok {
+	appsConfig := apps.AppsConfigFromValues(cfg.Values)
+	if appsConfig == nil {
 		return ""
 	}
 	connectorID = strings.TrimSpace(connectorID)
 	linkID = strings.TrimSpace(linkID)
 	if connectorID != "" {
-		if appValues, ok := raw[connectorID].(map[string]any); ok {
-			if linkID != "" {
-				if links, ok := appValues["links"].(map[string]any); ok {
-					if linkValues, ok := links[linkID].(map[string]any); ok {
-						if reviewer := firstNonEmpty(stringFromMap(linkValues, "approvals_reviewer"), stringFromMap(linkValues, "approvalsReviewer")); reviewer != "" {
-							return reviewer
-						}
+		if app, ok := appsConfig.Apps[connectorID]; ok {
+			if tool, found := app.Tools.ForTool(toolName, toolTitle); found && tool.ApprovalsReviewer != nil {
+				if reviewer := strings.TrimSpace(*tool.ApprovalsReviewer); reviewer != "" {
+					return reviewer
+				}
+			}
+			if linkID != "" && app.Links != nil {
+				if link, found := app.Links.Links[linkID]; found && link.ApprovalsReviewer != nil {
+					if reviewer := strings.TrimSpace(*link.ApprovalsReviewer); reviewer != "" {
+						return reviewer
 					}
 				}
 			}
-			if reviewer := firstNonEmpty(stringFromMap(appValues, "approvals_reviewer"), stringFromMap(appValues, "approvalsReviewer")); reviewer != "" {
-				return reviewer
+			if app.ApprovalsReviewer != nil {
+				if reviewer := strings.TrimSpace(*app.ApprovalsReviewer); reviewer != "" {
+					return reviewer
+				}
 			}
 		}
 	}
-	if defaults, ok := raw["_default"].(map[string]any); ok {
-		return firstNonEmpty(stringFromMap(defaults, "approvals_reviewer"), stringFromMap(defaults, "approvalsReviewer"))
+	if appsConfig.Default != nil && appsConfig.Default.ApprovalsReviewer != nil {
+		return strings.TrimSpace(*appsConfig.Default.ApprovalsReviewer)
 	}
 	return ""
+}
+
+// approvalsReviewerRequirementFallback returns the managed requirement's own
+// approvals reviewer: the first allowed entry, mirroring Rust
+// requirements.approvals_reviewer.value() used when both the app reviewer and
+// the thread-level reviewer are disallowed.
+func approvalsReviewerRequirementFallback(cfg *config.Config) string {
+	if cfg == nil || cfg.Requirements == nil || len(cfg.Requirements.AllowedApprovalsReviewers) == 0 {
+		return ""
+	}
+	return string(cfg.Requirements.AllowedApprovalsReviewers[0])
 }
 
 // approvalsReviewerAllowedByRequirements reports whether the candidate

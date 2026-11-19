@@ -35,7 +35,7 @@ func userNodeReplElicitationMeta() map[string]any {
 func userCUAHandler(authority mcpElicitationAuthority, reviewer GuardianReviewer) *appserverMCPElicitationHandler {
 	return &appserverMCPElicitationHandler{
 		reviewer: reviewer,
-		authority: func(string, string, string) mcpElicitationAuthority {
+		authority: func(string, string, string, string, string) mcpElicitationAuthority {
 			return authority
 		},
 	}

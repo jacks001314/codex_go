@@ -13,7 +13,7 @@ import (
 // before any approval-policy handling.
 func TestAppserverMCPElicitationDeclinesWithoutServerAuthorityLikeRust(t *testing.T) {
 	handler := &appserverMCPElicitationHandler{
-		authority: func(string, string, string) mcpElicitationAuthority {
+		authority: func(string, string, string, string, string) mcpElicitationAuthority {
 			return mcpElicitationAuthority{
 				ApprovalPolicy:           sandbox.ApprovalOnRequest,
 				ApprovalsReviewer:        "user",
@@ -40,7 +40,7 @@ func TestAppserverMCPElicitationDeclinesWithoutServerAuthorityLikeRust(t *testin
 func TestAppserverMCPElicitationUsesServerAuthorityLikeRust(t *testing.T) {
 	readOnly := sandbox.ReadOnlyPermissionProfile()
 	handler := &appserverMCPElicitationHandler{
-		authority: func(string, string, string) mcpElicitationAuthority {
+		authority: func(string, string, string, string, string) mcpElicitationAuthority {
 			return mcpElicitationAuthority{
 				ApprovalPolicy:           sandbox.ApprovalNever,
 				ApprovalsReviewer:        "user",
