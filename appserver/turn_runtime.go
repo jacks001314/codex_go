@@ -105,6 +105,12 @@ type activeRuntimeTurn struct {
 	// #46323 keeps the first received inventory).
 	PluginInventoryCaptured bool
 	PluginInventory         *[]string
+	// TurnClientMetadata is the turn's own Responses client-metadata document
+	// once a steer has updated it, kept apart from the merged request metadata so
+	// a spawned child inherits only client attribution
+	// (Rust TurnMetadataState::responsesapi_client_metadata, #62072). The turn
+	// lock guards it; a spawn reads it through ActiveTurn.
+	TurnClientMetadata map[string]string
 	// LatestResponseID is the newest response id received in this turn. Rust
 	// #45441 keeps it until a later `response.created` replaces it - including
 	// across sampling retries - so a Guardian review still has a parent response
@@ -9595,6 +9601,9 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 		HasReplacement: params.ResponsesAPIMetadata != nil,
 		Patch:          params.ResponsesAPIMetadataPatch,
 	})
+	// Rust #62072: keep the turn's own client-metadata document so a spawn from
+	// this turn attributes its child even after the parent moves on.
+	r.recordTurnClientMetadata(turnID, clientMetadata)
 	extraMetadata := turn.MergeClientMetadata(cfg.ResponsesAPIClientMetadata(), clientMetadata)
 	serviceTier := r.appServiceTierForTurn(cfg, params, modelProviderConfig.Model)
 	// Rust #41308: every subagent turn follows the root thread's service tier,
@@ -10554,6 +10563,14 @@ func (r *RuntimeRouter) steerClientMetadata(params *turn.TurnSteerParams) map[st
 	if active := r.activeRuntimeTurnStateSnapshot(params.ThreadID, params.ExpectedTurnID); active != nil && active.RunConfig != nil {
 		current = cloneStringMap(active.RunConfig.ClientMetadata)
 	}
+	// Rust keeps the turn's own document current so a later child spawn inherits
+	// the steered attribution (Rust #62072). The update lands on the live turn
+	// state under the turn lock because a spawn reads it from there.
+	steeredTurnID := strings.TrimSpace(params.ExpectedTurnID)
+	r.threads.UpdateTurn(strings.TrimSpace(params.ThreadID), steeredTurnID, func(active *activeRuntimeTurn) {
+		active.TurnClientMetadata = turn.ApplyStartResponsesAPIClientMetadataUpdate(active.turnClientMetadataDocument(), update)
+		r.recordTurnClientMetadata(steeredTurnID, active.TurnClientMetadata)
+	})
 	return r.activeTurnClientMetadata(params.ThreadID, params.ExpectedTurnID,
 		turn.ApplyStartResponsesAPIClientMetadataUpdate(current, update))
 }
@@ -11067,6 +11084,101 @@ func (r *RuntimeRouter) activeRuntimeTurnStateSnapshot(threadID string, turnID s
 		return nil
 	}
 	return active
+}
+
+// maxRetainedTurnClientMetadata bounds the per-turn client-metadata documents a
+// router keeps for spawn attribution. A stale entry is dropped so the map cannot
+// grow with the turn count.
+const maxRetainedTurnClientMetadata = 256
+
+// recordTurnClientMetadata stores one turn's Responses client-metadata document
+// so a spawn can attribute its child to the turn that requested it even after
+// the parent advanced to a newer turn (Rust #62072 reads the invoking turn's
+// live TurnMetadataState, which Go cannot reach once the turn leaves the slot).
+func (r *RuntimeRouter) recordTurnClientMetadata(turnID string, document map[string]string) {
+	if r == nil {
+		return
+	}
+	turnID = strings.TrimSpace(turnID)
+	if turnID == "" {
+		return
+	}
+	r.turnClientMetadataMu.Lock()
+	defer r.turnClientMetadataMu.Unlock()
+	if r.turnClientMetadataDocs == nil {
+		r.turnClientMetadataDocs = map[string]map[string]string{}
+	}
+	if _, exists := r.turnClientMetadataDocs[turnID]; !exists && len(r.turnClientMetadataDocs) >= maxRetainedTurnClientMetadata {
+		for key := range r.turnClientMetadataDocs {
+			delete(r.turnClientMetadataDocs, key)
+			break
+		}
+	}
+	r.turnClientMetadataDocs[turnID] = cloneStringMap(document)
+}
+
+// retainedTurnClientMetadata reports the stored document for one turn.
+func (r *RuntimeRouter) retainedTurnClientMetadata(turnID string) map[string]string {
+	if r == nil {
+		return nil
+	}
+	r.turnClientMetadataMu.Lock()
+	defer r.turnClientMetadataMu.Unlock()
+	return cloneStringMap(r.turnClientMetadataDocs[strings.TrimSpace(turnID)])
+}
+
+// turnClientMetadataForChild snapshots the client attribution a child spawn
+// inherits from the turn that requested it (Rust #62072). An empty turn ID means
+// the parent thread's live turn. Parent review and routing intent is dropped by
+// turn.ClientMetadataForChild.
+func (r *RuntimeRouter) turnClientMetadataForChild(threadID string, turnID string) map[string]string {
+	if r == nil || r.threads == nil {
+		return nil
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil
+	}
+	turnID = strings.TrimSpace(turnID)
+	if turnID != "" {
+		if document := r.retainedTurnClientMetadata(turnID); len(document) > 0 {
+			return turn.ClientMetadataForChild(document)
+		}
+	}
+	active := r.threads.ActiveTurn(threadID)
+	if active == nil {
+		return nil
+	}
+	if turnID != "" && active.TurnID != turnID {
+		return nil
+	}
+	return turn.ClientMetadataForChild(active.turnClientMetadataDocument())
+}
+
+// turnClientMetadataDocument reports the turn's own Responses client-metadata
+// document: the steered map once a steer updated it, otherwise what the
+// turn-start request asked for (Rust #62072).
+func (a *activeRuntimeTurn) turnClientMetadataDocument() map[string]string {
+	if a == nil {
+		return nil
+	}
+	if len(a.TurnClientMetadata) > 0 {
+		return a.TurnClientMetadata
+	}
+	return startedTurnClientMetadata(a.Params)
+}
+
+// startedTurnClientMetadata applies a turn-start request's client-metadata
+// replacement and patch, mirroring Rust's turn-start seam without a live store.
+func startedTurnClientMetadata(params *turn.TurnStartParams) map[string]string {
+	if params == nil {
+		return nil
+	}
+	return turn.ApplyStartResponsesAPIClientMetadataUpdate(nil, turn.ResponsesAPIClientMetadataUpdate{
+		Replacement:    params.ResponsesAPIMetadata,
+		HasReplacement: params.ResponsesAPIMetadata != nil,
+		Patch:          params.ResponsesAPIMetadataPatch,
+	})
 }
 
 // currentTurnEnvironmentSelections returns the running turn's current

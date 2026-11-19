@@ -112,6 +112,37 @@ func (c *runtimeAgentController) SpawnReservedAgent(ctx context.Context, args *a
 	return c.spawnAgentWithReservedID(ctx, args, reservedThreadID)
 }
 
+// applyInheritedClientMetadata replaces the child's initial-turn client metadata
+// with the snapshot captured at spawn time (Rust #62072). The map replaces the
+// document rather than merging into it, so the child keeps its own thread and
+// turn identifiers and later parent steers never reach the running child.
+func applyInheritedClientMetadata(params *turn.TurnStartParams, inherited map[string]string) {
+	if params == nil || len(inherited) == 0 {
+		return
+	}
+	params.ResponsesAPIMetadata = inherited
+}
+
+// inheritedClientMetadata snapshots the client attribution of the turn that
+// requested this spawn (Rust SpawnAgentOptions.inherited_client_metadata,
+// #62072). The requesting turn is preferred over the thread's current turn, so a
+// yielded Code Mode cell still attributes its child to the turn that ran it.
+func (c *runtimeAgentController) inheritedClientMetadata() map[string]string {
+	if c == nil || c.router == nil {
+		return nil
+	}
+	parentID := strings.TrimSpace(c.parentID)
+	if parentID == "" {
+		return nil
+	}
+	if turnID := strings.TrimSpace(c.parentTurnID); turnID != "" {
+		if metadata := c.router.turnClientMetadataForChild(parentID, turnID); len(metadata) > 0 {
+			return metadata
+		}
+	}
+	return c.router.turnClientMetadataForChild(parentID, "")
+}
+
 func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, args *agent.SpawnAgentArgs, reservedThreadID session.ThreadID) (*agent.SpawnAgentResult, error) {
 	if args == nil {
 		args = &agent.SpawnAgentArgs{}
@@ -364,6 +395,9 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 			return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextInputAdmission, forkMode)
 		}
 		params := &turn.TurnStartParams{ThreadID: string(threadID), CWD: c.cwd, Model: modelID, Environments: cloneMapSlice(inheritedEnvironments), ParentTurnID: c.parentTurnID, RootTurnID: c.rootTurnID, TurnTrigger: c.turnTrigger, CoreCyberAccessProgram: helperProgram}
+		// Rust #62072: the child's initial turn starts from the client
+		// attribution captured when this spawn was requested.
+		applyInheritedClientMetadata(params, c.inheritedClientMetadata())
 		if inheritDisabledPluginIDs {
 			values := append([]string{}, disabledPluginIDs...)
 			params.DisabledPluginIDs = &values

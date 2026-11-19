@@ -910,6 +910,30 @@ func ApplyResponsesAPIClientMetadataUpdate(current map[string]string, update Res
 	return out
 }
 
+// ClientMetadataForChild captures the client attribution a child spawn inherits
+// (Rust TurnMetadataState::client_metadata_for_child, #62072). The parent's
+// review and routing intent stays behind: `misalignment_override`,
+// `parent_response_id` and `mcp_request_meta` describe the parent request, not
+// the delegated work. The result is a snapshot, so later parent updates never
+// reach a child that already started.
+func ClientMetadataForChild(metadata map[string]string) map[string]string {
+	if len(metadata) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		switch key {
+		case "misalignment_override", "parent_response_id", "mcp_request_meta":
+			continue
+		}
+		out[key] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func MergeClientMetadata(base map[string]string, overlay map[string]string) map[string]string {
 	if len(base) == 0 && len(overlay) == 0 {
 		return nil

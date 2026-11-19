@@ -1280,5 +1280,6 @@ func cloneActiveRuntimeTurn(active *activeRuntimeTurn) *activeRuntimeTurn {
 	}
 	clone := *active
 	clone.Params = cloneTurnStartParams(active.Params)
+	clone.TurnClientMetadata = cloneStringMap(active.TurnClientMetadata)
 	return &clone
 }

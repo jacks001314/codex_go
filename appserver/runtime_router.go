@@ -424,6 +424,12 @@ type RuntimeRouter struct {
 	// refresh so concurrent readiness calls refresh the packaged runtime once
 	// (Rust windows_sandbox_processor registration_refresh OnceCell).
 	registeredCoreRefresh sync.Once
+	// turnClientMetadataMu guards turnClientMetadataDocs, the per-turn Responses
+	// client-metadata documents kept so a spawn attributes its child to the turn
+	// that requested it even after the parent advanced to a newer turn
+	// (Rust #62072 reads the invoking turn's live TurnMetadataState).
+	turnClientMetadataMu   sync.Mutex
+	turnClientMetadataDocs map[string]map[string]string
 	// itemStartedTimesMu guards itemStartedTimes, the start times published on
 	// ItemStarted notifications so the matching ItemCompleted can report the
 	// same startedAtMs (Rust #57172 turn timing state).
