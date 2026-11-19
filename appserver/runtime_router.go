@@ -13679,39 +13679,53 @@ func (r *RuntimeRouter) refreshPluginHookRuntimes() error {
 	return nil
 }
 
+// pluginReconcileSignature captures only the runtime inputs of one plugin
+// (Rust #62105): identity, enablement, canonical connector ownership, the
+// active bundle, and the capability sets. Catalog release, policy, and display
+// metadata stay out so a metadata-only update keeps live MCP sessions and
+// cached skills.
 func pluginReconcileSignature(detail plugin.PluginDetail) string {
+	activeDirectoryVersion := ""
+	var activeRemotePluginID *string
+	if detail.Summary.Enabled && detail.ActiveBundle != nil {
+		activeDirectoryVersion = detail.ActiveBundle.DirectoryVersion
+		activeRemotePluginID = detail.ActiveBundle.RemotePluginID
+	}
 	data, _ := json.Marshal(struct {
-		Enabled           bool
-		HasSkills         bool
-		RemotePluginID    string
-		Availability      plugin.PluginAvailability
-		AuthPolicy        plugin.PluginAuthPolicy
-		DisplayNameTag    string
-		InstallSuggestion bool
-		Version           *string
-		LocalVersion      *string
-		DisabledReason    *plugin.PluginDisabledReason
-		InstallPolicy     plugin.PluginInstallPolicy
-		MCPServers        []string
-		Apps              []plugin.AppSummary
-		Templates         []plugin.AppTemplateSummary
-		Hooks             []plugin.PluginHookSummary
+		Enabled                bool
+		HasSkills              bool
+		RemotePluginID         string
+		Name                   string
+		MarketplaceName        string
+		CanonicalAppID         *string
+		ActiveDirectoryVersion string
+		ActiveRemotePluginID   *string
 	}{
-		Enabled:           detail.Summary.Enabled,
-		HasSkills:         detail.Summary.HasSkills,
-		RemotePluginID:    detail.Summary.RemotePluginID,
-		Availability:      detail.Summary.Availability,
-		AuthPolicy:        detail.Summary.AuthPolicy,
-		DisplayNameTag:    detail.Summary.PluginDisplayNameTag,
-		InstallSuggestion: detail.Summary.InstallSuggestion,
-		Version:           detail.Summary.Version,
-		LocalVersion:      detail.Summary.LocalVersion,
-		DisabledReason:    detail.Summary.DisabledReason,
-		InstallPolicy:     detail.Summary.InstallPolicy,
-		MCPServers:        detail.MCPServers,
-		Apps:              detail.Apps,
-		Templates:         detail.AppTemplates,
-		Hooks:             detail.Hooks,
+		Enabled:                detail.Summary.Enabled,
+		HasSkills:              detail.Summary.HasSkills,
+		RemotePluginID:         detail.Summary.RemotePluginID,
+		Name:                   detail.Summary.Name,
+		MarketplaceName:        detail.Summary.MarketplaceName,
+		CanonicalAppID:         detail.CanonicalAppID,
+		ActiveDirectoryVersion: activeDirectoryVersion,
+		ActiveRemotePluginID:   activeRemotePluginID,
+	})
+	return string(data) + pluginReconcileCapabilitiesSignature(detail)
+}
+
+// pluginReconcileCapabilitiesSignature appends the capability sets the MCP,
+// app, hook, and skill runtimes are built from.
+func pluginReconcileCapabilitiesSignature(detail plugin.PluginDetail) string {
+	data, _ := json.Marshal(struct {
+		MCPServers []string
+		Apps       []plugin.AppSummary
+		Templates  []plugin.AppTemplateSummary
+		Hooks      []plugin.PluginHookSummary
+	}{
+		MCPServers: detail.MCPServers,
+		Apps:       detail.Apps,
+		Templates:  detail.AppTemplates,
+		Hooks:      detail.Hooks,
 	})
 	return string(data)
 }

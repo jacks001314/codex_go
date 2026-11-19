@@ -44,17 +44,56 @@ func remoteMetadataPlugin(renewal string) PluginDetail {
 	}
 }
 
-// Mirrors Rust remote_metadata_tests.rs::behavioral_metadata_changes_still_invalidate.
-func TestInstalledPluginMetadataBehavioralChangesStillInvalidateLikeRust(t *testing.T) {
+// Mirrors Rust remote_metadata_tests.rs::runtime_metadata_changes_invalidate.
+func TestInstalledPluginMetadataRuntimeChangesInvalidateLikeRust(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		mutate func(*PluginDetail)
 	}{
+		{"marketplace name", func(detail *PluginDetail) {
+			detail.Summary.MarketplaceName += "-other"
+			detail.MarketplaceName += "-other"
+		}},
 		{"remote plugin id", func(detail *PluginDetail) { detail.Summary.RemotePluginID += "-other" }},
 		{"name", func(detail *PluginDetail) { detail.Summary.Name += "-other" }},
+		{"canonical app id", func(detail *PluginDetail) {
+			value := "new-app"
+			detail.CanonicalAppID = &value
+		}},
+		{"enabled", func(detail *PluginDetail) { detail.Summary.Enabled = false }},
+		{"active directory version", func(detail *PluginDetail) {
+			detail.ActiveBundle = &PluginActiveBundle{DirectoryVersion: "2.0.0"}
+		}},
+		{"active remote plugin id", func(detail *PluginDetail) {
+			value := "plugin-test-other"
+			detail.ActiveBundle = &PluginActiveBundle{DirectoryVersion: "1.0.0", RemotePluginID: &value}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			previous := []PluginDetail{remoteMetadataPlugin("old")}
+			current := []PluginDetail{remoteMetadataPlugin("new")}
+			tc.mutate(&current[0])
+			if InstalledPluginMetadataEqual(previous, current) {
+				t.Fatalf("%s change must invalidate the loaded plugins", tc.name)
+			}
+		})
+	}
+	if InstalledPluginMetadataEqual([]PluginDetail{remoteMetadataPlugin("old")}, nil) {
+		t.Fatal("removing every installed plugin must invalidate")
+	}
+}
+
+// Mirrors Rust
+// remote_metadata_tests.rs::catalog_metadata_changes_do_not_invalidate_the_installed_runtime:
+// a release, installed-at, or policy change keeps the runtime while the catalog
+// comparison still reports the fresh metadata.
+func TestInstalledPluginMetadataCatalogChangesKeepRuntimeLikeRust(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*PluginDetail)
+	}{
 		{"version", func(detail *PluginDetail) { value := "2.0.0"; detail.Summary.Version = &value }},
 		{"installed at", func(detail *PluginDetail) { value := int64(1); detail.Summary.InstalledAt = &value }},
-		{"enabled", func(detail *PluginDetail) { detail.Summary.Enabled = false }},
 		{"install policy", func(detail *PluginDetail) { detail.Summary.InstallPolicy = InstallBlocked }},
 		{"install policy source", func(detail *PluginDetail) {
 			source := PluginInstallPolicySourceWorkspaceSetting
@@ -71,22 +110,24 @@ func TestInstalledPluginMetadataBehavioralChangesStillInvalidateLikeRust(t *test
 			plans := []string{"enterprise"}
 			detail.Summary.EligiblePlanTypes = &plans
 		}},
-		{"marketplace name", func(detail *PluginDetail) {
-			detail.Summary.MarketplaceName = "created-by-me-remote"
-			detail.MarketplaceName = "created-by-me-remote"
-		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			previous := []PluginDetail{remoteMetadataPlugin("old")}
-			current := []PluginDetail{remoteMetadataPlugin("new")}
+			current := []PluginDetail{remoteMetadataPlugin("old")}
 			tc.mutate(&current[0])
-			if InstalledPluginMetadataEqual(previous, current) {
-				t.Fatalf("%s change must invalidate the loaded plugins", tc.name)
+			if !InstalledPluginMetadataEqual(previous, current) {
+				t.Fatalf("%s change must keep the installed runtime", tc.name)
+			}
+			if changes := InstalledPluginMetadataChanges(previous, current); len(changes) != 0 {
+				t.Fatalf("%s changes = %#v, want none", tc.name, changes)
+			}
+			if RemoteCatalogMetadataEqual(
+				[]PluginMarketplaceEntry{{Name: remoteMetadataMarketplace, Plugins: []PluginSummary{previous[0].Summary}}},
+				[]PluginMarketplaceEntry{{Name: remoteMetadataMarketplace, Plugins: []PluginSummary{current[0].Summary}}},
+			) {
+				t.Fatalf("%s catalog change must still publish", tc.name)
 			}
 		})
-	}
-	if InstalledPluginMetadataEqual([]PluginDetail{remoteMetadataPlugin("old")}, nil) {
-		t.Fatal("removing every installed plugin must invalidate")
 	}
 }
 
@@ -156,10 +197,15 @@ func TestReplaceInstalledRemotePluginsOnlyReportsBehavioralChangesLikeRust(t *te
 		t.Fatalf("renewed interface was not published: %#v", stored.Summary.Interface)
 	}
 
-	renamed := remoteMetadataPlugin("second")
-	renamed.Summary.Version = stringPointerForPluginTest("2.0.0")
-	if changed := service.ReplaceInstalledRemotePlugins(remoteMetadataMarketplace, []PluginDetail{renamed}); !changed {
-		t.Fatal("a version change must report a change")
+	released := remoteMetadataPlugin("second")
+	released.Summary.Version = stringPointerForPluginTest("2.0.0")
+	if changed := service.ReplaceInstalledRemotePlugins(remoteMetadataMarketplace, []PluginDetail{released}); changed {
+		t.Fatal("an advertised release must keep the installed runtime")
+	}
+	disabled := remoteMetadataPlugin("second")
+	disabled.Summary.Enabled = false
+	if changed := service.ReplaceInstalledRemotePlugins(remoteMetadataMarketplace, []PluginDetail{disabled}); !changed {
+		t.Fatal("an enablement change must report a change")
 	}
 	if changed := service.ReplaceInstalledRemotePlugins(remoteMetadataMarketplace, nil); !changed {
 		t.Fatal("removing every installed plugin must report a change")
@@ -282,7 +328,7 @@ func TestInstalledPluginMetadataChangesAttributeFieldsByPluginIDLikeRust(t *test
 	want := map[string][]string{
 		"plugin-added":   {"added"},
 		"plugin-removed": {"removed"},
-		"plugin-test":    {"version", "enabled"},
+		"plugin-test":    {"enabled"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("metadata changes = %#v, want %#v", got, want)
@@ -300,9 +346,8 @@ func TestReplaceInstalledRemotePluginsReportsMetadataChangeIDLikeRust(t *testing
 	if again, _ := service.ReplaceInstalledRemotePluginsWithChanges(remoteMetadataMarketplace, []PluginDetail{remoteMetadataPlugin("renewed")}); again {
 		t.Fatal("a renewed display image must not invalidate installed plugin metadata")
 	}
-	version := "2"
 	behavioral := remoteMetadataPlugin("renewed")
-	behavioral.Summary.Version = &version
+	behavioral.Summary.Enabled = false
 	changed, changeID = service.ReplaceInstalledRemotePluginsWithChanges(remoteMetadataMarketplace, []PluginDetail{behavioral})
 	if !changed || changeID == "" {
 		t.Fatalf("behavior change reported changed = %v, changeID = %q", changed, changeID)

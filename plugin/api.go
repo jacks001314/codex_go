@@ -544,6 +544,20 @@ type PluginDetail struct {
 	// onboardingSkillPath is the resolved declaration from the plugin manifest;
 	// it is internal and never serialized.
 	onboardingSkillPath string
+	// ActiveBundle is the bundle identity this host has materialized for an
+	// enabled installed plugin (Rust #62105 `active_bundle`). It stays
+	// host-internal: runtime invalidation compares it while catalog consumers
+	// keep receiving the published metadata.
+	ActiveBundle *PluginActiveBundle
+}
+
+// PluginActiveBundle identifies the materialized plugin bundle, mirroring
+// Rust's `ActiveRemotePluginBundle` (#62105). The directory version is the
+// active version segment under the plugin cache; the remote plugin id is the
+// persisted install receipt, which another process may have rewritten.
+type PluginActiveBundle struct {
+	DirectoryVersion string
+	RemotePluginID   *string
 }
 
 func (d *PluginDetail) MarshalJSON() ([]byte, error) {
@@ -2109,8 +2123,42 @@ func (s *PluginService) addPluginLocked(detail PluginDetail) PluginDetail {
 		value := summary.Description
 		detail.Description = &value
 	}
+	detail.ActiveBundle = s.activePluginBundle(summary)
 	s.plugins[summary.ID] = cloneDetail(detail)
 	return detail
+}
+
+// activePluginBundle reports the bundle this host currently has materialized
+// for an enabled installed plugin (Rust #62105
+// `active_remote_plugin_bundle`). Disabled plugins carry no bundle so an
+// enablement flip alone decides the runtime identity.
+func (s *PluginService) activePluginBundle(summary PluginSummary) *PluginActiveBundle {
+	if s == nil || !summary.Installed || !summary.Enabled {
+		return nil
+	}
+	store, err := NewPluginStore(s.codexHome)
+	if err != nil {
+		return nil
+	}
+	pluginIDValue, err := ParsePluginId(pluginID(summary.Name, summary.MarketplaceName))
+	if err != nil {
+		return nil
+	}
+	root, ok := store.ActivePluginRoot(pluginIDValue)
+	if !ok {
+		return nil
+	}
+	version := filepath.Base(root)
+	if version == "" || version == "." || version == string(filepath.Separator) {
+		return nil
+	}
+	bundle := &PluginActiveBundle{DirectoryVersion: version}
+	if remoteID, err := store.RemotePluginID(pluginIDValue); err == nil {
+		if remoteID = strings.TrimSpace(remoteID); remoteID != "" {
+			bundle.RemotePluginID = &remoteID
+		}
+	}
+	return bundle
 }
 
 // ReplaceInstalledRemotePlugins replaces a marketplace's installed remote plugin
@@ -3940,6 +3988,14 @@ func cloneDetail(detail PluginDetail) PluginDetail {
 	if detail.CanonicalAppID != nil {
 		value := *detail.CanonicalAppID
 		detail.CanonicalAppID = &value
+	}
+	if detail.ActiveBundle != nil {
+		bundle := *detail.ActiveBundle
+		if bundle.RemotePluginID != nil {
+			value := *bundle.RemotePluginID
+			bundle.RemotePluginID = &value
+		}
+		detail.ActiveBundle = &bundle
 	}
 	return detail
 }

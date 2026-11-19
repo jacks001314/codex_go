@@ -36,37 +36,63 @@ func InstalledPluginMetadataEqual(previous []PluginDetail, current []PluginDetai
 	return true
 }
 
-// installedPluginMetadataEqual compares exactly the behavior-determining fields
+// installedPluginMetadataEqual compares exactly the runtime-determining fields
 // Rust compares, through the shared field-change list so invalidation and its
-// diagnostics never drift (#60505).
+// diagnostics never drift (#60505, #62105).
 func installedPluginMetadataEqual(previous PluginDetail, current PluginDetail) bool {
-	return len(installedPluginMetadataFieldChanges(previous.Summary, current.Summary)) == 0
+	return len(installedPluginMetadataFieldChanges(previous, current)) == 0
 }
 
-// installedPluginMetadataFieldChanges names the behavior-determining fields that
-// differ, using Rust's remote_metadata.rs field names (#60505). Only names are
-// reported so diagnostics never log plugin values. Go has no `canonical_app_id`
-// field, so that Rust entry has no counterpart here.
-func installedPluginMetadataFieldChanges(previous PluginSummary, current PluginSummary) []string {
+// installedPluginRuntimeState is the account metadata consumed when building
+// installed plugin runtimes (Rust `InstalledPluginRuntimeState`, #62105).
+// Catalog release, policy, and display fields are deliberately absent: an
+// advertised version or policy change must keep live MCP sessions and cached
+// skills while the active bundle stays the same.
+type installedPluginRuntimeState struct {
+	MarketplaceName        string
+	RemotePluginID         string
+	Name                   string
+	CanonicalAppID         *string
+	Enabled                bool
+	ActiveDirectoryVersion string
+	ActiveRemotePluginID   *string
+}
+
+func installedPluginRuntimeStateOf(detail PluginDetail) installedPluginRuntimeState {
+	state := installedPluginRuntimeState{
+		MarketplaceName: detail.Summary.MarketplaceName,
+		RemotePluginID:  detail.Summary.RemotePluginID,
+		Name:            detail.Summary.Name,
+		CanonicalAppID:  detail.CanonicalAppID,
+		Enabled:         detail.Summary.Enabled,
+	}
+	if !state.Enabled || detail.ActiveBundle == nil {
+		return state
+	}
+	state.ActiveDirectoryVersion = detail.ActiveBundle.DirectoryVersion
+	state.ActiveRemotePluginID = detail.ActiveBundle.RemotePluginID
+	return state
+}
+
+// installedPluginMetadataFieldChanges names the runtime-determining fields that
+// differ, using Rust's remote_metadata.rs field names (#62105). Only names are
+// reported so diagnostics never log plugin values.
+func installedPluginMetadataFieldChanges(previous PluginDetail, current PluginDetail) []string {
+	before := installedPluginRuntimeStateOf(previous)
+	after := installedPluginRuntimeStateOf(current)
 	var changed []string
 	add := func(field string, differs bool) {
 		if differs {
 			changed = append(changed, field)
 		}
 	}
-	add("marketplace_name", previous.MarketplaceName != current.MarketplaceName)
-	add("id", previous.RemotePluginID != current.RemotePluginID)
-	add("name", previous.Name != current.Name)
-	add("version", !reflect.DeepEqual(previous.Version, current.Version))
-	add("installed_at", !reflect.DeepEqual(previous.InstalledAt, current.InstalledAt))
-	add("enabled", previous.Enabled != current.Enabled)
-	add("install_policy", previous.InstallPolicy != current.InstallPolicy)
-	add("install_policy_source", !reflect.DeepEqual(previous.InstallPolicySource, current.InstallPolicySource))
-	add("must_show_installation_interstitial", !reflect.DeepEqual(previous.MustShowInstallationInterstitial, current.MustShowInstallationInterstitial))
-	add("auth_policy", previous.AuthPolicy != current.AuthPolicy)
-	add("availability", previous.Availability != current.Availability)
-	add("disabled_reason", !reflect.DeepEqual(previous.DisabledReason, current.DisabledReason))
-	add("eligible_plan_types", !reflect.DeepEqual(previous.EligiblePlanTypes, current.EligiblePlanTypes))
+	add("marketplace_name", before.MarketplaceName != after.MarketplaceName)
+	add("id", before.RemotePluginID != after.RemotePluginID)
+	add("name", before.Name != after.Name)
+	add("canonical_app_id", !reflect.DeepEqual(before.CanonicalAppID, after.CanonicalAppID))
+	add("enabled", before.Enabled != after.Enabled)
+	add("active_directory_version", before.ActiveDirectoryVersion != after.ActiveDirectoryVersion)
+	add("active_remote_plugin_id", !reflect.DeepEqual(before.ActiveRemotePluginID, after.ActiveRemotePluginID))
 	return changed
 }
 
@@ -105,7 +131,7 @@ func InstalledPluginMetadataChanges(previous []PluginDetail, current []PluginDet
 			continue
 		}
 		delete(prior, id)
-		fields := installedPluginMetadataFieldChanges(previousDetail.detail.Summary, detail.Summary)
+		fields := installedPluginMetadataFieldChanges(previousDetail.detail, detail)
 		if previousDetail.index != index && sameMembers {
 			// A removed plugin shifts later indices without reordering survivors.
 			fields = append(fields, "position")

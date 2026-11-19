@@ -25,6 +25,7 @@ func TestRemoteInstalledPluginDisplayRefreshPreservesDerivedCachesLikeRust(t *te
 	var mu sync.Mutex
 	displayName := "Demo plugin"
 	status := "AVAILABLE"
+	enabled := true
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/ps/plugins/installed" {
 			http.NotFound(w, request)
@@ -38,7 +39,7 @@ func TestRemoteInstalledPluginDisplayRefreshPreservesDerivedCachesLikeRust(t *te
 			return
 		}
 		mu.Lock()
-		body := fmt.Sprintf(`{"plugins":[{"id":"plugins~Plugin_demo","name":"demo-plugin","canonical_app_id":"demo-app","scope":"GLOBAL","enabled":true,"status":%q,"release":{"display_name":%q,"description":"Demo plugin"}}],"pagination":{"next_page_token":null}}`, status, displayName)
+		body := fmt.Sprintf(`{"plugins":[{"id":"plugins~Plugin_demo","name":"demo-plugin","canonical_app_id":"demo-app","scope":"GLOBAL","enabled":%t,"status":%q,"release":{"display_name":%q,"description":"Demo plugin"}}],"pagination":{"next_page_token":null}}`, enabled, status, displayName)
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(body))
@@ -112,7 +113,24 @@ func TestRemoteInstalledPluginDisplayRefreshPreservesDerivedCachesLikeRust(t *te
 	seed()
 	before = router.testMCPEpoch()
 	mu.Lock()
+	// Rust #62105: an availability change is catalog metadata, so it keeps the
+	// live runtime while the renewed payload is still published.
 	status = "DISABLED_BY_ADMIN"
+	mu.Unlock()
+	if _, err := router.reconcileInstalledRemotePlugins(context.Background()); err != nil {
+		t.Fatalf("catalog-only reconcile error = %v", err)
+	}
+	if cachedSkills() == 0 {
+		t.Fatal("a catalog-only change cleared the plugin/skill caches")
+	}
+	if router.testMCPEpoch() != before {
+		t.Fatal("a catalog-only change invalidated the MCP runtimes")
+	}
+
+	seed()
+	before = router.testMCPEpoch()
+	mu.Lock()
+	enabled = false
 	mu.Unlock()
 	if _, err := router.reconcileInstalledRemotePlugins(context.Background()); err != nil {
 		t.Fatalf("behavioral reconcile error = %v", err)

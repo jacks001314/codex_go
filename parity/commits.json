@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "59ac39addbbcd3499319c805a916846ca8ac5fef",
+ "rustToInclusive": "9a56c2b1aa994f696b144ba863200f4b73a74c0a",
  "commits": [
   {
    "sha": "27c05a52e0cdf93ef7db5a96ccaf88d6b9095472",
@@ -50378,6 +50378,20 @@
    "evidence": [
     "codex_go 26da1d19: Surface status line discovery failures and lookup timeouts like Rust (#61993).",
     "plan: update/plan_2026_11_16.md batch 69"
+   ]
+  },
+  {
+   "sha": "9a56c2b1aa994f696b144ba863200f4b73a74c0a",
+   "subject": "Preserve plugin runtimes across catalog metadata updates (#62105)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "installed-plugin invalidation compares runtime identity, enablement, canonical ownership and the active bundle (directory version + persisted remote id); catalog release/policy/display changes keep live MCP sessions and cached skills.",
+    "tests: plugin/remote_metadata_test.go, plugin/plugin_active_bundle_like_rust_test.go, appserver/plugin_reconcile_test.go, appserver/plugin_remote_metadata_test.go",
+    "plan: update/plan_2026_11_19.md batch 2"
    ]
   }
  ]
