@@ -24,7 +24,14 @@ const (
 	InvalidParamsErrorCode       = -32602
 
 	RemoteControlReadyTimeout = 10 * time.Second
-	ControlSocketProbeTimeout = 200 * time.Millisecond
+	// ControlSocketProbeTimeout bounds one passive control-socket probe.
+	// Rust client::probe wraps the connect, the initialize exchange, and the
+	// initialized notification in CONTROL_SOCKET_RESPONSE_TIMEOUT, so a healthy
+	// daemon that needs longer than a few hundred milliseconds to build a
+	// connection's router (configuration, plugins, auth and state startup under
+	// load) is still reported ready. A longer probe only paces the readiness
+	// loop; the overall start timeout is unchanged.
+	ControlSocketProbeTimeout = ControlSocketResponseTimeout
 	// ControlSocketResponseTimeout bounds one control-socket exchange (Rust
 	// client::CONTROL_SOCKET_RESPONSE_TIMEOUT).
 	ControlSocketResponseTimeout = 2 * time.Second
@@ -328,13 +335,17 @@ func StartRemoteControlPairingOnSocket(socketPath string) (*remotecontrol.Pairin
 }
 
 func ProbeAppServerVersionOnSocket(socketPath string, timeout time.Duration) (string, error) {
-	conn, err := connectUnixSocketWithRetry(socketPath, timeout, 25*time.Millisecond)
+	// Rust client::probe holds the connect and the initialize exchange under a
+	// single deadline, so a slow handshake cannot double the probe's budget.
+	timeout = defaultDuration(timeout, ControlSocketProbeTimeout)
+	deadline := time.Now().Add(timeout)
+	conn, err := connectUnixSocketWithRetry(socketPath, time.Until(deadline), 25*time.Millisecond)
 	if err != nil {
 		return "", err
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 	client := newLocalSocketRemoteControlClient(conn)
-	client.setDeadline(time.Now().Add(defaultDuration(timeout, ControlSocketProbeTimeout)))
+	client.setDeadline(deadline)
 	response, err := client.initialize()
 	if err != nil {
 		return "", err
