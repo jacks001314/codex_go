@@ -41,7 +41,6 @@ a4495dd5c9b99c528a73bba1a5d39d4048834db0	2026-11-18	Keep sandbox preparation wit
 ba8ab2d0501f13f70d109d090a1951d1699cd297	2026-11-18	Allow paging through long choices in async questions (#62209)
 bcff988bd12917283be7040768bfe928f63b5ff0	2026-11-18	Resolve Linux sandbox mode once before launching the helper (#62215)
 24e236514bebcef874c2d38ce5df26164aa50ca4	2026-11-18	Allow Bedrock Runtime selection during setup and login (#62222)
-ca21fe65d18a9b6326759fb4263c65dfbb645aa5	2026-11-18	Tag Guardian review counts with turn origin (#62225)
 6d9f0199ed0cfdd184754e593e0625917ad0ca28	2026-11-18	Refactor realtime handoff and history access (#62245)
 4389a526d51a5a7600e0648436a7142a304f0188	2026-11-18	Derive realtime input receipts from thread history (#62251)
 29cb67623c6c4360b29d09e66010ac71cef1a693	2026-11-18	Gate local realtime frame history on paginated storage (#62271)
