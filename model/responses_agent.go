@@ -5046,6 +5046,13 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 		// the usage-limit (#48174), usage-not-included and quota (#44492)
 		// branches alike, rather than only the usage-limit branch.
 		if errorBody, ok := decodeUsageLimitErrorBody(body); ok {
+			if errorBody.Code != nil {
+				// Rust #62329 classifies scoped spend limits before the generic
+				// quota arm and keeps them terminal even with Retry-After.
+				if apiErr := spendLimitError(strings.TrimSpace(*errorBody.Code), statusCode); apiErr != nil {
+					return apiErr
+				}
+			}
 			switch {
 			case errorBody.Type != nil && strings.TrimSpace(*errorBody.Type) == "usage_limit_reached":
 				return usageLimitReachedAPIError(statusCode, usageLimitEvidenceFromResponse(errorBody, headers))
@@ -5155,11 +5162,11 @@ func fallbackPolicyMessage(message string, fallback string) string {
 }
 
 // responsesQuotaErrorCodes mirrors Rust #44492's HTTP 429 quota classification.
+// Rust #62329 moved the project and organization spend limits out of this arm
+// into their own scoped spend-limit errors.
 var responsesQuotaErrorCodes = map[string]bool{
 	"insufficient_quota":                true,
 	"credit_balance_exhausted":          true,
-	"organization_spend_limit_exceeded": true,
-	"project_spend_limit_exceeded":      true,
 	"organization_usage_limit_exceeded": true,
 }
 

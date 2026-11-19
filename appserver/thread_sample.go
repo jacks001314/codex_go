@@ -21,7 +21,6 @@ import (
 
 const (
 	threadSampleTimeout      = 30 * time.Second
-	threadSampleMaxPrompt    = 4000
 	threadSampleMaxOutput    = 64 * 1024
 	threadSampleOriginator   = "thread_sample"
 	threadSampleThreadSource = "thread_sample"
@@ -44,8 +43,8 @@ func (r *RuntimeRouter) handleThreadSampleRuntime(request *Request) (*ThreadSamp
 	threadID := strings.TrimSpace(params.ThreadID)
 	expectedTurnID := strings.TrimSpace(params.ExpectedTurnID)
 	prompt := params.Prompt
-	if expectedTurnID == "" || strings.TrimSpace(prompt) == "" || len(prompt) > threadSampleMaxPrompt {
-		return nil, invalidParams(fmt.Sprintf("thread/sample requires expectedTurnId and a prompt of at most %d bytes", threadSampleMaxPrompt))
+	if expectedTurnID == "" || strings.TrimSpace(prompt) == "" {
+		return nil, invalidParams("thread/sample requires a nonblank expectedTurnId and prompt")
 	}
 	sampleBase, unregisterSample := r.registerThreadSampleCancel(request)
 	defer unregisterSample()

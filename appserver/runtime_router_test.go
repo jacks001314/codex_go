@@ -21500,11 +21500,30 @@ func TestTurnAnalyticsErrorFieldsFromAPIErrorSerializesDataVariantsLikeRust(t *t
 			wantKind:  "misalignment_policy_violation",
 		},
 		{
-			// Rust #46306 maps BioPolicy to the app-server's `other` variant.
+			// Rust #62176 exposes BioPolicy as its own app-server v2 variant.
 			name:      "bio policy",
 			err:       &codexapi.APIError{Kind: codexapi.ErrorBioPolicy, Status: http.StatusBadRequest, Message: "blocked"},
-			wantError: `"other"`,
+			wantError: `"bioPolicy"`,
 			wantKind:  "bio_policy",
+		},
+		{
+			// Rust #62329 exposes each spend-limit scope as its own variant.
+			name:      "api key spend limit",
+			err:       &codexapi.APIError{Kind: codexapi.ErrorAPIKeySpendLimitExceeded, Status: http.StatusTooManyRequests, Message: "limit"},
+			wantError: `"apiKeySpendLimitExceeded"`,
+			wantKind:  "api_key_spend_limit_exceeded",
+		},
+		{
+			name:      "project spend limit",
+			err:       &codexapi.APIError{Kind: codexapi.ErrorProjectSpendLimitExceeded, Status: http.StatusTooManyRequests, Message: "limit"},
+			wantError: `"projectSpendLimitExceeded"`,
+			wantKind:  "project_spend_limit_exceeded",
+		},
+		{
+			name:      "organization spend limit",
+			err:       &codexapi.APIError{Kind: codexapi.ErrorOrganizationSpendLimitExceeded, Status: http.StatusTooManyRequests, Message: "limit"},
+			wantError: `"organizationSpendLimitExceeded"`,
+			wantKind:  "organization_spend_limit_exceeded",
 		},
 		{
 			// Rust #47353 maps InvalidPrompt to `other` in app-server v2 while

@@ -62,12 +62,15 @@ const (
 type TurnRuntimeCodexErrorKind string
 
 const (
-	TurnRuntimeCodexErrorActiveTurnNotSteerable      TurnRuntimeCodexErrorKind = "ActiveTurnNotSteerable"
-	TurnRuntimeCodexErrorCyberPolicy                 TurnRuntimeCodexErrorKind = "CyberPolicy"
-	TurnRuntimeCodexErrorMisalignmentPolicyViolation TurnRuntimeCodexErrorKind = "MisalignmentPolicyViolation"
-	TurnRuntimeCodexErrorServerOverloaded            TurnRuntimeCodexErrorKind = "ServerOverloaded"
-	TurnRuntimeCodexErrorUsageLimitExceeded          TurnRuntimeCodexErrorKind = "UsageLimitExceeded"
-	TurnRuntimeCodexErrorResponseTooManyFailedTries  TurnRuntimeCodexErrorKind = "ResponseTooManyFailedAttempts"
+	TurnRuntimeCodexErrorActiveTurnNotSteerable         TurnRuntimeCodexErrorKind = "ActiveTurnNotSteerable"
+	TurnRuntimeCodexErrorCyberPolicy                    TurnRuntimeCodexErrorKind = "CyberPolicy"
+	TurnRuntimeCodexErrorMisalignmentPolicyViolation    TurnRuntimeCodexErrorKind = "MisalignmentPolicyViolation"
+	TurnRuntimeCodexErrorServerOverloaded               TurnRuntimeCodexErrorKind = "ServerOverloaded"
+	TurnRuntimeCodexErrorUsageLimitExceeded             TurnRuntimeCodexErrorKind = "UsageLimitExceeded"
+	TurnRuntimeCodexErrorAPIKeySpendLimitExceeded       TurnRuntimeCodexErrorKind = "ApiKeySpendLimitExceeded"
+	TurnRuntimeCodexErrorProjectSpendLimitExceeded      TurnRuntimeCodexErrorKind = "ProjectSpendLimitExceeded"
+	TurnRuntimeCodexErrorOrganizationSpendLimitExceeded TurnRuntimeCodexErrorKind = "OrganizationSpendLimitExceeded"
+	TurnRuntimeCodexErrorResponseTooManyFailedTries     TurnRuntimeCodexErrorKind = "ResponseTooManyFailedAttempts"
 )
 
 type TurnRuntimeCodexErrorInfo struct {
@@ -680,7 +683,12 @@ func AppServerRateLimitErrorKind(info *TurnRuntimeCodexErrorInfo) (RateLimitErro
 	switch info.Kind {
 	case TurnRuntimeCodexErrorServerOverloaded:
 		return RateLimitErrorServerOverloaded, true
-	case TurnRuntimeCodexErrorUsageLimitExceeded:
+	case TurnRuntimeCodexErrorUsageLimitExceeded,
+		// Rust #62329 treats every scoped spend limit as a usage limit so the
+		// credits nudge and model switch prompts fire for all four variants.
+		TurnRuntimeCodexErrorAPIKeySpendLimitExceeded,
+		TurnRuntimeCodexErrorProjectSpendLimitExceeded,
+		TurnRuntimeCodexErrorOrganizationSpendLimitExceeded:
 		return RateLimitErrorUsageLimit, true
 	case TurnRuntimeCodexErrorResponseTooManyFailedTries:
 		if info.HTTPStatusCode == 429 {

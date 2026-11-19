@@ -73,7 +73,7 @@ func TestRemoteConnectionStatusValueMatchesRust(t *testing.T) {
 	}
 
 	socket := RemoteConnectionStatusValue(RemoteConnectionUnixSocket, "/tmp/codex.sock", nil)
-	if socket == nil || socket.Address != "unix:///tmp/codex.sock" || socket.Version != "unknown" {
+	if socket == nil || socket.Address != "unix:///tmp/codex.sock" || socket.Version != "" {
 		t.Fatalf("unix status = %#v", socket)
 	}
 

@@ -126,12 +126,45 @@ func (t *streamTunnel) relay(in io.Reader, out io.Writer) error {
 		_, err := io.CopyBuffer(t.upload, in, make([]byte, copyBufferSize))
 		_ = t.upload.CloseWithError(err)
 	}()
-	_, err := io.CopyBuffer(out, t.body, make([]byte, copyBufferSize))
+	_, err := copyAndFlush(out, t.body)
 	t.close()
 	if err != nil {
 		return streamError()
 	}
 	return nil
+}
+
+// copyAndFlush forwards each response chunk and flushes a buffered local
+// writer before reading more. Rust's HTTP/2 tunnel flushes after every DATA
+// frame so interactive responses reach the process while the stream is open
+// (Rust #62186).
+func copyAndFlush(out io.Writer, in io.Reader) (int64, error) {
+	buffer := make([]byte, copyBufferSize)
+	var written int64
+	for {
+		count, readErr := in.Read(buffer)
+		if count > 0 {
+			n, writeErr := out.Write(buffer[:count])
+			written += int64(n)
+			if writeErr != nil {
+				return written, writeErr
+			}
+			if n != count {
+				return written, io.ErrShortWrite
+			}
+			if flusher, ok := out.(interface{ Flush() error }); ok {
+				if flushErr := flusher.Flush(); flushErr != nil {
+					return written, flushErr
+				}
+			}
+		}
+		if readErr == io.EOF {
+			return written, nil
+		}
+		if readErr != nil {
+			return written, readErr
+		}
+	}
 }
 
 // h3Connection owns one QUIC/HTTP/3 connection to the gateway.

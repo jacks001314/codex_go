@@ -9,24 +9,29 @@ import (
 )
 
 // TestResponsesHTTPErrorDistinguishesHTTPQuotaErrorsFromRateLimits mirrors Rust
-// #44492: HTTP 429 quota bodies map to the quota error kind while
-// rate_limit_exceeded / slow_down keep the generic rate-limit error.
+// #44492/#62329: HTTP 429 quota bodies map to the quota error kind, scoped
+// spend limits keep their own kinds, and rate_limit_exceeded / slow_down keep
+// the generic rate-limit error.
 func TestResponsesHTTPErrorDistinguishesHTTPQuotaErrorsFromRateLimits(t *testing.T) {
-	for _, body := range []string{
-		`{"error":{"type":"insufficient_quota"}}`,
-		`{"error":{"code":"insufficient_quota"}}`,
-		`{"error":{"code":"credit_balance_exhausted"}}`,
-		`{"error":{"code":"organization_spend_limit_exceeded"}}`,
-		`{"error":{"code":"project_spend_limit_exceeded"}}`,
-		`{"error":{"code":"organization_usage_limit_exceeded"}}`,
+	for _, tc := range []struct {
+		body string
+		kind codexapi.APIErrorKind
+	}{
+		{`{"error":{"type":"insufficient_quota"}}`, codexapi.ErrorQuotaExceeded},
+		{`{"error":{"code":"insufficient_quota"}}`, codexapi.ErrorQuotaExceeded},
+		{`{"error":{"code":"credit_balance_exhausted"}}`, codexapi.ErrorQuotaExceeded},
+		{`{"error":{"type":"insufficient_quota","code":"api_key_spend_limit_exceeded"}}`, codexapi.ErrorAPIKeySpendLimitExceeded},
+		{`{"error":{"type":"insufficient_quota","code":"organization_spend_limit_exceeded"}}`, codexapi.ErrorOrganizationSpendLimitExceeded},
+		{`{"error":{"type":"insufficient_quota","code":"project_spend_limit_exceeded"}}`, codexapi.ErrorProjectSpendLimitExceeded},
+		{`{"error":{"code":"organization_usage_limit_exceeded"}}`, codexapi.ErrorQuotaExceeded},
 	} {
-		err := responsesHTTPError("OpenAI", http.StatusTooManyRequests, http.Header{}, []byte(body))
+		err := responsesHTTPError("OpenAI", http.StatusTooManyRequests, http.Header{}, []byte(tc.body))
 		var apiErr *codexapi.APIError
 		if !errors.As(err, &apiErr) {
-			t.Fatalf("body %s: error type = %T, want *codexapi.APIError", body, err)
+			t.Fatalf("body %s: error type = %T, want *codexapi.APIError", tc.body, err)
 		}
-		if apiErr.Kind != codexapi.ErrorQuotaExceeded || apiErr.Status != http.StatusTooManyRequests {
-			t.Fatalf("body %s: error = %#v, want quota exceeded with status 429", body, apiErr)
+		if apiErr.Kind != tc.kind || apiErr.Status != http.StatusTooManyRequests {
+			t.Fatalf("body %s: error = %#v, want %s with status 429", tc.body, apiErr, tc.kind)
 		}
 	}
 

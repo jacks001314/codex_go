@@ -64,9 +64,11 @@ type DaemonMenuConfig struct {
 func DaemonMenuView(config DaemonMenuConfig) SelectionView {
 	status := daemonMenuStatusDisconnected
 	if config.LocalDaemon {
-		if version := strings.TrimSpace(config.DaemonVersion); version != "" {
-			status = "Running daemon: " + version
+		version := strings.TrimSpace(config.DaemonVersion)
+		if version == "" {
+			version = "unknown"
 		}
+		status = "Running daemon: " + version
 	}
 	// Rust's DaemonMenuHeader carries the status (and any guidance) only; the
 	// picker title supplies the bold "Daemon" line.

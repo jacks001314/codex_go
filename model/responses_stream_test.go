@@ -675,11 +675,30 @@ func TestResponseFailedErrorDistinguishesCapacityFromSlowDownLikeRust(t *testing
 		}
 	})
 
-	for _, code := range []string{
-		"credit_balance_exhausted",
-		"organization_spend_limit_exceeded",
-		"project_spend_limit_exceeded",
-	} {
+	t.Run("streamed policy error events terminate", func(t *testing.T) {
+		for _, tc := range []struct {
+			code string
+			kind codexapi.APIErrorKind
+		}{
+			{code: "bio_policy", kind: codexapi.ErrorBioPolicy},
+			{code: "cyber_policy", kind: codexapi.ErrorCyberPolicy},
+			{code: "invalid_prompt", kind: codexapi.ErrorInvalidPrompt},
+			{code: "policy_capacity_unavailable", kind: codexapi.ErrorPolicyCapacityUnavailable},
+			{code: "server_is_overloaded", kind: codexapi.ErrorServerOverloaded},
+		} {
+			acc := &responsesStreamAccumulator{}
+			_, err := acc.apply(&responsesSSEEvent{
+				Event: "error",
+				Data:  []byte(`{"type":"error","error":{"code":"` + tc.code + `","message":"blocked"}}`),
+			}, nil)
+			var apiErr *codexapi.APIError
+			if !errors.As(err, &apiErr) || apiErr.Kind != tc.kind {
+				t.Fatalf("%s error = %#v, want %s", tc.code, err, tc.kind)
+			}
+		}
+	})
+
+	for _, code := range []string{"credit_balance_exhausted"} {
 		t.Run(code+" terminates as quota", func(t *testing.T) {
 			raw := `{"type":"response.failed","response":{"error":{"code":"` + code + `","message":"quota exhausted"}}}`
 			err := responseFailedError([]byte(raw))

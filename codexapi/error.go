@@ -14,7 +14,13 @@ const (
 	ErrorStream                APIErrorKind = "stream"
 	ErrorContextWindowExceeded APIErrorKind = "contextWindowExceeded"
 	ErrorQuotaExceeded         APIErrorKind = "quotaExceeded"
-	ErrorUsageNotIncluded      APIErrorKind = "usageNotIncluded"
+	// Spend-limit kinds mirror Rust #62329's APISpendLimitExceeded scopes so
+	// clients can tell an API key, project, or organization limit apart from a
+	// generic quota failure. All three are terminal even with Retry-After.
+	ErrorAPIKeySpendLimitExceeded       APIErrorKind = "apiKeySpendLimitExceeded"
+	ErrorProjectSpendLimitExceeded      APIErrorKind = "projectSpendLimitExceeded"
+	ErrorOrganizationSpendLimitExceeded APIErrorKind = "organizationSpendLimitExceeded"
+	ErrorUsageNotIncluded               APIErrorKind = "usageNotIncluded"
 	// ErrorSessionBudgetExceeded is the provider's terminal `budget_reached`
 	// failure (Rust #59228).
 	ErrorSessionBudgetExceeded       APIErrorKind = "sessionBudgetExceeded"
@@ -140,6 +146,12 @@ func (e *APIError) Error() string {
 		return "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying."
 	case ErrorQuotaExceeded:
 		return "Quota exceeded. Check your plan and billing details."
+	case ErrorAPIKeySpendLimitExceeded:
+		return "Your API key has reached its spend limit."
+	case ErrorProjectSpendLimitExceeded:
+		return "Your API project has reached its spend limit."
+	case ErrorOrganizationSpendLimitExceeded:
+		return "Your API organization has reached its spend limit."
 	case ErrorUsageNotIncluded:
 		return "To use Codex with your ChatGPT plan, upgrade to Plus: https://chatgpt.com/explore/plus."
 	case ErrorSessionBudgetExceeded:

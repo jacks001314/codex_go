@@ -86,7 +86,6 @@ func TestResolveModelSearchPolicyAndFallbackLikeRust(t *testing.T) {
 		request      map[string]any
 		owner        modelSearchProvider
 		usedMCP      bool
-		attribution  bool
 		kind         mcp.SearchDiscoveryKind
 		want         modelSearchProvider
 		wantFallback bool
@@ -96,7 +95,6 @@ func TestResolveModelSearchPolicyAndFallbackLikeRust(t *testing.T) {
 		{name: "unavailable does not fall back", request: map[string]any{}, kind: mcp.SearchDiscoveryUnavailable, wantDisabled: true},
 		{name: "hosted use blocks fallback", request: map[string]any{}, kind: mcp.SearchDiscoveryCritical, usedMCP: true, wantDisabled: true},
 		{name: "MCP ownership blocks fallback", request: map[string]any{}, kind: mcp.SearchDiscoveryCritical, owner: modelSearchClientMCP, wantDisabled: true},
-		{name: "attribution blocks fallback", request: map[string]any{}, kind: mcp.SearchDiscoveryCritical, attribution: true, wantDisabled: true},
 		{name: "host request does not authorize native fallback", request: map[string]any{"request_id": "request-1"}, kind: mcp.SearchDiscoveryCritical, wantDisabled: true},
 		{name: "domain mismatch blocks hosted", request: map[string]any{"openai/search_context": map[string]any{"allowed_domains": []any{"other.example"}}}, kind: mcp.SearchDiscoveryReady, wantDisabled: true},
 	}
@@ -107,7 +105,7 @@ func TestResolveModelSearchPolicyAndFallbackLikeRust(t *testing.T) {
 			}
 			got := resolveModelSearchSelection(context.Background(), modelSearchResolveInput{
 				cfg: cfg, modelInfo: hosted, tools: []mcp.RuntimeToolInfo{modelSearchTestTool()}, nativeAvailable: true,
-				owner: test.owner, usedMCP: test.usedMCP, attributionBlocks: test.attribution,
+				owner: test.owner, usedMCP: test.usedMCP,
 				turnMetadata: map[string]any{"mcp_request_meta": test.request},
 			}, discover)
 			if test.wantDisabled {

@@ -22,6 +22,10 @@ const (
 	RunnerPreparationMetric = "codex.sandbox_integrity.preparation_ms"
 	// RunnerDurationMetric records total runner duration.
 	RunnerDurationMetric = "codex.sandbox_integrity.duration_ms"
+	// runtimeIntegrityChecksEnabled is false while Rust's runtime integrity
+	// checks are paused at the shared runner entry point (Rust #62389). The
+	// checker remains available to isolated tests.
+	runtimeIntegrityChecksEnabled = false
 )
 
 // RunnerRequest is the executor-local observation input. It is independent of
@@ -47,6 +51,9 @@ var integrityRunnerWork = executeIntegrityChecks
 // execution. Preparation and checks run off the caller's goroutine; timing out
 // stops waiting but does not cancel the observational work.
 func RunIntegrityChecks(ctx context.Context, request *RunnerRequest) {
+	if !runtimeIntegrityChecksEnabled {
+		return
+	}
 	runIntegrityChecks(ctx, request, metrics.Global())
 }
 

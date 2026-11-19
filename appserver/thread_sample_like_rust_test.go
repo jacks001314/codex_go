@@ -220,7 +220,6 @@ func TestThreadSampleRejectsPromptAndStaleTurnLikeRust(t *testing.T) {
 	initializeThreadSampleConnection(t, router, "conn-1")
 	for name, params := range map[string]ThreadSampleParams{
 		"empty prompt": {ThreadID: string(record.ID), ExpectedTurnID: "turn-latest", Prompt: "   "},
-		"oversized":    {ThreadID: string(record.ID), ExpectedTurnID: "turn-latest", Prompt: strings.Repeat("x", threadSampleMaxPrompt+1)},
 		"stale turn":   {ThreadID: string(record.ID), ExpectedTurnID: "turn-old", Prompt: "ok"},
 	} {
 		response := router.Handle(&Request{JSONRPC: "2.0", ID: IntID(1), Method: MethodThreadSample, ConnectionID: "conn-1", Params: mustJSON(t, params)})

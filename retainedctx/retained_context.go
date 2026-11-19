@@ -130,6 +130,16 @@ func (s RetainedInputSource) AcceptanceOrder() (uint64, bool) {
 	return *s.Order, true
 }
 
+// ModelSearchState is the persisted owner of a thread's search references
+// (Rust `ModelSearchState`, #62144).
+type ModelSearchState string
+
+const (
+	ModelSearchStateUnused     ModelSearchState = "unused"
+	ModelSearchStateStandalone ModelSearchState = "standalone"
+	ModelSearchStateSearchMCP  ModelSearchState = "search_mcp"
+)
+
 // HarnessMetadata is the retained model's view of Rust's `CodexHarnessMetadata`.
 // Go persists harness metadata as an untyped map, so this type carries only the
 // members the retained-context model consumes.
@@ -180,7 +190,10 @@ type HarnessMetadata struct {
 	// never model-visible (Rust `CodexHarnessMetadata::mcp_attribution`). An
 	// unreadable checkpoint decodes as an attribution error rather than being
 	// dropped, so the loss stays visible to the host.
-	McpAttribution     *McpAttribution     `json:"mcp_attribution,omitempty"`
+	McpAttribution *McpAttribution `json:"mcp_attribution,omitempty"`
+	// ModelSearchState records which search provider owns this thread's
+	// provider-specific references (Rust #62144). Absent on older rollouts.
+	ModelSearchState   *ModelSearchState   `json:"model_search_state,omitempty"`
 	SenderUserMessages *SenderUserMessages `json:"sender_user_messages,omitempty"`
 }
 

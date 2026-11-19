@@ -67,7 +67,7 @@ func SanitizedWebSocketDisplayAddress(raw string) (string, bool) {
 
 func remoteServerVersionDisplay(serverVersion *string) string {
 	if serverVersion == nil {
-		return "unknown"
+		return ""
 	}
 	return "v" + *serverVersion
 }

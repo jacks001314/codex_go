@@ -129,6 +129,65 @@ func terminalProviderStreamError(data []byte) (*codexapi.APIError, bool) {
 	return nil, false
 }
 
+// streamErrorEvent classifies a standalone SSE `error` event like Rust's
+// `parse_error_event` (Rust #62356/#62354): recognized terminal provider and
+// policy codes end the stream immediately, while unknown notifications stay
+// non-terminal. Errors nested in `response.failed` use responseFailedError.
+func streamErrorEvent(data []byte) error {
+	if apiErr, ok := terminalProviderStreamError(data); ok {
+		return apiErr
+	}
+	var payload struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil
+	}
+	rawError := bytes.TrimSpace(payload.Error)
+	if len(rawError) == 0 || string(rawError) == "null" {
+		return nil
+	}
+	var body responsesFailedErrorBody
+	if err := json.Unmarshal(rawError, &body); err != nil || body.Code == nil {
+		return nil
+	}
+	switch strings.TrimSpace(*body.Code) {
+	case "insufficient_quota", "credit_balance_exhausted",
+		"usage_not_included", "invalid_prompt",
+		"misalignment_policy_violation", "cyber_policy", "bio_policy",
+		"api_key_spend_limit_exceeded", "organization_spend_limit_exceeded",
+		"project_spend_limit_exceeded", "policy_capacity_unavailable",
+		"server_is_overloaded":
+	default:
+		return nil
+	}
+	wrapped := append([]byte(`{"response":{"error":`), rawError...)
+	wrapped = append(wrapped, []byte(`}}`)...)
+	return responseFailedError(wrapped)
+}
+
+// spendLimitError classifies Rust #62329's scoped spend-limit provider codes.
+// A statusless streamed error or HTTP 429 is terminal; another status keeps the
+// caller's generic classification.
+func spendLimitError(code string, status int) *codexapi.APIError {
+	var kind codexapi.APIErrorKind
+	var message string
+	switch code {
+	case "api_key_spend_limit_exceeded":
+		kind, message = codexapi.ErrorAPIKeySpendLimitExceeded, "Your API key has reached its spend limit."
+	case "project_spend_limit_exceeded":
+		kind, message = codexapi.ErrorProjectSpendLimitExceeded, "Your API project has reached its spend limit."
+	case "organization_spend_limit_exceeded":
+		kind, message = codexapi.ErrorOrganizationSpendLimitExceeded, "Your API organization has reached its spend limit."
+	default:
+		return nil
+	}
+	if status != 0 && status != http.StatusTooManyRequests {
+		return nil
+	}
+	return &codexapi.APIError{Kind: kind, Status: status, Message: message}
+}
+
 // terminalProviderError maps provider error codes that end a turn without
 // retries, preserving the provider message and any eligible HTTP status.
 // Status 0 means the error arrived streamed, without a status.
@@ -151,6 +210,12 @@ func terminalProviderError(body *responsesAgentAPIErrorBody, status int) *codexa
 		return &codexapi.APIError{Kind: codexapi.ErrorInvalidAudioInput, Status: status, Message: message, AudioValidationCode: code}
 	}
 	switch code {
+	case "api_key_spend_limit_exceeded", "project_spend_limit_exceeded", "organization_spend_limit_exceeded":
+		// Rust #62329: scoped spend limits are terminal on a statusless
+		// streamed error or an HTTP 429 and name the exhausted scope.
+		if apiErr := spendLimitError(code, status); apiErr != nil {
+			return apiErr
+		}
 	case "budget_reached":
 		// Rust #59228: a provider budget stop is terminal for a statusless
 		// streamed error or an HTTP 400; retry advice and later completion
@@ -759,6 +824,10 @@ func isRetryableResponsesStreamError(err error) bool {
 			// rate limits, so the stream retries them even without a 5xx status.
 			return true
 		case codexapi.ErrorContextWindowExceeded, codexapi.ErrorQuotaExceeded,
+			// Rust #62329: scoped spend limits never retry, even when the
+			// provider supplies Retry-After.
+			codexapi.ErrorAPIKeySpendLimitExceeded, codexapi.ErrorProjectSpendLimitExceeded,
+			codexapi.ErrorOrganizationSpendLimitExceeded,
 			codexapi.ErrorUsageNotIncluded, codexapi.ErrorSessionBudgetExceeded,
 			codexapi.ErrorInvalidRequest,
 			codexapi.ErrorInvalidPrompt, codexapi.ErrorInvalidAudioInput,
@@ -1445,11 +1514,9 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 	}
 	switch rawType {
 	case "error":
-		// Rust #47967: a streamed `error` event whose code is
-		// `flex_unavailable` is a terminal Flex-capacity failure; it ends the
-		// turn without retries instead of being buffered as a generic stream
-		// error.
-		if apiErr, ok := terminalProviderStreamError(sse.Data); ok {
+		// Rust #47967/#62356: recognized error events end the turn as soon as
+		// they arrive instead of waiting for more output or a completion event.
+		if apiErr := streamErrorEvent(sse.Data); apiErr != nil {
 			return false, apiErr
 		}
 	case string(ResponsesStreamEventTimingMetrics):
@@ -3179,7 +3246,11 @@ func responseFailedError(data []byte) error {
 			Status:  http.StatusBadRequest,
 			Message: message,
 		}
-	case "insufficient_quota", "credit_balance_exhausted", "organization_spend_limit_exceeded", "project_spend_limit_exceeded":
+	case "api_key_spend_limit_exceeded", "project_spend_limit_exceeded", "organization_spend_limit_exceeded":
+		// Rust #62329: failed responses carry the same scoped spend-limit
+		// classification as streamed error events.
+		return spendLimitError(code, 0)
+	case "insufficient_quota", "credit_balance_exhausted":
 		// Rust #45602: exhausted credit balances and spend limits are quota
 		// exhaustion, so they terminate without retries like insufficient_quota.
 		return &codexapi.APIError{Kind: codexapi.ErrorQuotaExceeded, Message: message}

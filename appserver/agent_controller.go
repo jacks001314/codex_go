@@ -1264,6 +1264,14 @@ func runtimeAgentMessageIsTerminalResult(item any) bool {
 	return false
 }
 
+// runtimeAgentMessageIsAgentMessage reports whether queued input is inter-agent
+// mail. Rust #62348 records every accepted AgentMessage item before an
+// interrupted turn's teardown discards pending input.
+func runtimeAgentMessageIsAgentMessage(item any) bool {
+	payload, ok := configurationUpdatePayload(item)
+	return ok && strings.TrimSpace(stringFromMap(payload, "type")) == "agent_message"
+}
+
 // takeRuntimeAgentTerminalResults removes and returns the queued terminal
 // results for one thread. Other mail keeps its order, so a handoff only takes
 // the deliveries that Rust would flush before shutdown.
@@ -1341,6 +1349,29 @@ func (r *RuntimeRouter) persistSuspendedAgentResults(now time.Time) error {
 		}
 	}
 	return firstErr
+}
+
+// preserveQueuedAgentMessagesOnInterrupt records inter-agent mail that the
+// interrupted turn already acknowledged but never sampled (Rust #62348). The
+// next model request must carry it exactly once from history rather than losing
+// it when the turn clears its pending input.
+func (r *RuntimeRouter) preserveQueuedAgentMessagesOnInterrupt(threadID string, turnID string, now time.Time) {
+	if r == nil {
+		return
+	}
+	mailbox := r.requireSteerMailbox()
+	if mailbox == nil {
+		return
+	}
+	items := mailbox.Extract(threadID, turnID, runtimeAgentMessageIsAgentMessage)
+	if len(items) == 0 {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	prefix := fmt.Sprintf("agent-interrupt-%s-%d", safeIdentifier(threadID), now.UTC().UnixNano())
+	r.persistRuntimeAgentCommunicationItems(threadID, turnID, items, nil, prefix, now)
 }
 
 // maybeWakeRootForPendingAgentMessages mirrors Rust #54961's

@@ -1364,10 +1364,20 @@ func stateGoalTurnKey(threadID, turnID string) string {
 func codexErrorIsUsageLimited(value CodexErrorInfo) bool {
 	switch typed := value.(type) {
 	case string:
-		return strings.EqualFold(strings.TrimSpace(typed), "usageLimitExceeded")
+		switch strings.TrimSpace(typed) {
+		case "usageLimitExceeded", "apiKeySpendLimitExceeded", "projectSpendLimitExceeded", "organizationSpendLimitExceeded":
+			return true
+		}
+		return false
 	case map[string]any:
-		_, ok := typed["usageLimitExceeded"]
-		return ok
+		// Rust #62329 (`CodexErrorInfo::is_usage_limit`) treats every scoped
+		// spend limit like a usage limit so goals and compaction stop.
+		for _, key := range []string{"usageLimitExceeded", "apiKeySpendLimitExceeded", "projectSpendLimitExceeded", "organizationSpendLimitExceeded"} {
+			if _, ok := typed[key]; ok {
+				return true
+			}
+		}
+		return false
 	default:
 		return false
 	}

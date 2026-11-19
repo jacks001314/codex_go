@@ -546,8 +546,10 @@ func (s *State) RenderStatusCardWidth(width int) string {
 	if server := s.ServerConnection; server != nil {
 		serverValue := "Local background server"
 		if !server.LocalDaemon {
-			version := displayValue(server.Version, "unknown")
-			serverValue = displayValue(server.Address, "-") + " (" + version + ")"
+			serverValue = displayValue(server.Address, "-")
+			if version := strings.TrimSpace(server.Version); version != "" {
+				serverValue += " (" + version + ")"
+			}
 		}
 		fields = append(fields, statusFieldData{label: "Server", value: serverValue, blankAfter: true})
 	}

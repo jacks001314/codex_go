@@ -200,7 +200,7 @@ var Registry = []Spec{
 	{Key: "mcp_shared_repl_cwd", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs #60039): defer optional stdio server
 	// startup in regular chats when a warm tool catalog already covers them.
-	{Key: "mcp_lazy_stdio_startup", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	{Key: "mcp_lazy_stdio_startup", Stage: StageStable, DefaultEnabled: true},
 	// Rust (codex-rs/features/src/lib.rs eb680c0558 #44318): hosted Codex Apps
 	// get an independent MCP protocol opt-in.
 	{Key: "codex_apps_mcp_2026_07_28", Stage: StageUnderDevelopment, DefaultEnabled: false},

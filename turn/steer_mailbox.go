@@ -733,6 +733,42 @@ func (m *SteerMailbox) Clear(params *SteerDrainParams) {
 	delete(m.pendingInjections, key)
 }
 
+// Extract removes and returns only the queued input items matching predicate,
+// leaving every other item for the caller's normal cleanup. Rust #62348 uses
+// this split while interrupting a turn: acknowledged inter-agent mail is
+// recorded in history instead of being discarded with the remaining input.
+func (m *SteerMailbox) Extract(threadID string, turnID string, predicate func(any) bool) []any {
+	if m == nil || predicate == nil || strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
+		return nil
+	}
+	key := steerMailboxKey(threadID, turnID)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	items := m.items[key]
+	if len(items) == 0 {
+		return nil
+	}
+	extracted := make([]any, 0, len(items))
+	remaining := make([]any, 0, len(items))
+	for _, item := range items {
+		if predicate(item) {
+			extracted = append(extracted, item)
+			continue
+		}
+		remaining = append(remaining, item)
+	}
+	if len(extracted) == 0 {
+		return nil
+	}
+	if len(remaining) == 0 {
+		delete(m.items, key)
+		delete(m.pendingInjections, key)
+	} else {
+		m.items[key] = remaining
+	}
+	return extracted
+}
+
 func compactInputItems(items []any) []any {
 	out := make([]any, 0, len(items))
 	for i := range items {

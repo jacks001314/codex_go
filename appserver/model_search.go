@@ -38,15 +38,14 @@ type modelSearchSelection struct {
 }
 
 type modelSearchResolveInput struct {
-	cfg               *config.Config
-	modelInfo         *model.ModelInfo
-	tools             []mcp.RuntimeToolInfo
-	turnMetadata      map[string]any
-	nativeAvailable   bool
-	owner             modelSearchProvider
-	usedMCP           bool
-	attributionBlocks bool
-	ephemeral         bool
+	cfg             *config.Config
+	modelInfo       *model.ModelInfo
+	tools           []mcp.RuntimeToolInfo
+	turnMetadata    map[string]any
+	nativeAvailable bool
+	owner           modelSearchProvider
+	usedMCP         bool
+	ephemeral       bool
 }
 
 type modelSearchDiscoveryFunc func(context.Context, map[string]any) mcp.SearchDiscovery
@@ -156,7 +155,7 @@ func resolveModelSearchSelection(ctx context.Context, input modelSearchResolveIn
 	}
 	fallbackAllowed := input.nativeAvailable && nativeOK &&
 		input.owner != modelSearchClientMCP && input.owner != modelSearchHosted &&
-		!input.usedMCP && !input.attributionBlocks
+		!input.usedMCP
 	if discovery.Kind == mcp.SearchDiscoveryReady && discovery.Binding != nil {
 		if input.owner != modelSearchNative {
 			return modelSearchSelection{
@@ -484,16 +483,6 @@ func (r *RuntimeRouter) resolveModelSearchForTurn(ctx context.Context, threadID 
 	if record, err := r.threadRecord(session.ThreadID(threadID), true, false); err == nil && record != nil {
 		input.ephemeral = runtimeRecordEphemeral(record)
 	}
-	if recorder := r.executedToolCallRecorder(threadID); recorder != nil {
-		attribution := recorder.McpAttributionSnapshot()
-		input.attributionBlocks = attribution.Status == retainedctx.McpAttributionStatusAttributionError
-		for _, source := range attribution.Sources {
-			if source.ConnectorID != nil && strings.TrimSpace(*source.ConnectorID) == mcp.SearchConnector {
-				input.attributionBlocks = true
-				break
-			}
-		}
-	}
 	discover := func(ctx context.Context, metadata map[string]any) mcp.SearchDiscovery {
 		if binding == nil {
 			return mcp.SearchDiscovery{Kind: mcp.SearchDiscoveryUnavailable}
@@ -541,21 +530,23 @@ func (r *RuntimeRouter) threadModelSearchProvider(threadID string) modelSearchPr
 	if provider != "" || restored {
 		return provider
 	}
-	native := false
+	restoredOwner := modelSearchProvider("")
+	readable := false
 	if record, err := r.threadRecord(session.ThreadID(threadID), false, true); err == nil && record != nil {
-		native = historyUsesNativeSearch(record.Items)
+		readable = true
+		restoredOwner = scanModelSearchHistory(record.Items).restoredProvider(len(record.Items) == 0)
 	}
 	r.modelSearchMu.Lock()
 	if r.modelSearchRestored == nil {
 		r.modelSearchRestored = map[string]bool{}
 	}
-	if !r.modelSearchRestored[threadID] {
+	if readable && !r.modelSearchRestored[threadID] {
 		r.modelSearchRestored[threadID] = true
-		if native {
+		if restoredOwner != "" {
 			if r.modelSearchOwners == nil {
 				r.modelSearchOwners = map[string]modelSearchProvider{}
 			}
-			r.modelSearchOwners[threadID] = modelSearchNative
+			r.modelSearchOwners[threadID] = restoredOwner
 		}
 	}
 	provider = r.modelSearchOwners[threadID]
@@ -566,20 +557,80 @@ func (r *RuntimeRouter) threadModelSearchProvider(threadID string) modelSearchPr
 	return provider
 }
 
-func historyUsesNativeSearch(items []session.Item) bool {
+// modelSearchHistoryScan captures the persisted search ownership evidence Rust
+// restores in SearchOwner::restore (#62144). Search MCP wins over standalone so
+// a thread never mixes provider-specific references.
+type modelSearchHistoryScan struct {
+	provider        modelSearchProvider
+	legacyNative    bool
+	legacySearchMCP bool
+	hasCheckpoint   bool
+}
+
+func scanModelSearchHistory(items []session.Item) modelSearchHistoryScan {
+	var scan modelSearchHistoryScan
 	for i := range items {
 		raw := harnessMetadataRawFromItem(&items[i])
 		if len(raw) == 0 {
 			continue
 		}
 		var fields map[string]any
-		if json.Unmarshal(raw, &fields) == nil {
-			if used, _ := fields["native_search_fallback_used"].(bool); used {
-				return true
+		if json.Unmarshal(raw, &fields) != nil {
+			continue
+		}
+		if state, ok := fields["model_search_state"].(string); ok {
+			scan.hasCheckpoint = true
+			switch retainedctx.ModelSearchState(strings.TrimSpace(state)) {
+			case retainedctx.ModelSearchStateSearchMCP:
+				scan.provider = modelSearchClientMCP
+			case retainedctx.ModelSearchStateStandalone:
+				if scan.provider != modelSearchClientMCP {
+					scan.provider = modelSearchNative
+				}
+			}
+		}
+		if used, _ := fields["native_search_fallback_used"].(bool); used {
+			scan.legacyNative = true
+		}
+		if attribution, ok := fields["mcp_attribution"].(map[string]any); ok {
+			scan.hasCheckpoint = true
+			if status, _ := attribution["status"].(string); status == string(retainedctx.McpAttributionStatusAttributionError) {
+				scan.legacySearchMCP = true
+			}
+			if sources, ok := attribution["sources"].([]any); ok {
+				for _, source := range sources {
+					entry, _ := source.(map[string]any)
+					if connector, _ := entry["connector_id"].(string); strings.TrimSpace(connector) == mcp.SearchConnector {
+						scan.legacySearchMCP = true
+					}
+				}
 			}
 		}
 	}
-	return false
+	return scan
+}
+
+// restoredProvider mirrors Rust's precedence: saved state, then legacy Search
+// MCP attribution, then legacy native markers. A non-fresh history without any
+// checkpoint (imported older history) withholds native fallback by claiming
+// Search MCP.
+func (scan modelSearchHistoryScan) restoredProvider(fresh bool) modelSearchProvider {
+	switch {
+	case scan.provider != "":
+		return scan.provider
+	case scan.legacySearchMCP:
+		return modelSearchClientMCP
+	case scan.legacyNative:
+		return modelSearchNative
+	case !fresh && !scan.hasCheckpoint:
+		return modelSearchClientMCP
+	default:
+		return ""
+	}
+}
+
+func historyUsesNativeSearch(items []session.Item) bool {
+	return scanModelSearchHistory(items).restoredProvider(len(items) == 0) == modelSearchNative
 }
 
 func (r *RuntimeRouter) claimModelSearchProvider(threadID string, provider modelSearchProvider) bool {
@@ -785,13 +836,25 @@ func (r *RuntimeRouter) nativeModelSearchOptions(options *turn.WebSearchOptions,
 }
 
 func (r *RuntimeRouter) annotateModelSearchMetadata(threadID string, items []session.Item) {
-	if r == nil || len(items) == 0 || r.threadModelSearchProvider(threadID) != modelSearchNative {
+	if r == nil || len(items) == 0 {
 		return
 	}
+	provider := r.threadModelSearchProvider(threadID)
+	state := retainedctx.ModelSearchStateUnused
+	switch provider {
+	case modelSearchNative:
+		state = retainedctx.ModelSearchStateStandalone
+	case modelSearchClientMCP, modelSearchHosted:
+		state = retainedctx.ModelSearchStateSearchMCP
+	}
 	for i := range items {
-		if strings.TrimSpace(items[i].Type) == "webSearch" || strings.TrimSpace(items[i].Type) == "web_search_call" {
-			mergeSessionItemHarnessMetadata(&items[i], map[string]any{"native_search_fallback_used": true})
+		// Rust checkpoints the owner on every recorded response item, including
+		// the legacy native marker older readers still honor.
+		fields := map[string]any{"model_search_state": string(state)}
+		if provider == modelSearchNative {
+			fields["native_search_fallback_used"] = true
 		}
+		mergeSessionItemHarnessMetadata(&items[i], fields)
 	}
 }
 

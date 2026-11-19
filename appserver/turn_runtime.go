@@ -5166,6 +5166,7 @@ func (r *RuntimeRouter) finishTurnInterruptedAnalyticsWithError(threadID string,
 	now := time.Now().UTC()
 	completedAt := now.Unix()
 	durationMS := now.UnixMilli() - startedAtMS
+	r.preserveQueuedAgentMessagesOnInterrupt(threadID, turnID, now)
 	r.persistInterruptedTurnMarker(threadID, turnID, now)
 	if strings.EqualFold(strings.TrimSpace(reason), turnAbortReasonInterrupted) {
 		if analytics != nil && analytics.Result != nil {
@@ -5387,6 +5388,14 @@ func turnAnalyticsErrorFieldsFromAPIError(err *codexapi.APIError) turnAnalyticsE
 		return fields("contextWindowExceeded", "context_window_exceeded")
 	case codexapi.ErrorQuotaExceeded:
 		return fields("usageLimitExceeded", "quota_exceeded")
+	case codexapi.ErrorAPIKeySpendLimitExceeded:
+		// Rust #62329 exposes each spend-limit scope as its own app-server v2
+		// variant while analytics keeps the scoped error kind.
+		return fields("apiKeySpendLimitExceeded", "api_key_spend_limit_exceeded")
+	case codexapi.ErrorProjectSpendLimitExceeded:
+		return fields("projectSpendLimitExceeded", "project_spend_limit_exceeded")
+	case codexapi.ErrorOrganizationSpendLimitExceeded:
+		return fields("organizationSpendLimitExceeded", "organization_spend_limit_exceeded")
 	case codexapi.ErrorUsageNotIncluded:
 		return fields("usageLimitExceeded", "usage_not_included")
 	case codexapi.ErrorSessionBudgetExceeded:
@@ -5416,8 +5425,8 @@ func turnAnalyticsErrorFieldsFromAPIError(err *codexapi.APIError) turnAnalyticsE
 	case codexapi.ErrorCyberPolicy:
 		return fields("cyberPolicy", "cyber_policy")
 	case codexapi.ErrorBioPolicy:
-		// Rust #46306 maps BioPolicy to the app-server's `other` variant.
-		return fields("other", "bio_policy")
+		// Rust #62176 exposes BioPolicy as its own app-server v2 variant.
+		return fields("bioPolicy", "bio_policy")
 	case codexapi.ErrorMisalignmentPolicyViolation:
 		return fields("misalignmentPolicyViolation", "misalignment_policy_violation")
 	case codexapi.ErrorInvalidPrompt:
