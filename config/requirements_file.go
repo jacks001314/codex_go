@@ -25,7 +25,20 @@ func LoadRequirementsFile(path string) (*ConfigRequirements, error) {
 		}
 		return nil, err
 	}
-	return ParseRequirementsTOMLWithBaseDir(data, filepath.Dir(path))
+	context, err := NewHostConfigPathContext(filepath.Dir(path))
+	if err != nil {
+		return nil, err
+	}
+	requirements, err := ParseRequirementsTOMLWithPathContext(data, context)
+	if err != nil {
+		return nil, err
+	}
+	// Rust #62110 validates the helper while composing the system requirements
+	// layer, so a relative command never reaches the exporter setup.
+	if err := validateManagedOtelHeadersHelper(requirements, context); err != nil {
+		return nil, err
+	}
+	return requirements, nil
 }
 
 func ParseRequirementsTOML(data []byte) (*ConfigRequirements, error) {

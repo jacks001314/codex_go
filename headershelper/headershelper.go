@@ -83,9 +83,30 @@ func Run(ctx context.Context, command string, cwd string) (Headers, error) {
 	}
 	runCtx, cancel := context.WithTimeout(ctx, Timeout)
 	defer cancel()
+	return runHelperProcess(runCtx, shellCommand(runCtx, command), cwd)
+}
+
+// RunExecutable executes an already-resolved helper executable without a shell
+// and parses its output (Rust #62110 runs managed OTel helpers directly from
+// their installation directory).
+func RunExecutable(ctx context.Context, executable string, cwd string) (Headers, error) {
+	executable = strings.TrimSpace(executable)
+	if executable == "" {
+		return Headers{}, errors.New("HTTP headers helper must not be empty")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runCtx, cancel := context.WithTimeout(ctx, Timeout)
+	defer cancel()
+	return runHelperProcess(runCtx, exec.CommandContext(runCtx, executable), cwd)
+}
+
+// runHelperProcess runs one prepared helper process with the bounded lifetime
+// and output limits shared by the shell and executable entry points.
+func runHelperProcess(runCtx context.Context, cmd *exec.Cmd, cwd string) (Headers, error) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	cmd := shellCommand(runCtx, command)
 	cmd.Dir = cwd
 	// Rust #48238: the headers helper is a stdio-only child, so it must not
 	// allocate a console window when the CLI itself has no console.

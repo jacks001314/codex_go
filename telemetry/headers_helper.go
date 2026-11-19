@@ -3,7 +3,9 @@ package telemetry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -22,11 +24,29 @@ type OTelHeadersHelperConfig struct {
 	Command         string
 	CWD             string
 	RefreshInterval time.Duration
+	// Managed marks a helper installed by managed requirements. It must be an
+	// absolute executable and runs from its installation directory instead of
+	// through a shell (Rust #62110).
+	Managed bool
+	// ApplyToLogs, ApplyToTraces and ApplyToMetrics bound which signals may
+	// receive the helper's credentials. A managed helper only serves the
+	// exporters its own requirements layer bound it to.
+	ApplyToLogs    bool
+	ApplyToTraces  bool
+	ApplyToMetrics bool
 	// Policy is the application policy the helper runs under. The script can
 	// open its own sockets, so it needs the same revocable permit as an SDK that
 	// cannot enforce individual destinations (Rust #61028).
 	Policy network.NetworkPolicy
 }
+
+// appliesToLogs, appliesToTraces and appliesToMetrics report whether the
+// requirements layer bound the helper to that signal (Rust #62110).
+func (c *OTelHeadersHelperConfig) appliesToLogs() bool { return c != nil && c.ApplyToLogs }
+
+func (c *OTelHeadersHelperConfig) appliesToTraces() bool { return c != nil && c.ApplyToTraces }
+
+func (c *OTelHeadersHelperConfig) appliesToMetrics() bool { return c != nil && c.ApplyToMetrics }
 
 // otelHeadersHelper refreshes collector headers on a background worker. One
 // worker serves every explicit HTTP signal. A failed refresh replaces the cache
@@ -58,13 +78,31 @@ func startOTelHeadersHelper(config *OTelHeadersHelperConfig) (*otelHeadersHelper
 	if interval <= 0 {
 		interval = DefaultOTelHeadersHelperRefreshInterval
 	}
+	cwd := config.CWD
+	run := headershelper.Run
+	if config.Managed {
+		// Rust #62110: a managed executable runs directly from its installation
+		// directory, so a relative value cannot name it.
+		if !filepath.IsAbs(command) {
+			return nil, errors.New("managed OTel helper requires an absolute executable path")
+		}
+		executable := command
+		cwd = filepath.Dir(executable)
+		run = func(ctx context.Context, _ string, _ string) (headershelper.Headers, error) {
+			headers, err := headershelper.RunExecutable(ctx, executable, filepath.Dir(executable))
+			if err != nil {
+				return headershelper.Headers{}, fmt.Errorf("managed OTel helper %s: %w", executable, err)
+			}
+			return headers, nil
+		}
+	}
 	helper := &otelHeadersHelper{
 		ready:  make(chan struct{}),
 		stop:   make(chan struct{}),
 		policy: config.Policy,
-		run:    headershelper.Run,
+		run:    run,
 	}
-	go helper.loop(command, config.CWD, interval)
+	go helper.loop(command, cwd, interval)
 	return helper, nil
 }
 

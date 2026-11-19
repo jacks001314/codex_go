@@ -640,6 +640,15 @@ func applyCloudConfigBundleWithFilesystemSource(values map[string]any, requireme
 				networkFragments = append(networkFragments, layer.Source.Name)
 			}
 		}
+		// Rust #62110: a managed OTel headers helper must come from the machine
+		// own requirements, so fetched policy may never install one.
+		if otelTable, ok := parsed["otel"].(map[string]any); ok {
+			for _, key := range []string{"headers_helper", "headersHelper", "headers_helper_refresh_interval_ms", "headersHelperRefreshIntervalMs"} {
+				if _, ok := otelTable[key]; ok {
+					return nil, false, fmt.Errorf("%w: invalid cloud requirements: OTel headers helpers may only be configured in local managed requirements", ErrInvalidCloudConfig)
+				}
+			}
+		}
 		// Rust #56055: config_server selects which server the local machine
 		// trusts, so a fetched policy may never supply it.
 		if _, ok := mapAnyKey(parsed, "config_server", "configServer"); ok {

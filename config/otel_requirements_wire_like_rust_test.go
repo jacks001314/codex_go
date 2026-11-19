@@ -58,17 +58,21 @@ authorization = "Bearer secret"
 	if !ok {
 		t.Fatalf("otel = %#v", decoded["requirements"])
 	}
+	// Rust #62110 exposes the managed helper settings through the requirements API,
+	// so they join the protocol shape instead of staying TOML-only.
 	want := map[string]bool{
-		"tool_result":              true,
-		"log_user_prompt":          true,
-		"log_agent_responses":      true,
-		"log_guardian_assessments": true,
-		"environment":              true,
-		"exporter":                 true,
-		"trace_exporter":           true,
-		"metrics_exporter":         true,
-		"span_attributes":          true,
-		"tracestate":               true,
+		"headers_helper":                     true,
+		"headers_helper_refresh_interval_ms": true,
+		"tool_result":                        true,
+		"log_user_prompt":                    true,
+		"log_agent_responses":                true,
+		"log_guardian_assessments":           true,
+		"environment":                        true,
+		"exporter":                           true,
+		"trace_exporter":                     true,
+		"metrics_exporter":                   true,
+		"span_attributes":                    true,
+		"tracestate":                         true,
 	}
 	for key := range otel {
 		if !want[key] {

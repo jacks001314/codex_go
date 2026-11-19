@@ -75,7 +75,7 @@ func BuildProvider(options Options) (*telemetry.OtelProvider, error) {
 		runtimeMetrics = options.Config.FeatureSettings()["runtime_metrics"]
 	}
 	provider, err := telemetry.NewOtelProvider(telemetry.OtelSettings{
-		HeadersHelper:   otelHeadersHelperConfig(resolved, options),
+		HeadersHelper:   otelHeadersHelperConfig(resolved, options, managedOtelRequirements(options)),
 		Environment:     resolved.Environment,
 		ServiceName:     options.ServiceName,
 		ServiceVersion:  options.ServiceVersion,
@@ -140,9 +140,10 @@ func otelExporter(kind config.OtelExporterKind) telemetry.OtelExporter {
 
 // otelHeadersHelperConfig maps `otel.headers_helper` and its refresh cadence
 // onto the shared helper the explicit OTLP HTTP exporters use (Rust #61028).
-// The command runs from CODEX_HOME; repository-local configuration is not
-// filtered here because the Go config layers are merged before resolution.
-func otelHeadersHelperConfig(resolved config.OtelConfig, options Options) *telemetry.OTelHeadersHelperConfig {
+// A user command runs from CODEX_HOME; a managed command must be executed from
+// its own installation directory and only serves the exporters its
+// requirements layer bound it to (Rust #62110).
+func otelHeadersHelperConfig(resolved config.OtelConfig, options Options, managed *config.OtelRequirements) *telemetry.OTelHeadersHelperConfig {
 	command := strings.TrimSpace(resolved.HeadersHelper)
 	if command == "" {
 		return nil
@@ -151,12 +152,29 @@ func otelHeadersHelperConfig(resolved config.OtelConfig, options Options) *telem
 	if resolved.HeadersHelperRefreshIntervalMS > 0 {
 		interval = time.Duration(resolved.HeadersHelperRefreshIntervalMS) * time.Millisecond
 	}
+	targets := config.OtelHeadersHelperTargets{Logs: true, Traces: true, Metrics: true}
+	if managed != nil {
+		targets = managed.HeadersHelperTargets()
+	}
 	return &telemetry.OTelHeadersHelperConfig{
 		Command:         command,
 		CWD:             otelCodexHome(options.CodexHome),
 		RefreshInterval: interval,
 		Policy:          options.NetworkPolicy,
+		Managed:         managed.ManagedHeadersHelper(),
+		ApplyToLogs:     targets.Logs,
+		ApplyToTraces:   targets.Traces,
+		ApplyToMetrics:  targets.Metrics,
 	}
+}
+
+// managedOtelRequirements returns the OTEL policy layer, which decides whether
+// the configured helper is managed and which signals it may serve.
+func managedOtelRequirements(options Options) *config.OtelRequirements {
+	if options.Config == nil || options.Config.Requirements == nil {
+		return nil
+	}
+	return options.Config.Requirements.Otel
 }
 
 // otelCodexHome resolves the helper's working directory.

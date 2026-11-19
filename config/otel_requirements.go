@@ -2,11 +2,14 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 
 	"codex_go/protocol"
+	"codex_go/utils"
 )
 
 // OtelRequirements mirrors Rust's OtelRequirementsToml / app-server
@@ -15,17 +18,92 @@ import (
 // projection; API responses redact exporter header values at the app-server
 // boundary.
 type OtelRequirements struct {
-	ToolResult             *OtelToolResultLogConfig     `json:"tool_result"`
-	LogUserPrompt          *bool                        `json:"log_user_prompt"`
-	LogSSEDeltas           *bool                        `json:"log_sse_deltas"`
-	LogAgentResponses      *bool                        `json:"log_agent_responses"`
-	LogGuardianAssessments *bool                        `json:"log_guardian_assessments"`
-	Environment            *string                      `json:"environment"`
-	Exporter               *OtelExporter                `json:"exporter"`
-	TraceExporter          *OtelExporter                `json:"trace_exporter"`
-	MetricsExporter        *OtelExporter                `json:"metrics_exporter"`
-	SpanAttributes         map[string]string            `json:"span_attributes"`
-	Tracestate             map[string]map[string]string `json:"tracestate"`
+	HeadersHelper                  *string                      `json:"headers_helper"`
+	HeadersHelperRefreshIntervalMS *int64                       `json:"headers_helper_refresh_interval_ms"`
+	ToolResult                     *OtelToolResultLogConfig     `json:"tool_result"`
+	LogUserPrompt                  *bool                        `json:"log_user_prompt"`
+	LogSSEDeltas                   *bool                        `json:"log_sse_deltas"`
+	LogAgentResponses              *bool                        `json:"log_agent_responses"`
+	LogGuardianAssessments         *bool                        `json:"log_guardian_assessments"`
+	Environment                    *string                      `json:"environment"`
+	Exporter                       *OtelExporter                `json:"exporter"`
+	TraceExporter                  *OtelExporter                `json:"trace_exporter"`
+	MetricsExporter                *OtelExporter                `json:"metrics_exporter"`
+	SpanAttributes                 map[string]string            `json:"span_attributes"`
+	Tracestate                     map[string]map[string]string `json:"tracestate"`
+
+	// managedHelperTargets is computed during composition: a policy cannot
+	// grant a helper access to another layer's collector.
+	managedHelperTargets otelHeadersHelperTargets
+}
+
+// otelHeadersHelperTargets mirrors Rust's OtelHeadersHelperTargets: the
+// signals whose collector may receive the configured managed helper's
+// credentials.
+type otelHeadersHelperTargets struct {
+	Logs    bool
+	Traces  bool
+	Metrics bool
+}
+
+// mergeLayer folds one requirements layer into the managed binding. Replacing
+// either side of the binding revokes the previous grant, so a layer that sets
+// the helper without an OTLP HTTP exporter for a signal revokes it.
+func (t *otelHeadersHelperTargets) mergeLayer(layer *OtelRequirements) {
+	if layer == nil {
+		return
+	}
+	hasHelper := layer.HeadersHelper != nil
+	update := func(target *bool, exporter *OtelExporter) {
+		if !hasHelper && exporter == nil {
+			return
+		}
+		// An empty HTTP endpoint falls back to the process environment in the
+		// OTLP SDK, so it cannot carry the helper's credentials.
+		*target = hasHelper && otelExporterAcceptsManagedHelper(exporter)
+	}
+	update(&t.Logs, layer.Exporter)
+	update(&t.Traces, layer.TraceExporter)
+	update(&t.Metrics, layer.MetricsExporter)
+}
+
+func otelExporterAcceptsManagedHelper(exporter *OtelExporter) bool {
+	return exporter != nil && exporter.Kind == OtelExporterKindOtlpHTTP && exporter.Endpoint != ""
+}
+
+// OtelHeadersHelperTargets names the signals the configured helper may
+// authorize.
+type OtelHeadersHelperTargets struct {
+	Logs    bool
+	Traces  bool
+	Metrics bool
+}
+
+// HeadersHelperTargets mirrors Rust's headers_helper_targets: a managed helper
+// serves only the exporters its own layer bound it to, while a user helper
+// serves the signals no managed exporter claims.
+func (o *OtelRequirements) HeadersHelperTargets() OtelHeadersHelperTargets {
+	if o == nil {
+		return OtelHeadersHelperTargets{}
+	}
+	if o.HeadersHelper != nil {
+		return OtelHeadersHelperTargets{
+			Logs:    o.managedHelperTargets.Logs,
+			Traces:  o.managedHelperTargets.Traces,
+			Metrics: o.managedHelperTargets.Metrics,
+		}
+	}
+	return OtelHeadersHelperTargets{
+		Logs:    o.Exporter == nil,
+		Traces:  o.TraceExporter == nil,
+		Metrics: o.MetricsExporter == nil,
+	}
+}
+
+// ManagedHeadersHelper reports whether managed requirements supply the
+// `otel.headers_helper` command rather than the user own configuration.
+func (o *OtelRequirements) ManagedHeadersHelper() bool {
+	return o != nil && o.HeadersHelper != nil
 }
 
 type OtelToolResultLogConfig struct {
@@ -104,7 +182,9 @@ func otelRequirementsEmpty(value *OtelRequirements) bool {
 	if value == nil {
 		return true
 	}
-	return value.ToolResult == nil &&
+	return value.HeadersHelper == nil &&
+		value.HeadersHelperRefreshIntervalMS == nil &&
+		value.ToolResult == nil &&
 		value.LogUserPrompt == nil &&
 		value.LogSSEDeltas == nil &&
 		value.LogAgentResponses == nil &&
@@ -139,6 +219,21 @@ func otelRequirementsFromMap(values map[string]any) (*OtelRequirements, error) {
 		return nil, err
 	}
 	out := &OtelRequirements{}
+	if raw, ok := anyKey(values, "headers_helper", "headersHelper"); ok && raw != nil {
+		value, valid := raw.(string)
+		if !valid {
+			return nil, fmt.Errorf("otel.headers_helper must be a string")
+		}
+		out.HeadersHelper = &value
+	}
+	if raw, ok := values["headers_helper_refresh_interval_ms"]; ok && raw != nil {
+		number, valid := otelConfigIntValue(raw)
+		if !valid || number <= 0 {
+			return nil, fmt.Errorf("otel.headers_helper_refresh_interval_ms must be a positive integer")
+		}
+		interval := int64(number)
+		out.HeadersHelperRefreshIntervalMS = &interval
+	}
 	if raw, ok := anyKey(values, "tool_result", "toolResult"); ok && raw != nil {
 		nested, valid := raw.(map[string]any)
 		if !valid {
@@ -242,6 +337,9 @@ func otelRequirementsFromMap(values map[string]any) (*OtelRequirements, error) {
 			out.Tracestate = members
 		}
 	}
+	// A single layer resolves its managed binding the way the layer stack does:
+	// the helper may only serve exporters this same layer configures.
+	out.managedHelperTargets.mergeLayer(out)
 	if otelRequirementsEmpty(out) {
 		return nil, nil
 	}
@@ -254,7 +352,9 @@ func otelRequirementsFromMap(values map[string]any) (*OtelRequirements, error) {
 func rejectUnknownOtelRequirementKeys(values map[string]any) error {
 	for key := range values {
 		switch key {
-		case "tool_result", "toolResult",
+		case "headers_helper", "headersHelper",
+			"headers_helper_refresh_interval_ms", "headersHelperRefreshIntervalMs",
+			"tool_result", "toolResult",
 			"log_user_prompt", "logUserPrompt",
 			"log_sse_deltas", "logSSEDeltas",
 			"log_agent_responses", "logAgentResponses",
@@ -389,6 +489,27 @@ func (e *OtelExporter) ToConfigValue() any {
 	return map[string]any{e.Kind: body}
 }
 
+// validateManagedOtelHeadersHelper mirrors Rust's managed-layer validation
+// (Rust #62110): a managed helper must name an absolute executable, because the
+// client runs it from its installation directory instead of through a shell.
+func validateManagedOtelHeadersHelper(requirements *ConfigRequirements, context *ConfigPathContext) error {
+	if requirements == nil || requirements.Otel == nil || requirements.Otel.HeadersHelper == nil {
+		return nil
+	}
+	const message = "otel.headers_helper must be an absolute executable path in managed requirements"
+	convention := context.Convention()
+	if convention == "" {
+		convention = utils.ConventionPosix
+		if runtime.GOOS == "windows" {
+			convention = utils.ConventionWindows
+		}
+	}
+	if _, err := utils.ResolveConfigPathURI(*requirements.Otel.HeadersHelper, convention, nil, nil); err != nil {
+		return errors.New(message)
+	}
+	return nil
+}
+
 // resolveOtelRequirementPaths turns relative TLS paths into paths relative to
 // the requirements document that declared them (Rust #57649).
 func resolveOtelRequirementPaths(requirements *ConfigRequirements, context *ConfigPathContext) error {
@@ -432,6 +553,12 @@ func applyManagedOtelOverrides(values map[string]any, requirements *ConfigRequir
 	otel, _ := values["otel"].(map[string]any)
 	if otel == nil {
 		otel = map[string]any{}
+	}
+	if req.HeadersHelper != nil {
+		otel["headers_helper"] = *req.HeadersHelper
+	}
+	if req.HeadersHelperRefreshIntervalMS != nil {
+		otel["headers_helper_refresh_interval_ms"] = *req.HeadersHelperRefreshIntervalMS
 	}
 	if req.ToolResult != nil {
 		otel["tool_result"] = map[string]any{"max_bytes": req.ToolResult.MaxBytes}
@@ -505,6 +632,12 @@ func otelRequirementsConflict(values map[string]any, requirements *OtelRequireme
 		if configured, ok := otel[key]; ok && !reflect.DeepEqual(configured, managed) {
 			conflict = true
 		}
+	}
+	if requirements.HeadersHelper != nil {
+		scalar("headers_helper", *requirements.HeadersHelper)
+	}
+	if requirements.HeadersHelperRefreshIntervalMS != nil {
+		scalar("headers_helper_refresh_interval_ms", *requirements.HeadersHelperRefreshIntervalMS)
 	}
 	if requirements.ToolResult != nil {
 		managed := map[string]any{"max_bytes": int64(requirements.ToolResult.MaxBytes)}
@@ -580,6 +713,8 @@ func otelRequirementForConfigPath(requirements *OtelRequirements, segments []str
 		name   string
 		exists bool
 	}{
+		{"headers_helper", requirements.HeadersHelper != nil},
+		{"headers_helper_refresh_interval_ms", requirements.HeadersHelperRefreshIntervalMS != nil},
 		{"tool_result", requirements.ToolResult != nil},
 		{"log_user_prompt", requirements.LogUserPrompt != nil},
 		{"log_sse_deltas", requirements.LogSSEDeltas != nil},
@@ -660,6 +795,11 @@ func cloneOtelRequirements(value *OtelRequirements) *OtelRequirements {
 		return nil
 	}
 	out := *value
+	out.HeadersHelper = cloneStringPtr(value.HeadersHelper)
+	if value.HeadersHelperRefreshIntervalMS != nil {
+		interval := *value.HeadersHelperRefreshIntervalMS
+		out.HeadersHelperRefreshIntervalMS = &interval
+	}
 	out.LogUserPrompt = cloneBoolPtr(value.LogUserPrompt)
 	out.LogSSEDeltas = cloneBoolPtr(value.LogSSEDeltas)
 	out.LogAgentResponses = cloneBoolPtr(value.LogAgentResponses)
@@ -722,6 +862,14 @@ func mergeOtelRequirements(lower, higher *OtelRequirements) *OtelRequirements {
 	if out == nil {
 		out = &OtelRequirements{}
 	}
+	if higher.HeadersHelper != nil {
+		helper := *higher.HeadersHelper
+		out.HeadersHelper = &helper
+	}
+	if higher.HeadersHelperRefreshIntervalMS != nil {
+		interval := *higher.HeadersHelperRefreshIntervalMS
+		out.HeadersHelperRefreshIntervalMS = &interval
+	}
 	if higher.ToolResult != nil {
 		limit := *higher.ToolResult
 		out.ToolResult = &limit
@@ -772,6 +920,7 @@ func mergeOtelRequirements(lower, higher *OtelRequirements) *OtelRequirements {
 			out.Tracestate[member][key] = value
 		}
 	}
+	out.managedHelperTargets.mergeLayer(higher)
 	return out
 }
 
@@ -781,16 +930,18 @@ func mergeOtelRequirements(lower, higher *OtelRequirements) *OtelRequirements {
 // #57638). `log_sse_deltas` stays TOML-only, while `span_attributes` and
 // `tracestate` are part of the protocol type (Rust #57658).
 type wireOtelRequirements struct {
-	ToolResult             *OtelToolResultLogConfig     `json:"tool_result"`
-	LogUserPrompt          *bool                        `json:"log_user_prompt"`
-	LogAgentResponses      *bool                        `json:"log_agent_responses"`
-	LogGuardianAssessments *bool                        `json:"log_guardian_assessments"`
-	Environment            *string                      `json:"environment"`
-	Exporter               *OtelExporter                `json:"exporter"`
-	TraceExporter          *OtelExporter                `json:"trace_exporter"`
-	MetricsExporter        *OtelExporter                `json:"metrics_exporter"`
-	SpanAttributes         map[string]string            `json:"span_attributes"`
-	Tracestate             map[string]map[string]string `json:"tracestate"`
+	HeadersHelper                  *string                      `json:"headers_helper"`
+	HeadersHelperRefreshIntervalMS *int64                       `json:"headers_helper_refresh_interval_ms"`
+	ToolResult                     *OtelToolResultLogConfig     `json:"tool_result"`
+	LogUserPrompt                  *bool                        `json:"log_user_prompt"`
+	LogAgentResponses              *bool                        `json:"log_agent_responses"`
+	LogGuardianAssessments         *bool                        `json:"log_guardian_assessments"`
+	Environment                    *string                      `json:"environment"`
+	Exporter                       *OtelExporter                `json:"exporter"`
+	TraceExporter                  *OtelExporter                `json:"trace_exporter"`
+	MetricsExporter                *OtelExporter                `json:"metrics_exporter"`
+	SpanAttributes                 map[string]string            `json:"span_attributes"`
+	Tracestate                     map[string]map[string]string `json:"tracestate"`
 }
 
 // otelRequirementsForWire projects managed OTEL requirements onto the
@@ -801,22 +952,32 @@ func otelRequirementsForWire(value *OtelRequirements) *wireOtelRequirements {
 		return nil
 	}
 	out := &wireOtelRequirements{
-		ToolResult:             redacted.ToolResult,
-		LogUserPrompt:          cloneBoolPtr(redacted.LogUserPrompt),
-		LogAgentResponses:      cloneBoolPtr(redacted.LogAgentResponses),
-		LogGuardianAssessments: cloneBoolPtr(redacted.LogGuardianAssessments),
-		Environment:            cloneStringPtr(redacted.Environment),
-		Exporter:               redacted.Exporter,
-		TraceExporter:          redacted.TraceExporter,
-		MetricsExporter:        redacted.MetricsExporter,
-		SpanAttributes:         cloneStringMap(redacted.SpanAttributes),
-		Tracestate:             cloneTracestate(redacted.Tracestate),
+		HeadersHelper:                  cloneStringPtr(redacted.HeadersHelper),
+		HeadersHelperRefreshIntervalMS: cloneHeadersHelperInterval(redacted.HeadersHelperRefreshIntervalMS),
+		ToolResult:                     redacted.ToolResult,
+		LogUserPrompt:                  cloneBoolPtr(redacted.LogUserPrompt),
+		LogAgentResponses:              cloneBoolPtr(redacted.LogAgentResponses),
+		LogGuardianAssessments:         cloneBoolPtr(redacted.LogGuardianAssessments),
+		Environment:                    cloneStringPtr(redacted.Environment),
+		Exporter:                       redacted.Exporter,
+		TraceExporter:                  redacted.TraceExporter,
+		MetricsExporter:                redacted.MetricsExporter,
+		SpanAttributes:                 cloneStringMap(redacted.SpanAttributes),
+		Tracestate:                     cloneTracestate(redacted.Tracestate),
 	}
 	if redacted.ToolResult != nil {
 		copied := *redacted.ToolResult
 		out.ToolResult = &copied
 	}
 	return out
+}
+
+func cloneHeadersHelperInterval(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func redactedOtelRequirements(value *OtelRequirements) *OtelRequirements {

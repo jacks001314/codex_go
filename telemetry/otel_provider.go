@@ -182,6 +182,16 @@ func ValidateSpanAttributes(attributes map[string]string) error {
 	return nil
 }
 
+// helperForExport returns the shared collector-credential helper only for a
+// signal the requirements layer authorizes (Rust #62110). An unauthorized
+// signal keeps its static headers instead of inheriting managed credentials.
+func (s OtelSettings) helperForExport(apply bool) *otelHeadersHelper {
+	if !apply {
+		return nil
+	}
+	return s.headersHelper
+}
+
 // tracesClientOptions maps the resolved trace exporter onto the traces client,
 // the way metricsClientOptions does for metrics.
 func tracesClientOptions(settings OtelSettings, exporter OtelExporter) (TracesClientOptions, bool) {
@@ -193,7 +203,7 @@ func tracesClientOptions(settings OtelSettings, exporter OtelExporter) (TracesCl
 		Headers:        exporter.Headers,
 		TLS:            exporter.TLS,
 		SpanAttributes: settings.SpanAttributes,
-		HeaderHelper:   settings.headersHelper,
+		HeaderHelper:   settings.helperForExport(settings.HeadersHelper.appliesToTraces()),
 	}
 	switch exporter.Kind {
 	case OtelExporterOtlpHTTP:
@@ -224,7 +234,7 @@ func logsClientOptions(settings OtelSettings, exporter OtelExporter) (LogsClient
 		Endpoint:       exporter.Endpoint,
 		Headers:        exporter.Headers,
 		TLS:            exporter.TLS,
-		HeaderHelper:   settings.headersHelper,
+		HeaderHelper:   settings.helperForExport(settings.HeadersHelper.appliesToLogs()),
 	}
 	switch exporter.Kind {
 	case OtelExporterOtlpHTTP:
@@ -254,7 +264,7 @@ func metricsClientOptions(settings OtelSettings, exporter OtelExporter) (Metrics
 		Endpoint:       exporter.Endpoint,
 		Headers:        exporter.Headers,
 		TLS:            exporter.TLS,
-		HeaderHelper:   settings.headersHelper,
+		HeaderHelper:   settings.helperForExport(settings.HeadersHelper.appliesToMetrics()),
 	}
 	switch exporter.Kind {
 	case OtelExporterOtlpHTTP:
