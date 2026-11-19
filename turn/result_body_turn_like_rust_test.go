@@ -154,3 +154,32 @@ func TestBeginResultBodyTurnReplacesStoreLikeRust(t *testing.T) {
 		t.Fatal("CapturesResultBodies() = true after a disabled turn start")
 	}
 }
+
+// Mirrors Rust's per-task store lifetime from the other direction: a capture that
+// arrives for a turn the recorder never began does not create or replace one, so
+// a late result cannot evict the current turn's bodies.
+func TestCaptureResultBodyIgnoresOtherTurnsLikeRust(t *testing.T) {
+	recorder := NewExecutedToolCallRecorder()
+	recorder.BeginResultBodyTurn("turn-1", "chatgpt|acct", true)
+	kept, ok := recorder.CaptureResultBody("turn-1", "chatgpt|acct", model.ToolResultBodySource{
+		Content: []any{map[string]any{"type": "text", "text": "current turn"}},
+	})
+	if !ok {
+		t.Fatal("CaptureResultBody() rejected an eligible result")
+	}
+	if _, ok := recorder.CaptureResultBody("turn-0", "chatgpt|acct", model.ToolResultBodySource{
+		Content: []any{map[string]any{"type": "text", "text": "stale turn"}},
+	}); ok {
+		t.Fatal("CaptureResultBody() accepted a result for a turn that never began")
+	}
+	item := &model.AgentItem{Type: "function_call_output"}
+	call := model.NewExecutedToolCall("search", map[string]any{"q": "x"})
+	call.SetToolResultMetadata(model.NewToolResultMetadata(nil).WithResultID(kept))
+	item.AppendExecutedToolCalls(call)
+	if got := recorder.ResultBodyAttachments("chatgpt|acct", []any{item}); len(got) != 1 {
+		t.Fatalf("attachments = %d, want the current turn's body", len(got))
+	}
+	if got := recorder.ResultBodyOwnerForTurn("turn-0"); got != "" {
+		t.Fatalf("ResultBodyOwnerForTurn(turn-0) = %q, want empty", got)
+	}
+}

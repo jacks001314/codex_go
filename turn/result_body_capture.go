@@ -27,23 +27,21 @@ type RuntimeAuthBinding struct {
 	UsesCodexBackend bool
 }
 
-// resultBodyTurnFor returns the store that captures for this recorder, creating
-// it on first use for the given turn and owner. A store from another turn is
-// replaced, mirroring Rust's per-task ResultBodyTurn.
+// resultBodyTurnFor returns the store this recorder began for the given turn and
+// owner. It never creates one: a capture belongs to the turn that announced
+// itself at turn start, so a late result from another turn cannot evict the
+// current turn's bodies (Rust ResultBodyTurn's per-task lifetime).
 func (r *ExecutedToolCallRecorder) resultBodyTurnFor(turnID string, owner string) *ResultBodyTurn {
-	if r == nil {
+	if r == nil || turnID == "" {
 		return nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.resultBodyTurn != nil && r.resultBodyTurn.TurnID() == turnID && r.resultBodyTurn.Owner() == owner {
-		return r.resultBodyTurn
-	}
-	if turnID == "" {
+	store := r.resultBodyTurn
+	if store == nil || store.TurnID() != turnID || store.Owner() != owner {
 		return nil
 	}
-	r.resultBodyTurn = NewResultBodyTurn(turnID, owner)
-	return r.resultBodyTurn
+	return store
 }
 
 // BeginResultBodyTurn starts the bounded result-body store for one turn and
