@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "5387162ef03157b27111c82ba5807078a66aa726",
+ "rustToInclusive": "c332754aa3a764ae89352aa5903119281ae32e5a",
  "commits": [
   {
    "sha": "27c05a52e0cdf93ef7db5a96ccaf88d6b9095472",
@@ -50438,6 +50438,21 @@
    ]
   },
   {
+   "sha": "06789c7618611ba7059af026ae8efd0b14f7017b",
+   "subject": "Preserve web search provider ownership across thread resumes (#62144)",
+   "kind": "persistence",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "retainedctx.ModelSearchState plus appserver/model_search.go restore the newest web search owner from injected history (search_mcp ahead of standalone, standalone ahead of legacy attribution) and treat pre-checkpoint native hits as search_mcp only when the history is new.",
+    "checkpoints are annotated on every owner transition so a resumed thread keeps the provider that ran the search and the call history.",
+    "tests: appserver TestModelSearchStateRestorePrecedenceLikeRust, TestAnnotateModelSearchMetadataCheckpointsEveryOwnerLikeRust",
+    "plan: update/plan_2026_11_19.md batch 1"
+   ]
+  },
+  {
    "sha": "1c2e4cd45f15ea7d9576d638f6a1112b8fa58f77",
    "subject": "Limit recovery after repeated cloud reply stream disconnects (#62151)",
    "kind": "runtime",
@@ -50449,6 +50464,48 @@
     "cloudbackend idle recovery counts replacement streams, delays each reopen by 500 ms per installed replacement, answers an exhausted sequence with the transcript/draft message, and clears the budget on reset or after a stream stays connected 15 s.",
     "tests: cloudbackend TestIdleRecoveryDelaysReplacementsLikeRust, TestIdleRecoveryStopsAfterRepeatedDisconnectsLikeRust, TestIdleRecoveryClearsReplacementBudgetLikeRust",
     "plan: update/plan_2026_11_19.md batch 4"
+   ]
+  },
+  {
+   "sha": "9f80bb5957f0d863fdeaaff0ea193cac94c192d1",
+   "subject": "Expose `bioPolicy` errors in app-server v2 (#62176)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "appserver/turn_runtime.go maps bio policy API errors to the v2 bioPolicy code instead of collapsing them into other, so clients can tell a policy refusal apart from a generic failure.",
+    "tests: appserver runtime router analytics assertions on the bioPolicy code",
+    "plan: update/plan_2026_11_19.md batch 1"
+   ]
+  },
+  {
+   "sha": "1b84166252b6ecfd36be9e12c29ac01454a30d7e",
+   "subject": "Flush HTTP/2 tunnel data to the local TCP writer (#62186)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "tcptunnel copyAndFlush forwards each HTTP/2 response chunk and flushes the local writer, so a buffered writer cannot hold tunnel payload until the stream ends.",
+    "tests: tcptunnel TestHTTP2AdmitsConnectAndForwardsLikeRust",
+    "plan: update/plan_2026_11_19.md batch 1"
+   ]
+  },
+  {
+   "sha": "a734a13ad77c759c927fc1ff86d4f7d31e53e997",
+   "subject": "Omit unknown server versions from `/status` (#62202)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "tui/status/remote_connection.go and tui/state.go drop the server version segment when the daemon never reported one, while the daemon menu keeps its explicit unknown label.",
+    "tests: tui/status/status_test.go",
+    "plan: update/plan_2026_11_19.md batch 1"
    ]
   },
   {
@@ -50480,6 +50537,63 @@
    ]
   },
   {
+   "sha": "cc7a62e19cb4703495e3a6d01e1af076e8223833",
+   "subject": "Report API spend limit errors by scope (#62329)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "codexapi gains apiKeySpendLimitExceeded, projectSpendLimitExceeded and organizationSpendLimitExceeded kinds with their messages; model/responses_agent.go and responses_stream.go refuse to retry them across HTTP, SSE and response.failed even when Retry-After is present.",
+    "appserver maps the three kinds into the v2 error codes, codexErrorIsUsageLimited stops goal/compaction work on them, rollout round-trips the classification labels and the TUI folds them into usage_limit.",
+    "tests: model TestAPISpendLimitScopesLikeRust, TestQuotaErrorCodesExcludeScopedSpendLimitsLikeRust; appserver TestAPISpendLimitScopesSurviveThreadReadLikeRust; rollout TestScopedSpendLimitClassificationSurvivesLikeRust; tui/chatwidget TestAppServerSpendLimitsMapToUsageLimitLikeRust",
+    "plan: update/plan_2026_11_19.md batch 1"
+   ]
+  },
+  {
+   "sha": "9d8ca1df71dd95e0bb77b22207236f29a83bdc5f",
+   "subject": "Preserve queued agent messages when a parent turn is interrupted (#62348)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "turn/steer_mailbox.go Extract keeps non-mail input while returning queued agent mail, and appserver/agent_controller.go preserveQueuedAgentMessagesOnInterrupt writes that mail back as agent_message events when a parent turn is interrupted.",
+    "tests: appserver TestPreserveQueuedAgentMessagesOnInterruptLikeRust; turn TestSteerMailboxExtractKeepsOtherInputLikeRust",
+    "plan: update/plan_2026_11_19.md batch 1"
+   ]
+  },
+  {
+   "sha": "c5cff4335c1e4675227c8b89520aaf09564b9aa7",
+   "subject": "Treat statusless bio and cyber policy errors as terminal (#62354)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "model/responses_stream.go keeps bio and cyber policy codes in the terminal policy table, so a stream error without an HTTP status stops the turn instead of being retried.",
+    "tests: model TestBioPolicyErrorsAreTypedAcrossStreamAndHTTPLikeRust and the terminal provider error table tests",
+    "plan: update/plan_2026_11_19.md batch 1"
+   ]
+  },
+  {
+   "sha": "513577302a9aacd217b128a701702a54b7e752b6",
+   "subject": "Surface Responses stream errors as soon as they arrive (#62356)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "model/responses_stream.go classifies a standalone SSE error event through streamErrorEvent and terminates the stream at that point instead of waiting for response.failed.",
+    "tests: model/responses_stream_test.go stream error coverage",
+    "plan: update/plan_2026_11_19.md batch 1"
+   ]
+  },
+  {
    "sha": "5387162ef03157b27111c82ba5807078a66aa726",
    "subject": "Reserve credential permission tables in Codex configuration (#62358)",
    "kind": "runtime",
@@ -50492,6 +50606,90 @@
     "tests: config TestPermissionsCredentialsReservedInRequirementsLikeRust, TestPermissionsCredentialsProfileTableLikeRust",
     "Rust loader/local.rs manages config-file permissions tables as legacy managed profiles; Go reads managed profiles only from requirements.toml and cloud layers, so no equivalent filter exists to change.",
     "plan: update/plan_2026_11_19.md batch 4"
+   ]
+  },
+  {
+   "sha": "637c42947236017bc78da59d1a22916400ccae63",
+   "subject": "Enable lazy startup for stdio MCP servers by default (#62366)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "features/features.go promotes mcp_lazy_stdio_startup to a stable default-on flag so stdio MCP servers start on first tool use like Rust.",
+    "tests: mcp TestMcpLazyStdioStartupDefersCachedServersLikeRust",
+    "plan: update/plan_2026_11_19.md batch 1"
+   ]
+  },
+  {
+   "sha": "bc63849ff6ba67033e6887bf7c37c18c7bd631ad",
+   "subject": "Share config layer entries across snapshots (#62370)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Rust cloned layer entries when snapshotting because its layer stack owned values; Go's config layer stack stores maps and profile structs that snapshots share by reference, so copying a layer snapshot cannot drop or duplicate entries.",
+    "no Go deep-copy path exists to replace; behaviour is already equivalent.",
+    "plan: update/plan_2026_11_19.md batch 5"
+   ]
+  },
+  {
+   "sha": "8e9746b19d20539ab3fbce5d69a4e0cd09b27305",
+   "subject": "Remove the 4,000-byte prompt limit for `thread/sample` (#62378)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "appserver/thread_sample.go accepts prompts of any length and reports the Rust not-in-progress message instead of a size error.",
+    "tests: appserver/thread_sample_like_rust_test.go",
+    "plan: update/plan_2026_11_19.md batch 1"
+   ]
+  },
+  {
+   "sha": "ab1ad9299b53642517c77e1f617f63d5f9273e43",
+   "subject": "Skip the sandbox denial wait when unified exec output closes (#62382)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "Go has no denial-context wait to skip: unifiedExecProcess.finishWithExit classifies the buffered transcript through sandbox.IsLikelySandboxDenied at the moment the output stream closes (process exit or process/closed), so a closed stream never waits for more output.",
+    "tests: tool TestUnifiedExecClassifiesSandboxDenialAtOutputCloseLikeRust pins sandboxed and unsandboxed classification at close with no further output.",
+    "plan: update/plan_2026_11_19.md batch 5"
+   ]
+  },
+  {
+   "sha": "f7dece07d08b1452aaac13053a72de0631fa934f",
+   "subject": "Centralize transcript overlay input routing (#62384)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "The refactor removes scattered Overlay::Transcript matching in Rust; Go keeps a single transcript overlay pointer on the model and routes every interaction key through updateTranscriptOverlayKey, which already branches once between the transcript and pager keymaps.",
+    "Go resolves keymap matches at key time (keyMatches), so there are no runtime bindings to refresh through the overlay as Rust needed.",
+    "plan: update/plan_2026_11_19.md batch 5"
+   ]
+  },
+  {
+   "sha": "c332754aa3a764ae89352aa5903119281ae32e5a",
+   "subject": "Pause runtime sandbox integrity checks (#62389)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "sandbox/integrity/runner.go short-circuits the shared runner entry point so runtime integrity checks no longer run while the checkers stay available to the isolated tests.",
+    "tests: sandbox/integrity TestRunIntegrityChecks*",
+    "plan: update/plan_2026_11_19.md batch 1"
    ]
   }
  ]

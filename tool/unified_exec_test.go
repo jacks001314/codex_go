@@ -2152,3 +2152,39 @@ func TestUnifiedExecSandboxContextCarriesSandboxOverrideLikeRust(t *testing.T) {
 		t.Fatalf("no-override wire form = %s", encodedPlain)
 	}
 }
+
+// Rust ab1ad9299b (#62382): a closed output stream can no longer add denial
+// context, so check_for_sandbox_denial classifies the buffered output instead of
+// waiting out the 20 ms window. Go classifies at the same point - when
+// finishWithExit records the process close - so the verdict has to be available
+// with no further output arriving.
+func TestUnifiedExecClassifiesSandboxDenialAtOutputCloseLikeRust(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		sandboxType sandbox.SandboxType
+		wantDenied  bool
+	}{
+		{name: "sandboxed", sandboxType: sandbox.SandboxTypeLinuxSeccomp, wantDenied: true},
+		{name: "unsandboxed", sandboxType: sandbox.SandboxTypeNone, wantDenied: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sandboxType := test.sandboxType
+			process := &unifiedExecProcess{
+				callID:      "sandbox-denial",
+				eventSink:   func(UnifiedExecEvent) {},
+				output:      newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
+				transcript:  newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
+				done:        make(chan struct{}),
+				eventDone:   make(chan struct{}),
+				sandboxType: &sandboxType,
+			}
+			process.startEventStream(UnifiedExecEvent{Kind: UnifiedExecEventBegin, CallID: process.callID})
+			process.appendOutput([]byte("touch: cannot touch 'x': Permission denied"))
+			process.finish(errors.New("exit status 1"))
+			if got := process.wasSandboxDenied(); got != test.wantDenied {
+				t.Fatalf("sandbox denial at output close = %v, want %v", got, test.wantDenied)
+			}
+			<-process.eventDone
+		})
+	}
+}
