@@ -5,12 +5,14 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/mattn/go-runewidth"
 
 	"codex_go/gitutil"
+	"codex_go/utils"
 )
 
 // Rust parity: codex-rs/tui/src/resume_picker.rs.
@@ -19,6 +21,9 @@ const (
 	SessionPickerPageSize          = 25
 	SessionPickerLoadNearThreshold = 5
 	sessionPickerDateWidth         = 12
+	// sessionPickerFooterDefaultHeight stands in for the list viewport before
+	// the first render records it (Rust view_rows defaults to None).
+	sessionPickerFooterDefaultHeight = 10
 )
 
 type SessionPickerAction string
@@ -167,8 +172,20 @@ func SessionPickerRepoFilterAvailable(cwd string) bool {
 	if !ok {
 		return false
 	}
+	return SessionPickerRepoFilterAvailableFromCWDs(cwds)
+}
+
+// SessionPickerRepoFilterAvailableFromCWDs answers the same question for a
+// checkout set a caller already expanded, so the picker can discover linked
+// worktrees once and still offer the Repo filter (Rust
+// local_repo_filter_available).
+func SessionPickerRepoFilterAvailableFromCWDs(cwds []string) bool {
 	seen := map[string]bool{}
 	for _, candidate := range cwds {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
 		resolved, err := filepath.EvalSymlinks(candidate)
 		if err != nil {
 			continue
@@ -302,11 +319,46 @@ type SessionPickerState struct {
 	// MorePagesAvailable reports whether a page-down past the last row may wait
 	// for the catalog to serve another page (Rust PaginationState.next_cursor).
 	MorePagesAvailable bool
+	// NextCursor is the backend continuation of the current listing (Rust
+	// PaginationState::next_cursor). Empty exhausts the listing.
+	NextCursor string
 	// pendingPageDownTarget keeps a page-down distance while rows are still
 	// arriving so a delayed page cannot drop the user's position (Rust
 	// PickerState.pending_page_down_target, #57862).
 	pendingPageDownTarget int
 	hasPendingPageDown    bool
+	// ScrollTop is the first visible session (Rust PickerState::scroll_top).
+	// RenderWindow advances it just far enough to keep the selection on screen.
+	ScrollTop int
+	// viewWidth/viewHeight/viewNow record the list viewport of the last render
+	// so row heights and the footer percent need no extra measuring pass
+	// (Rust PickerState::view_width/view_rows/relative_time_reference).
+	viewWidth  int
+	viewHeight int
+	viewNow    time.Time
+	// frozenFooterPercent pins the scroll percent while a page is in flight so
+	// the footer does not jump as rows arrive (Rust
+	// PickerState::frozen_footer_percent).
+	frozenFooterPercent    int
+	frozenFooterPercentSet bool
+	// listingToken identifies the current listing cycle. Pages carrying an
+	// older token belong to a filter the user has already left (Rust
+	// PickerState::listing_token).
+	listingToken uint64
+	// cwdNormalized memoizes directory normalization per raw path. A single
+	// render pass reads every row's cwd more than once, and canonicalization
+	// walks the filesystem, so normalize each distinct path once. Rust keeps
+	// the same per-cwd result in PickerState::local_cwd_matches.
+	cwdNormalized map[string]string
+	// cwdMatches caches the directory-filter decision per raw row cwd for the
+	// active filter. Rust clears local_cwd_matches whenever the listing
+	// restarts; cwdMatchKey gives the cache the same lifetime without a reload.
+	cwdMatches  map[string]bool
+	cwdMatchKey string
+	// cwdFilterIdentity caches the filter directory's repository identity so a
+	// Repo filter does not re-walk it for every uncached row.
+	cwdFilterIdentity    *gitutil.RepositoryIdentity
+	cwdFilterIdentitySet bool
 }
 
 func NewSessionPickerState(action SessionPickerAction, items []SessionSummary, filterCWD string, filterCWDs ...string) *SessionPickerState {
@@ -329,6 +381,7 @@ func NewSessionPickerStateForBackend(backendID BackendID, action SessionPickerAc
 		SortKey:        SessionSortUpdatedAt,
 		ToolbarFocus:   SessionPickerToolbarFilter,
 		Expanded:       map[string]bool{},
+		cwdNormalized:  map[string]string{},
 	}
 	state.clampSelection()
 	return state
@@ -340,13 +393,17 @@ func (s *SessionPickerState) VisibleItems() []SessionSummary {
 	}
 	query := strings.ToLower(strings.TrimSpace(s.Query))
 	provider := strings.ToLower(strings.TrimSpace(s.ProviderFilter))
-	filterCWD := cleanPathForCompare(s.FilterCWD)
-	filterCWDSet := map[string]bool{}
-	for _, cwd := range s.FilterCWDs {
-		if cleaned := cleanPathForCompare(cwd); cleaned != "" {
-			filterCWDSet[cleaned] = true
+	filterCWD := s.normalizedCWD(s.FilterCWD)
+	var filterCWDSet map[string]bool
+	if s.FilterMode == SessionFilterRepo {
+		filterCWDSet = make(map[string]bool, len(s.FilterCWDs))
+		for _, cwd := range s.FilterCWDs {
+			if cleaned := s.normalizedCWD(cwd); cleaned != "" {
+				filterCWDSet[cleaned] = true
+			}
 		}
 	}
+	s.resetCWDFilterCacheIfNeeded(filterCWD)
 	items := make([]SessionSummary, 0, len(s.Items))
 	for _, item := range s.Items {
 		switch s.Action {
@@ -364,11 +421,11 @@ func (s *SessionPickerState) VisibleItems() []SessionSummary {
 		case SessionFilterCWD:
 			// Rust #56308: Cwd is directory-scoped, so linked worktrees no longer
 			// leak into it.
-			if filterCWD != "" && cleanPathForCompare(item.CWD) != filterCWD {
+			if !s.rowMatchesCWDFilter(item.CWD, filterCWD, nil) {
 				continue
 			}
 		case SessionFilterRepo:
-			if !s.repoFilterMatches(item, filterCWD, filterCWDSet) {
+			if !s.rowMatchesCWDFilter(item.CWD, filterCWD, filterCWDSet) {
 				continue
 			}
 		}
@@ -419,9 +476,14 @@ func (s *SessionPickerState) Move(delta int) {
 		s.Selected = 0
 		return
 	}
-	s.Selected = (s.Selected + delta) % len(visible)
+	// Rust stops at the ends instead of wrapping, so pressing down on the last
+	// loaded row can page in older sessions (resume_picker.rs move_down).
+	s.Selected += delta
 	if s.Selected < 0 {
-		s.Selected += len(visible)
+		s.Selected = 0
+	}
+	if s.Selected >= len(visible) {
+		s.Selected = len(visible) - 1
 	}
 }
 
@@ -501,6 +563,244 @@ func (s *SessionPickerState) ChangeFilter(direction SessionFilterDirection) {
 	}
 	s.FilterMode = next
 	s.clampSelection()
+}
+
+// SessionPickerScope is the directory scope a picker listing asks for. It
+// mirrors Rust's ThreadListCwdFilter: All requests no directory filter, and
+// CWDs carries the filter set (the requested directory alone for Cwd, the
+// expanded checkout set for Repo).
+type SessionPickerScope struct {
+	All  bool
+	CWDs []string
+	// Archived selects the status the listing pages over (Rust
+	// thread_list_params.archived). A nil value keeps the legacy merged
+	// listing that returns both statuses in one page.
+	Archived *bool
+	// Limit overrides the page size; zero uses SessionPickerPageSize.
+	Limit int
+}
+
+// ListingScope is the scope the picker sends to thread/list for its current
+// filter (Rust PageCwdFilter::for_request).
+func (s *SessionPickerState) ListingScope() SessionPickerScope {
+	if s == nil {
+		return SessionPickerScope{All: true, Limit: SessionPickerPageSize}
+	}
+	scope := SessionPickerScope{Archived: s.listingStatus(), Limit: SessionPickerPageSize}
+	switch s.FilterMode {
+	case SessionFilterCWD:
+		if cwd := strings.TrimSpace(s.FilterCWD); cwd != "" {
+			scope.CWDs = []string{cwd}
+			return scope
+		}
+	case SessionFilterRepo:
+		if len(s.FilterCWDs) > 0 {
+			scope.CWDs = append([]string(nil), s.FilterCWDs...)
+			return scope
+		}
+		if cwd := strings.TrimSpace(s.FilterCWD); cwd != "" {
+			scope.CWDs = []string{cwd}
+			return scope
+		}
+	}
+	scope.All = true
+	return scope
+}
+
+// listingStatus reports the archive status the picker's action pages over.
+// Rust drills into one SessionStatus at a time and toggles it from the
+// toolbar; Go's Delete picker keeps listing both so a session of either kind
+// can be removed.
+func (s *SessionPickerState) listingStatus() *bool {
+	if s == nil {
+		return nil
+	}
+	switch s.Action {
+	case SessionPickerUnarchive:
+		archived := true
+		return &archived
+	case SessionPickerDelete:
+		return nil
+	default:
+		archived := false
+		return &archived
+	}
+}
+
+// BeginListing starts a fresh cursor cycle and invalidates pages from an older
+// filter (Rust PickerState::start_initial_load -> PaginationState::reset).
+func (s *SessionPickerState) BeginListing() uint64 {
+	if s == nil {
+		return 0
+	}
+	s.listingToken++
+	s.NextCursor = ""
+	s.MorePagesAvailable = false
+	s.hasPendingPageDown = false
+	s.pendingPageDownTarget = 0
+	s.ScrollTop = 0
+	s.Error = ""
+	s.Loading = true
+	s.clearFrozenFooterPercent()
+	return s.listingToken
+}
+
+// BeginPageLoad marks the next page in flight and freezes the footer percent
+// at the position the user left (Rust load_more_if_needed ->
+// freeze_footer_percent + PaginationState::start_load).
+func (s *SessionPickerState) BeginPageLoad() {
+	if s == nil {
+		return
+	}
+	if !s.Loading {
+		s.freezeFooterPercent()
+	}
+	s.Loading = true
+}
+
+// ListingToken identifies the current listing cycle.
+func (s *SessionPickerState) ListingToken() uint64 {
+	if s == nil {
+		return 0
+	}
+	return s.listingToken
+}
+
+// SetNextPageCursor records the continuation returned by the current listing.
+func (s *SessionPickerState) SetNextPageCursor(cursor string) {
+	if s == nil {
+		return
+	}
+	s.NextCursor = strings.TrimSpace(cursor)
+	s.MorePagesAvailable = s.NextCursor != ""
+}
+
+// ShouldLoadNextPage reports whether the selection sits within
+// LOAD_NEAR_THRESHOLD rows of the end of a listing that can serve another page
+// (Rust maybe_load_more_for_scroll).
+func (s *SessionPickerState) ShouldLoadNextPage() bool {
+	if s == nil || s.Loading || !s.MorePagesAvailable || strings.TrimSpace(s.NextCursor) == "" {
+		return false
+	}
+	visible := s.VisibleItems()
+	if len(visible) == 0 {
+		return false
+	}
+	return len(visible)-1-s.Selected <= SessionPickerLoadNearThreshold
+}
+
+// PendingPageDown reports a page-down that is waiting for older rows
+// (Rust PickerState::pending_page_down_target).
+func (s *SessionPickerState) PendingPageDown() bool {
+	return s != nil && s.hasPendingPageDown
+}
+
+// SearchNeedsMorePages reports a typed query with no matching loaded rows
+// while the listing can still serve pages. Rust keeps paging until the search
+// finds a row or the listing is exhausted (resume_picker.rs set_query /
+// continue_search_if_needed).
+func (s *SessionPickerState) SearchNeedsMorePages() bool {
+	if s == nil || strings.TrimSpace(s.Query) == "" || s.Loading || strings.TrimSpace(s.NextCursor) == "" {
+		return false
+	}
+	return len(s.VisibleItems()) == 0
+}
+
+// rowSeparatorHeight is the blank line Rust paints between comfortable rows
+// (resume_picker.rs row_separator_height).
+func (s *SessionPickerState) rowSeparatorHeight() int {
+	if s != nil && s.Density == SessionDensityDense {
+		return 0
+	}
+	return 1
+}
+
+// renderedHeightBetween sums the rendered line count from start through
+// endInclusive, including the comfortable separators between them (Rust
+// PickerState::rendered_height_between).
+func (s *SessionPickerState) renderedHeightBetween(start int, endInclusive int) int {
+	if s == nil {
+		return 0
+	}
+	visible := s.VisibleItems()
+	if start < 0 {
+		start = 0
+	}
+	if endInclusive >= len(visible) {
+		endInclusive = len(visible) - 1
+	}
+	if start > endInclusive {
+		return 0
+	}
+	height := 0
+	for index := start; index <= endInclusive; index++ {
+		height += len(s.renderSessionRows(index, visible[index], s.viewWidth, s.viewNow))
+	}
+	return height + s.rowSeparatorHeight()*(endInclusive-start)
+}
+
+// hasMoreAbove reports rows hidden above the window (Rust has_more_above).
+func (s *SessionPickerState) hasMoreAbove() bool {
+	return s != nil && s.ScrollTop > 0
+}
+
+// availableContentRows is the viewport height minus the rows reserved for the
+// up/down more indicators (Rust available_content_rows).
+func (s *SessionPickerState) availableContentRows(viewportHeight int) int {
+	rows := viewportHeight
+	if s.hasMoreAbove() {
+		rows--
+	}
+	if strings.TrimSpace(s.NextCursor) != "" || s.Selected+1 < len(s.VisibleItems()) {
+		rows--
+	}
+	if rows < 1 {
+		return 1
+	}
+	return rows
+}
+
+// HasMoreBelow reports rows hidden below the window, either because the
+// listing can serve another page or because the loaded rows overflow the
+// viewport (Rust has_more_below).
+func (s *SessionPickerState) HasMoreBelow(viewportHeight int) bool {
+	if s == nil {
+		return false
+	}
+	visible := s.VisibleItems()
+	if len(visible) == 0 {
+		return false
+	}
+	if strings.TrimSpace(s.NextCursor) != "" {
+		return true
+	}
+	capacity := s.availableContentRows(viewportHeight)
+	used := 0
+	for index := s.ScrollTop; index < len(visible); index++ {
+		if index > s.ScrollTop {
+			used += s.rowSeparatorHeight()
+		}
+		used += len(s.renderSessionRows(index, visible[index], s.viewWidth, s.viewNow))
+		if used > capacity {
+			return true
+		}
+	}
+	return false
+}
+
+// NeedsMinimumRowsForView reports a first page that does not fill the list
+// viewport while older pages remain, so the picker should fetch more instead
+// of leaving the window half empty (Rust ensure_minimum_rows_for_view).
+func (s *SessionPickerState) NeedsMinimumRowsForView(minimumRows int) bool {
+	if s == nil || minimumRows == 0 || s.Loading || strings.TrimSpace(s.NextCursor) == "" {
+		return false
+	}
+	visible := s.VisibleItems()
+	rendered := 0
+	if len(visible) > 0 {
+		rendered = s.renderedHeightBetween(0, len(visible)-1)
+	}
+	return rendered < s.availableContentRows(minimumRows)
 }
 
 func (s *SessionPickerState) ToggleDensity() {
@@ -714,33 +1014,138 @@ func (s *SessionPickerState) NeedsNextPage() bool {
 }
 
 func (s *SessionPickerState) RenderRows(width int, now time.Time) []string {
+	rows, _, _ := s.renderRows(width, now, 0)
+	return rows
+}
+
+// RenderWindow renders at most maxRows lines scrolled so the selected session
+// is visible (Rust PickerState::ensure_selected_visible + render_rows).
+func (s *SessionPickerState) RenderWindow(width int, now time.Time, maxRows int) []string {
+	rows, _, _ := s.renderRows(width, now, maxRows)
+	return rows
+}
+
+// renderRows returns the rendered lines, the first visible session index, and
+// the number of visible sessions. maxRows <= 0 renders the whole list.
+func (s *SessionPickerState) renderRows(width int, now time.Time, maxRows int) ([]string, int, int) {
 	if s == nil {
-		return []string{"No sessions yet"}
+		return []string{"No sessions yet"}, 0, 0
 	}
+	if width > 0 {
+		s.viewWidth = width
+	}
+	if maxRows > 0 {
+		s.viewHeight = maxRows
+	}
+	s.viewNow = now
 	if strings.TrimSpace(s.Error) != "" {
-		return WrapLine(s.Error, WrapOptions{Width: width, BreakWords: true})
+		return WrapLine(s.Error, WrapOptions{Width: width, BreakWords: true}), 0, 0
 	}
 	visible := s.VisibleItems()
 	if len(visible) == 0 {
+		if strings.TrimSpace(s.Query) != "" {
+			// Rust render_empty_state_line: an active search says so while a
+			// page is in flight, and otherwise reports no match.
+			if s.Loading && strings.TrimSpace(s.NextCursor) != "" {
+				return []string{"Searching..."}, 0, 0
+			}
+			return []string{"No results for your search"}, 0, 0
+		}
 		if s.Loading {
-			return []string{"Loading sessions..."}
+			if len(s.Items) == 0 {
+				return []string{"Loading sessions..."}, 0, 0
+			}
+			return []string{"Loading older sessions..."}, 0, 0
 		}
-		return []string{"No sessions yet"}
+		return []string{"No sessions yet"}, 0, 0
 	}
-	rows := make([]string, 0, len(visible)*2)
-	for index, item := range visible {
-		selected := index == s.Selected
-		if s.Density == SessionDensityDense {
-			rows = append(rows, s.renderDenseSessionRow(item, selected, width, now))
-		} else {
-			rows = append(rows, s.renderComfortableSessionRow(item, selected, width, now)...)
+	start := 0
+	capacity := 0
+	if maxRows > 0 {
+		start = s.ensureSelectedVisible(width, now, visible, maxRows)
+		capacity = s.availableContentRows(maxRows)
+	}
+	rows := make([]string, 0, len(visible)*2+2)
+	for index := start; index < len(visible); index++ {
+		for _, line := range s.renderSessionRows(index, visible[index], width, now) {
+			if capacity > 0 && len(rows) >= capacity {
+				break
+			}
+			rows = append(rows, line)
 		}
-		if s.Expanded[item.ThreadID] {
-			rows = append(rows, renderExpandedSessionRows(item, s.itemCloud(item), width, now)...)
-			rows = append(rows, s.renderTranscriptPreviewLines(item.ThreadID, width)...)
+		if capacity > 0 && len(rows) >= capacity {
+			break
 		}
+		// Rust paints one blank line between comfortable rows while space
+		// remains in the content area (resume_picker.rs render_list).
+		if s.rowSeparatorHeight() > 0 && index+1 < len(visible) {
+			rows = append(rows, "")
+		}
+	}
+	if s.Loading && (capacity <= 0 || len(rows) < capacity) {
+		// Rust paints the trailing row while the next page is in flight
+		// (resume_picker.rs render_rows).
+		rows = append(rows, "  Loading older sessions...")
+	}
+	if maxRows > 0 {
+		if s.hasMoreAbove() {
+			rows = append([]string{"\u2191 more"}, rows...)
+		}
+		if s.HasMoreBelow(maxRows) {
+			label := "\u2193 more"
+			if s.Loading {
+				label = "\u2193 loading more"
+			}
+			// Rust anchors the downward hint on the last row of the list
+			// viewport, below any short content.
+			for len(rows) < maxRows-1 {
+				rows = append(rows, "")
+			}
+			rows = append(rows, label)
+		}
+		if len(rows) > maxRows {
+			rows = rows[:maxRows]
+		}
+	}
+	return rows, start, len(visible)
+}
+
+func (s *SessionPickerState) renderSessionRows(index int, item SessionSummary, width int, now time.Time) []string {
+	selected := index == s.Selected
+	var rows []string
+	if s.Density == SessionDensityDense {
+		rows = append(rows, s.renderDenseSessionRow(item, selected, width, now))
+	} else {
+		rows = append(rows, s.renderComfortableSessionRow(item, selected, width, now)...)
+	}
+	if s.Expanded[item.ThreadID] {
+		rows = append(rows, renderExpandedSessionRows(item, s.itemCloud(item), width, now)...)
+		rows = append(rows, s.renderTranscriptPreviewLines(item.ThreadID, width)...)
 	}
 	return rows
+}
+
+// ensureSelectedVisible scrolls only as far as needed to show the selection,
+// mirroring Rust PickerState::ensure_selected_visible.
+func (s *SessionPickerState) ensureSelectedVisible(width int, now time.Time, visible []SessionSummary, maxRows int) int {
+	if s.Selected >= len(visible) {
+		s.Selected = len(visible) - 1
+	}
+	if s.Selected < 0 {
+		s.Selected = 0
+	}
+	if s.ScrollTop < 0 || s.ScrollTop >= len(visible) {
+		s.ScrollTop = 0
+	}
+	if s.Selected < s.ScrollTop {
+		s.ScrollTop = s.Selected
+	}
+	// Rust scrolls only as far as the content area requires, and the area
+	// shrinks by one row once the top indicator appears.
+	for s.ScrollTop < s.Selected && s.renderedHeightBetween(s.ScrollTop, s.Selected) > s.availableContentRows(maxRows) {
+		s.ScrollTop++
+	}
+	return s.ScrollTop
 }
 
 func (s *SessionPickerState) SearchLine(width int) string {
@@ -829,31 +1234,86 @@ func filterModeLabel(mode SessionFilterMode) string {
 	return "Cwd"
 }
 
-// repoFilterMatches reports whether an item is inside the repository scope:
-// the filter directory itself, a directory in the pre-expanded linked-worktree
-// set, or the corresponding directory of a linked checkout (Rust
-// PickerState::row_matches_filter for SessionFilterMode::Repo).
-func (s *SessionPickerState) repoFilterMatches(item SessionSummary, filterCWD string, filterCWDSet map[string]bool) bool {
-	itemCWD := cleanPathForCompare(item.CWD)
+// normalizedCWD canonicalizes a directory once per picker. Rust resume_picker
+// canonicalizes on every paths_match call but caches the per-row decision in
+// PickerState::local_cwd_matches, which is the behavior mirrored here.
+func (s *SessionPickerState) normalizedCWD(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if s.cwdNormalized == nil {
+		s.cwdNormalized = map[string]string{}
+	}
+	if normalized, ok := s.cwdNormalized[raw]; ok {
+		return normalized
+	}
+	normalized := cleanPathForCompare(raw)
+	s.cwdNormalized[raw] = normalized
+	return normalized
+}
+
+// resetCWDFilterCacheIfNeeded drops cached row decisions when the active
+// directory filter changes, matching Rust's clear on every listing restart.
+func (s *SessionPickerState) resetCWDFilterCacheIfNeeded(filterCWD string) {
+	key := strconv.Itoa(int(s.FilterMode)) + "\x00" + filterCWD
+	if s.FilterMode == SessionFilterRepo && len(s.FilterCWDs) > 0 {
+		cwds := append([]string(nil), s.FilterCWDs...)
+		sort.Strings(cwds)
+		key += "\x00" + strings.Join(cwds, "\x00")
+	}
+	if key == s.cwdMatchKey {
+		return
+	}
+	s.cwdMatchKey = key
+	s.cwdMatches = map[string]bool{}
+	s.cwdFilterIdentity = nil
+	s.cwdFilterIdentitySet = false
+}
+
+// rowMatchesCWDFilter reports whether a row is inside the active directory
+// filter and memoizes the answer per raw cwd (Rust
+// PickerState::row_matches_filter).
+func (s *SessionPickerState) rowMatchesCWDFilter(itemCWD string, filterCWD string, filterCWDSet map[string]bool) bool {
+	raw := strings.TrimSpace(itemCWD)
 	if filterCWD == "" {
 		return true
 	}
-	if itemCWD == filterCWD {
-		return true
+	if raw == "" {
+		return false
 	}
-	if filterCWDSet[itemCWD] {
-		return true
+	if matches, ok := s.cwdMatches[raw]; ok {
+		return matches
 	}
-	rowIdentity, ok := gitutil.RepositoryIdentityForCWD(strings.TrimSpace(item.CWD))
+	normalized := s.normalizedCWD(raw)
+	matches := normalized == filterCWD || filterCWDSet[normalized]
+	if !matches && s.FilterMode == SessionFilterRepo {
+		matches = s.repoFilterMatches(itemCWD)
+	}
+	if s.cwdMatches == nil {
+		s.cwdMatches = map[string]bool{}
+	}
+	s.cwdMatches[raw] = matches
+	return matches
+}
+
+// repoFilterMatches covers the Repository scope: the corresponding directory
+// of a linked checkout of the same repository (Rust
+// PickerState::row_matches_local_cwd for SessionFilterMode::Repo).
+func (s *SessionPickerState) repoFilterMatches(itemCWD string) bool {
+	rowIdentity, ok := gitutil.RepositoryIdentityForCWD(strings.TrimSpace(itemCWD))
 	if !ok {
 		return false
 	}
-	filterIdentity, ok := gitutil.RepositoryIdentityForCWD(strings.TrimSpace(s.FilterCWD))
-	if !ok {
+	if !s.cwdFilterIdentitySet {
+		s.cwdFilterIdentity, _ = gitutil.RepositoryIdentityForCWD(strings.TrimSpace(s.FilterCWD))
+		s.cwdFilterIdentitySet = true
+	}
+	if s.cwdFilterIdentity == nil {
 		return false
 	}
-	return rowIdentity.CommonDir == filterIdentity.CommonDir &&
-		rowIdentity.RelativeCWD == filterIdentity.RelativeCWD
+	return rowIdentity.CommonDir == s.cwdFilterIdentity.CommonDir &&
+		rowIdentity.RelativeCWD == s.cwdFilterIdentity.RelativeCWD
 }
 
 func sortKeyLabel(key SessionSortKey) string {
@@ -867,30 +1327,11 @@ func (s *SessionPickerState) FooterLines(width int, existingSession bool) []stri
 	if s == nil {
 		return nil
 	}
-	visible := s.VisibleItems()
-	position := 0
-	if len(visible) > 0 {
-		position = s.Selected + 1
-	}
-	percent := 100
-	if len(visible) > 1 {
-		percent = int(float64(s.Selected) / float64(len(visible)-1) * 100)
-	}
-	total := FormatInt(int64(len(visible)))
-	progress := FormatInt(int64(position)) + " / " + total + " \u00b7 " + FormatInt(int64(percent)) + "%"
 	separatorWidth := width
 	if separatorWidth <= 0 {
 		separatorWidth = 80
 	}
-	separator := strings.Repeat("\u2500", separatorWidth)
-	if DisplayWidth(progress)+2 < separatorWidth {
-		start := len([]rune(separator)) - DisplayWidth(progress) - 1
-		if start > 0 {
-			runes := []rune(separator)
-			copy(runes[start:], []rune(" "+progress+" "))
-			separator = string(runes)
-		}
-	}
+	separator := renderFooterProgress(separatorWidth, s.footerProgressLabel(separatorWidth))
 	escWide := "start new"
 	escCompact := "new"
 	ctrlC := "quit"
@@ -924,6 +1365,128 @@ func (s *SessionPickerState) FooterLines(width int, existingSession bool) []stri
 		"enter " + s.Action.Label() + "   esc " + escWide + "   " + ctrl + "c " + ctrlC + "   tab focus sort/filter   \u2190/\u2192 change option",
 		ctrl + "o " + densityWide + "   " + ctrl + "t transcript   " + ctrl + "e expand   \u2191/\u2193 browse",
 	}
+}
+
+// renderFooterProgress draws the dim rule with the progress label at its right
+// edge, one column in from the end (Rust render_picker_footer_separator).
+func renderFooterProgress(width int, label string) string {
+	runes := []rune(strings.Repeat("\u2500", width))
+	labelRunes := []rune(label)
+	if len(labelRunes) == 0 {
+		return string(runes)
+	}
+	start := width - len(labelRunes) - 1
+	if start < 0 {
+		return string(runes)
+	}
+	copy(runes[start:], labelRunes)
+	return string(runes)
+}
+
+// footerProgressLabel is the "position / total · percent" text Rust fits into
+// the separator, trying the wide form first and falling back to just the
+// percent (Rust picker_footer_progress_label).
+func (s *SessionPickerState) footerProgressLabel(width int) string {
+	position := 0
+	if len(s.VisibleItems()) > 0 {
+		position = s.Selected + 1
+	}
+	total := FormatInt(int64(len(s.VisibleItems())))
+	if s.Loading {
+		// The total is a lower bound until the last page lands.
+		total += "\u2026"
+	}
+	percent := FormatInt(int64(s.FooterPercent()))
+	labels := []string{
+		" " + FormatInt(int64(position)) + " / " + total + " \u00b7 " + percent + "% ",
+		" " + FormatInt(int64(position)) + "/" + total + " \u00b7 " + percent + "% ",
+		" " + percent + "% ",
+	}
+	for _, label := range labels {
+		if DisplayWidth(label) < width {
+			return label
+		}
+	}
+	return ""
+}
+
+// FooterPercent is the footer's scroll progress. While a page loads it stays
+// at the position the user left (Rust picker_footer_percent).
+func (s *SessionPickerState) FooterPercent() int {
+	if s == nil {
+		return 100
+	}
+	if s.Loading {
+		if s.frozenFooterPercentSet {
+			return s.frozenFooterPercent
+		}
+		if len(s.VisibleItems()) == 0 {
+			return 0
+		}
+	}
+	return s.footerScrollPercent()
+}
+
+// footerScrollPercent maps the rows scrolled past the top of the viewport onto
+// 0-100, reporting 100 whenever the whole listing already fits (Rust
+// picker_footer_scroll_percent).
+func (s *SessionPickerState) footerScrollPercent() int {
+	visible := s.VisibleItems()
+	if len(visible) == 0 {
+		return 100
+	}
+	height := s.viewHeight
+	if height <= 0 {
+		height = sessionPickerFooterDefaultHeight
+	}
+	contentRows := s.availableContentRows(height)
+	total := s.renderedHeightBetween(0, len(visible)-1)
+	maxScroll := total - contentRows
+	if maxScroll <= 0 {
+		return 100
+	}
+	if s.renderedHeightBetween(s.ScrollTop, len(visible)-1) <= contentRows {
+		return 100
+	}
+	skipped := 0
+	if s.ScrollTop > 0 {
+		skipped = s.renderedHeightBetween(0, s.ScrollTop-1)
+	}
+	if skipped > maxScroll {
+		skipped = maxScroll
+	}
+	return (skipped*100 + maxScroll/2) / maxScroll
+}
+
+func (s *SessionPickerState) freezeFooterPercent() {
+	if s == nil {
+		return
+	}
+	s.frozenFooterPercent = s.footerScrollPercent()
+	s.frozenFooterPercentSet = true
+}
+
+func (s *SessionPickerState) clearFrozenFooterPercent() {
+	if s == nil {
+		return
+	}
+	s.frozenFooterPercent = 0
+	s.frozenFooterPercentSet = false
+}
+
+// ClearFrozenFooterPercent releases a frozen footer percent, used when a page
+// fails and the listing stops growing.
+func (s *SessionPickerState) ClearFrozenFooterPercent() {
+	s.clearFrozenFooterPercent()
+}
+
+// ResetPendingPageDown drops a page-down that is still waiting for rows.
+func (s *SessionPickerState) ResetPendingPageDown() {
+	if s == nil {
+		return
+	}
+	s.hasPendingPageDown = false
+	s.pendingPageDownTarget = 0
 }
 
 func (s *SessionPickerState) clampSelection() {
@@ -1278,6 +1841,9 @@ func cleanPathForCompare(path string) string {
 	if path == "" {
 		return ""
 	}
+	if normalized, err := utils.NormalizeForPathComparison(path); err == nil {
+		return normalized
+	}
 	cleaned, err := filepath.Abs(path)
 	if err != nil {
 		cleaned = filepath.Clean(path)
@@ -1286,11 +1852,9 @@ func cleanPathForCompare(path string) string {
 }
 
 // PathsMatch reports whether two paths identify the same normalized location.
-// Rust parity: path_utils::paths_match_after_normalization.
+// Rust parity: resume_picker::paths_match -> path_utils::paths_match_after_normalization.
 func PathsMatch(left string, right string) bool {
-	normalizedLeft := cleanPathForCompare(left)
-	normalizedRight := cleanPathForCompare(right)
-	return normalizedLeft != "" && normalizedLeft == normalizedRight
+	return utils.PathsMatchAfterNormalization(left, right)
 }
 
 func compactPath(path string) string {

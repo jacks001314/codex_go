@@ -6319,9 +6319,10 @@ func (r *Runner) resolveExecResumeRecordForMethod(req *Request, method string) (
 
 func latestExecResumeRolloutRecord(codexHome string, resume *cli.ExecResumeOptions, cwd string) (*session.Record, error) {
 	page, err := rollout.ListThreads(codexHome, rollout.ListOptions{
-		SortKey:       rollout.SortUpdatedAt,
-		SortDirection: rollout.SortDesc,
-		Archived:      false,
+		SortKey:        rollout.SortUpdatedAt,
+		SortDirection:  rollout.SortDesc,
+		Archived:       false,
+		RequirePreview: true,
 	})
 	if err != nil {
 		return nil, err
@@ -6340,9 +6341,10 @@ func latestExecResumeRolloutRecord(codexHome string, resume *cli.ExecResumeOptio
 
 func namedExecResumeRolloutRecord(codexHome string, resume *cli.ExecResumeOptions, target string, cwd string) (*session.Record, error) {
 	page, err := rollout.ListThreads(codexHome, rollout.ListOptions{
-		SortKey:       rollout.SortUpdatedAt,
-		SortDirection: rollout.SortDesc,
-		Archived:      false,
+		SortKey:        rollout.SortUpdatedAt,
+		SortDirection:  rollout.SortDesc,
+		Archived:       false,
+		RequirePreview: true,
 	})
 	if err != nil {
 		return nil, err

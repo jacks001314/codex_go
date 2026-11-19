@@ -127,6 +127,153 @@ func TestCreateChildRequiresLiveInvocationLikeRust(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #62128: host child preparation reports the parent's effective
+// base instructions with their provenance and the developer instructions a
+// native child inherits, including the V2 subagent override.
+func TestPrepareChildPreservesInheritedInstructionsLikeRust(t *testing.T) {
+	const parentDeveloper = "Explain the reasoning behind your findings."
+	const subagentOverride = "Report worker findings concisely."
+	cases := []struct {
+		name              string
+		version           agent.MultiAgentVersion
+		baseText          string
+		provenance        *session.BaseInstructionsProvenance
+		override          string
+		parentDeveloper   string
+		wantBaseText      string
+		wantProvenance    *agent.PreparedChildBaseInstructionsProvenance
+		wantDeveloperText string
+	}{
+		{
+			name:              "custom base with subagent override",
+			version:           agent.VersionV2,
+			baseText:          "Keep the custom base instructions.",
+			provenance:        &session.BaseInstructionsProvenance{Type: session.BaseInstructionsProvenanceCustom},
+			override:          subagentOverride,
+			parentDeveloper:   parentDeveloper,
+			wantBaseText:      "Keep the custom base instructions.",
+			wantProvenance:    &agent.PreparedChildBaseInstructionsProvenance{Type: session.BaseInstructionsProvenanceCustom},
+			wantDeveloperText: subagentOverride,
+		},
+		{
+			name:              "custom base inherits parent developer instructions",
+			version:           agent.VersionV2,
+			baseText:          "Keep the custom base instructions.",
+			provenance:        &session.BaseInstructionsProvenance{Type: session.BaseInstructionsProvenanceCustom},
+			parentDeveloper:   parentDeveloper,
+			wantBaseText:      "Keep the custom base instructions.",
+			wantProvenance:    &agent.PreparedChildBaseInstructionsProvenance{Type: session.BaseInstructionsProvenanceCustom},
+			wantDeveloperText: parentDeveloper,
+		},
+		{
+			name:              "model-owned base instructions keep their provenance",
+			version:           agent.VersionV2,
+			baseText:          "generated instructions",
+			provenance:        &session.BaseInstructionsProvenance{Type: session.BaseInstructionsProvenanceModel, Model: "gpt-6-astra"},
+			override:          subagentOverride,
+			parentDeveloper:   parentDeveloper,
+			wantBaseText:      "generated instructions",
+			wantProvenance:    &agent.PreparedChildBaseInstructionsProvenance{Type: session.BaseInstructionsProvenanceModel, Model: "gpt-6-astra"},
+			wantDeveloperText: subagentOverride,
+		},
+		{
+			// The V2 subagent override only applies to a V2 parent.
+			name:              "v1 parent keeps its developer instructions",
+			version:           agent.VersionV1,
+			baseText:          "Keep the custom base instructions.",
+			provenance:        &session.BaseInstructionsProvenance{Type: session.BaseInstructionsProvenanceCustom},
+			override:          subagentOverride,
+			parentDeveloper:   parentDeveloper,
+			wantBaseText:      "Keep the custom base instructions.",
+			wantProvenance:    &agent.PreparedChildBaseInstructionsProvenance{Type: session.BaseInstructionsProvenanceCustom},
+			wantDeveloperText: parentDeveloper,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			home := t.TempDir()
+			store := session.NewStore(t.TempDir())
+			now := time.Now().UTC()
+			cwd := t.TempDir()
+			if err := store.Create(&session.Record{
+				ID: "root", SessionID: "root", CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+				Metadata: session.Metadata{
+					CWD:                        cwd,
+					AgentPath:                  "/root",
+					Model:                      "gpt-6-astra",
+					MultiAgentVersion:          string(testCase.version),
+					Instructions:               testCase.parentDeveloper,
+					BaseInstructions:           testCase.baseText,
+					BaseInstructionsProvenance: testCase.provenance,
+				},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			router := NewRuntimeRouter(RuntimeServices{
+				ThreadRouter: NewRouter(store),
+				Config:       config.NewConfigService(home),
+				DefaultCWD:   cwd,
+			})
+			params := &turn.TurnStartParams{ThreadID: "root", CWD: cwd}
+			if testCase.override != "" {
+				params.Config = map[string]any{"features": map[string]any{"multi_agent_v2": map[string]any{"subagent_developer_instructions": testCase.override}}}
+			}
+			if err := router.threads.RegisterTurn("root", "turn-1", nil, 0, params); err != nil {
+				t.Fatal(err)
+			}
+			_, guard, invocation := activateHostInvocation(t, router, "root", "turn-1", "spawn-call")
+			defer guard.Release()
+
+			prepared, err := router.PrepareChild(context.Background(), "root", invocation)
+			if err != nil {
+				t.Fatalf("PrepareChild() error = %v", err)
+			}
+			if prepared.BaseInstructions.Text != testCase.wantBaseText {
+				t.Fatalf("prepared base instructions = %q, want %q", prepared.BaseInstructions.Text, testCase.wantBaseText)
+			}
+			if !reflect.DeepEqual(prepared.BaseInstructions.Provenance, testCase.wantProvenance) {
+				t.Fatalf("prepared base provenance = %#v, want %#v", prepared.BaseInstructions.Provenance, testCase.wantProvenance)
+			}
+			gotDeveloper := "<none>"
+			if prepared.DeveloperInstructions != nil {
+				gotDeveloper = *prepared.DeveloperInstructions
+			}
+			if gotDeveloper != testCase.wantDeveloperText {
+				t.Fatalf("prepared developer instructions = %q, want %q", gotDeveloper, testCase.wantDeveloperText)
+			}
+		})
+	}
+}
+
+// A prepared context with no parent developer instructions reports none.
+func TestPrepareChildOmitsAbsentDeveloperInstructionsLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := time.Now().UTC()
+	cwd := t.TempDir()
+	if err := store.Create(&session.Record{
+		ID: "root", SessionID: "root", CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{CWD: cwd, AgentPath: "/root", MultiAgentVersion: string(agent.VersionV2)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), DefaultCWD: cwd})
+	if err := router.threads.RegisterTurn("root", "turn-1", nil, 0, &turn.TurnStartParams{ThreadID: "root", CWD: cwd}); err != nil {
+		t.Fatal(err)
+	}
+	_, guard, invocation := activateHostInvocation(t, router, "root", "turn-1", "spawn-call")
+	defer guard.Release()
+	prepared, err := router.PrepareChild(context.Background(), "root", invocation)
+	if err != nil {
+		t.Fatalf("PrepareChild() error = %v", err)
+	}
+	if prepared.DeveloperInstructions != nil {
+		t.Fatalf("prepared developer instructions = %q, want none", *prepared.DeveloperInstructions)
+	}
+	if prepared.BaseInstructions.Text != "" || prepared.BaseInstructions.Provenance != nil {
+		t.Fatalf("prepared base instructions = %#v, want empty", prepared.BaseInstructions)
+	}
+}
+
 // Mirrors Rust #58390 prepare_child: a live invocation captures the parent's
 // instructions, environments, permissions, approval settings, execution-policy
 // snapshot with its managed requirements, inheritable dynamic tools and

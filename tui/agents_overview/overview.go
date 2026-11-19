@@ -743,6 +743,10 @@ const (
 	// agents.toggle_pin); it is only advertised when the selected task can be
 	// pinned.
 	ShortcutHintTogglePin = "toggle_pin"
+	// ShortcutHintNextGroup and ShortcutHintPreviousGroup jump to the first
+	// task of an adjacent group (Rust agents.next_group/previous_group).
+	ShortcutHintNextGroup     = "next_group"
+	ShortcutHintPreviousGroup = "previous_group"
 )
 
 // SetShortcutHint overrides the displayed key for one dashboard action. An

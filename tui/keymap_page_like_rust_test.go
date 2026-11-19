@@ -33,7 +33,7 @@ func TestKeymapPageRowsLikeRust(t *testing.T) {
 
 	all := keymapPageTabByLabel(t, tabs, "All")
 	// composer.undo/composer.redo (#61954) join the picker.
-	if all.Summary != "173 actions, 0 customized, 23 unbound." {
+	if all.Summary != "175 actions, 0 customized, 23 unbound." {
 		t.Fatalf("all summary = %q (rows=%d)", all.Summary, len(rows))
 	}
 	if got := keymapPageTabByLabel(t, tabs, "Common").Summary; got != "21 actions." {
@@ -64,7 +64,7 @@ func TestKeymapPageRowsLikeRust(t *testing.T) {
 
 	counts := map[string]int{
 		"App": 39, "Composer": 7, "Editor": 17, "Vim": 69,
-		"Navigation": 22, "Agents": 11, "Approval": 8,
+		"Navigation": 22, "Agents": 13, "Approval": 8,
 	}
 	for label, want := range counts {
 		tab := keymapPageTabByLabel(t, tabs, label)
@@ -90,6 +90,7 @@ func TestKeymapPageRowsLikeRust(t *testing.T) {
 		{"global", "copy", "Copy", "ctrl-o"},
 		{"global", "open_agents", "Open Agents", "unbound"},
 		{"chat", "open_presets", "Open Presets", "leader p (ctrl-x p)"},
+		{"agents", "next_group", "Next Group", "shift-down, shift-j"},
 		{"chat", "decrease_reasoning_effort", "Decrease Reasoning Effort", "alt-,, shift-down"},
 		{"editor", "insert_newline", "Insert Newline", "ctrl-j, ctrl-m, enter, shift-enter, alt-enter"},
 		{"global", "toggle_side_conversation", "Toggle Side Conversation", "ctrl-/"},

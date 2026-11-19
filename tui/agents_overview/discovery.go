@@ -140,6 +140,48 @@ func (v *View) SelectableIndices() []int {
 	return indices
 }
 
+// SelectSection moves the selection to the first task of the next or previous
+// rendered group, clamping at either end like Rust
+// agent_center::navigation::select_section. The "Show more" row counts as the
+// position after the last group, so moving up from it lands on that group.
+func (v *View) SelectSection(forward bool) {
+	if v == nil || v.renameTargetIndex() >= 0 {
+		return
+	}
+	indices := v.SelectableIndices()
+	grouping := v.State.Grouping
+	sections := make([]int, 0, len(indices))
+	current := -1
+	previous := -1
+	for _, index := range indices {
+		if index == ShowMoreIndex {
+			if v.Selected == ShowMoreIndex {
+				current = len(sections)
+			}
+			continue
+		}
+		if previous < 0 || !v.sameGroup(grouping, previous, index) {
+			sections = append(sections, index)
+		}
+		if index == v.Selected {
+			current = len(sections) - 1
+		}
+		previous = index
+	}
+	target := -1
+	if current >= 0 {
+		if forward {
+			target = current + 1
+		} else {
+			target = current - 1
+		}
+	}
+	if target < 0 || target >= len(sections) {
+		return
+	}
+	v.Selected = sections[target]
+}
+
 // NextBatch publishes up to one more page of retained tasks and reports how
 // many rows appeared plus whether another page remains (Rust next_batch).
 func (v *View) NextBatch() (int, bool) {

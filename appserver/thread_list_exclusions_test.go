@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -271,6 +272,13 @@ func TestRouterThreadListStateDBOnlyQueryFailureIsNotExhaustedHistory(t *testing
 func TestRouterThreadListExplicitEmptyCWDArrayMatchesNothing(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRouter(store)
+	// Rust canonicalizes both sides before comparing
+	// (`normalize_cwd_for_state_db` for the stored cwd,
+	// `AbsolutePathBuf::relative_to_current_dir` for the filter), so the
+	// separator style a caller stores does not matter. Use a real directory
+	// because canonicalization requires the path to exist.
+	workspace := t.TempDir()
+	storedCWD := filepath.ToSlash(workspace)
 	now := fixedTime()
 	ids := []string{uuid.NewString(), uuid.NewString()}
 	for i, id := range ids {
@@ -283,7 +291,7 @@ func TestRouterThreadListExplicitEmptyCWDArrayMatchesNothing(t *testing.T) {
 			UpdatedAt: created,
 			RecencyAt: created,
 			Metadata: session.Metadata{
-				CWD:           "D:/repo",
+				CWD:           storedCWD,
 				ModelProvider: "openai",
 				Source:        string(SessionSourceCli),
 				HistoryMode:   string(ThreadHistoryLegacy),
@@ -306,7 +314,7 @@ func TestRouterThreadListExplicitEmptyCWDArrayMatchesNothing(t *testing.T) {
 	for name, params := range map[string]ThreadListParams{
 		"omitted": {},
 		"null":    {CWD: nil},
-		"one":     {CWD: &ThreadListCwdFilter{Values: []string{"D:/repo"}}},
+		"one":     {CWD: &ThreadListCwdFilter{Values: []string{workspace}}},
 	} {
 		response := router.Handle(requestWithParams(t, IntID(2), MethodThreadList, params))
 		if response.Error != nil {

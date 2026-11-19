@@ -170,13 +170,20 @@ func (r *RuntimeRouter) prepareChildContext(ctx context.Context, threadID string
 		return nil, fmt.Errorf("cannot prepare child: %w", err)
 	}
 	cwd := firstNonEmpty(strings.TrimSpace(params.CWD), r.childPreparationCWD(threadID))
-	instructions := ""
+	var parent *session.Record
 	if record, recordErr := r.threadRecord(session.ThreadID(threadID), true, false); recordErr == nil && record != nil {
-		instructions = record.Metadata.Instructions
+		parent = record
 	}
+	instructions := ""
+	if parent != nil {
+		instructions = parent.Metadata.Instructions
+	}
+	baseInstructions, developerInstructions := r.preparedChildInheritedInstructions(threadID, cfg, parent)
 	return &agent.PreparedChildContext{
 		Originator:                   strings.TrimSpace(params.Originator),
 		UserInstructions:             instructions,
+		BaseInstructions:             baseInstructions,
+		DeveloperInstructions:        developerInstructions,
 		CWD:                          cwd,
 		Environments:                 cloneMapSlice(params.Environments),
 		SelectedCapabilityRoots:      preparedChildCapabilityRoots(r.readySelectedCapabilityRootsForStep(threadID, params)),
@@ -188,6 +195,56 @@ func (r *RuntimeRouter) prepareChildContext(ctx context.Context, threadID string
 		DynamicTools:                 r.inheritedChildDynamicTools(threadID, cfg),
 		DisabledPluginIDs:            r.threadDisabledPluginIDs(threadID),
 	}, nil
+}
+
+// preparedChildInheritedInstructions captures the instructions a native child
+// inherits from the parent thread: the effective base instructions with their
+// provenance, and the developer instructions under the same rules native
+// subagent creation uses (Rust #62128).
+func (r *RuntimeRouter) preparedChildInheritedInstructions(threadID string, cfg *config.Config, parent *session.Record) (agent.PreparedChildBaseInstructions, *string) {
+	if parent == nil {
+		return agent.PreparedChildBaseInstructions{}, nil
+	}
+	return preparedChildBaseInstructions(parent.Metadata.BaseInstructions, parent.Metadata.BaseInstructionsProvenance),
+		r.inheritedChildDeveloperInstructions(threadID, cfg, parent.Metadata.Instructions)
+}
+
+// preparedChildBaseInstructions projects the parent's effective base
+// instructions into the host-facing context. The provenance tells a
+// destination whether to keep custom text or let model-owned text resolve for
+// the child's model.
+func preparedChildBaseInstructions(text string, provenance *session.BaseInstructionsProvenance) agent.PreparedChildBaseInstructions {
+	out := agent.PreparedChildBaseInstructions{Text: text}
+	if provenance != nil && strings.TrimSpace(provenance.Type) != "" {
+		out.Provenance = &agent.PreparedChildBaseInstructionsProvenance{Type: provenance.Type, Model: provenance.Model}
+	}
+	return out
+}
+
+// inheritedChildDeveloperInstructions resolves the developer instructions a
+// native child inherits: the configured V2 subagent override when the parent
+// thread runs multi-agent V2, otherwise the parent's own developer
+// instructions (Rust inherited_developer_instructions, #62128). Go's native
+// spawn path applies the same two-tier rule through agent.SpawnDefaults plus
+// the controller's parent-record fallback.
+func (r *RuntimeRouter) inheritedChildDeveloperInstructions(threadID string, cfg *config.Config, parent string) *string {
+	if r != nil && cfg != nil {
+		agentsConfig, _ := r.configAgentsConfig(cfg)
+		if agentsConfig == nil {
+			agentsConfig = &config.AgentsConfig{}
+		}
+		if r.runtimeMultiAgentVersionForTurn(threadID, cfg, agentsConfig) == agent.VersionV2 {
+			if resolved, configErr := cfg.MultiAgentV2Config(agentsConfig.MaxConcurrentThreadsPerSession); configErr == nil && resolved.SubagentDeveloperInstructions != nil {
+				value := *resolved.SubagentDeveloperInstructions
+				return &value
+			}
+		}
+	}
+	if parent == "" {
+		return nil
+	}
+	value := parent
+	return &value
 }
 
 // preparedChildCapabilityRoots projects the step's roots into the host-facing

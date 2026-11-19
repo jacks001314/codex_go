@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"codex_go/rollout"
+	"codex_go/utils"
+
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -51,6 +53,43 @@ func TestBackfillLeaseCheckpointAndCompletionMatchRust(t *testing.T) {
 	claimed, err = runtime.TryClaimBackfill(ctx, 0)
 	if err != nil || claimed {
 		t.Fatalf("completed claim = %v, %v", claimed, err)
+	}
+}
+
+// Rust normalizes a rollout's cwd before storing it in the state database
+// (rollout/src/state_db.rs::normalize_cwd_for_state_db), so cwd filters can
+// compare canonical paths.
+func TestUpsertRolloutThreadNormalizesCWDLikeRust(t *testing.T) {
+	runtime := newBackfillTestRuntime(t)
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "nested"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(nested) error = %v", err)
+	}
+	raw := root + string(os.PathSeparator) + "nested" + string(os.PathSeparator) + ".."
+	now := time.Date(2026, 7, 30, 1, 2, 3, 0, time.UTC)
+	metadata := rolloutThreadMetadata{
+		id:         "thread-cwd",
+		path:       filepath.Join(rollout.SessionsSubdir, "rollout-thread-cwd.jsonl"),
+		cwd:        raw,
+		source:     "cli",
+		cliVersion: "0.0.0",
+		createdAt:  now,
+		updatedAt:  now,
+		recencyAt:  now,
+	}
+	if err := runtime.upsertRolloutThread(context.Background(), metadata); err != nil {
+		t.Fatalf("upsertRolloutThread() error = %v", err)
+	}
+	row, exists, err := runtime.readRolloutThreadRow(context.Background(), "thread-cwd")
+	if err != nil || !exists {
+		t.Fatalf("readRolloutThreadRow() = exists %v, err %v", exists, err)
+	}
+	want, err := utils.NormalizeForPathComparison(root)
+	if err != nil {
+		t.Fatalf("NormalizeForPathComparison() error = %v", err)
+	}
+	if got := row.cwd.String; got != want {
+		t.Fatalf("stored cwd = %q, want %q", got, want)
 	}
 }
 
@@ -218,7 +257,14 @@ FROM threads WHERE id = ?`, id).Scan(
 		t.Fatal(err)
 	}
 	wantPath := filepath.Clean(rollout.PlainRolloutPath(sourcePath))
-	if path != wantPath || source != "cli" || historyMode != "paginated" || provider != "openai" || cwd != "/workspace" || cliVersion != "1.2.3" {
+	// The state row stores the canonical working directory, matching
+	// normalize_cwd_for_state_db; relative-volume paths such as "/workspace"
+	// resolve against the current drive.
+	wantCWD := "/workspace"
+	if normalized, err := utils.NormalizeForPathComparison(wantCWD); err == nil {
+		wantCWD = normalized
+	}
+	if path != wantPath || source != "cli" || historyMode != "paginated" || provider != "openai" || cwd != wantCWD || cliVersion != "1.2.3" {
 		t.Fatalf("thread identity metadata = path:%q source:%q history:%q provider:%q cwd:%q cli:%q", path, source, historyMode, provider, cwd, cliVersion)
 	}
 	if title != preview || gotPreview != preview || sandboxPolicy != defaultThreadSandboxPolicy() || approvalMode != "on-request" || memoryMode != "disabled" || archivedValue != archived || tokens != 42 {

@@ -1348,6 +1348,14 @@ func sessionPickerRecords(store *session.Store, opts *cli.SessionOptions) ([]ses
 	if store == nil {
 		return nil, errors.New("session store is nil")
 	}
+	// Rust lists resume-picker rows from the state database first and only
+	// falls back to scanning rollout files when the database has no usable
+	// page (codex-rs/tui/src/resume_picker.rs: PageLoadMode::StateDbOnly).
+	// Go's JSON thread store keeps full item histories, so reading it just to
+	// resolve session labels or --last is prohibitively slow.
+	if records, ok := sessionPickerStateRecords(store, opts); ok {
+		return records, nil
+	}
 	records, err := listSessionsByArchived(store, false)
 	if err != nil {
 		return nil, err
@@ -1362,6 +1370,54 @@ func sessionPickerRecords(store *session.Store, opts *cli.SessionOptions) ([]ses
 	records = filterSessionPickerRecords(records, opts)
 	sortSessionRecordsByRecency(records)
 	return records, nil
+}
+
+// sessionPickerStateRecords projects the indexed thread metadata into picker
+// records. It reports false when the state database is unavailable, still
+// being backfilled, or empty so the caller can fall back to the filesystem.
+func sessionPickerStateRecords(store *session.Store, opts *cli.SessionOptions) ([]session.Record, bool) {
+	codexHome := sessionCodexHome(store)
+	if codexHome == "" {
+		return nil, false
+	}
+	sqliteConfig, err := state.SqliteConfigForCodexHome(codexHome)
+	if err != nil {
+		return nil, false
+	}
+	runtime, err := state.InitStateRuntime(context.Background(), sqliteConfig, "openai")
+	if err != nil {
+		return nil, false
+	}
+	defer func() { _ = runtime.Close() }()
+	backfill, err := runtime.GetBackfillState(context.Background())
+	if err != nil || backfill.Status != state.BackfillComplete {
+		return nil, false
+	}
+	rows, err := runtime.ListThreadRows(context.Background())
+	if err != nil || len(rows) == 0 {
+		return nil, false
+	}
+	indexedNames := appserver.IndexedThreadNamesForRows(codexHome, rows)
+	var records []session.Record
+	for _, archived := range []bool{false, true} {
+		if archived && !(opts != nil && opts.All) {
+			continue
+		}
+		listOptions := session.ListOptions{
+			Archived:      archived,
+			SortKey:       session.SortRecencyAt,
+			SortDirection: session.SortDesc,
+		}
+		projected := appserver.RecordsFromStateRows(rows, indexedNames, listOptions)
+		page, listErr := session.ListRecords(projected, listOptions)
+		if listErr != nil {
+			return nil, false
+		}
+		records = append(records, page.Records...)
+	}
+	records = filterSessionPickerRecords(records, opts)
+	sortSessionRecordsByRecency(records)
+	return records, true
 }
 
 func listSessionsByArchived(store *session.Store, archived bool) ([]session.Record, error) {
@@ -1379,18 +1435,19 @@ func listSessionsByArchived(store *session.Store, archived bool) ([]session.Reco
 	for i := range records {
 		ids[string(records[i].ID)] = struct{}{}
 	}
-	rolloutPage, rolloutErr := rollout.ListThreads(sessionCodexHome(store), rollout.ListOptions{Archived: archived, PageSize: 0})
+	rolloutPage, rolloutErr := rollout.ListThreads(sessionCodexHome(store), rollout.ListOptions{
+		Archived: archived, PageSize: 0, RequirePreview: true,
+	})
 	if rolloutErr == nil {
 		for i := range rolloutPage.Items {
 			threadID := rolloutPage.Items[i].ThreadID
 			if _, exists := ids[threadID]; exists {
 				continue
 			}
-			record, err := rollout.RecordFromPath(rolloutPage.Items[i].Path, archived)
-			if err != nil || record == nil {
+			record := rollout.RecordFromThreadItem(rolloutPage.Items[i])
+			if record == nil {
 				continue
 			}
-			record.Items = nil
 			records = append(records, *record)
 			ids[threadID] = struct{}{}
 		}

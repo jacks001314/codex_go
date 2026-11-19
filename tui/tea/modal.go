@@ -882,10 +882,22 @@ func (m *Model) updateSessionPickerModal(message keymsg.KeyMsg) bubbletea.Cmd {
 		picker.SelectLast()
 	case keymsg.KeyTab, keymsg.KeyShiftTab:
 		picker.ToggleToolbarFocus()
-	case keymsg.KeyLeft:
-		picker.ChangeFocusedToolbarValueDirection(codextui.SessionFilterPrevious)
-	case keymsg.KeyRight:
-		picker.ChangeFocusedToolbarValueDirection(codextui.SessionFilterNext)
+	case keymsg.KeyLeft, keymsg.KeyRight:
+		previous := picker.FilterMode
+		direction := codextui.SessionFilterNext
+		if message.Type == keymsg.KeyLeft {
+			direction = codextui.SessionFilterPrevious
+		}
+		picker.ChangeFocusedToolbarValueDirection(direction)
+		m.syncSessionPickerModalSelection()
+		if picker.FilterMode != previous {
+			// Rust start_initial_load: a filter change restarts the listing with
+			// that filter's ThreadListCwdFilter (resume_picker.rs
+			// change_filter_mode), so Repo can reach linked checkouts the Cwd
+			// listing never returned.
+			return m.sessionPickerRefreshCmd(m.modal.id, picker)
+		}
+		return nil
 	case keymsg.KeyCtrlO:
 		picker.ToggleDensity()
 	case keymsg.KeyCtrlE:
@@ -946,6 +958,12 @@ func (m *Model) updateSessionPickerModal(message keymsg.KeyMsg) bubbletea.Cmd {
 		}
 	}
 	m.syncSessionPickerModalSelection()
+	if picker.PendingPageDown() || picker.ShouldLoadNextPage() || picker.SearchNeedsMorePages() || picker.NeedsMinimumRowsForView(sessionPickerListHeight(m.height)) {
+		// Rust maybe_load_more_for_scroll: moving within LOAD_NEAR_THRESHOLD
+		// rows of the end, or paging past the last row, starts the next page.
+		// A typed query with no match keeps paging older sessions instead.
+		return m.sessionPickerPageCmd(m.modal.id, picker)
+	}
 	return nil
 }
 
@@ -2547,11 +2565,8 @@ func (m *Model) renderSessionPickerModal() string {
 		builder.WriteString(notice)
 		builder.WriteString("\n\n")
 	}
-	rows := picker.RenderRows(contentWidth, m.currentTime())
 	maxRows := sessionPickerListHeight(m.height)
-	if maxRows > 0 && len(rows) > maxRows {
-		rows = rows[:maxRows]
-	}
+	rows := picker.RenderWindow(contentWidth, m.currentTime(), maxRows)
 	for index := 0; index < maxRows; index++ {
 		if index < len(rows) {
 			builder.WriteString(rows[index])

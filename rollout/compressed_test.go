@@ -140,7 +140,7 @@ func TestLoadMatchesAcrossPlainAndCompressedRepresentations(t *testing.T) {
 		t.Fatalf("read rollout: %v", err)
 	}
 	baseline, baselineErrors, err := Load(plain)
-	if err != nil || baselineErrors != 0 || len(baseline) != 2 {
+	if err != nil || baselineErrors != 0 || len(baseline) != 3 {
 		t.Fatalf("baseline load = lines=%#v errors=%d err=%v", baseline, baselineErrors, err)
 	}
 

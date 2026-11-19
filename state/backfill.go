@@ -15,6 +15,7 @@ import (
 	"codex_go/rollout"
 	"codex_go/sandbox"
 	"codex_go/session"
+	"codex_go/utils"
 )
 
 type BackfillStatus string
@@ -595,6 +596,7 @@ func userTextFromEvent(values map[string]any) string {
 }
 
 func (r *StateRuntime) upsertRolloutThread(ctx context.Context, metadata rolloutThreadMetadata) error {
+	metadata.cwd = normalizeStateCWD(metadata.cwd)
 	existing, exists, err := r.readRolloutThreadRow(ctx, metadata.id)
 	if err != nil {
 		return err
@@ -771,6 +773,20 @@ func stripUserMessageEnvelope(value string) string {
 		value = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(value, begin), end))
 	}
 	return value
+}
+
+// normalizeStateCWD mirrors rollout/src/state_db.rs::normalize_cwd_for_state_db:
+// state rows store canonical working directories so cwd filters match after
+// path normalization.
+func normalizeStateCWD(cwd string) string {
+	if strings.TrimSpace(cwd) == "" {
+		return cwd
+	}
+	normalized, err := utils.NormalizeForPathComparison(cwd)
+	if err != nil {
+		return cwd
+	}
+	return normalized
 }
 
 func serializedJSONValue(value any) string {

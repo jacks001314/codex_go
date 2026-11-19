@@ -11,6 +11,9 @@ import (
 // Rust parity: codex-rs/tui/src/line_truncation.rs.
 
 func DisplayWidth(text string) int {
+	if printableASCII(text) {
+		return len(text)
+	}
 	if strings.Contains(text, "\x1b") {
 		return ansi.StringWidth(text)
 	}
@@ -30,6 +33,19 @@ func DisplayWidth(text string) int {
 		width += runewidth.StringWidth(base.String()) + marks
 	}
 	return width
+}
+
+// printableASCII reports whether every byte is a printable ASCII character.
+// Each of those occupies exactly one column, so callers can skip grapheme
+// segmentation entirely; uniseg dominated resume-time rendering of long
+// sessions.
+func printableASCII(text string) bool {
+	for i := 0; i < len(text); i++ {
+		if text[i] < 0x20 || text[i] > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 func TruncateToWidth(text string, maxWidth int) string {

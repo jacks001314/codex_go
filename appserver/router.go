@@ -4156,7 +4156,7 @@ func (r *Router) handleThreadList(request *Request) (*ThreadListResponse, error)
 		if params.UseStateDBOnly {
 			page, err = session.ListRecords(records, options)
 		} else {
-			page, err = r.listRecordsIncludingRollouts(records, options, false)
+			page, err = r.listRecordsIncludingRollouts(records, options)
 		}
 	}
 	if err != nil {
@@ -4216,6 +4216,14 @@ func (r *Router) listRecordsFromState(options session.ListOptions) (*session.Pag
 	// section metadata. Legacy rows still fall back to the session index with
 	// the existing title precedence, resolved in one batch.
 	indexedNames := r.legacyIndexedThreadNames(rows)
+	return session.ListRecords(RecordsFromStateRows(rows, indexedNames, options), options)
+}
+
+// RecordsFromStateRows projects indexed SQLite thread metadata into the
+// session records consumed by listings. It keeps the resume picker on the same
+// state-database-only path Rust uses (thread-store/src/local/list_threads.rs);
+// callers that need filtering or pagination pass the records to ListRecords.
+func RecordsFromStateRows(rows []state.ThreadListRow, indexedNames map[string]string, options session.ListOptions) []session.Record {
 	records := make([]session.Record, 0, len(rows))
 	for i := range rows {
 		row := &rows[i]
@@ -4236,7 +4244,9 @@ func (r *Router) listRecordsFromState(options session.ListOptions) (*session.Pag
 			ParentThreadID:         session.ThreadID(nullString(row.ParentThreadID)),
 			AttachedThreadParentID: session.ThreadID(nullString(row.AttachedThreadParentID)),
 			Title:                  listedThreadNameFromRow(row, indexedNames[row.ID]),
-			Preview:                nullString(row.Preview),
+			// Rust falls back to the indexed first user message when the
+			// stored preview is empty (stored_thread_from_state_metadata).
+			Preview:                firstNonEmpty(nullString(row.Preview), nullString(row.FirstUserMessage)),
 			Archived:               row.Archived,
 			CreatedAt:              time.UnixMilli(row.CreatedAtMS).UTC(),
 			UpdatedAt:              time.UnixMilli(row.UpdatedAtMS).UTC(),
@@ -4289,7 +4299,7 @@ func (r *Router) listRecordsFromState(options session.ListOptions) (*session.Pag
 		}
 		records = append(records, record)
 	}
-	return session.ListRecords(records, options)
+	return records
 }
 
 func nullString(value sql.NullString) string {
@@ -4346,7 +4356,17 @@ func distinctThreadMetadataTitle(title string, firstUserMessage string) string {
 // a SQLite listing (Rust #61866 resolve_thread_names). Failures stay best
 // effort so a broken index cannot fail the listing.
 func (r *Router) legacyIndexedThreadNames(rows []state.ThreadListRow) map[string]string {
-	if r == nil || len(rows) == 0 {
+	if r == nil {
+		return nil
+	}
+	return IndexedThreadNamesForRows(codexHomeFromSessionStore(r.store), rows)
+}
+
+// IndexedThreadNamesForRows resolves the legacy session-index names the
+// state-database listing uses as its title fallback. Rust resolves these in one
+// batch (thread-store/src/local/helpers.rs resolve_thread_names).
+func IndexedThreadNamesForRows(codexHome string, rows []state.ThreadListRow) map[string]string {
+	if len(rows) == 0 {
 		return nil
 	}
 	ids := map[string]struct{}{}
@@ -4361,7 +4381,7 @@ func (r *Router) legacyIndexedThreadNames(rows []state.ThreadListRow) map[string
 	if len(ids) == 0 {
 		return nil
 	}
-	names, err := rollout.FindThreadNamesByIDs(codexHomeFromSessionStore(r.store), ids)
+	names, err := rollout.FindThreadNamesByIDs(codexHome, ids)
 	if err != nil {
 		return nil
 	}
@@ -4411,7 +4431,7 @@ func materializedThreadRecords(records []session.Record) []session.Record {
 	return out
 }
 
-func (r *Router) listRecordsIncludingRollouts(records []session.Record, options session.ListOptions, includeHistory bool) (*session.Page, error) {
+func (r *Router) listRecordsIncludingRollouts(records []session.Record, options session.ListOptions) (*session.Page, error) {
 	records = append([]session.Record(nil), records...)
 	seen := make(map[session.ThreadID]bool, len(records))
 	for i := range records {
@@ -4423,6 +4443,9 @@ func (r *Router) listRecordsIncludingRollouts(records []session.Record, options 
 		rolloutPage, err := rollout.ListThreads(codexHome, rollout.ListOptions{
 			Archived: archived, PageSize: 0, IncludeAttachedThreads: options.IncludeAttachedThreads,
 			IncludedThreadIDs: rolloutIncludedThreadIDs(options.IncludedThreadIDs),
+			// Rust's rollout recorder requires a discoverable preview for
+			// ordinary listings (PreviewFilter::RequirePreview).
+			RequirePreview: true,
 		})
 		if err != nil {
 			continue
@@ -4432,12 +4455,9 @@ func (r *Router) listRecordsIncludingRollouts(records []session.Record, options 
 			if threadID == "" || seen[threadID] {
 				continue
 			}
-			record, err := rollout.RecordFromPath(rolloutPage.Items[i].Path, archived)
-			if err != nil {
+			record := rollout.RecordFromThreadItem(rolloutPage.Items[i])
+			if record == nil {
 				continue
-			}
-			if !includeHistory {
-				record.Items = nil
 			}
 			records = append(records, *record)
 			seen[record.ID] = true
@@ -5103,7 +5123,7 @@ func (r *Router) handleThreadSearch(request *Request) (*ThreadSearchResponse, er
 	if err != nil {
 		return nil, err
 	}
-	page, err := r.listRecordsIncludingRollouts(records, options, false)
+	page, err := r.listRecordsIncludingRollouts(records, options)
 	if err != nil {
 		return nil, err
 	}

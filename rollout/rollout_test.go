@@ -1670,6 +1670,15 @@ func writeRollout(t *testing.T, home string, threadID string, now time.Time, mes
 	if err := recorder.AppendItem(item); err != nil {
 		t.Fatalf("AppendItem() error = %v", err)
 	}
+	// Rust legacy rollouts also persist the display event; the rollout listing
+	// reads previews from event messages only (rollout/src/list.rs).
+	eventPayload, err := json.Marshal(map[string]any{"type": "user_message", "message": message})
+	if err != nil {
+		t.Fatalf("Marshal(user_message) error = %v", err)
+	}
+	if err := recorder.AppendLine(Line{Type: "event_msg", Timestamp: now.UTC().Format(time.RFC3339Nano), Payload: eventPayload}); err != nil {
+		t.Fatalf("AppendLine(user_message) error = %v", err)
+	}
 	if err := recorder.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}

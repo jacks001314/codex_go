@@ -74,7 +74,13 @@ func WrapLine(text string, options WrapOptions) []string {
 	}
 	lines := []string{}
 	current := options.InitialIndent
+	currentWidth := DisplayWidth(current)
 	currentLimit := width
+	// Tracks whether current holds text beyond its indent. Feeding a whole
+	// conversation through the wrapper made the per-token TrimSpace and
+	// DisplayWidth over the growing line quadratic in the text length, which
+	// froze resume for long sessions; the width is carried along instead.
+	hasContent := false
 	for _, token := range tokens {
 		pieces := []string{token}
 		breakWidth := tokenBreakWidth(current, options)
@@ -83,23 +89,31 @@ func WrapLine(text string, options WrapOptions) []string {
 		}
 		for _, piece := range pieces {
 			separator := ""
-			if strings.TrimSpace(current) != "" && strings.TrimSpace(current) != strings.TrimSpace(options.InitialIndent) && strings.TrimSpace(current) != strings.TrimSpace(options.SubsequentIndent) {
+			if hasContent {
 				separator = " "
 			}
-			candidate := current + separator + piece
-			if separator == "" && (current == options.InitialIndent || current == options.SubsequentIndent) {
-				current = candidate
+			pieceWidth := lenColumns(piece)
+			candidateWidth := currentWidth + pieceWidth
+			if separator != "" {
+				candidateWidth++
+			}
+			if separator == "" && !hasContent {
+				current += piece
+				currentWidth = candidateWidth
+				hasContent = true
 				continue
 			}
-			if lenColumns(candidate) <= currentLimit || strings.TrimSpace(current) == "" || current == options.InitialIndent || current == options.SubsequentIndent {
-				if lenColumns(candidate) <= currentLimit || lenColumns(current) == 0 {
-					current = candidate
-					continue
-				}
+			if candidateWidth <= currentLimit || currentWidth == 0 {
+				current += separator + piece
+				currentWidth = candidateWidth
+				hasContent = true
+				continue
 			}
 			lines = append(lines, strings.TrimRight(current, " \t"))
 			current = options.SubsequentIndent + piece
+			currentWidth = DisplayWidth(options.SubsequentIndent) + pieceWidth
 			currentLimit = width
+			hasContent = true
 		}
 	}
 	lines = append(lines, strings.TrimRight(current, " \t"))

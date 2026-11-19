@@ -42,7 +42,7 @@ import (
 // stays out of this catalog (Rust keeps it out of KEYMAP_ACTIONS too), and
 // pager.mark_markdown (#61422) joined the catalog with its table-cell consumer,
 // taking it to 173, and composer.undo/composer.redo (#61954) took it to 175.
-const keymapCatalogEntryCount = 175
+const keymapCatalogEntryCount = 177
 
 // rustOnlyKeymapActions: Rust actions this Go tree does not register and whose
 // behavior is genuinely missing (still blocked). T-b14 landed agents.fork and
@@ -358,15 +358,16 @@ func TestKeymapCatalogMatchesRustActionsLikeRust(t *testing.T) {
 		}
 	}
 	// A truncated parse would silently shrink RUST_KEYS, so pin the parsed shape:
-	// upstream declares 172 actions across 12 contexts after the workspace focus
+	// upstream declares 176 actions across 12 contexts after the workspace focus
 	// shortcuts (#59007/#59130/#59208/#59287), pane layout shortcuts (#59595),
-	// the sidebar tab chooser (#59767), and pager.mark_markdown (#61422) landed.
+	// the sidebar tab chooser (#59767), pager.mark_markdown (#61422), and the
+	// agent-center group jumps landed.
 	contexts := map[string]bool{}
 	for _, key := range rustKeys {
 		context, _, _ := strings.Cut(key, ".")
 		contexts[context] = true
 	}
-	if len(rustKeys) != 172 || len(contexts) != 12 {
-		t.Fatalf("parsed %d upstream actions across %d contexts, want 172 across 12", len(rustKeys), len(contexts))
+	if len(rustKeys) != 176 || len(contexts) != 12 {
+		t.Fatalf("parsed %d upstream actions across %d contexts, want 176 across 12", len(rustKeys), len(contexts))
 	}
 }

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1194,7 +1195,7 @@ func (s *Store) MoveThreadToSection(threadID ThreadID, sectionID *string, before
 	if beforeThreadID != nil && *beforeThreadID == threadID {
 		return nil, fmt.Errorf("thread %s cannot be moved before itself", threadID)
 	}
-	records, err := s.loadAllLocked()
+	records, err := s.loadAllLocked(false)
 	if err != nil {
 		return nil, err
 	}
@@ -1503,7 +1504,7 @@ func (s *Store) Unarchive(threadID ThreadID) (*Record, error) {
 func (s *Store) Delete(threadID ThreadID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	records, err := s.loadAllLocked()
+	records, err := s.loadAllLocked(false)
 	if err != nil {
 		return err
 	}
@@ -1531,7 +1532,7 @@ func (s *Store) SubtreeThreadIDs(root ThreadID) ([]ThreadID, error) {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	records, err := s.loadAllLocked()
+	records, err := s.loadAllLocked(false)
 	if err != nil {
 		return nil, err
 	}
@@ -1583,7 +1584,7 @@ func ArchiveNotificationOrder(ids []ThreadID) []ThreadID {
 func (s *Store) List(options ListOptions) (*Page, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	records, err := s.loadAllLocked()
+	records, err := s.loadAllLocked(options.IncludeHistory)
 	if err != nil {
 		return nil, err
 	}
@@ -1593,7 +1594,7 @@ func (s *Store) List(options ListOptions) (*Page, error) {
 func (s *Store) AllRecords() ([]Record, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.loadAllLocked()
+	return s.loadAllLocked(true)
 }
 
 func (s *Store) ListSections(cursor string, limit int) ([]ThreadSection, string, error) {
@@ -1716,14 +1717,23 @@ func (s *Store) DeleteSection(sectionID string) error {
 }
 
 func ListRecords(records []Record, options ListOptions) (*Page, error) {
+	// Rust normalizes the query's cwd filters once (thread-store list_threads
+	// passes normalize_cwd_for_state_db over them) and compares canonical
+	// strings, so a scan costs one normalization per record and per filter
+	// rather than one per pair.
+	cwdMatcher := utils.NewPathMatcher(options.CWDs)
 	filtered := make([]Record, 0, len(records))
 	for i := range records {
 		record := records[i]
-		if !matchesListOptions(&record, &options, records) {
+		if !matchesListOptions(&record, &options, records, cwdMatcher) {
 			continue
 		}
 		if !options.IncludeHistory {
-			record.ItemCount = len(record.Items)
+			// A summary load counts the items without materializing them, so
+			// keep that count unless this record carries its history in memory.
+			if record.Items != nil || record.ItemCount == 0 {
+				record.ItemCount = len(record.Items)
+			}
 			record.Items = nil
 		}
 		filtered = append(filtered, record)
@@ -2019,7 +2029,7 @@ func cloneTurnSnapshots(values []TurnSnapshot) []TurnSnapshot {
 	return out
 }
 
-func (s *Store) loadAllLocked() ([]Record, error) {
+func (s *Store) loadAllLocked(includeHistory bool) ([]Record, error) {
 	entries, err := os.ReadDir(s.root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -2037,8 +2047,17 @@ func (s *Store) loadAllLocked() ([]Record, error) {
 			return nil, err
 		}
 		var record Record
-		if err := json.Unmarshal(data, &record); err != nil {
-			return nil, fmt.Errorf("%s: %w", entry.Name(), err)
+		if includeHistory {
+			if err := json.Unmarshal(data, &record); err != nil {
+				return nil, fmt.Errorf("%s: %w", entry.Name(), err)
+			}
+		} else {
+			var summary recordSummary
+			if err := json.Unmarshal(data, &summary); err != nil {
+				return nil, fmt.Errorf("%s: %w", entry.Name(), err)
+			}
+			record = summary.Record
+			record.ItemCount = int(summary.Items)
 		}
 		if record.ID == "" {
 			record.ID = ThreadID(strings.TrimSuffix(entry.Name(), ".json"))
@@ -2050,6 +2069,88 @@ func (s *Store) loadAllLocked() ([]Record, error) {
 		records = append(records, record)
 	}
 	return records, nil
+}
+
+// recordSummary decodes the discovery fields of a persisted thread record while
+// counting — but not materializing — its items. Listing paths only need the
+// metadata, and replaying items for every stored thread is what made the resume
+// picker read hundreds of megabytes.
+type recordSummary struct {
+	Record
+	Items itemCounter `json:"items,omitempty"`
+}
+
+// itemCounter counts a JSON array's top-level elements without allocating the
+// element payloads.
+type itemCounter int
+
+func (c *itemCounter) UnmarshalJSON(data []byte) error {
+	*c = itemCounter(countJSONArrayElements(data))
+	return nil
+}
+
+func countJSONArrayElements(data []byte) int {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) < 2 || trimmed[0] != '[' {
+		return 0
+	}
+	count := 0
+	depth := 0
+	inString := false
+	escaped := false
+	// The slot right after '[' starts an element.
+	expectValue := true
+	for i := 1; i < len(trimmed); i++ {
+		ch := trimmed[i]
+		if inString {
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		if isJSONSpace(ch) {
+			continue
+		}
+		if depth > 0 {
+			switch ch {
+			case '"':
+				inString = true
+			case '{', '[':
+				depth++
+			case '}', ']':
+				depth--
+			}
+			continue
+		}
+		switch ch {
+		case ']':
+			return count
+		case ',':
+			expectValue = true
+		case '"':
+			inString = true
+			count++
+			expectValue = false
+		case '{', '[':
+			depth++
+			count++
+			expectValue = false
+		default:
+			if expectValue {
+				count++
+				expectValue = false
+			}
+		}
+	}
+	return count
+}
+
+func isJSONSpace(ch byte) bool {
+	return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n'
 }
 
 func writeStoreFileAtomically(path string, data []byte) error {
@@ -2082,7 +2183,7 @@ func writeStoreFileAtomically(path string, data []byte) error {
 	return os.Rename(temporaryPath, path)
 }
 
-func matchesListOptions(record *Record, options *ListOptions, all []Record) bool {
+func matchesListOptions(record *Record, options *ListOptions, all []Record, cwdMatcher utils.PathMatcher) bool {
 	if options.IncludedThreadIDs != nil && !containsThreadID(*options.IncludedThreadIDs, record.ID) {
 		return false
 	}
@@ -2119,7 +2220,7 @@ func matchesListOptions(record *Record, options *ListOptions, all []Record) bool
 		// on the scan path, so an explicitly empty cwd array matches nothing.
 		return false
 	}
-	if len(options.CWDs) > 0 && !recordMatchesCWDs(record.Metadata.CWD, options.CWDs) {
+	if cwdMatcher.Len() > 0 && !cwdMatcher.Matches(record.Metadata.CWD) {
 		return false
 	}
 	if len(options.Sources) > 0 && !recordMatchesAllowedSources(record.Metadata.Source, options.Sources) {
@@ -2144,39 +2245,6 @@ func matchesListOptions(record *Record, options *ListOptions, all []Record) bool
 		return false
 	}
 	return true
-}
-
-func recordMatchesCWDs(cwd string, filters []string) bool {
-	if len(filters) == 0 {
-		return true
-	}
-	for _, filter := range filters {
-		if normalizedCWDEqual(cwd, filter) {
-			return true
-		}
-	}
-	return false
-}
-
-func normalizedCWDEqual(left string, right string) bool {
-	left = normalizedCWD(left)
-	right = normalizedCWD(right)
-	if runtime.GOOS == "windows" {
-		return strings.EqualFold(left, right)
-	}
-	return left == right
-}
-
-func normalizedCWD(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-	value = filepath.Clean(value)
-	if absolute, err := filepath.Abs(value); err == nil {
-		value = absolute
-	}
-	return filepath.Clean(value)
 }
 
 func recordMatchesAllowedSources(source string, allowed []string) bool {

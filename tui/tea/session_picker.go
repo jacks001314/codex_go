@@ -21,6 +21,63 @@ func (m *Model) applyResumeCommand(args string) bubbletea.Cmd {
 	if query == "" {
 		return m.openSessionPicker(codextui.SessionPickerResume)
 	}
+	if _, ok, ambiguous := m.findSessionByIDOrName(query); ok || ambiguous {
+		return m.applyResumeQueryResult(query)
+	}
+	// Rust resolves `/resume <id-or-name>` through the backend
+	// (`AppEvent::ResumeSessionByIdOrName` -> lookup_session_target_with_app_server)
+	// instead of a startup snapshot, so the first listing may still be in
+	// flight when the command runs.
+	if m.onListSessionPickerItems == nil {
+		return m.applyResumeQueryResult(query)
+	}
+	list := m.onListSessionPickerItems
+	return func() bubbletea.Msg {
+		// Rust named_session_lookup::lookup walks the active collection and
+		// then the archived one, paging until each cursor is exhausted, so a
+		// label resolves even when it is older than the first page.
+		var items []codextui.SessionSummary
+		notice := ""
+		for _, archivedValue := range []bool{false, true} {
+			archived := archivedValue
+			cursor := ""
+			for page := 0; page < sessionResumeLookupMaxPages; page++ {
+				scope := codextui.SessionPickerScope{
+					All:      true,
+					Archived: &archived,
+					Limit:    sessionResumeLookupPageSize,
+				}
+				pageItems, next, pageNotice, err := list(scope, cursor)
+				if err != nil {
+					return SessionResumeLookupMsg{Query: query, Items: items, Err: err}
+				}
+				if strings.TrimSpace(pageNotice) != "" {
+					notice = strings.TrimSpace(pageNotice)
+				}
+				items = append(items, pageItems...)
+				next = strings.TrimSpace(next)
+				if next == "" || next == cursor {
+					break
+				}
+				cursor = next
+			}
+		}
+		return SessionResumeLookupMsg{Query: query, Items: items, Notice: notice}
+	}
+}
+
+const (
+	// sessionResumeLookupPageSize mirrors Rust's thread/list limit while
+	// resolving `/resume <name>` (named_session_lookup.rs).
+	sessionResumeLookupPageSize = 100
+	// sessionResumeLookupMaxPages bounds a lookup against a backend that never
+	// exhausts its cursor.
+	sessionResumeLookupMaxPages = 100
+)
+
+// applyResumeQueryResult resumes a unique id-or-name match, prefills the picker
+// when the name is ambiguous, and reports a miss otherwise.
+func (m *Model) applyResumeQueryResult(query string) bubbletea.Cmd {
 	item, ok, ambiguous := m.findSessionByIDOrName(query)
 	if ambiguous {
 		m.notice = "Multiple saved chats match '" + query + "'."
@@ -132,9 +189,6 @@ func (m *Model) openSessionPicker(action codextui.SessionPickerAction) bubbletea
 		action,
 		m.sessionItems,
 		m.sessionCWD,
-		// Rust #54175: the retired `worktrees` flag no longer gates linked
-		// checkout discovery; the model's local/remote scope decides instead.
-		codextui.SessionPickerWorktreeCWDs(m.sessionCWD, m.worktreesEnabled)...,
 	)
 	if picker == nil {
 		// Rust #42419: a picker that cannot open reports its failure inside the
@@ -146,9 +200,6 @@ func (m *Model) openSessionPicker(action codextui.SessionPickerAction) bubbletea
 		m.notice = "No sessions available."
 		return nil
 	}
-	// Rust #56308: Repo only appears for local sessions whose directory has
-	// more than one canonical linked-worktree directory.
-	picker.RepoFilterAvailable = m.worktreesEnabled && codextui.SessionPickerRepoFilterAvailable(m.sessionCWD)
 	picker.CloudBackends = m.cloudBackends
 	picker.ThemeID = m.tuiTheme
 	picker.Density = m.sessionPickerDensity
@@ -186,8 +237,14 @@ func (m *Model) openSessionPicker(action codextui.SessionPickerAction) bubbletea
 		m.modal.selected = picker.Selected
 	}
 	var cmds []bubbletea.Cmd
-	if refresh := m.sessionPickerRefreshCmd(pickerID); refresh != nil {
+	if refresh := m.sessionPickerRefreshCmd(pickerID, picker); refresh != nil {
 		cmds = append(cmds, refresh)
+	}
+	// Rust computes local_repo_filter_available on a blocking worker after the
+	// picker paints (resume_picker.rs spawn_blocking), so linked-checkout
+	// discovery never stalls the first frame.
+	if repo := m.sessionPickerRepoFilterCmd(pickerID); repo != nil {
+		cmds = append(cmds, repo)
 	}
 	if m.noAltScreen {
 		return bubbletea.Batch(cmds...)

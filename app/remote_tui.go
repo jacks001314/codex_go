@@ -575,7 +575,6 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	// are built (the standalone `codex agents` dashboard drives the core
 	// directly instead of the tea model).
 	agentsOverviewPinRequest := interactiveRemoteAgentsOverviewPinRequest(ctx, endpoint)
-	sessionPickerItems, sessionPickerNotice := interactiveRemoteSessionPickerItems(ctx, root, endpoint, backendID)
 	// Rust #47417: the startup probe runs before the first frame, so `auto`
 	// keeps native scrollback for Apple Terminal over SSH.
 	stdin = codextea.PrepareTerminal(stdin, stdout)
@@ -656,12 +655,13 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		// rejected with "This session belongs to a different backend".
 		BackendID:           backendID,
 		ServerOwnedSettings: paramsMode.SettingsOwner() == ThreadSettingsOwnerServer,
-		SessionPickerItems:  sessionPickerItems,
-		OnListSessionPickerItems: func() ([]codextui.SessionSummary, string, error) {
-			items, notice := interactiveRemoteSessionPickerItems(ctx, root, endpoint, backendID)
-			return items, notice, nil
+		// Rust lists the picker's sessions when the picker opens, so the remote
+		// TUI does not wait for thread/list (or its linked-worktree discovery)
+		// before the first frame; OnListSessionPickerItems runs that request in
+		// a background command while the picker shows "Loading sessions…".
+		OnListSessionPickerItems: func(scope codextea.SessionPickerScope, cursor string) ([]codextui.SessionSummary, string, string, error) {
+			return interactiveRemoteSessionPickerItemPage(ctx, root, endpoint, backendID, scope, cursor)
 		},
-		SessionPickerNotice:         sessionPickerNotice,
 		SessionPickerCWD:            interactiveSessionPickerCWD(root),
 		SessionPickerView:           settings.SessionPickerView,
 		AgentsOverviewGrouping:      settings.AgentsOverviewGrouping,
@@ -1809,6 +1809,50 @@ func runInteractiveRemotePrompt(ctx context.Context, root *cli.RootOptions, endp
 		fmt.Fprintln(stderr, turnErr.Error())
 	}
 	return turnErr
+}
+
+// interactiveRemoteSessionPickerItemPage lists one page of sessions from the
+// connected app server. Rust's picker sends thread/list the active cwd filter,
+// archive status and cursor (resume_picker.rs thread_list_params), so a remote
+// picker pages the same way it does locally.
+func interactiveRemoteSessionPickerItemPage(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, backendID codextui.BackendID, scope codextea.SessionPickerScope, cursor string) ([]codextui.SessionSummary, string, string, error) {
+	if scope.Archived == nil {
+		// The Delete picker lists both statuses; keep its merged snapshot.
+		items, notice := interactiveRemoteSessionPickerItems(ctx, root, endpoint, backendID)
+		return items, "", notice, nil
+	}
+	client, err := openRemoteSessionClient(ctx, endpoint)
+	if err != nil {
+		return nil, "", "", err
+	}
+	defer client.close()
+	archived := *scope.Archived
+	params := remoteTUIThreadListParams(root, archived)
+	if limit := scope.Limit; limit > 0 {
+		params.Limit = &limit
+	}
+	if scope.All {
+		params.CWD = nil
+	} else if len(scope.CWDs) > 0 {
+		params.CWD = &appserver.ThreadListCwdFilter{Values: append([]string(nil), scope.CWDs...)}
+	}
+	cursor = strings.TrimSpace(cursor)
+	if cursor != "" {
+		params.Cursor = &cursor
+	}
+	response, err := remoteThreadListWithCwdFallback(ctx, client, params)
+	if err != nil {
+		return nil, "", "", err
+	}
+	items := codextui.SessionSummariesFromAppServerThreadsWithReadStates(response.Data, archived, response.ReadStates)
+	next := ""
+	if response.NextCursor != nil {
+		next = strings.TrimSpace(*response.NextCursor)
+	}
+	if next == cursor {
+		next = ""
+	}
+	return codextui.StampSessionSummariesBackend(items, backendID), next, "", nil
 }
 
 func interactiveRemoteSessionPickerItems(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, backendID codextui.BackendID) ([]codextui.SessionSummary, string) {

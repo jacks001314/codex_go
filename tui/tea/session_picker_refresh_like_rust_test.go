@@ -17,12 +17,12 @@ func TestSessionPickerRefreshesFromConnectedBackendLikeRust(t *testing.T) {
 		DisablePasteBurst:  true,
 		SessionPickerCWD:   "/repo",
 		SessionPickerItems: []codextui.SessionSummary{{ThreadID: "thread-1", Preview: "old", CWD: "/repo"}},
-		OnListSessionPickerItems: func() ([]codextui.SessionSummary, string, error) {
+		OnListSessionPickerItems: func(codextui.SessionPickerScope, string) ([]codextui.SessionSummary, string, string, error) {
 			listed++
 			return []codextui.SessionSummary{
 				{ThreadID: "thread-1", Preview: "old", CWD: "/repo", UnreadRevision: "revision-2"},
 				{ThreadID: "thread-2", Preview: "new", CWD: "/repo"},
-			}, "", nil
+			}, "", "", nil
 		},
 	})
 	typeText(t, model, "/resume")
@@ -59,8 +59,8 @@ func TestSessionPickerOpensForLiveListingWhenSnapshotIsEmptyLikeRust(t *testing.
 		Height:            24,
 		DisablePasteBurst: true,
 		SessionPickerCWD:  "/repo",
-		OnListSessionPickerItems: func() ([]codextui.SessionSummary, string, error) {
-			return []codextui.SessionSummary{{ThreadID: "thread-1", Preview: "fresh", CWD: "/repo"}}, "", nil
+		OnListSessionPickerItems: func(codextui.SessionPickerScope, string) ([]codextui.SessionSummary, string, string, error) {
+			return []codextui.SessionSummary{{ThreadID: "thread-1", Preview: "fresh", CWD: "/repo"}}, "", "", nil
 		},
 	})
 	typeText(t, model, "/resume")
@@ -82,8 +82,8 @@ func TestSessionPickerIgnoresRefreshAfterCloseLikeRust(t *testing.T) {
 		DisablePasteBurst:  true,
 		SessionPickerCWD:   "/repo",
 		SessionPickerItems: []codextui.SessionSummary{{ThreadID: "thread-1", Preview: "old", CWD: "/repo"}},
-		OnListSessionPickerItems: func() ([]codextui.SessionSummary, string, error) {
-			return nil, "", nil
+		OnListSessionPickerItems: func(codextui.SessionPickerScope, string) ([]codextui.SessionSummary, string, string, error) {
+			return nil, "", "", nil
 		},
 	})
 	typeText(t, model, "/resume")

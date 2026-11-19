@@ -417,6 +417,13 @@ func TestStoreArchiveUnarchiveAndList(t *testing.T) {
 func TestStoreListFiltersSortsAndPages(t *testing.T) {
 	store := NewStore(t.TempDir())
 	now := fixedTime()
+	// An existing directory lets the cwd filter exercise Rust's
+	// paths_match_after_normalization (canonicalization) instead of the
+	// direct-equality fallback used for missing paths.
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "nested"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(nested) error = %v", err)
+	}
 	fixtures := []*Record{
 		{
 			ID:        "thread-1",
@@ -425,7 +432,7 @@ func TestStoreListFiltersSortsAndPages(t *testing.T) {
 			CreatedAt: now,
 			UpdatedAt: now,
 			RecencyAt: now,
-			Metadata:  Metadata{CWD: "/repo", ModelProvider: "openai", Source: "cli"},
+			Metadata:  Metadata{CWD: root, ModelProvider: "openai", Source: "cli"},
 		},
 		{
 			ID:        "thread-2",
@@ -483,7 +490,7 @@ func TestStoreListFiltersSortsAndPages(t *testing.T) {
 	filtered, err := store.List(ListOptions{
 		Archived:       false,
 		ModelProviders: []string{"openai"},
-		CWDs:           []string{"/repo"},
+		CWDs:           []string{root},
 		Sources:        []string{"cli"},
 	})
 	if err != nil {
@@ -494,7 +501,7 @@ func TestStoreListFiltersSortsAndPages(t *testing.T) {
 	}
 	normalizedCWD, err := store.List(ListOptions{
 		Archived: false,
-		CWDs:     []string{filepath.Join("/repo", "nested", "..")},
+		CWDs:     []string{root + string(os.PathSeparator) + "nested" + string(os.PathSeparator) + ".."},
 		Sources:  []string{"cli"},
 	})
 	if err != nil {

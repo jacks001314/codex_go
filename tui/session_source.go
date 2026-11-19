@@ -17,13 +17,26 @@ type SessionSourceOptions struct {
 	IncludeNonInteractive bool
 	Limit                 int
 	CWD                   string
-	Search                string
-	ModelProvider         string
-	// WorktreesEnabled expands the directory filter to the corresponding
-	// directories of the repository's linked worktrees (Rust #43279). Rust
-	// #54175 retired the `worktrees` feature flag, so callers set this from the
-	// session's filesystem scope instead: true for local sessions, false for
-	// remote ones.
+	// CWDs overrides CWD with an explicit directory scope (the picker's
+	// ThreadListCwdFilter). nil keeps the single-directory default.
+	CWDs []string
+	// MatchAllCWDs lists every directory regardless of CWD/CWDs, mirroring the
+	// picker's All filter (Rust ThreadListCwdFilter absent).
+	MatchAllCWDs  bool
+	Search        string
+	ModelProvider string
+	// Archived selects a single archive status for the listing (Rust
+	// ThreadListParams.archived). nil keeps the merged listing that returns
+	// both statuses in one page.
+	Archived *bool
+	// Cursor continues a listing whose earlier page already arrived (Rust
+	// ThreadListParams.cursor).
+	Cursor string
+	// WorktreesEnabled marks local filesystem scope (Rust #54175 retired the
+	// `worktrees` feature flag). The listing filter stays the requested
+	// directory alone: Rust sends ThreadListCwdFilter::One for the picker's Cwd
+	// filter and only expands linked checkouts when the Repo filter is active
+	// (resume_picker.rs PageCwdFilter::for_request).
 	WorktreesEnabled bool
 }
 
@@ -48,34 +61,80 @@ func SessionPickerWorktreeCWDs(cwd string, expandLinkedWorktrees bool) []string 
 	return cwds
 }
 
+// SessionSourceCWDs resolves a listing's directory scope. The picker's All
+// filter wins over any other scope; otherwise an explicit CWDs set is used,
+// falling back to the single requested directory.
+func SessionSourceCWDs(options SessionSourceOptions) []string {
+	if options.MatchAllCWDs {
+		return nil
+	}
+	if len(options.CWDs) > 0 {
+		return append([]string(nil), options.CWDs...)
+	}
+	if cwd := strings.TrimSpace(options.CWD); cwd != "" {
+		return []string{cwd}
+	}
+	return nil
+}
+
 func LoadSessionSummariesFromStore(store *session.Store, options SessionSourceOptions) ([]SessionSummary, error) {
+	summaries, _, err := LoadSessionSummaryPage(store, options)
+	return summaries, err
+}
+
+// LoadSessionSummaryPage lists one page from the store's default source (Rust
+// PageLoadMode::StoreDefault) and returns the cursor that continues it.
+func LoadSessionSummaryPage(store *session.Store, options SessionSourceOptions) ([]SessionSummary, string, error) {
 	if store == nil {
-		return nil, errors.New("session store is nil")
+		return nil, "", errors.New("session store is nil")
 	}
-	records, err := loadSessionRecordsByArchived(store, false, options)
-	if err != nil {
-		return nil, err
+	groups := []bool{false}
+	if options.Archived != nil {
+		groups = []bool{*options.Archived}
+	} else if options.IncludeArchived {
+		groups = []bool{false, true}
 	}
-	if options.IncludeArchived {
-		archived, err := loadSessionRecordsByArchived(store, true, options)
+	var items []SessionSummary
+	nextCursor := ""
+	for _, archived := range groups {
+		pageItems, next, err := loadSessionRecordPageByArchived(store, archived, options)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
-		records = append(records, archived...)
+		items = append(items, pageItems...)
+		if len(groups) == 1 {
+			nextCursor = next
+		}
 	}
-	records = filterSessionRecordsForPicker(records, options)
-	sort.SliceStable(records, func(i int, j int) bool {
-		left := sessionRecordPickerTime(&records[i])
-		right := sessionRecordPickerTime(&records[j])
-		if left.Equal(right) {
-			return records[i].ID > records[j].ID
+	return MergeSessionSummaryGroups(items, options.Limit), nextCursor, nil
+}
+
+// SessionSummaryPageFromRecords turns one archive group of already-projected
+// records into a picker page. Eligibility filtering runs before the cursor
+// page, so rows the picker never shows cannot consume a page slot (Rust
+// thread/list applies source_kinds in the query itself).
+func SessionSummaryPageFromRecords(store *session.Store, records []session.Record, options SessionSourceOptions, archived bool) ([]SessionSummary, string, error) {
+	eligible := filterSessionRecordsForPicker(records, options)
+	page, err := session.ListRecords(eligible, sessionPageListOptions(options, archived))
+	if err != nil {
+		return nil, "", err
+	}
+	return SessionSummariesFromRecords(store, page.Records), page.NextCursor, nil
+}
+
+// MergeSessionSummaryGroups orders rows from several archive groups by the
+// picker's recency key and applies the display limit.
+func MergeSessionSummaryGroups(items []SessionSummary, limit int) []SessionSummary {
+	sort.SliceStable(items, func(i int, j int) bool {
+		if items[i].UpdatedAt.Equal(items[j].UpdatedAt) {
+			return items[i].ThreadID > items[j].ThreadID
 		}
-		return left.After(right)
+		return items[i].UpdatedAt.After(items[j].UpdatedAt)
 	})
-	if limit := normalizedSessionSourceLimit(options.Limit); limit > 0 && len(records) > limit {
-		records = records[:limit]
+	if limit = normalizedSessionSourceLimit(limit); limit > 0 && len(items) > limit {
+		items = items[:limit]
 	}
-	return SessionSummariesFromRecords(store, records), nil
+	return items
 }
 
 func SessionSummariesFromRecords(store *session.Store, records []session.Record) []SessionSummary {
@@ -95,8 +154,8 @@ func AppServerThreadListParamsForSessionPicker(options SessionSourceOptions) app
 		SortDirection: appserver.SortDesc,
 		Archived:      &archived,
 	}
-	if cwd := strings.TrimSpace(options.CWD); cwd != "" {
-		params.CWD = &appserver.ThreadListCwdFilter{Values: SessionPickerWorktreeCWDs(cwd, options.WorktreesEnabled)}
+	if cwds := SessionSourceCWDs(options); len(cwds) > 0 {
+		params.CWD = &appserver.ThreadListCwdFilter{Values: cwds}
 	}
 	if search := strings.TrimSpace(options.Search); search != "" {
 		params.SearchTerm = &search
@@ -139,7 +198,7 @@ func SessionSummariesFromAppServerThreadsWithReadStates(threads []appserver.Thre
 	return summaries
 }
 
-func loadSessionRecordsByArchived(store *session.Store, archived bool, options SessionSourceOptions) ([]session.Record, error) {
+func loadSessionRecordPageByArchived(store *session.Store, archived bool, options SessionSourceOptions) ([]SessionSummary, string, error) {
 	listOptions := session.ListOptions{
 		SortKey:        session.SortRecencyAt,
 		SortDirection:  session.SortDesc,
@@ -147,17 +206,37 @@ func loadSessionRecordsByArchived(store *session.Store, archived bool, options S
 		Search:         strings.TrimSpace(options.Search),
 		IncludeHistory: false,
 	}
-	if cwd := strings.TrimSpace(options.CWD); cwd != "" {
-		listOptions.CWDs = SessionPickerWorktreeCWDs(cwd, options.WorktreesEnabled)
+	if cwds := SessionSourceCWDs(options); len(cwds) > 0 {
+		listOptions.CWDs = cwds
 	}
 	if provider := strings.TrimSpace(options.ModelProvider); provider != "" {
 		listOptions.ModelProviders = []string{provider}
 	}
 	page, err := store.List(listOptions)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return append([]session.Record(nil), page.Records...), nil
+	return SessionSummaryPageFromRecords(store, page.Records, options, archived)
+}
+
+func sessionPageListOptions(options SessionSourceOptions, archived bool) session.ListOptions {
+	listOptions := session.ListOptions{
+		PageSize:       options.Limit,
+		Cursor:         strings.TrimSpace(options.Cursor),
+		SortKey:        session.SortRecencyAt,
+		SortDirection:  session.SortDesc,
+		Archived:       archived,
+		Search:         strings.TrimSpace(options.Search),
+		IncludeHistory: false,
+	}
+	if cwds := SessionSourceCWDs(options); len(cwds) > 0 {
+		listOptions.CWDSet = true
+		listOptions.CWDs = cwds
+	}
+	if provider := strings.TrimSpace(options.ModelProvider); provider != "" {
+		listOptions.ModelProviders = []string{provider}
+	}
+	return listOptions
 }
 
 func filterSessionRecordsForPicker(records []session.Record, options SessionSourceOptions) []session.Record {

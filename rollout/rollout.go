@@ -21,6 +21,7 @@ import (
 
 	"codex_go/retainedctx"
 	"codex_go/session"
+	"codex_go/utils"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -107,9 +108,9 @@ type Item struct {
 }
 
 type ContentPart struct {
-	Type     string  `json:"type"`
-	Text     string  `json:"text,omitempty"`
-	ImageURL string  `json:"image_url,omitempty"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
 	// FileID is the durable uploaded-file reference that replaces an inline
 	// image or audio payload (Rust #45794/#45543, AudioReference::File).
 	FileID   string  `json:"file_id,omitempty"`
@@ -2852,6 +2853,7 @@ type ThreadItem struct {
 	Source           string
 	HistoryMode      string
 	ParentThreadID   string
+	ForkedFromID     string
 	AgentNickname    string
 	AgentRole        string
 	Model            string
@@ -2865,7 +2867,19 @@ type ThreadItem struct {
 	// AttachedThread marks a saved fork that is attached to its source. The
 	// default rollout listing hides these rows (Rust #56351).
 	AttachedThread bool
+	// hasForkHistory marks a reference-backed fork whose stored prefix carries
+	// prior history (Rust HeadTailSummary::has_fork_history). Such a rollout is
+	// listed even when its local head has not produced a preview yet.
+	hasForkHistory bool
 }
+
+// Rust's rollout listing reads only a bounded head of each rollout
+// (codex-rs/rollout/src/list.rs: HEAD_RECORD_LIMIT/USER_EVENT_SCAN_LIMIT) so a
+// large session history does not turn the resume picker into a full-file scan.
+const (
+	threadListItemHeadLimit     = 10
+	threadListItemUserScanLimit = 200
+)
 
 type Page struct {
 	Items           []ThreadItem
@@ -2887,6 +2901,10 @@ type ListOptions struct {
 	// IncludeAttachedThreads keeps saved attached forks in the result. Ordinary
 	// resume and history listings leave this false (Rust #56351).
 	IncludeAttachedThreads bool
+	// RequirePreview drops rollouts whose head carries no display preview,
+	// mirroring Rust's PreviewFilter::RequirePreview (rollout/src/list.rs).
+	// Forked rollout prefixes and attached threads stay visible without one.
+	RequirePreview bool
 	// IncludedThreadIDs restricts the listing to these threads (Rust #61446).
 	// Nil means unrestricted; an empty slice matches nothing.
 	IncludedThreadIDs []string
@@ -2900,8 +2918,9 @@ type ListOptions struct {
 type threadItemFilters struct {
 	allowedSources         []string
 	modelProviders         []string
-	cwdFilters             []string
+	cwdMatcher             utils.PathMatcher
 	includeAttachedThreads bool
+	requirePreview         bool
 }
 
 func listFiltersFromOptions(options *ListOptions) threadItemFilters {
@@ -2909,11 +2928,24 @@ func listFiltersFromOptions(options *ListOptions) threadItemFilters {
 		return threadItemFilters{includeAttachedThreads: true}
 	}
 	return threadItemFilters{
-		allowedSources:         options.AllowedSources,
-		modelProviders:         options.ModelProviders,
-		cwdFilters:             options.CWDFilters,
+		allowedSources: options.AllowedSources,
+		modelProviders: options.ModelProviders,
+		// Rust normalizes the cwd filters once per listing
+		// (normalize_cwd_for_state_db) instead of canonicalizing every
+		// record/filter pair.
+		cwdMatcher:             utils.NewPathMatcher(options.CWDFilters),
 		includeAttachedThreads: options.IncludeAttachedThreads,
+		requirePreview:         options.RequirePreview,
 	}
+}
+
+// sessionSourceIsNonRootAgent mirrors Rust's SessionSource::is_non_root_agent:
+// internal and subagent threads are not user-resumable history, so a fork
+// prefix on one of them does not make an empty preview displayable.
+func sessionSourceIsNonRootAgent(source string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(source))
+	normalized = strings.NewReplacer("_", "", "-", "", " ", "").Replace(normalized)
+	return strings.HasPrefix(normalized, "subagent") || strings.HasPrefix(normalized, "internal")
 }
 
 func (f threadItemFilters) matches(item *ThreadItem) bool {
@@ -2926,7 +2958,7 @@ func (f threadItemFilters) matches(item *ThreadItem) bool {
 	if len(f.modelProviders) > 0 && !contains(f.modelProviders, item.ModelProvider) {
 		return false
 	}
-	if len(f.cwdFilters) > 0 && !contains(f.cwdFilters, item.CWD) {
+	if f.cwdMatcher.Len() > 0 && !f.cwdMatcher.Matches(item.CWD) {
 		return false
 	}
 	return true
@@ -2982,65 +3014,113 @@ func BuildThreadItem(path string, archived bool) (ThreadItem, bool) {
 }
 
 func buildThreadItem(path string, archived bool, filters threadItemFilters) (ThreadItem, bool) {
-	lines, _, err := Load(path)
-	if err != nil || len(lines) == 0 {
-		return ThreadItem{}, false
-	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return ThreadItem{}, false
 	}
+	modified := info.ModTime().UTC()
 	item := ThreadItem{
 		Path:      path,
-		UpdatedAt: info.ModTime().UTC(),
-		RecencyAt: info.ModTime().UTC(),
+		UpdatedAt: modified,
+		RecencyAt: modified,
 		Archived:  archived,
 	}
-	// Rust filters on the first session metadata record only, so later copied
-	// fork metadata cannot change whether the rollout is listed (#61902).
-	checkedSessionMeta := false
-	for _, line := range lines {
+	reader, err := OpenRolloutLineReader(path)
+	if err != nil {
+		return ThreadItem{}, false
+	}
+	defer func() { _ = reader.Close() }()
+
+	// Rust's rollout listing (codex-rs/rollout/src/list.rs::read_head_summary)
+	// reads only the head of the file: the first ten records must be enough to
+	// find the session metadata, and the scan is extended to at most 210
+	// records only while the preview or first user message is still missing.
+	// Reading every rollout in full is prohibitively slow for homes with
+	// hundreds of megabytes of session history.
+	headLimit := threadListItemHeadLimit
+	sawSessionMeta := false
+	scanned := 0
+	for scanned < headLimit {
+		raw, readErr := reader.ReadLine()
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			return ThreadItem{}, false
+		}
+		raw = bytes.TrimSpace(raw)
+		if len(raw) == 0 {
+			continue
+		}
+		scanned++
+		var line Line
+		if err := unmarshalLine(raw, &line); err != nil {
+			continue
+		}
 		if line.Meta != nil {
+			if sawSessionMeta {
+				continue
+			}
+			// Rust filters on the first session metadata record only, so later
+			// copied fork metadata cannot change whether the rollout is listed
+			// (#61902).
+			sawSessionMeta = true
 			item.ThreadID = line.Meta.ID
 			item.CWD = line.Meta.CWD
 			item.Source = line.Meta.Source
 			item.HistoryMode = line.Meta.HistoryMode
 			item.ParentThreadID = line.Meta.ParentThreadID
+			item.ForkedFromID = line.Meta.ForkedFromID
 			item.AttachedThread = line.Meta.AttachedThread
 			item.AgentNickname = line.Meta.AgentNickname
 			item.AgentRole = line.Meta.AgentRole
 			item.Model = line.Meta.Model
 			item.ModelProvider = line.Meta.ModelProvider
 			item.CLIVersion = line.Meta.CLIVersion
+			item.hasForkHistory = strings.TrimSpace(line.Meta.ForkedFromID) != "" &&
+				line.Meta.HistoryBase != nil && line.Meta.HistoryBase.EndOrdinalExclusive > 0 &&
+				!sessionSourceIsNonRootAgent(item.Source)
 			if created, err := time.Parse(time.RFC3339, line.Meta.Timestamp); err == nil {
 				item.CreatedAt = created.UTC()
 			}
-			if !checkedSessionMeta {
-				checkedSessionMeta = true
-				if !filters.matches(&item) {
-					return ThreadItem{}, false
-				}
+			if !filters.matches(&item) {
+				return ThreadItem{}, false
 			}
 			if session.IsGuardianReviewSource(item.Source) {
-				// Rust #47302 (codex-rs/rollout/src/list.rs): a Guardian review
-				// thread's synthetic approval prompt is not display metadata. The
-				// summary uses the compact preview and stops scanning user messages.
+				// Rust #47302: a Guardian review thread's synthetic approval
+				// prompt is not display metadata. The summary uses the compact
+				// preview and stops scanning user messages.
 				item.Preview = session.GuardianThreadPreview
 				item.FirstUserMessage = ""
 				break
 			}
+			if item.Preview != "" && item.FirstUserMessage != "" {
+				break
+			}
+			headLimit = threadListItemHeadLimit + threadListItemUserScanLimit
 			continue
-		}
-		if !lineItemTime(line).IsZero() {
-			item.RecencyAt = lineItemTime(line)
 		}
 		if line.ResponseID != "" {
 			item.LastResponseID = line.ResponseID
 		}
-		if item.FirstUserMessage == "" {
-			item.FirstUserMessage = userTextFromLine(&line)
-			item.Preview = item.FirstUserMessage
+		if preview, fromUser := userPreviewFromLine(&line); preview != "" {
+			if item.Preview == "" {
+				item.Preview = preview
+			}
+			if fromUser && item.FirstUserMessage == "" {
+				item.FirstUserMessage = preview
+			}
 		}
+		if sawSessionMeta && item.Preview != "" && item.FirstUserMessage != "" {
+			break
+		}
+	}
+	if !sawSessionMeta || scanned == 0 {
+		return ThreadItem{}, false
+	}
+	if filters.requirePreview && item.Preview == "" && !item.hasForkHistory &&
+		!(item.AttachedThread && strings.TrimSpace(item.ForkedFromID) != "") {
+		return ThreadItem{}, false
 	}
 	if item.CreatedAt.IsZero() {
 		if created, ok := ParseTimestampFromFilename(filepath.Base(path)); ok {
@@ -3048,9 +3128,6 @@ func buildThreadItem(path string, archived bool, filters threadItemFilters) (Thr
 		} else {
 			item.CreatedAt = item.UpdatedAt
 		}
-	}
-	if item.RecencyAt.IsZero() {
-		item.RecencyAt = item.UpdatedAt
 	}
 	return item, true
 }
@@ -3669,40 +3746,119 @@ func userTextFromRaw(raw json.RawMessage) string {
 	return ""
 }
 
-func userTextFromLine(line *Line) string {
-	if line == nil {
-		return ""
+// userPreviewFromLine mirrors the EventMsg arm of Rust's rollout head summary
+// (codex-rs/rollout/src/list.rs::event_msg_preview): only event messages carry a
+// display preview, and fromUser marks the previews that also fill
+// first_user_message. Thread goals fill the preview only.
+func userPreviewFromLine(line *Line) (preview string, fromUser bool) {
+	if line == nil || line.Type != "event_msg" || len(line.Payload) == 0 {
+		return "", false
 	}
-	if text := userTextFromRaw(line.Item); text != "" {
-		return text
+	var payload struct {
+		Type            string            `json:"type"`
+		Message         string            `json:"message"`
+		Text            string            `json:"text"`
+		Images          []json.RawMessage `json:"images"`
+		FileIDs         []json.RawMessage `json:"file_ids"`
+		LocalImages     []json.RawMessage `json:"local_images"`
+		Audio           []json.RawMessage `json:"audio"`
+		AudioReferences []json.RawMessage `json:"audio_references"`
+		LocalAudio      []json.RawMessage `json:"local_audio"`
+		Item            json.RawMessage   `json:"item"`
+		Goal            struct {
+			Objective string `json:"objective"`
+		} `json:"goal"`
 	}
-	if line.Type == "event_msg" {
-		if text := userTextFromEventPayload(line.Payload); text != "" {
-			return text
+	if err := json.Unmarshal(line.Payload, &payload); err != nil {
+		return "", false
+	}
+	switch normalizeRolloutEventType(payload.Type) {
+	case "user_message":
+		hasImages := len(payload.Images) > 0 || len(payload.FileIDs) > 0 || len(payload.LocalImages) > 0
+		hasAudio := len(payload.Audio) > 0 || len(payload.AudioReferences) > 0 || len(payload.LocalAudio) > 0
+		return userMessagePreview(firstNonEmpty(payload.Message, payload.Text), hasImages, hasAudio), true
+	case "item_completed":
+		return itemCompletedUserPreview(payload.Item)
+	case "thread_goal_updated":
+		return strings.TrimSpace(payload.Goal.Objective), false
+	default:
+		return "", false
+	}
+}
+
+const (
+	userMessageImagePreview = "[Image]"
+	userMessageAudioPreview = "[Audio]"
+)
+
+// itemCompletedUserPreview decodes the paginated ItemCompleted(UserMessage)
+// event that newer rollouts use in place of the legacy user_message event.
+func itemCompletedUserPreview(raw json.RawMessage) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
+	}
+	var item struct {
+		Type    string `json:"type"`
+		Text    string `json:"text"`
+		Message string `json:"message"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return "", false
+	}
+	if normalizeRolloutEventType(item.Type) != "user_message" {
+		return "", false
+	}
+	// Rust's UserMessageItem::message concatenates the text inputs without a
+	// separator (codex-rs/protocol/src/items.rs).
+	var text strings.Builder
+	hasImages := false
+	hasAudio := false
+	for _, part := range item.Content {
+		switch normalizeRolloutEventType(part.Type) {
+		case "text", "input_text":
+			text.WriteString(part.Text)
+		case "image", "input_image", "local_image":
+			hasImages = true
+		case "audio", "input_audio", "local_audio":
+			hasAudio = true
 		}
 	}
-	if text, ok := line.Data["text"].(string); ok {
-		return text
+	if text.Len() == 0 {
+		// Flat fields cover simplified items written by older clients.
+		text.WriteString(firstNonEmpty(item.Message, item.Text))
+	}
+	return userMessagePreview(text.String(), hasImages, hasAudio), true
+}
+
+// userMessagePreview mirrors Rust's protocol::user_message_preview: the
+// model-context prefix is stripped, and attachment-only messages fall back to a
+// media label so they stay visible in the picker.
+func userMessagePreview(message string, hasImages, hasAudio bool) string {
+	if preview := stripUserMessagePreviewPrefix(message); preview != "" {
+		return preview
+	}
+	if hasImages {
+		return userMessageImagePreview
+	}
+	if hasAudio {
+		return userMessageAudioPreview
 	}
 	return ""
 }
 
-func userTextFromEventPayload(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
+// stripUserMessagePreviewPrefix mirrors protocol::strip_user_message_prefix
+// (codex-rs/protocol/src/protocol.rs): IDE context before the request heading is
+// not part of the display preview.
+func stripUserMessagePreviewPrefix(value string) string {
+	const begin = "## My request for Codex:"
+	if index := strings.Index(value, begin); index >= 0 {
+		return strings.TrimSpace(value[index+len(begin):])
 	}
-	var payload struct {
-		Type    string `json:"type"`
-		Message string `json:"message"`
-		Text    string `json:"text"`
-	}
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return ""
-	}
-	if normalizeRolloutEventType(payload.Type) != "user_message" {
-		return ""
-	}
-	return firstNonEmpty(payload.Message, payload.Text)
+	return strings.TrimSpace(value)
 }
 
 func lineItemTime(line Line) time.Time {

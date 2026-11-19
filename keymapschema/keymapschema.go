@@ -188,6 +188,8 @@ var ContextActions = map[string]map[string]struct{}{
 		"cancel":      {},
 	},
 	"agents": {
+		"next_group":      {},
+		"previous_group":  {},
 		"resume":          {},
 		"search":          {},
 		"new_task":        {},

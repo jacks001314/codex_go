@@ -1360,7 +1360,9 @@ type Options struct {
 	SessionPickerView       string
 	// OnListSessionPickerItems lists sessions from the connected backend when
 	// the picker opens, so in-app resumes see sessions created after startup
-	// (Rust #58280). Nil keeps the startup snapshot.
+	// (Rust #58280). scope mirrors ThreadListCwdFilter plus
+	// ThreadListParams.archived, and cursor continues the listing (Rust
+	// PaginationState). Nil keeps the startup snapshot.
 	OnListSessionPickerItems SessionPickerItemsFunc
 	// SessionPickerNotice preserves already-loaded sessions when a later remote
 	// history page fails (Rust #51230's inline "Could not load more sessions").
@@ -4904,8 +4906,11 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		m.applySessionTranscriptAcknowledged(msg)
 		return m, nil
 	case SessionPickerRefreshMsg:
-		m.applySessionPickerRefresh(msg)
-		return m, nil
+		return m, m.applySessionPickerRefresh(msg)
+	case SessionPickerRepoFilterMsg:
+		return m, m.applySessionPickerRepoFilter(msg)
+	case SessionResumeLookupMsg:
+		return m, m.applySessionResumeLookup(msg)
 	case DynamicToolThreadStartedMsg:
 		return m, m.applyDynamicToolThreadStarted(msg)
 	case DebugConfigResultMsg:

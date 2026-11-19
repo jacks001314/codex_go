@@ -465,6 +465,15 @@ func TestRouterThreadListUseStateDBOnlySkipsRolloutScan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create rollout error = %v", err)
 	}
+	// Rust's rollout listing only returns threads with a discoverable preview
+	// (PreviewFilter::RequirePreview), so the fixture needs a user message.
+	if err := recorder.AppendLine(rollout.Line{
+		Type:      "event_msg",
+		Timestamp: fixedTime().Add(time.Second).Format(time.RFC3339Nano),
+		Payload:   json.RawMessage(`{"type":"user_message","message":"hello"}`),
+	}); err != nil {
+		t.Fatalf("append user message error = %v", err)
+	}
 	if err := recorder.Close(); err != nil {
 		t.Fatalf("close rollout error = %v", err)
 	}
@@ -2881,6 +2890,15 @@ func TestRouterReadAndResumeFallbackToRollout(t *testing.T) {
 	}
 	if err := recorder.AppendItem(rollout.Item{ID: "user-1", Type: "message", Role: "user", Text: "from rollout"}); err != nil {
 		t.Fatalf("AppendItem() error = %v", err)
+	}
+	// Rust legacy rollouts persist the user turn as a display event too; the
+	// ordinary thread list reads previews from event messages only.
+	userEvent, err := json.Marshal(map[string]any{"type": "item_completed", "thread_id": "thread-rollout", "turn_id": "turn-1", "item": map[string]any{"id": "user-1", "type": "UserMessage", "content": []any{map[string]any{"type": "text", "text": "from rollout"}}}})
+	if err != nil {
+		t.Fatalf("Marshal(user_message) error = %v", err)
+	}
+	if err := recorder.AppendLine(rollout.Line{Type: "event_msg", Timestamp: fixedTime().UTC().Format(time.RFC3339Nano), Payload: userEvent}); err != nil {
+		t.Fatalf("AppendLine(user_message) error = %v", err)
 	}
 	if err := recorder.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)

@@ -218,8 +218,17 @@ type PreparedChildContext struct {
 	// repository instructions.
 	UserInstructions   string
 	ThreadInstructions string
-	CWD                string
-	Environments       []map[string]any
+	// BaseInstructions are the parent's effective base instructions. A host
+	// applies both the text and its provenance to the destination config so
+	// model-owned instructions keep their model-switch behavior, then applies
+	// the requested child overrides (Rust #62128).
+	BaseInstructions PreparedChildBaseInstructions
+	// DeveloperInstructions are the developer instructions a native child
+	// inherits, including the configured V2 subagent override. Requested child
+	// role overrides apply after this inherited value (Rust #62128).
+	DeveloperInstructions *string
+	CWD                   string
+	Environments          []map[string]any
 	// SelectedCapabilityRoots are the roots visible to the invoking step.
 	SelectedCapabilityRoots []PreparedChildCapabilityRoot
 	// ResolvedPermissionProfile is the parent's resolved permission profile at
@@ -237,4 +246,20 @@ type PreparedChildContext struct {
 	// inherit. The host supplies their execution route.
 	DynamicTools      []json.RawMessage
 	DisabledPluginIDs []string
+}
+
+// PreparedChildBaseInstructions is the parent's effective base instructions
+// with the provenance a destination needs before choosing child overrides
+// (Rust BaseInstructions).
+type PreparedChildBaseInstructions struct {
+	Text       string
+	Provenance *PreparedChildBaseInstructionsProvenance
+}
+
+// PreparedChildBaseInstructionsProvenance records whether the parent's base
+// instructions are custom text or were generated for a model (Rust
+// BaseInstructionsProvenance).
+type PreparedChildBaseInstructionsProvenance struct {
+	Type  string
+	Model string
 }

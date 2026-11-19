@@ -175,6 +175,8 @@ func (v *View) renderHelp(width int, styled bool) []string {
 		[2]string{hint("accept", "enter"), "Open"},
 		[2]string{hint("page_up", "pgup"), "Page up"},
 		[2]string{hint("page_down", "pgdown"), "Page down"},
+		[2]string{hint(ShortcutHintNextGroup, "shift+\u2193"), "Next group"},
+		[2]string{hint(ShortcutHintPreviousGroup, "shift+\u2191"), "Previous group"},
 	)
 	taskEntries := [][2]string{
 		[2]string{hint(ShortcutHintNewTask, "n"), "New"},

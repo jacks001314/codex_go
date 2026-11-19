@@ -79,6 +79,12 @@ func procVersionIndicatesWSL1(procVersion string) bool {
 }
 
 func NormalizeForPathComparison(path string) (string, error) {
+	// Rust's canonicalize requires every component to exist. Go's EvalSymlinks
+	// tolerates a missing final component on Windows ("/workspace" becomes
+	// "\\workspace"), which would silently rebase relative to the drive.
+	if _, err := os.Lstat(path); err != nil {
+		return "", err
+	}
 	canonical, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return "", err
@@ -96,7 +102,64 @@ func PathsMatchAfterNormalization(left string, right string) bool {
 	if leftErr == nil && rightErr == nil {
 		return normalizedLeft == normalizedRight
 	}
-	return filepath.Clean(left) == filepath.Clean(right)
+	// Rust falls back to direct path equality when canonicalization fails.
+	return left == right
+}
+
+// PathMatcher compares candidate paths against a fixed filter set, normalizing
+// every filter once. Rust normalizes a query's cwd filters once and stores
+// canonical cwds (`normalize_cwd_for_state_db`), then compares the strings, so
+// scanning N records against M filters costs N + M canonicalizations instead
+// of N*M filesystem walks. The zero value matches nothing, like an empty
+// filter list.
+type PathMatcher struct {
+	filters []pathFilter
+}
+
+type pathFilter struct {
+	raw        string
+	normalized string
+	failed     bool
+}
+
+// NewPathMatcher normalizes filters once. The comparison still uses
+// PathsMatchAfterNormalization's fallback: when either side cannot be
+// canonicalized, the raw paths must be equal.
+func NewPathMatcher(filters []string) PathMatcher {
+	if len(filters) == 0 {
+		return PathMatcher{}
+	}
+	matcher := PathMatcher{filters: make([]pathFilter, len(filters))}
+	for i, filter := range filters {
+		normalized, err := NormalizeForPathComparison(filter)
+		matcher.filters[i] = pathFilter{raw: filter, normalized: normalized, failed: err != nil}
+	}
+	return matcher
+}
+
+// Len reports the number of filters the matcher holds.
+func (m PathMatcher) Len() int {
+	return len(m.filters)
+}
+
+// Matches reports whether path identifies the same location as any filter.
+func (m PathMatcher) Matches(path string) bool {
+	if len(m.filters) == 0 {
+		return false
+	}
+	normalized, err := NormalizeForPathComparison(path)
+	for _, filter := range m.filters {
+		if err == nil && !filter.failed {
+			if normalized == filter.normalized {
+				return true
+			}
+			continue
+		}
+		if path == filter.raw {
+			return true
+		}
+	}
+	return false
 }
 
 func NormalizeForNativeWorkdir(path string) string {

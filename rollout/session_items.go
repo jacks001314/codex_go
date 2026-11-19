@@ -2109,7 +2109,11 @@ func (b *rolloutReplayBuilder) hasCanonicalEventMirror(item session.Item, kind s
 	turnID := sessionItemTurnID(&item, len(b.items))
 	for i := len(b.items) - 1; i >= 0; i-- {
 		candidate := &b.items[i]
-		if len(candidate.Raw) == 0 {
+		// Only a recorded `response_item` can absorb the compatibility event.
+		// The event half of the same message is a TurnItem projection, which is
+		// not model-visible: Rust replays response items through ContextManager
+		// and TurnItems only through the transcript.
+		if !session.HasResponseItemPayload(candidate) {
 			continue
 		}
 		// Go-written legacy rollouts emit the event mirror before its canonical
@@ -2138,7 +2142,7 @@ func (b *rolloutReplayBuilder) generatedEventMirrorIndex(item session.Item, turn
 	}
 	for i := len(b.items) - 1; i >= 0; i-- {
 		candidate := &b.items[i]
-		if len(candidate.Raw) != 0 {
+		if session.HasResponseItemPayload(candidate) {
 			continue
 		}
 		candidateTurn := sessionItemTurnID(candidate, i)
@@ -2156,11 +2160,37 @@ func (b *rolloutReplayBuilder) generatedEventMirrorIndex(item session.Item, turn
 }
 
 func rolloutItemsMirror(left *session.Item, right *session.Item, kind string) bool {
-	if left == nil || right == nil || stringFromMap(left.Metadata, "kind") != kind {
+	if left == nil || right == nil || !rolloutItemIsMessage(left) || !rolloutItemIsMessage(right) {
+		return false
+	}
+	// Rust never builds a transcript item from the `response_item` half of a
+	// message, so that half carries neither Metadata "kind" nor the TurnItem
+	// vocabulary. Resolve the event kind from role so the two halves still
+	// identify the same message.
+	if rolloutMessageKind(left) != kind || rolloutMessageKind(right) != kind {
 		return false
 	}
 	return strings.TrimSpace(left.Role) == strings.TrimSpace(right.Role) &&
 		strings.TrimSpace(left.Text) == strings.TrimSpace(right.Text)
+}
+
+// rolloutMessageKind resolves the compatibility-event kind of a message item.
+// TurnItem projections record it in Metadata["kind"]; the response_item half of
+// a message only records type and role.
+func rolloutMessageKind(item *session.Item) string {
+	if item == nil {
+		return ""
+	}
+	if kind := strings.TrimSpace(stringFromMap(item.Metadata, "kind")); kind != "" {
+		return kind
+	}
+	switch rolloutMessageRole(item) {
+	case "user":
+		return "user_message"
+	case "assistant":
+		return "agent_message"
+	}
+	return ""
 }
 
 // isSyntheticRolloutTurn reports whether a turn id was synthesized by the

@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1789,10 +1790,14 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		// Every session selection is stamped with the backend this process
 		// talks to; the model needs the same identity or the first `/fork` of a
 		// fresh session is rejected as belonging to another backend (#54681).
-		BackendID:          codextui.ProcessBackendID(),
-		SessionPickerItems: interactiveSessionPickerItems(root),
-		OnListSessionPickerItems: func() ([]codextui.SessionSummary, string, error) {
-			return interactiveSessionPickerItems(root), "", nil
+		BackendID: codextui.ProcessBackendID(),
+		// Rust lists sessions when the picker opens (the resume picker's
+		// background loader shows "Loading sessions…" while its first page is
+		// in flight), so startup never blocks on thread/list. The eager
+		// snapshot would run worktree discovery and the state listing before
+		// the first frame.
+		OnListSessionPickerItems: func(scope codextea.SessionPickerScope, cursor string) ([]codextui.SessionSummary, string, string, error) {
+			return interactiveSessionPickerItemsForScope(root, scope, cursor)
 		},
 		SessionPickerCWD:            interactiveSessionPickerCWD(root),
 		SessionPickerView:           settings.SessionPickerView,
@@ -4176,19 +4181,54 @@ func interactiveKeymapEditMessage(edit codextui.KeymapEdit) string {
 }
 
 func interactiveSessionPickerItems(root *cli.RootOptions) []codextui.SessionSummary {
+	cwd := strings.TrimSpace(interactiveSessionPickerCWD(root))
+	scope := codextea.SessionPickerScope{All: cwd == ""}
+	if cwd != "" {
+		scope.CWDs = []string{cwd}
+	}
+	items, _, _, _ := interactiveSessionPickerItemsForScope(root, scope, "")
+	return items
+}
+
+// interactiveSessionPickerItemsForScope lists one page of the picker's rows
+// for the directory and status scope it asked for (Rust ThreadListCwdFilter +
+// ThreadListParams.archived). All matches every directory; CWDs carries the
+// Cwd filter's single directory or the Repo filter's expanded checkout set.
+// cursor continues a listing whose first page already arrived.
+func interactiveSessionPickerItemsForScope(root *cli.RootOptions, scope codextea.SessionPickerScope, cursor string) ([]codextui.SessionSummary, string, string, error) {
 	// Rust #58202: the resume picker includes every provider so chats saved
 	// under a previous provider stay discoverable; fork lookups still filter by
 	// the current provider.
 	store := newSessionStore()
-	items, err := codextui.LoadSessionSummariesFromStore(store, codextui.SessionSourceOptions{
+	options := codextui.SessionSourceOptions{
 		CWD:             interactiveSessionPickerCWD(root),
 		IncludeArchived: true,
+		Archived:        scope.Archived,
+		Cursor:          strings.TrimSpace(cursor),
+		Limit:           interactiveSessionPickerPageSize(scope),
 		// Rust #54175: local session discovery always groups linked checkouts;
 		// the retired `worktrees` flag no longer gates it.
 		WorktreesEnabled: true,
-	})
-	if err != nil {
-		return nil
+	}
+	if scope.All {
+		options.MatchAllCWDs = true
+	} else if len(scope.CWDs) > 0 {
+		options.CWDs = append([]string(nil), scope.CWDs...)
+	}
+	// Rust's resume picker asks thread/list for a state-database-only first
+	// page (codex-rs/tui/src/resume_picker.rs: PageLoadMode::StateDbOnly) and
+	// only falls back to the filesystem scan when the database has nothing to
+	// serve. Go's JSON store fallback reads every thread file (seconds on a
+	// large home), so it runs only when the database itself is empty: an empty
+	// filtered page is authoritative once the database has rows.
+	items, nextCursor, stateDB := interactiveSessionPickerStateItems(store, options)
+	if !stateDB && strings.TrimSpace(cursor) == "" {
+		loaded, next, err := codextui.LoadSessionSummaryPage(store, options)
+		if err != nil {
+			return nil, "", "", err
+		}
+		items = loaded
+		nextCursor = next
 	}
 	// Rust #58264: the picker marks unread sessions from the backend read
 	// receipts, which the embedded state database backs here.
@@ -4200,7 +4240,74 @@ func interactiveSessionPickerItems(root *cli.RootOptions) []codextui.SessionSumm
 		}
 		items[i].UnreadRevision = strings.TrimSpace(value.Revision)
 	}
-	return codextui.StampSessionSummariesBackend(items, codextui.ProcessBackendID())
+	return codextui.StampSessionSummariesBackend(items, codextui.ProcessBackendID()), nextCursor, "", nil
+}
+
+// interactiveSessionPickerPageSize maps a picker listing scope onto the
+// thread/list page size (Rust PAGE_SIZE, or the lookup's explicit limit).
+func interactiveSessionPickerPageSize(scope codextea.SessionPickerScope) int {
+	if scope.Limit > 0 {
+		return scope.Limit
+	}
+	return codextui.SessionPickerPageSize
+}
+
+// interactiveSessionPickerStateItems mirrors Rust's state-database-only picker
+// page. Reading the indexed thread metadata keeps resume startup independent of
+// the size of the session history; the JSON store path is only the fallback
+// for homes whose state database is still empty.
+func interactiveSessionPickerStateItems(store *session.Store, options codextui.SessionSourceOptions) ([]codextui.SessionSummary, string, bool) {
+	if store == nil {
+		return nil, "", false
+	}
+	codexHome := sessionCodexHome(store)
+	if codexHome == "" {
+		return nil, "", false
+	}
+	sqliteConfig, err := state.SqliteConfigForCodexHome(codexHome)
+	if err != nil {
+		return nil, "", false
+	}
+	runtime, err := state.InitStateRuntime(context.Background(), sqliteConfig, "openai")
+	if err != nil {
+		return nil, "", false
+	}
+	defer func() { _ = runtime.Close() }()
+	rows, err := runtime.ListThreadRows(context.Background())
+	if err != nil || len(rows) == 0 {
+		return nil, "", false
+	}
+	indexedNames := appserver.IndexedThreadNamesForRows(codexHome, rows)
+	cwds := codextui.SessionSourceCWDs(options)
+	// Rust pages one SessionStatus at a time (thread_list_params.archived).
+	// An unscoped listing (the Delete picker) keeps the merged page.
+	groups := []bool{false}
+	if options.Archived != nil {
+		groups = []bool{*options.Archived}
+	} else if options.IncludeArchived {
+		groups = []bool{false, true}
+	}
+	var items []codextui.SessionSummary
+	nextCursor := ""
+	for _, archived := range groups {
+		listOptions := session.ListOptions{
+			SortKey:       session.SortRecencyAt,
+			SortDirection: session.SortDesc,
+			CWDSet:        len(cwds) > 0,
+			CWDs:          cwds,
+			Archived:      archived,
+		}
+		projected := appserver.RecordsFromStateRows(rows, indexedNames, listOptions)
+		pageItems, pageNext, listErr := codextui.SessionSummaryPageFromRecords(store, projected, options, archived)
+		if listErr != nil {
+			return nil, "", false
+		}
+		items = append(items, pageItems...)
+		if len(groups) == 1 {
+			nextCursor = pageNext
+		}
+	}
+	return codextui.MergeSessionSummaryGroups(items, options.Limit), nextCursor, true
 }
 
 // interactiveHistoryModelProvider mirrors Rust #49161's history provider:
@@ -4520,9 +4627,24 @@ func interactiveResumeSessionHandler(root *cli.RootOptions) codextea.SessionResu
 		if threadID == "" {
 			return codextea.SessionResumeResponse{}, errors.New("resume requires a thread id")
 		}
-		record, err := store.Read(threadID, true, true)
-		if err != nil {
-			return codextea.SessionResumeResponse{}, err
+		// Rust pages the history store for a resume window instead of hydrating
+		// the whole transcript. The bounded read carries the whole history of a
+		// short thread and the newest page of a long one; a record it cannot
+		// page keeps the full materialization path.
+		tail, tailOK, tailErr := store.ReadTailPage(threadID, interactiveResumeInitialItemBudget)
+		paged := tailErr == nil && tailOK && tail.TotalItems > interactiveResumeInitialItemBudget
+		var record *session.Record
+		if tailErr == nil && tailOK {
+			record = tail.Record
+			if !paged {
+				record.Items = tail.Items
+			}
+		} else {
+			loaded, readErr := store.Read(threadID, true, true)
+			if readErr != nil {
+				return codextea.SessionResumeResponse{}, readErr
+			}
+			record = loaded
 		}
 		// Rust #53816: interactive CLI resume refuses Guardian review threads.
 		if record != nil {
@@ -4535,7 +4657,11 @@ func interactiveResumeSessionHandler(root *cli.RootOptions) codextea.SessionResu
 		if record != nil && record.Archived {
 			return codextea.SessionResumeResponse{}, archivedSessionStartError(threadID)
 		}
-		if interactiveRepairImageGenerationItems(record, auth.DefaultCodexHome()) {
+		if paged {
+			// The bounded read never carries the full history, so the legacy
+			// image-generation repair only rewrites the loaded page.
+			_ = interactiveRepairImageGenerationItems(&session.Record{ID: record.ID, Items: tail.Items}, auth.DefaultCodexHome())
+		} else if interactiveRepairImageGenerationItems(record, auth.DefaultCodexHome()) {
 			_ = store.Save(record)
 		}
 		var tokenUsage *protocol.ThreadTokenUsage
@@ -4543,15 +4669,23 @@ func interactiveResumeSessionHandler(root *cli.RootOptions) codextea.SessionResu
 			value := remoteThreadTokenUsage(*restored)
 			tokenUsage = &value
 		}
-		messages := interactiveSessionMessagesFromRecord(record, reasoningProjectionChatWidget, false)
+		var messages []codextui.Message
 		olderCursor := ""
 		hasOlder := false
-		if record != nil && len(record.Items) > interactiveResumeInitialItemBudget {
-			// Rust #46739: a long thread opens on its newest page and streams the
-			// earlier pages in when the reader reaches the top.
-			if window, cursor, older, err := interactiveSessionHistoryWindow(store, threadID, record.Metadata.CWD); err == nil {
-				messages, olderCursor, hasOlder = window, cursor, older
-			}
+		windowed := false
+		// Rust #46739: a long thread opens on its newest page and streams the
+		// earlier pages in when the reader reaches the top. The page comes from
+		// the bounded read, or from the loaded record after a fallback:
+		// projecting every stored item and re-reading the thread file was the
+		// dominant resume cost.
+		if paged {
+			messages = interactiveSessionMessagesFromItems(tail.Items, record.Metadata.CWD, reasoningProjectionChatWidget, false)
+			olderCursor, hasOlder, windowed = tail.NextCursor, tail.NextCursor != "", true
+		} else if window, cursor, older, ok := interactiveSessionHistoryWindowFromRecord(record); ok {
+			messages, olderCursor, hasOlder, windowed = window, cursor, older, true
+		}
+		if !windowed {
+			messages = interactiveSessionMessagesFromRecord(record, reasoningProjectionChatWidget, false)
 		}
 		return codextea.SessionResumeResponse{
 			Summary:            firstSessionSummary(store, record),
@@ -4710,6 +4844,55 @@ func interactiveSessionHistoryPage(store *session.Store, threadID session.Thread
 	}
 	next := strings.TrimSpace(page.NextCursor)
 	return messages, next, next != "", nil
+}
+
+// interactiveSessionHistoryWindowFromRecord cuts the newest item page from a
+// record the caller already loaded. Rust's budgeted initial hydration pages the
+// store once and renders only the resulting window (#46739); re-reading the
+// thread file and projecting every stored item first made resume pay for the
+// whole transcript twice. Threads at or below the budget keep the full
+// projection and report no window.
+func interactiveSessionHistoryWindowFromRecord(record *session.Record) ([]codextui.Message, string, bool, bool) {
+	if record == nil || len(record.Items) <= interactiveResumeInitialItemBudget {
+		return nil, "", false, false
+	}
+	page, next := interactiveSessionHistoryPageItems(record.Items, interactiveResumeInitialItemBudget)
+	if len(page) == 0 {
+		return nil, "", false, false
+	}
+	messages := interactiveSessionMessagesFromItems(page, record.Metadata.CWD, reasoningProjectionChatWidget, false)
+	return messages, next, next != "", true
+}
+
+// interactiveSessionHistoryPageItems mirrors Store.ListItems for an in-memory
+// record: items carry their created ordinal, the newest page is cut first, and
+// it is returned in transcript order with the cursor for the page before it.
+func interactiveSessionHistoryPageItems(items []session.Item, pageSize int) ([]session.Item, string) {
+	if pageSize <= 0 || len(items) == 0 {
+		return nil, ""
+	}
+	ordered := append([]session.Item(nil), items...)
+	for index := range ordered {
+		if ordered[index].CreatedAtOrdinal == 0 {
+			ordered[index].CreatedAtOrdinal = uint64(index + 1)
+		}
+	}
+	sort.SliceStable(ordered, func(left, right int) bool {
+		return ordered[left].CreatedAtOrdinal > ordered[right].CreatedAtOrdinal
+	})
+	limit := pageSize
+	if limit > len(ordered) {
+		limit = len(ordered)
+	}
+	next := ""
+	if limit < len(ordered) {
+		next = fmt.Sprintf("%s:%d", session.ItemSortCreatedAtOrdinal, ordered[limit-1].CreatedAtOrdinal)
+	}
+	page := make([]session.Item, 0, limit)
+	for index := limit - 1; index >= 0; index-- {
+		page = append(page, ordered[index])
+	}
+	return page, next
 }
 
 // interruptionNoticeMessage is the neutral row Rust's

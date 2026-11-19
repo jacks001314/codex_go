@@ -215,6 +215,8 @@ func (m *Model) applyAgentsOverviewKeymapHints() {
 		key    string
 	}{
 		{action: agentsoverview.ShortcutHintSearch, key: "agents.search"},
+		{action: agentsoverview.ShortcutHintNextGroup, key: "agents.next_group"},
+		{action: agentsoverview.ShortcutHintPreviousGroup, key: "agents.previous_group"},
 		{action: agentsoverview.ShortcutHintToggleGrouping, key: "agents.toggle_grouping"},
 		{action: agentsoverview.ShortcutHintRename, key: "agents.rename"},
 		{action: agentsoverview.ShortcutHintStop, key: "agents.stop"},
@@ -703,6 +705,16 @@ func (m *Model) updateAgentsOverviewKey(msg keymsg.KeyMsg) bubbletea.Cmd {
 			m.agentsOverview.CycleStatusFilter(false)
 			return nil
 		}
+	}
+	// Rust agent_center::navigation: the shifted arrow/letter bindings jump to
+	// the first task of the next or previous rendered group.
+	if m.keyMatches("agents", "next_group", keySpec) {
+		m.agentsOverview.SelectSection(true)
+		return nil
+	}
+	if m.keyMatches("agents", "previous_group", keySpec) {
+		m.agentsOverview.SelectSection(false)
+		return nil
 	}
 	if m.keyMatches("agents", "search", keySpec) {
 		m.agentsOverview.ToggleSearch()
