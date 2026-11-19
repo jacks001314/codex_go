@@ -51005,6 +51005,48 @@
    "sha": "b5d9f7116e256e59f4a036c1c3e18979994598c4",
    "status": "complete",
    "subject": "Include nested Apps tool results in Code Mode sampling requests (#62423)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "cli/cli.go validateSessionRemoteConflicts covers agents, resume and fork and reports \"`codex <command>` received conflicting remote server endpoints\", mirroring Rust's dispatch_cli session_remote check.",
+    "The check runs inside Parse, before any authentication token lookup, exactly like Rust's pre-auth ordering.",
+    "tests: cli TestSessionCommandsRejectConflictingRemotesLikeRust (conflicting endpoints for all three commands plus the accepted matching/absent cases)"
+   ],
+   "kind": "runtime",
+   "sha": "0cc88d0c74e528b405b89ad4b82c97ad73604ecf",
+   "status": "complete",
+   "subject": "Reject conflicting remote endpoints for resume and fork (#62065)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "model/spawn_agent_models.go defines MaxSpawnAgentModelOverrides = 16 and caps the unknown-model candidate list with it (Rust MAX_SPAWN_AGENT_MODEL_OVERRIDES).",
+    "appserver/model_catalog_world_state.go uses the same constant for the spawn_agent tool description catalog and the context catalog.",
+    "tests: model TestSpawnAgentUnknownModelListsCompatibleModelsLikeRust asserts the list is capped at MaxSpawnAgentModelOverrides"
+   ],
+   "kind": "runtime",
+   "sha": "5a4aff84319b4376658b4cac50fcd15fa976f6fa",
+   "status": "complete",
+   "subject": "Expand the `spawn_agent` model listing cap to 16 (#62051)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "attachmentstore/attachment_store.go models UploadContent as distinct image and tool-audio variants (ImageUploadContent with file name and tags, ToolAudioUploadContent with a declared MIME type), matching Rust UploadContent::Image/ToolAudio.",
+    "The tool-audio variant carries its own declared MIME type so a persistent backend can verify it against the uploaded bytes, and both variants redact bytes in their debug output.",
+    "tests: attachmentstore TestInlineStorePreservesToolAudioBytesLikeRust and the UploadContent debug-redaction assertions"
+   ],
+   "kind": "runtime",
+   "sha": "db9778b73cf0291da3c025709cc55c4a6eb97c28",
+   "status": "complete",
+   "subject": "Distinguish image and tool audio attachment uploads (#62047)"
   }
  ]
 }
