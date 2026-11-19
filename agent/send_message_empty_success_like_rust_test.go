@@ -18,31 +18,15 @@ func (c *acknowledgementSendController) SendMessage(_ context.Context, args *Sen
 	return nil
 }
 
-// TestSendMessageAcknowledgesDeliveryLikeRust pins Rust #61894: the v2
-// send_message tool reports "Message accepted." and only adds the followup_task
-// hint when the recipient is not the root agent.
-func TestSendMessageAcknowledgesDeliveryLikeRust(t *testing.T) {
-	cases := []struct {
-		name         string
-		receiverPath string
-		want         string
-	}{
-		{
-			name:         "root recipient",
-			receiverPath: AgentPathRootValue,
-			want:         "Message accepted.",
-		},
-		{
-			name:         "child recipient",
-			receiverPath: "/root/worker",
-			want:         "Message accepted. If the recipient is idle and should act now, use followup_task to ask it to act on the message.",
-		},
-	}
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
+// TestSendMessageReturnsEmptySuccessLikeRust pins Rust #62093: a successful v2
+// send_message reports success with no output text, for the root agent and for
+// ordinary recipients alike (the followup_task hint is gone).
+func TestSendMessageReturnsEmptySuccessLikeRust(t *testing.T) {
+	for _, receiverPath := range []string{AgentPathRootValue, "/root/worker"} {
+		t.Run(receiverPath, func(t *testing.T) {
 			controller := &acknowledgementSendController{
 				MemoryToolController: NewMemoryToolController(),
-				receiverPath:         tt.receiverPath,
+				receiverPath:         receiverPath,
 			}
 			registry := tool.NewRegistry()
 			if err := RegisterMultiAgentHandlersWithOptions(registry, &MultiAgentHandlerOptions{
@@ -63,8 +47,8 @@ func TestSendMessageAcknowledgesDeliveryLikeRust(t *testing.T) {
 			if !output.Success {
 				t.Fatalf("Success = false, want true")
 			}
-			if output.Body != tt.want {
-				t.Fatalf("Body = %q, want %q", output.Body, tt.want)
+			if output.Body != "" {
+				t.Fatalf("Body = %q, want empty success output", output.Body)
 			}
 		})
 	}
