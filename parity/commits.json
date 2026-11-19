@@ -51415,11 +51415,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Rust #62175 removes paints that read tui.terminal.last_known_screen_size before resize handling, replacing them with prepare_draw_size plus handle_draw_pre_render.",
+    "Go's TUI has no cached screen-size field to go stale: the model stores width/height only from bubbletea.WindowSizeMsg (applied in resize) and renders once after the message batch, and the single direct size read is the tmux size monitor poll (tui/tea/size_monitor.go), which compares the live geometry and re-applies it through the same resize path."
    ],
    "kind": "runtime",
    "sha": "fc25d8f1203a152fe44d7a980edcab1a55f08fc9",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Fix stale terminal dimensions in immediate TUI redraws (#62175)"
   },
   {

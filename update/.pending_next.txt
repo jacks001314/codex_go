@@ -34,7 +34,6 @@ cc3757a99db9c129757ced74192eaf831f959d2e	2026-11-18	Open subagent transcripts in
 bedafe7156ab73ac213cf960a2c2ef90033dd259	2026-11-18	Open subagent transcripts from activity links in the TUI (#62159)
 bb6b4b63b9df5432f4f45c90072d7823764ced00	2026-11-18	Move the app-server socket relay into the Codex CLI (#62163)
 3dbc6f86570ec10aaf1df2b1011912d47274622b	2026-11-18	Keep the TUI composer caret anchored while typing (#62174)
-fc25d8f1203a152fe44d7a980edcab1a55f08fc9	2026-11-18	Fix stale terminal dimensions in immediate TUI redraws (#62175)
 6ee9bc1ba7b6375faf040042728add58f796e79c	2026-11-18	Select process sandboxes during launch preparation (#62183)
 8e1fc8e0592c850d3adeeba7ba7355947540617e	2026-11-18	Route turn and response checkpoints through the rollout budget policy (#62190)
 89feadf3cca2a53d01bbf4c35ce53227704b2417	2026-11-18	Preserve saved sandbox permissions when resuming `codex exec` (#62194)
