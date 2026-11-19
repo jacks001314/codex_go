@@ -79,5 +79,3 @@ d64451b049d6f8b75b747e339a7034d23ddc9466	2026-11-19	Support tool-specific JavaSc
 14302d5de9ec4183fd2b53ad2a0ae7bdf80340d5	2026-11-19	Add opt-in OAuth discovery to config server loaders (#62432)
 524e15989b79039e14d01cd197ed6e6580bd59f2	2026-11-19	Expand connector result metadata coverage across auth configurations (#62434)
 c764c44a0559b36e016efefcfeb473966162e5d5	2026-11-19	Let extensions attach metadata to MCP tool requests (#62435)
-739f934a15	2026-11-19	Add Windows MXC sandbox launch diagnostics (#62439)
-b9559ff737	2026-11-19	Update the `openai-docs` skill for GPT-6.2 (#62447)
