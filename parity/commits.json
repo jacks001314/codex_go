@@ -50695,6 +50695,176 @@
    ]
   },
   {
+   "sha": "29091c7234b0e58d4e5474841dd69474d6116ce0",
+   "subject": "Wait for the system `bwrap` probe with a pidfd (#62160)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "sandbox/bwrap.go now gives the launcher its own stderr pipe and reads only the bytes that already arrived, so the user-namespace probe reaches its verdict as soon as the launcher exits instead of waiting for a descendant that keeps the pipe open (Rust #62160 pidfd wait); the bounded capture mirrors their 64 KiB limit and the timeout/kill path still treats an unresponsive launcher as usable.",
+    "tests: sandbox TestProbeSystemBwrapDoesNotWaitForDescendantHoldingStderr (Linux-gated: a fake launcher that exits after spawning a 5s background sleep holding stderr must still be classified as a user-namespace failure well inside the 500 ms probe timeout), TestProbeSystemBwrapBoundsCapturedStderr, TestProbeSystemBwrapTreatsUnstartableLauncherAsUsable; the existing classification test still passes. Verified go build ./sandbox, GOOS=linux go build ./sandbox and go vet ./sandbox.",
+    "plan: update/plan_2026_11_19.md batch 8"
+   ]
+  },
+  {
+   "sha": "4e51bfbacc2d1fd9b479350859c6bba652f1e853",
+   "subject": "Refresh tool hashes in core scenario snapshots (#62124)",
+   "kind": "test",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Rust-only insta snapshot refresh (codex-rs/core/tests/suite/snapshots/**.snap); Go has no core scenario snapshot files, its stability/scenarios suite asserts behaviour directly, so there are no tool hashes to re-pin.",
+    "plan: update/plan_2026_11_19.md batch 8"
+   ]
+  },
+  {
+   "sha": "53cd1894aa94185668d76e212e793e7950294f24",
+   "subject": "Fix Node launcher detection in the standalone installer (#62120)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "The change tightens classify_existing_codex in scripts/install/install.sh; Go's scripts/install.sh and install.ps1 never inspect an existing executable for a Node shebang (no npm/bun launcher classification, no node references at all), so there is no carrier for the exact-first-line check.",
+    "plan: update/plan_2026_11_19.md batch 8"
+   ]
+  },
+  {
+   "sha": "1283c91ad7e6cf00360727157ac62db5e3a9c18d",
+   "subject": "Update `crossterm` to fix stray input when scrolling (#62139)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Dependency bump for codex-rs (MODULE.bazel.lock, codex-rs/Cargo.toml, Cargo.lock); the Go repository has no Cargo or Bazel manifests, and the TUI input path is implemented in tui/ with its own event loop.",
+    "plan: update/plan_2026_11_19.md batch 8"
+   ]
+  },
+  {
+   "sha": "71527c18c7caff2fe3f6fa1b84c4e8b3ff720288",
+   "subject": "Account for macOS voice build parallelism in Bazel (#62338)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Bazel rule change for third_party/voice/native.bzl; Go has no Bazel build files and no third_party/voice tree.",
+    "plan: update/plan_2026_11_19.md batch 8"
+   ]
+  },
+  {
+   "sha": "0e011c00928a16579b0bda47473cee986628cb51",
+   "subject": "Verify dependency hashes when running Python repository tools (#62346)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Adds run_locked_python_tool.py dependency-hash verification for codex-rs and sdk/python tooling; Go's scripts/*.py helpers run under the repository's Go tooling with no pinned Python dependency set (no requirements*, pyproject.toml or lock file), so there is nothing to verify hashes against.",
+    "plan: update/plan_2026_11_19.md batch 8"
+   ]
+  },
+  {
+   "sha": "b65d9a3b2ddb413e38847626863189d1c12171af",
+   "subject": "Stabilize app-server `app/list` integration tests (#62162)",
+   "kind": "test",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "Rust-only app-server integration-test stabilisation (codex-rs/app-server/tests/suite/v2/app_list.rs); no production behaviour changed and Go's app/list coverage lives in appserver Go tests, so no Go change is required.",
+    "plan: update/plan_2026_11_19.md batch 8"
+   ]
+  },
+  {
+   "sha": "345f166d01fda88e6e723afbbfdce2efde843f74",
+   "subject": "Wait for the search connector in hosted web search tests (#62165)",
+   "kind": "test",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "Rust-only test wait in codex-rs/app-server/tests/suite/v2/web_search.rs; the Go hosted-search tests already wait for the connector before asserting, and no production code changed.",
+    "plan: update/plan_2026_11_19.md batch 8"
+   ]
+  },
+  {
+   "sha": "c90234de95857bf9e0d6b9073786f0419aceb5d1",
+   "subject": "Isolate auth storage attribution tests from account switches (#62131)",
+   "kind": "test",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "Rust-only test isolation (codex-rs/app-server/tests/suite/v2/account.rs and auth_storage_originator_tests.rs); no production behaviour changed, so no Go carrier is required.",
+    "plan: update/plan_2026_11_19.md batch 8"
+   ]
+  },
+  {
+   "sha": "f09fb197f517acb3052ae3976a7fc3b5a5a8897d",
+   "subject": "Remove Python from MCP permission request hook tests (#62172)",
+   "kind": "test",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "Rust-only test refactor replacing the Python permission-request hook fixture with an in-process one, plus the matching BUILD.bazel line; Go's MCP permission hook tests are already in-process Go tests.",
+    "plan: update/plan_2026_11_19.md batch 8"
+   ]
+  },
+  {
+   "sha": "3aaa23a437f6a0e6ab224163a2e36fd95ff73804",
+   "subject": "Reduce overhead in CLI integration tests (#62153)",
+   "kind": "test",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "Rust-only CLI/exec integration-test harness changes (tests/common/responses.rs, test_codex_exec.rs and the suite files); no production behaviour changed, and Go's exec/appserver tests own their own harness.",
+    "plan: update/plan_2026_11_19.md batch 8"
+   ]
+  },
+  {
+   "sha": "409973e0e217a3d271d0bb425085eef077743ac6",
+   "subject": "Extract TUI thread resume finalization (#62171)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Pure Rust refactor extracting finish_thread_resume (behaviour unchanged, HistoryHydrationScope::Initial kept for the existing path); Go's app-server session resume finalisation is a separate implementation with no equivalent code motion to mirror.",
+    "plan: update/plan_2026_11_19.md batch 8"
+   ]
+  },
+  {
+   "sha": "c695d267e3ecbe135d7570cd9c6c19792b06868c",
+   "subject": "Box the config reload future for persistent MCP tool approvals (#62337)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Boxing a Rust future to bound async layout; Go has no future layout to optimise and the persistent MCP tool approval reload path is a synchronous call.",
+    "plan: update/plan_2026_11_19.md batch 8"
+   ]
+  },
+  {
    "sha": "f1b69864161866a111610c4b4351d397fb644b6f",
    "subject": "Support optional Apps tool results in Responses requests (#62388)",
    "kind": "protocol",
