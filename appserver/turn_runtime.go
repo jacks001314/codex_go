@@ -111,6 +111,9 @@ type activeRuntimeTurn struct {
 	// (Rust TurnMetadataState::responsesapi_client_metadata, #62072). The turn
 	// lock guards it; a spawn reads it through ActiveTurn.
 	TurnClientMetadata map[string]string
+	// GitEnrichment is this turn's Git snapshot and background collection
+	// (Rust #62437). It is nil for a turn that reports no local workspace.
+	GitEnrichment *turnGitEnrichment
 	// LatestResponseID is the newest response id received in this turn. Rust
 	// #45441 keeps it until a later `response.created` replaces it - including
 	// across sampling retries - so a Guardian review still has a parent response
@@ -1771,6 +1774,9 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	}
 	threadID := params.ThreadID
 	turnID := record.ID
+	// Rust #62437 admits the deferred worktree scan here: the turn reached the
+	// runtime, so its Git status is worth observing.
+	r.admitTurnGitEnrichment(threadID, turnID)
 	defer r.clearPreparedUserMessageContent(turnID)
 	startedAt := time.Unix(record.StartedAt, 0).UTC()
 	if record.StartedAt == 0 {
@@ -10668,6 +10674,7 @@ func (r *RuntimeRouter) activeTurnClientMetadata(threadID string, turnID string,
 		Extra:                      extraMetadata,
 		ResponsesAPIMetadata:       cfg.ResponsesAPIMetadata(),
 		StartedAtMS:                active.StartedAtMS,
+		Workspaces:                 active.gitWorkspaces(),
 		UseResponsesLite:           r.modelUsesResponsesLite(modelID),
 	})
 }

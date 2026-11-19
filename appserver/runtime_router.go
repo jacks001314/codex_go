@@ -22729,6 +22729,14 @@ func (r *RuntimeRouter) startTurnRuntimeAsync(params *turn.TurnStartParams, resp
 		r.emitTurnRuntimeError(params.ThreadID, response.Turn.ID, err)
 		return
 	}
+	// Rust #62437 collects HEAD and the remote URLs after turn setup; the
+	// worktree status scan waits for admission (runTurnRuntime).
+	if cwd, ok := turnGitEnrichmentCWD(paramsCopy); ok {
+		enrichment := startTurnGitEnrichment(ctx, cwd)
+		r.threads.UpdateTurn(params.ThreadID, response.Turn.ID, func(active *activeRuntimeTurn) {
+			active.GitEnrichment = enrichment
+		})
+	}
 	if turnStartHasUserInput(paramsCopy) {
 		r.noteAcceptedTurnDictation(paramsCopy.ThreadID, response.Turn.ID, paramsCopy.UsedDictation)
 	}

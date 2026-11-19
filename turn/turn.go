@@ -711,7 +711,10 @@ type ResponsesClientMetadataOptions struct {
 	Extra                      map[string]string
 	ResponsesAPIMetadata       map[string]string
 	StartedAtMS                int64
-	UseResponsesLite           bool
+	// Workspaces carries the turn's Git workspace observation (HEAD, remote
+	// URLs, worktree status). A nil map omits the field.
+	Workspaces       map[string]codexapi.ClientWorkspaceMetadata
+	UseResponsesLite bool
 }
 
 // ConversationWindowID builds Rust's conversation window identity
@@ -726,6 +729,26 @@ func ConversationWindowID(threadID string, windowNumber uint64) string {
 	return fmt.Sprintf("%s:%d", threadID, windowNumber)
 }
 
+// cloneClientWorkspaces copies a workspace observation so a request never
+// shares mutable remote maps with the collector.
+func cloneClientWorkspaces(workspaces map[string]codexapi.ClientWorkspaceMetadata) map[string]codexapi.ClientWorkspaceMetadata {
+	out := make(map[string]codexapi.ClientWorkspaceMetadata, len(workspaces))
+	for path, workspace := range workspaces {
+		if len(workspace.AssociatedRemoteURLs) > 0 {
+			remotes := make(map[string]string, len(workspace.AssociatedRemoteURLs))
+			for name, url := range workspace.AssociatedRemoteURLs {
+				remotes[name] = url
+			}
+			workspace.AssociatedRemoteURLs = remotes
+		}
+		if workspace.HasChanges != nil {
+			observed := *workspace.HasChanges
+			workspace.HasChanges = &observed
+		}
+		out[path] = workspace
+	}
+	return out
+}
 func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[string]string {
 	if options == nil {
 		return nil
@@ -788,6 +811,9 @@ func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[s
 	metadata.TurnStartedAtUnixMS = options.StartedAtMS
 	metadata.Extra = FilterClientMetadata(options.Extra)
 	metadata.ResponsesAPIMetadata = cloneStringMap(options.ResponsesAPIMetadata)
+	if len(options.Workspaces) > 0 {
+		metadata.Workspaces = cloneClientWorkspaces(options.Workspaces)
+	}
 	clientMetadata := metadata.ClientMetadata()
 	if options.UseResponsesLite {
 		clientMetadata["ws_request_header_x_openai_internal_codex_responses_lite"] = "true"
