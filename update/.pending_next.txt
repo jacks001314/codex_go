@@ -7,7 +7,6 @@ ce5a565ba0f2e459e953bb18f1cedd5440f46d6b	2026-11-17	Simplify Guardian history re
 f99317520575edcb1dd9e732222152be32dd273c	2026-11-17	Add policy-checked dispatch for bundled App hooks (#62080)
 6d94d4af1070d8c7230a1027a3a18753e0796c4e	2026-11-17	Isolate Guardian v2 score caches by policy revision (#62083)
 bc2c328483ee60e82e08ad48f3a5efbb5712f914	2026-11-17	Append transcript provenance to Guardian JSON instructions (#62090)
-6d40c0ac9b99f4ccb8d432f354c042cd7649e00d	2026-11-17	Clarify recovery guidance for stale Guardian authorization (#62099)
 5cba3aec84fb7fb13785ab9da330ee6debca21e6	2026-11-17	Support transparent TCP with inherited PID namespaces (#62100)
 8011b92bc82d4cc1b6dc3f35c0cd28768c797c97	2026-11-17	Log macOS user verification enrollment failure diagnostics (#62107)
 8fca6ffb92a602875a0b97e3e535eb48375bdd8c	2026-11-17	Support OTel header helpers in local managed requirements (#62110)
