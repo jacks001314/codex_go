@@ -783,6 +783,13 @@ func statusProjectRootForCWD(cwd string) (string, string) {
 	if root == "" {
 		root = cwd
 	}
+	// Rust keeps the session directory as a PathUri and takes the project name
+	// from its last segment, so a remote app server reporting a foreign path
+	// convention still yields the final component on a native client
+	// (PathUri::basename, #62375).
+	if name, ok := codextui.PathURIBasename(root); ok {
+		return root, name
+	}
 	return root, filepath.Base(root)
 }
 

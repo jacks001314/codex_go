@@ -460,7 +460,6 @@ func (e *multiAgentV2ToolExecutor) Execute(ctx context.Context, invocation *tool
 				"agent_path":      firstNonEmptyAgentString(args.ResolvedPath, args.Target),
 			}
 			result = nil
-			bodyOverride = SendMessageAcknowledgement(args.ResolvedPath)
 		}
 	case multiAgentV2Followup:
 		var args FollowupTaskArgs
@@ -599,16 +598,6 @@ func ListedAgentsFromLive(live []LiveAgent) []ListedAgent {
 	}
 	sort.SliceStable(agents, func(i int, j int) bool { return agents[i].AgentName < agents[j].AgentName })
 	return agents
-}
-
-// SendMessageAcknowledgement mirrors Rust #61894's v2 send_message output: the
-// root agent only needs the delivery acknowledgment, while a non-root recipient
-// is told to use followup_task when it is idle and should act immediately.
-func SendMessageAcknowledgement(receiverPath string) string {
-	if AgentPath(receiverPath).IsRoot() {
-		return "Message accepted."
-	}
-	return "Message accepted. If the recipient is idle and should act now, use followup_task to ask it to act on the message."
 }
 
 func validateTargetMessage(target, message string) error {
