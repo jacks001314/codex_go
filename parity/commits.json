@@ -51047,6 +51047,22 @@
    "sha": "db9778b73cf0291da3c025709cc55c4a6eb97c28",
    "status": "complete",
    "subject": "Distinguish image and tool audio attachment uploads (#62047)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "turn.ClientMetadataForChild snapshots a turn's Responses client-metadata document and drops the parent's review and routing intent (`misalignment_override`, `parent_response_id`, `mcp_request_meta`), mirroring Rust TurnMetadataState::client_metadata_for_child.",
+    "appserver/turn_runtime.go records each turn's document (turn-start replacement plus patch) in a bounded per-turn map under its own lock and refreshes it on steer, so a spawn still attributes its child after the parent advances to a newer turn; a turn's own state also keeps the document so the live path needs no extra bookkeeping.",
+    "appserver/agent_controller.go applies the snapshot to the child's initial turn as a replacement, so the child keeps its own thread and turn identifiers and later parent steers never reach it; the follow-up and message turns are untouched.",
+    "The controller resolves the attribution from the turn that requested the spawn (parentTurnID), falling back to the parent thread's live turn only when no turn was captured.",
+    "tests: turn TestClientMetadataForChildFiltersParentIntentLikeRust (filtering plus snapshot isolation); appserver TestSpawnInheritsRequestingTurnClientMetadataLikeRust (requesting turn wins over the live turn, live-turn fallback, no-router case) and TestChildInitialTurnUsesInheritedClientMetadataLikeRust (replacement semantics)."
+   ],
+   "kind": "runtime",
+   "sha": "02d60fb5ccdbb77ae63a12c5f9448363ea0db285",
+   "status": "complete",
+   "subject": "Preserve client attribution when spawning subagents (#62072)"
   }
  ]
 }
