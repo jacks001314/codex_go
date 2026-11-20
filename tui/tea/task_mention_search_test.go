@@ -1,6 +1,7 @@
 package tea
 
 import (
+	"context"
 	keymsg "codex_go/tui/keymsg"
 	"testing"
 
@@ -18,7 +19,7 @@ func TestModelTaskMentionSearchPopulatesTaskCandidatesLikeRust(t *testing.T) {
 	state := codextui.NewState(nil)
 	state.SetThreadID("thread-1")
 	model := NewModel(state, Options{
-		OnSearchTasks: func(query string, currentThreadID string, cwd string) ([]codextui.TaskMention, error) {
+		OnSearchTasks: func(_ context.Context, query string, currentThreadID string, cwd string) ([]codextui.TaskMention, error) {
 			queries = append(queries, query+"|"+currentThreadID)
 			return []codextui.TaskMention{{
 				ThreadID: "task-123",
@@ -92,7 +93,7 @@ func TestModelTaskMentionsRequireTaskToolsLikeRust(t *testing.T) {
 	state := codextui.NewState(nil)
 	state.SetThreadID("thread-1")
 	model := NewModel(state, Options{
-		OnSearchTasks: func(query string, currentThreadID string, cwd string) ([]codextui.TaskMention, error) {
+		OnSearchTasks: func(_ context.Context, query string, currentThreadID string, cwd string) ([]codextui.TaskMention, error) {
 			queries = append(queries, query)
 			return []codextui.TaskMention{{ThreadID: "task-1", Title: "Task"}}, nil
 		},
@@ -147,7 +148,7 @@ func TestModelTaskMentionsUsePersistedCapabilityLikeRust(t *testing.T) {
 	var queries []string
 	persisted := map[string]bool{"thread-persisted": true, "thread-unknown": false}
 	model := NewModel(state, Options{
-		OnSearchTasks: func(query string, currentThreadID string, cwd string) ([]codextui.TaskMention, error) {
+		OnSearchTasks: func(_ context.Context, query string, currentThreadID string, cwd string) ([]codextui.TaskMention, error) {
 			queries = append(queries, query)
 			return nil, nil
 		},
@@ -178,7 +179,7 @@ func TestModelTaskMentionSearchDebouncesLikeRust(t *testing.T) {
 	state.SetThreadID("thread-1")
 	var queries []string
 	model := NewModel(state, Options{
-		OnSearchTasks: func(query string, currentThreadID string, cwd string) ([]codextui.TaskMention, error) {
+		OnSearchTasks: func(_ context.Context, query string, currentThreadID string, cwd string) ([]codextui.TaskMention, error) {
 			queries = append(queries, query)
 			return nil, nil
 		},

@@ -58,6 +58,11 @@ const (
 	NotificationThreadSectionChanged                NotificationMethod = "thread/section/changed"
 )
 
+// NotificationThreadSearchPartial streams best-effort provisional matches for
+// `thread/search/stream` on the requesting connection (Rust #62132). Splitting
+// it out of the block above keeps that table's alignment stable.
+const NotificationThreadSearchPartial NotificationMethod = "thread/search/partial"
+
 type ErrorNotification struct {
 	Error     TurnError `json:"error"`
 	WillRetry bool      `json:"willRetry"`

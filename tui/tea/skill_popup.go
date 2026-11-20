@@ -185,10 +185,12 @@ func (m *Model) refreshMentionPopup() bubbletea.Cmd {
 	if m.taskMentionsEnabled() && (newPopup || previousQuery != query) {
 		generation, shared := m.nextTaskSearchGeneration()
 		if strings.TrimSpace(query) == "" {
+			m.cancelTaskMentionSearch()
 			m.mentionTasks = nil
 			m.mentionPopup.SetCandidates(m.mentionCandidates())
 		} else {
 			searcher := m.onSearchTasks
+			searchCtx := m.beginTaskMentionSearch()
 			currentThreadID := ""
 			if m.State != nil {
 				currentThreadID = strings.TrimSpace(m.State.ThreadID)
@@ -201,7 +203,7 @@ func (m *Model) refreshMentionPopup() bubbletea.Cmd {
 				if shared.Load() != generation {
 					return nil
 				}
-				matches, err := searcher(query, currentThreadID, cwd)
+				matches, err := searcher(searchCtx, query, currentThreadID, cwd)
 				return TaskMentionSearchResultMsg{Generation: generation, Query: query, Matches: matches, Err: err}
 			})
 		}
@@ -263,6 +265,7 @@ func (m *Model) applyTaskMentionSearchResult(message TaskMentionSearchResultMsg)
 	if m == nil || m.mentionPopup == nil || message.Generation != m.mentionTaskSearchGeneration || message.Query != m.mentionPopup.Query {
 		return
 	}
+	m.cancelTaskMentionSearch()
 	if message.Err != nil {
 		m.mentionTasks = nil
 	} else {

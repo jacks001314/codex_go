@@ -85,6 +85,9 @@ const (
 	MethodThreadSectionUpdate                Method = "threadSection/update"
 	MethodThreadSectionDelete                Method = "threadSection/delete"
 	MethodThreadSearch                       Method = "thread/search"
+	MethodThreadSearchStream                 Method = "thread/search/stream"
+	MethodThreadSearchCancel                 Method = "thread/search/cancel"
+	MethodThreadSearchStreamCancel           Method = "thread/search/stream/cancel"
 	MethodThreadSearchOccurrences            Method = "thread/searchOccurrences"
 	MethodThreadLoadedList                   Method = "thread/loaded/list"
 	MethodThreadRead                         Method = "thread/read"
@@ -3177,6 +3180,24 @@ func utf16Offset(value string) uint32 {
 	return count
 }
 
+// maxThreadSearchStreamTermBytes bounds `thread/search/stream` search terms
+// after trimming surrounding whitespace (Rust #62132
+// MAX_STREAM_SEARCH_TERM_BYTES).
+const maxThreadSearchStreamTermBytes = 64 * 1024
+
+// validateThreadSearchStreamTerm mirrors Rust's streaming-only searchTerm
+// limit. `thread/search` accepts any non-empty term; only the streaming method
+// turns an oversized term into invalid params.
+func validateThreadSearchStreamTerm(term string) error {
+	if len(strings.TrimSpace(term)) > maxThreadSearchStreamTermBytes {
+		return newJSONRPCCodedError(JSONRPCInvalidParamsErrorCode, fmt.Sprintf(
+			"thread/search/stream searchTerm exceeds %d UTF-8 bytes",
+			maxThreadSearchStreamTermBytes,
+		))
+	}
+	return nil
+}
+
 func (p *ThreadSearchParams) Validate() error {
 	if p == nil || strings.TrimSpace(p.SearchTerm) == "" {
 		return jsonRPCInvalidRequest("thread/search requires a non-empty searchTerm")
@@ -3221,6 +3242,27 @@ type ThreadSearchResponse struct {
 	NextCursor      *string              `json:"nextCursor"`
 	BackwardsCursor *string              `json:"backwardsCursor"`
 }
+
+// ThreadSearchPartialNotification carries a best-effort batch for
+// `thread/search/stream` (Rust #62132). Rows are provisional: they arrive in
+// discovery order for the request identified by requestId, and the final
+// response decides membership, ordering and cursors.
+type ThreadSearchPartialNotification struct {
+	RequestID RequestID            `json:"requestId"`
+	Data      []ThreadSearchResult `json:"data"`
+}
+
+// ThreadSearchCancelParams cancels a search request on the same connection.
+// `thread/search/cancel` targets only `thread/search` and
+// `thread/search/stream/cancel` targets only `thread/search/stream`.
+type ThreadSearchCancelParams struct {
+	RequestID RequestID `json:"requestId"`
+}
+
+// ThreadSearchCancelResponse acknowledges a cancellation request. The
+// interrupted search fails separately once it stops, and cancellation is
+// idempotent, so unknown or repeated cancellations still succeed.
+type ThreadSearchCancelResponse struct{}
 
 func (r *ThreadSearchResponse) MarshalJSON() ([]byte, error) {
 	data := append([]ThreadSearchResult(nil), r.Data...)

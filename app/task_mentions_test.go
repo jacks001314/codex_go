@@ -3,12 +3,20 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"codex_go/appserver"
 	"codex_go/turn"
 )
+
+func fmtArgs(format string, args ...any) string {
+	return fmt.Sprintf(format, args...)
+}
 
 func taskMentionTestThread(id string, name string, preview string, cwd string) appserver.Thread {
 	thread := appserver.Thread{ID: id, Preview: preview, CWD: cwd}
@@ -22,16 +30,30 @@ func taskMentionTestThread(id string, name string, preview string, cwd string) a
 // discovery half: request shape, merge/dedupe, filtering, title fallback,
 // snippet provenance, the 50-result bound, and current-cwd-first ordering.
 func TestSearchTaskMentionsMatchesRust(t *testing.T) {
+	var mu sync.Mutex
 	var methods []appserver.Method
-	request := func(_ context.Context, method appserver.Method, params any, target any) error {
+	// The search and the title listing run concurrently, so the fake records
+	// problems instead of failing from a worker goroutine.
+	var problems []string
+	note := func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		problems = append(problems, fmtArgs(format, args...))
+	}
+	record := func(method appserver.Method) {
+		mu.Lock()
+		defer mu.Unlock()
 		methods = append(methods, method)
+	}
+	request := func(_ context.Context, method appserver.Method, params any, target any) error {
+		record(method)
 		switch method {
 		case appserver.MethodThreadSearch:
 			search := params.(appserver.ThreadSearchParams)
 			if search.SearchTerm != "query" || search.Limit == nil || *search.Limit != 50 ||
 				search.SortKey != appserver.SortRecencyAt || search.SortDirection != appserver.SortDesc ||
 				search.Archived == nil || *search.Archived {
-				t.Fatalf("thread/search params = %#v", search)
+				note("thread/search params = %#v", search)
 			}
 			*(target.(*appserver.ThreadSearchResponse)) = appserver.ThreadSearchResponse{Data: []appserver.ThreadSearchResult{
 				{Thread: taskMentionTestThread("match", "Named task", "preview", `/repo`), Snippet: "snippet"},
@@ -46,14 +68,14 @@ func TestSearchTaskMentionsMatchesRust(t *testing.T) {
 			if list.Limit == nil || *list.Limit != 50 || list.SortKey != appserver.SortUpdatedAt ||
 				list.SortDirection != appserver.SortDesc || list.Archived == nil || *list.Archived ||
 				!list.UseStateDBOnly {
-				t.Fatalf("thread/list params = %#v", list)
+				note("thread/list params = %#v", list)
 			}
 			*(target.(*appserver.ThreadListResponse)) = appserver.ThreadListResponse{Data: []appserver.Thread{
 				taskMentionTestThread("match", "Named task", "preview", `/repo`), // duplicate is skipped
 				taskMentionTestThread("listonly", "Listed task", "listed preview", `/repo`),
 			}}
 		default:
-			t.Fatalf("unexpected method %s", method)
+			note("unexpected method %s", method)
 		}
 		return nil
 	}
@@ -78,8 +100,16 @@ func TestSearchTaskMentionsMatchesRust(t *testing.T) {
 	}
 
 	matches := searchTaskMentions(context.Background(), requestWithMarkers, " query ", "self", `/repo`)
-	if len(methods) != 2 || methods[0] != appserver.MethodThreadSearch || methods[1] != appserver.MethodThreadList {
-		t.Fatalf("methods = %#v", methods)
+	mu.Lock()
+	issued := append([]appserver.Method(nil), methods...)
+	recorded := append([]string(nil), problems...)
+	mu.Unlock()
+	if len(recorded) > 0 {
+		t.Fatalf("request problems: %s", strings.Join(recorded, "; "))
+	}
+	sort.Slice(issued, func(i, j int) bool { return issued[i] < issued[j] })
+	if len(issued) != 2 || issued[0] != appserver.MethodThreadList || issued[1] != appserver.MethodThreadSearch {
+		t.Fatalf("methods = %#v", issued)
 	}
 	gotIDs := make([]string, 0, len(matches))
 	for _, match := range matches {
@@ -103,12 +133,17 @@ func TestSearchTaskMentionsMatchesRust(t *testing.T) {
 	}
 
 	// An empty query issues no requests.
+	mu.Lock()
 	methods = nil
+	mu.Unlock()
 	if matches := searchTaskMentions(context.Background(), requestWithMarkers, "  ", "self", `/repo`); matches != nil {
 		t.Fatalf("empty query matches = %#v", matches)
 	}
-	if len(methods) != 0 {
-		t.Fatalf("empty query issued requests: %#v", methods)
+	mu.Lock()
+	issued = append([]appserver.Method(nil), methods...)
+	mu.Unlock()
+	if len(issued) != 0 {
+		t.Fatalf("empty query issued requests: %#v", issued)
 	}
 	// Both requests failing yields no tasks instead of an error.
 	failing := func(context.Context, appserver.Method, any, any) error { return errors.New("offline") }
@@ -190,5 +225,43 @@ func TestApplySubmitTaskReferencesEncodesTaskMentionsLikeRust(t *testing.T) {
 	// Empty bindings and inputs are no-ops.
 	if noop := applySubmitTaskReferences([]turn.TurnUserInput{{Type: "text", Text: "hi"}}, nil, ""); len(noop) != 1 || noop[0].Text != "hi" {
 		t.Fatalf("empty bindings noop = %#v", noop)
+	}
+}
+
+// Rust #62132: a task search is bounded and never delays the title matches that
+// are already available.
+func TestSearchTaskMentionsBoundsTheSearchAndKeepsTitleMatchesLikeRust(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var mu sync.Mutex
+	var bounded bool
+	request := func(requestCtx context.Context, method appserver.Method, _ any, target any) error {
+		switch method {
+		case appserver.MethodThreadSearch:
+			deadline, ok := requestCtx.Deadline()
+			mu.Lock()
+			bounded = ok && time.Until(deadline) <= taskMentionSearchTimeout+time.Second
+			mu.Unlock()
+			<-requestCtx.Done()
+			return requestCtx.Err()
+		case appserver.MethodThreadList:
+			*(target.(*appserver.ThreadListResponse)) = appserver.ThreadListResponse{Data: []appserver.Thread{
+				taskMentionTestThread("listed", "Listed task", "listed preview", `/repo`),
+			}}
+		}
+		return nil
+	}
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	matches := searchTaskMentions(ctx, request, "query", "", `/repo`)
+	mu.Lock()
+	defer mu.Unlock()
+	if !bounded {
+		t.Fatal("thread/search was not bounded by the task-mention search timeout")
+	}
+	if len(matches) != 1 || matches[0].ThreadID != "listed" {
+		t.Fatalf("matches = %#v, want the title listing despite the abandoned search", matches)
 	}
 }

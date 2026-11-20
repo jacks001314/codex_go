@@ -7,8 +7,11 @@ package app
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 	"unicode/utf8"
 
 	"codex_go/appserver"
@@ -20,9 +23,40 @@ import (
 // taskMentionSearchLimit mirrors Rust MAX_SEARCH_RESULTS.
 const taskMentionSearchLimit = 50
 
+// taskMentionSearchTimeout mirrors Rust task_mentions::SEARCH_TIMEOUT: a task
+// search that outlives the query that triggered it must not hold the caller (or
+// its connection) open (Rust #62132).
+const taskMentionSearchTimeout = 10 * time.Second
+
+// taskMentionCancelTimeout mirrors Rust task_mentions::CANCEL_TIMEOUT: the
+// cancellation message an abandoned remote search sends must not delay the
+// title matches that are already available (Rust #62132).
+const taskMentionCancelTimeout = time.Second
+
+// errTaskMentionCloudSearchUnsupported marks the content search the hosted
+// Cloud backend does not implement. Rust's search_with_cancellation returns
+// early for AppServerRequestHandle::Cloud and keeps the title listing (#62132).
+var errTaskMentionCloudSearchUnsupported = errors.New("cloud app server does not implement thread/search")
+
 // taskMentionRequestFunc is the typed app-server request Rust performs through
 // AppServerRequestHandle::request_typed.
 type taskMentionRequestFunc func(ctx context.Context, method appserver.Method, params any, target any) error
+
+// taskMentionSearchRunner issues the content search and the title listing Rust
+// joins in task_mentions::spawn_search, each under taskMentionSearchTimeout.
+// The remote TUI supplies a runner that multiplexes both replies on one
+// connection; taskMentionRequestRunner backs test doubles and in-process
+// handles.
+type taskMentionSearchRunner func(
+	ctx context.Context,
+	search appserver.ThreadSearchParams,
+	listed appserver.ThreadListParams,
+) (
+	searchResponse appserver.ThreadSearchResponse,
+	searchErr error,
+	listResponse appserver.ThreadListResponse,
+	listErr error,
+)
 
 type taskMentionSearchResult struct {
 	thread  appserver.Thread
@@ -32,28 +66,71 @@ type taskMentionSearchResult struct {
 // searchTaskMentions mirrors Rust task_mentions::spawn_search's discovery half.
 // A nil result means no tasks (both requests failed, or nothing matched).
 func searchTaskMentions(ctx context.Context, request taskMentionRequestFunc, query string, currentThreadID string, cwd string) []codextui.TaskMention {
-	query = strings.TrimSpace(query)
-	if request == nil || query == "" {
+	if request == nil {
 		return nil
+	}
+	return searchTaskMentionsWithRunner(ctx, taskMentionRequestRunner(request), query, currentThreadID, cwd)
+}
+
+// taskMentionRequestRunner joins the two requests through request. The callback
+// must tolerate concurrent use: Rust issues both typed requests at once through
+// one app-server request handle.
+func taskMentionRequestRunner(request taskMentionRequestFunc) taskMentionSearchRunner {
+	return func(ctx context.Context, searchParams appserver.ThreadSearchParams, listParams appserver.ThreadListParams) (
+		appserver.ThreadSearchResponse, error, appserver.ThreadListResponse, error,
+	) {
+		var searchResponse appserver.ThreadSearchResponse
+		var listResponse appserver.ThreadListResponse
+		var searchErr error
+		var listErr error
+		var wait sync.WaitGroup
+		wait.Add(2)
+		go func() {
+			defer wait.Done()
+			searchCtx, cancel := context.WithTimeout(ctx, taskMentionSearchTimeout)
+			defer cancel()
+			searchErr = request(searchCtx, appserver.MethodThreadSearch, searchParams, &searchResponse)
+		}()
+		go func() {
+			defer wait.Done()
+			listCtx, cancel := context.WithTimeout(ctx, taskMentionSearchTimeout)
+			defer cancel()
+			listErr = request(listCtx, appserver.MethodThreadList, listParams, &listResponse)
+		}()
+		wait.Wait()
+		return searchResponse, searchErr, listResponse, listErr
+	}
+}
+
+// searchTaskMentionsWithRunner builds Rust's search/listing pair, merges the
+// results, and keeps title-only matches when the content search is abandoned.
+func searchTaskMentionsWithRunner(ctx context.Context, run taskMentionSearchRunner, query string, currentThreadID string, cwd string) []codextui.TaskMention {
+	query = strings.TrimSpace(query)
+	if run == nil || query == "" {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	limit := taskMentionSearchLimit
 	archived := false
-	var searchResponse appserver.ThreadSearchResponse
-	searchErr := request(ctx, appserver.MethodThreadSearch, appserver.ThreadSearchParams{
-		Limit:         &limit,
-		SortKey:       appserver.SortRecencyAt,
-		SortDirection: appserver.SortDesc,
-		Archived:      &archived,
-		SearchTerm:    query,
-	}, &searchResponse)
-	var listResponse appserver.ThreadListResponse
-	listErr := request(ctx, appserver.MethodThreadList, appserver.ThreadListParams{
-		Limit:          &limit,
-		SortKey:        appserver.SortUpdatedAt,
-		SortDirection:  appserver.SortDesc,
-		Archived:       &archived,
-		UseStateDBOnly: true,
-	}, &listResponse)
+	searchResponse, searchErr, listResponse, listErr := run(ctx,
+		appserver.ThreadSearchParams{
+			CurrentAccountOnly: true,
+			Limit:              &limit,
+			SortKey:            appserver.SortRecencyAt,
+			SortDirection:      appserver.SortDesc,
+			Archived:           &archived,
+			SearchTerm:         query,
+		},
+		appserver.ThreadListParams{
+			CurrentAccountOnly: true,
+			Limit:              &limit,
+			SortKey:            appserver.SortUpdatedAt,
+			SortDirection:      appserver.SortDesc,
+			Archived:           &archived,
+			UseStateDBOnly:     true,
+		})
 	if searchErr != nil && listErr != nil {
 		return nil
 	}

@@ -666,6 +666,11 @@ type RuntimeRouter struct {
 	// and JSON-RPC request id so thread/sample/cancel can stop only that sample.
 	threadSampleMu      sync.Mutex
 	threadSampleCancels map[string]context.CancelFunc
+	// threadSearchCancels tracks in-flight thread searches by connection,
+	// search family and JSON-RPC request id so thread/search/cancel and
+	// thread/search/stream/cancel stop only the matching search (Rust #62132).
+	threadSearchMu      sync.Mutex
+	threadSearchCancels map[string]context.CancelFunc
 	// restoredWindows records the threads whose persisted window state was
 	// already loaded from their record (Rust restores the compacted item's
 	// window_number/window_ids when a thread resumes).
@@ -3111,6 +3116,7 @@ func (r *RuntimeRouter) ConnectionClosed(connectionID string) {
 	r.clearConnectionMCPStandardFormInput(connectionID)
 	r.releaseUserVerificationConnection(connectionID)
 	r.cancelThreadSamplesForConnection(connectionID)
+	r.cancelThreadSearchesForConnection(connectionID)
 	if r.mcpEventStreams != nil {
 		r.mcpEventStreams.stopConnection(connectionID)
 	}
@@ -3932,6 +3938,9 @@ func experimentalAPIMethod(method Method) bool {
 		MethodProjectUpdate,
 		MethodThreadItemsRead,
 		MethodThreadPredictionRequest,
+		MethodThreadSearchStream,
+		MethodThreadSearchCancel,
+		MethodThreadSearchStreamCancel,
 		MethodThreadSample,
 		MethodThreadPrepareApprovedPlan,
 		MethodThreadGuardianReview,
@@ -4188,6 +4197,15 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 		}
 		if request.Method == MethodThreadSearch {
 			return r.handleThreadSearchRuntime(request)
+		}
+		if request.Method == MethodThreadSearchStream {
+			return r.handleThreadSearchStreamRuntime(request)
+		}
+		if request.Method == MethodThreadSearchCancel {
+			return r.handleThreadSearchCancelRuntime(request, false)
+		}
+		if request.Method == MethodThreadSearchStreamCancel {
+			return r.handleThreadSearchCancelRuntime(request, true)
 		}
 		if request.Method == MethodThreadUnsubscribe {
 			return r.handleThreadUnsubscribeRuntime(request)
@@ -5872,6 +5890,17 @@ func (r *RuntimeRouter) handleThreadListRuntime(request *Request) (any, error) {
 }
 
 func (r *RuntimeRouter) handleThreadSearchRuntime(request *Request) (any, error) {
+	return r.deliverThreadSearchRuntime(request /*streaming*/, false)
+}
+
+// handleThreadSearchStreamRuntime serves the experimental streaming method: the
+// authoritative page matches thread/search, and best-effort provisional batches
+// reach this connection as `thread/search/partial` (Rust #62132).
+func (r *RuntimeRouter) handleThreadSearchStreamRuntime(request *Request) (any, error) {
+	return r.deliverThreadSearchRuntime(request /*streaming*/, true)
+}
+
+func (r *RuntimeRouter) deliverThreadSearchRuntime(request *Request, streaming bool) (any, error) {
 	if r == nil || request == nil || r.services.ThreadRouter == nil {
 		return nil, fmt.Errorf("%w: thread router is not configured", ErrInvalidRequest)
 	}
@@ -5887,12 +5916,109 @@ func (r *RuntimeRouter) handleThreadSearchRuntime(request *Request) (any, error)
 		}
 		request = updated
 	}
-	result, err := r.services.ThreadRouter.dispatch(request)
+	cancelled, release := r.registerThreadSearchCancel(request, streaming)
+	defer release()
+	progress := &threadSearchProgress{Streaming: streaming, Stopped: cancelled}
+	if streaming {
+		progress.Emit = func(rows []ThreadSearchResult) bool {
+			if len(rows) == 0 {
+				return true
+			}
+			r.notify(NotificationThreadSearchPartial, &ThreadSearchPartialNotification{
+				RequestID: request.ID,
+				Data:      rows,
+			})
+			return true
+		}
+	}
+	result, err := r.services.ThreadRouter.handleThreadSearchStream(request, progress)
 	if err != nil {
 		return nil, err
 	}
+	if progress.Stopped != nil && progress.Stopped() {
+		// Rust reports a cancelled search as an invalid request even when the
+		// scan finished before the cancellation was observed.
+		return nil, jsonRPCInvalidRequest("thread search cancelled")
+	}
 	r.applyRuntimeThreadStatuses(result)
 	return result, nil
+}
+
+// threadSearchCancelKey scopes a cancellation to the connection and to the
+// search family it targets. Rust #62132 keeps the two families apart:
+// thread/search/cancel only stops thread/search and thread/search/stream/cancel
+// only stops thread/search/stream.
+func threadSearchCancelKey(connectionID string, streaming bool, requestID RequestID) string {
+	encoded, _ := json.Marshal(requestID)
+	family := "final"
+	if streaming {
+		family = "stream"
+	}
+	return normalizeConnectionID(connectionID) + "\x00" + family + "\x00" + string(encoded)
+}
+
+func (r *RuntimeRouter) registerThreadSearchCancel(request *Request, streaming bool) (func() bool, func()) {
+	if r == nil || request == nil {
+		return nil, func() {}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	key := threadSearchCancelKey(request.ConnectionID, streaming, request.ID)
+	r.threadSearchMu.Lock()
+	if r.threadSearchCancels == nil {
+		r.threadSearchCancels = map[string]context.CancelFunc{}
+	}
+	r.threadSearchCancels[key] = cancel
+	r.threadSearchMu.Unlock()
+	stopped := func() bool { return ctx.Err() != nil }
+	return stopped, func() {
+		cancel()
+		r.threadSearchMu.Lock()
+		delete(r.threadSearchCancels, key)
+		r.threadSearchMu.Unlock()
+	}
+}
+
+// handleThreadSearchCancelRuntime acknowledges a cancellation request. Unknown,
+// repeated and cross-family cancellations are harmless no-ops, and the
+// interrupted search reports its own failure once it stops (Rust #62132).
+func (r *RuntimeRouter) handleThreadSearchCancelRuntime(request *Request, streaming bool) (*ThreadSearchCancelResponse, error) {
+	var params ThreadSearchCancelParams
+	if request != nil {
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+	}
+	if r != nil && request != nil {
+		key := threadSearchCancelKey(request.ConnectionID, streaming, params.RequestID)
+		r.threadSearchMu.Lock()
+		cancel := r.threadSearchCancels[key]
+		r.threadSearchMu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+	}
+	return &ThreadSearchCancelResponse{}, nil
+}
+
+// cancelThreadSearchesForConnection stops every search a closing connection
+// owns (Rust #62132: disconnecting stops active searches).
+func (r *RuntimeRouter) cancelThreadSearchesForConnection(connectionID string) {
+	if r == nil {
+		return
+	}
+	prefix := normalizeConnectionID(connectionID) + "\x00"
+	r.threadSearchMu.Lock()
+	var cancels []context.CancelFunc
+	for key, cancel := range r.threadSearchCancels {
+		if strings.HasPrefix(key, prefix) {
+			cancels = append(cancels, cancel)
+			delete(r.threadSearchCancels, key)
+		}
+	}
+	r.threadSearchMu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
 }
 
 // localHistoryAccountFilter resolves the ChatGPT identity for
@@ -22854,7 +22980,8 @@ func isThreadMethod(method Method) bool {
 		MethodThreadMetadataUpdate, MethodThreadSectionMove, MethodThreadList, MethodThreadRead,
 		MethodThreadAttachmentAdd, MethodThreadAttachmentList, MethodThreadAttachmentRemove,
 		MethodThreadAttachmentOwnerList,
-		MethodThreadSearch, MethodThreadLoadedList, MethodThreadItemsList,
+		MethodThreadSearch, MethodThreadSearchStream, MethodThreadSearchCancel,
+		MethodThreadSearchStreamCancel, MethodThreadLoadedList, MethodThreadItemsList,
 		MethodThreadItemsRead, MethodThreadTimelineList, MethodThreadRealtimeList,
 		MethodThreadTurnsList, MethodThreadRevert,
 		MethodThreadSample,

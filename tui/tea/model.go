@@ -660,7 +660,7 @@ type FuzzyFileSearchReaderFunc func(query string, cwd string, cancellationToken 
 // task_mentions::spawn_search). It is only provided when the thread's app server
 // serves the codex_tui task tools, mirroring
 // chat_widget.set_task_mentions_enabled(task_tools_available).
-type TaskMentionSearchFunc func(query string, currentThreadID string, cwd string) ([]codextui.TaskMention, error)
+type TaskMentionSearchFunc func(ctx context.Context, query string, currentThreadID string, cwd string) ([]codextui.TaskMention, error)
 
 type AppListReaderFunc func(threadID string, forceRefetch bool) (appsapi.AppListResponse, error)
 
@@ -2586,7 +2586,11 @@ type Model struct {
 	// taskSearchGeneration mirrors mentionTaskSearchGeneration for the search
 	// command, which checks it after the debounce to drop superseded requests
 	// (Rust task_mentions::spawn_search generation).
-	taskSearchGeneration          *atomic.Uint64
+	taskSearchGeneration *atomic.Uint64
+	// taskMentionSearchCancel stops the in-flight task-mention search. Rust's
+	// TaskSearch::spawn cancels the search it replaces and drops with the
+	// session (#62132).
+	taskMentionSearchCancel       context.CancelFunc
 	mentionPluginInventory        []plugin.PluginSummary
 	mentionPluginInventoryReady   bool
 	mentionPluginInventoryLoading bool

@@ -195,8 +195,12 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		// re-copied byte-for-byte from
 		// app-server-protocol/schema/precomputed/, so the pins below are
 		// recomputed from those exact bytes.
-		{"stable", stablePrecomputedExports, "74185e87f9b7bc8399e1cf91bc4980e40aa99675a3705e7324c7ed957dfa4c24"},
-		{"experimental", experimentalPrecomputedExports, "1cabb2654f1e9830dafd85ffbc28e99654a59e49949ad8e687e157e2a7961865"},
+		// Re-anchored to upstream 9f2b87495b (#62132): thread/search/stream,
+		// its two cancellation methods and the thread/search/partial
+		// notification changed both exports, so the pins below are again
+		// recomputed from the vendored bytes (byte-identical to the anchor).
+		{"stable", stablePrecomputedExports, "2307314c2b280e33c981a5226851cfe55f14402d454c0695b7a8c3ada57faa0a"},
+		{"experimental", experimentalPrecomputedExports, "fefa72be10828d16f66d9730c4814087fd921e4f02fe20eefd7503f3d2876589"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

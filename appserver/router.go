@@ -1489,6 +1489,10 @@ func (r *Router) dispatch(request *Request) (any, error) {
 		return r.handleThreadSectionList(request)
 	case MethodThreadSearch:
 		return r.handleThreadSearch(request)
+	case MethodThreadSearchStream:
+		return r.handleThreadSearchStream(request, nil)
+	case MethodThreadSearchCancel, MethodThreadSearchStreamCancel:
+		return r.handleThreadSearchCancel()
 	case MethodThreadSearchOccurrences:
 		return r.handleThreadSearchOccurrences(request)
 	case MethodThreadLoadedList:
@@ -4246,11 +4250,11 @@ func RecordsFromStateRows(rows []state.ThreadListRow, indexedNames map[string]st
 			Title:                  listedThreadNameFromRow(row, indexedNames[row.ID]),
 			// Rust falls back to the indexed first user message when the
 			// stored preview is empty (stored_thread_from_state_metadata).
-			Preview:                firstNonEmpty(nullString(row.Preview), nullString(row.FirstUserMessage)),
-			Archived:               row.Archived,
-			CreatedAt:              time.UnixMilli(row.CreatedAtMS).UTC(),
-			UpdatedAt:              time.UnixMilli(row.UpdatedAtMS).UTC(),
-			RecencyAt:              time.UnixMilli(row.RecencyAtMS).UTC(),
+			Preview:   firstNonEmpty(nullString(row.Preview), nullString(row.FirstUserMessage)),
+			Archived:  row.Archived,
+			CreatedAt: time.UnixMilli(row.CreatedAtMS).UTC(),
+			UpdatedAt: time.UnixMilli(row.UpdatedAtMS).UTC(),
+			RecencyAt: time.UnixMilli(row.RecencyAtMS).UTC(),
 			Metadata: session.Metadata{
 				CreatorUserID:    nullString(row.CreatorUserID),
 				CreatorAccountID: nullString(row.CreatorAccountID),
@@ -4432,6 +4436,13 @@ func materializedThreadRecords(records []session.Record) []session.Record {
 }
 
 func (r *Router) listRecordsIncludingRollouts(records []session.Record, options session.ListOptions) (*session.Page, error) {
+	return r.listRecordsIncludingRolloutsObserved(records, options, nil)
+}
+
+// listRecordsIncludingRolloutsObserved mirrors listRecordsIncludingRollouts and
+// forwards matched records to observer while the final page is still being
+// assembled (Rust #62132 thread/search/stream).
+func (r *Router) listRecordsIncludingRolloutsObserved(records []session.Record, options session.ListOptions, observer *session.ListObserver) (*session.Page, error) {
 	records = append([]session.Record(nil), records...)
 	seen := make(map[session.ThreadID]bool, len(records))
 	for i := range records {
@@ -4464,7 +4475,7 @@ func (r *Router) listRecordsIncludingRollouts(records []session.Record, options 
 		}
 	}
 	r.enrichRolloutListingNames(records[stateCount:])
-	return session.ListRecords(records, options)
+	return session.ListRecordsObserved(records, options, observer)
 }
 
 // enrichRolloutListingNames mirrors Rust's best-effort rollout-listing name
@@ -5095,6 +5106,38 @@ func threadTurnsListReadError(threadID string, err error) error {
 }
 
 func (r *Router) handleThreadSearch(request *Request) (*ThreadSearchResponse, error) {
+	return r.searchThreads(request, nil)
+}
+
+// threadSearchProgress carries the streaming half of `thread/search/stream`
+// (Rust #62132): provisional rows discovered before the authoritative page, and
+// the caller's abandonment signal.
+type threadSearchProgress struct {
+	// Streaming marks the experimental delivery: only streaming searches carry
+	// the provisional-row cap and the tighter searchTerm limit.
+	Streaming bool
+	// Emit receives provisional rows in discovery order. Returning false stops
+	// further rows without stopping the search.
+	Emit func([]ThreadSearchResult) bool
+	// Stopped reports that the caller no longer needs the result.
+	Stopped func() bool
+}
+
+// handleThreadSearchStream mirrors handleThreadSearch for the experimental
+// streaming method: the final page is identical, and callers may observe
+// provisional matches while the scan runs.
+func (r *Router) handleThreadSearchStream(request *Request, progress *threadSearchProgress) (*ThreadSearchResponse, error) {
+	return r.searchThreads(request, progress)
+}
+
+// handleThreadSearchCancel acknowledges a connection-scoped cancellation
+// request (Rust #62132). The interrupted search fails on its own once it stops,
+// and unknown or repeated cancellations are harmless, so this always succeeds.
+func (r *Router) handleThreadSearchCancel() (*ThreadSearchCancelResponse, error) {
+	return &ThreadSearchCancelResponse{}, nil
+}
+
+func (r *Router) searchThreads(request *Request, progress *threadSearchProgress) (*ThreadSearchResponse, error) {
 	var params ThreadSearchParams
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
@@ -5103,6 +5146,11 @@ func (r *Router) handleThreadSearch(request *Request) (*ThreadSearchResponse, er
 		return nil, err
 	}
 	searchTerm := strings.TrimSpace(params.SearchTerm)
+	if progress != nil && progress.Streaming {
+		if err := validateThreadSearchStreamTerm(searchTerm); err != nil {
+			return nil, err
+		}
+	}
 	listParams := &ThreadListParams{
 		CurrentAccountOnly:     params.CurrentAccountOnly,
 		HistoryAccount:         params.HistoryAccount,
@@ -5123,20 +5171,26 @@ func (r *Router) handleThreadSearch(request *Request) (*ThreadSearchResponse, er
 	if err != nil {
 		return nil, err
 	}
-	page, err := r.listRecordsIncludingRollouts(records, options)
+	var observer *session.ListObserver
+	if progress != nil {
+		observer = &session.ListObserver{Stopped: progress.Stopped}
+		if progress.Emit != nil {
+			observer.Report = func(batch []session.Record) bool {
+				return progress.Emit(r.threadSearchResults(batch, searchTerm))
+			}
+			// Rust #62132 caps provisional rows at min(page_size, 8) so a
+			// streaming search never front-runs more rows than the page holds.
+			observer.MaxRows = min(options.PageSize, threadSearchProgressRowLimit)
+		}
+	}
+	page, err := r.listRecordsIncludingRolloutsObserved(records, options, observer)
 	if err != nil {
+		if errors.Is(err, session.ErrListCancelled) {
+			return nil, jsonRPCInvalidRequest("thread search cancelled")
+		}
 		return nil, err
 	}
-	data := make([]ThreadSearchResult, 0, len(page.Records))
-	for i := range page.Records {
-		record := &page.Records[i]
-		path := r.threadRolloutPath(record)
-		thread := BuildThread(record, path, false)
-		if thread == nil {
-			continue
-		}
-		data = append(data, ThreadSearchResult{Thread: *thread, Snippet: searchSnippet(record, searchTerm)})
-	}
+	data := r.threadSearchResults(page.Records, searchTerm)
 	var next *string
 	if page.NextCursor != "" {
 		next = &page.NextCursor
@@ -5146,6 +5200,26 @@ func (r *Router) handleThreadSearch(request *Request) (*ThreadSearchResponse, er
 		backwards = &page.BackwardsCursor
 	}
 	return &ThreadSearchResponse{Data: data, NextCursor: next, BackwardsCursor: backwards}, nil
+}
+
+// threadSearchProgressRowLimit mirrors Rust's PROGRESS_RESULT_LIMIT: at most
+// this many provisional rows precede the authoritative search response.
+const threadSearchProgressRowLimit = 8
+
+// threadSearchResults renders stored records as search rows. Provisional
+// batches and the final page share it so both carry the same thread metadata
+// and snippet.
+func (r *Router) threadSearchResults(records []session.Record, searchTerm string) []ThreadSearchResult {
+	data := make([]ThreadSearchResult, 0, len(records))
+	for i := range records {
+		record := &records[i]
+		thread := BuildThread(record, r.threadRolloutPath(record), false)
+		if thread == nil {
+			continue
+		}
+		data = append(data, ThreadSearchResult{Thread: *thread, Snippet: searchSnippet(record, searchTerm)})
+	}
+	return data
 }
 
 func (r *Router) handleThreadSearchOccurrences(request *Request) (*ThreadSearchOccurrencesResponse, error) {

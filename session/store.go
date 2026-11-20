@@ -55,6 +55,9 @@ var (
 	// retryable failure. An unclassified (internal) failure carries no such
 	// information and must not be read as either category.
 	ErrOutcomeUnknown = errors.New("thread store write outcome unknown")
+	// ErrListCancelled reports that an observed listing stopped because the
+	// caller no longer needs the result (Rust #62132 search_threads_observed).
+	ErrListCancelled = errors.New("thread list cancelled")
 )
 
 const (
@@ -1717,13 +1720,47 @@ func (s *Store) DeleteSection(sectionID string) error {
 }
 
 func ListRecords(records []Record, options ListOptions) (*Page, error) {
+	return ListRecordsObserved(records, options, nil)
+}
+
+// DefaultListObserverBatchSize bounds one reported batch when the caller does
+// not pick a size. It mirrors Rust's search progress result limit (#62132
+// local/search_progress.rs).
+const DefaultListObserverBatchSize = 8
+
+// ListObserver receives matched records while an observed listing scans them,
+// before the authoritative page is sorted and paginated (Rust #62132
+// ThreadSearchObserver). Reported rows are a best-effort subset discovered in
+// scan order; the final page still decides membership, ordering and cursors.
+type ListObserver struct {
+	// Report receives one batch of matches in discovery order. Returning false
+	// stops further reporting without stopping the scan.
+	Report func(batch []Record) bool
+	// Stopped reports whether the caller abandoned the request; a true value
+	// ends the scan with ErrListCancelled.
+	Stopped func() bool
+	// MaxRows bounds how many matched rows are reported. Zero reports all.
+	MaxRows int
+	// BatchSize bounds one reported batch. Zero uses
+	// DefaultListObserverBatchSize.
+	BatchSize int
+}
+
+// ListRecordsObserved mirrors ListRecords and additionally reports matched
+// records as they are discovered, so a caller can surface provisional results
+// before the authoritative page exists (Rust #62132 search_threads_observed).
+func ListRecordsObserved(records []Record, options ListOptions, observer *ListObserver) (*Page, error) {
 	// Rust normalizes the query's cwd filters once (thread-store list_threads
 	// passes normalize_cwd_for_state_db over them) and compares canonical
 	// strings, so a scan costs one normalization per record and per filter
 	// rather than one per pair.
 	cwdMatcher := utils.NewPathMatcher(options.CWDs)
 	filtered := make([]Record, 0, len(records))
+	progress := newListObserverProgress(observer)
 	for i := range records {
+		if listObserverStopped(observer) {
+			return nil, ErrListCancelled
+		}
 		record := records[i]
 		if !matchesListOptions(&record, &options, records, cwdMatcher) {
 			continue
@@ -1737,6 +1774,15 @@ func ListRecords(records []Record, options ListOptions) (*Page, error) {
 			record.Items = nil
 		}
 		filtered = append(filtered, record)
+		if progress != nil {
+			progress.add(record)
+		}
+	}
+	if listObserverStopped(observer) {
+		return nil, ErrListCancelled
+	}
+	if progress != nil {
+		progress.flush()
 	}
 	sortRecords(filtered, options.SortKey, options.SortDirection)
 	start, legacyCursor, err := listStartIndex(filtered, options)
@@ -1768,6 +1814,72 @@ func ListRecords(records []Record, options ListOptions) (*Page, error) {
 		NextCursor:      nextCursor,
 		BackwardsCursor: backwardsCursor,
 	}, nil
+}
+
+// listObserverProgress batches matched records for a ListObserver and enforces
+// the caller's reporting bounds.
+type listObserverProgress struct {
+	observer  *ListObserver
+	batchSize int
+	pending   []Record
+	reported  int
+	quiet     bool
+}
+
+func newListObserverProgress(observer *ListObserver) *listObserverProgress {
+	if observer == nil || observer.Report == nil {
+		return nil
+	}
+	batchSize := observer.BatchSize
+	if batchSize <= 0 {
+		batchSize = DefaultListObserverBatchSize
+	}
+	return &listObserverProgress{observer: observer, batchSize: batchSize}
+}
+
+// listObserverStopped reports whether the observer abandoned the request.
+// Cancellation is independent of progress reporting, so an observer that only
+// watches for abandonment still stops the scan.
+func listObserverStopped(observer *ListObserver) bool {
+	return observer != nil && observer.Stopped != nil && observer.Stopped()
+}
+
+func (p *listObserverProgress) add(record Record) {
+	if p == nil || p.quiet {
+		return
+	}
+	if p.observer.MaxRows > 0 && p.reported+len(p.pending) >= p.observer.MaxRows {
+		p.quiet = true
+		p.pending = nil
+		return
+	}
+	p.pending = append(p.pending, record)
+	if len(p.pending) >= p.batchSize {
+		p.flush()
+	}
+}
+
+func (p *listObserverProgress) flush() {
+	if p == nil {
+		return
+	}
+	if p.quiet || len(p.pending) == 0 {
+		p.pending = nil
+		return
+	}
+	batch := p.pending
+	p.pending = nil
+	if max := p.observer.MaxRows; max > 0 && p.reported+len(batch) > max {
+		batch = batch[:max-p.reported]
+	}
+	if len(batch) == 0 {
+		p.quiet = true
+		return
+	}
+	p.reported += len(batch)
+	if !p.observer.Report(batch) {
+		p.quiet = true
+	}
 }
 
 func (s *Store) Fork(sourceID ThreadID, options ForkOptions) (*Record, error) {

@@ -1723,17 +1723,51 @@ func remoteTUIAccountRequestContext(ctx context.Context) (context.Context, conte
 // against the remote app server: thread/search and thread/list merged into the
 // mention popup's task candidates.
 func interactiveRemoteTaskMentionSearch(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.TaskMentionSearchFunc {
-	return func(query string, currentThreadID string, cwd string) ([]codextui.TaskMention, error) {
-		reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
+	return func(searchCtx context.Context, query string, currentThreadID string, cwd string) ([]codextui.TaskMention, error) {
+		if searchCtx == nil {
+			searchCtx = ctx
+		}
+		reqCtx, cancel := remoteTUIAccountRequestContext(searchCtx)
 		defer cancel()
 		client, err := openRemoteSessionClient(reqCtx, endpoint)
 		if err != nil {
 			return nil, err
 		}
 		defer client.close()
-		return searchTaskMentions(reqCtx, func(requestCtx context.Context, method appserver.Method, params any, target any) error {
-			return remoteSessionRequest(requestCtx, client, method, params, target)
-		}, query, strings.TrimSpace(currentThreadID), cwd), nil
+		cloud := endpointAppServerTransport(endpoint) == appServerTransportCloud
+		return searchTaskMentionsWithRunner(reqCtx, remoteTaskMentionSearchRunner(client, cloud), query, strings.TrimSpace(currentThreadID), cwd), nil
+	}
+}
+
+// remoteTaskMentionSearchRunner joins the task-mention search and title listing
+// on one connection. Both requests are sent before either reply is read so the
+// single reader can dispatch them by id, mirroring Rust's
+// AppServerRequestHandle. The hosted Cloud backend implements only the title
+// listing, so the search half is skipped there (Rust
+// AppServerRequestHandle::Cloud).
+func remoteTaskMentionSearchRunner(client *remoteAppServerTUIClient, cloud bool) taskMentionSearchRunner {
+	return func(ctx context.Context, search appserver.ThreadSearchParams, listed appserver.ThreadListParams) (
+		appserver.ThreadSearchResponse, error, appserver.ThreadListResponse, error,
+	) {
+		runCtx, cancel := context.WithTimeout(ctx, taskMentionSearchTimeout)
+		defer cancel()
+		var searchResponse appserver.ThreadSearchResponse
+		var listResponse appserver.ThreadListResponse
+		specs := []remoteRequestSpec{{method: appserver.MethodThreadList, params: listed, target: &listResponse}}
+		if !cloud {
+			specs = append([]remoteRequestSpec{{method: appserver.MethodThreadSearch, params: search, target: &searchResponse}}, specs...)
+		}
+		outcomes := remoteSessionRequestBatch(runCtx, client, specs)
+		if cloud {
+			return searchResponse, errTaskMentionCloudSearchUnsupported, listResponse, outcomes[0].err
+		}
+		searchOutcome, listOutcome := outcomes[0], outcomes[1]
+		if !searchOutcome.settled && searchOutcome.id > 0 {
+			// Rust cancels a superseded or timed-out remote search instead of
+			// leaving it to run out its own budget (#62132).
+			cancelRemoteThreadSearch(client, searchOutcome.id)
+		}
+		return searchResponse, searchOutcome.err, listResponse, listOutcome.err
 	}
 }
 
@@ -4421,6 +4455,128 @@ func (c *remoteAppServerTUIClient) waitResponse(ctx context.Context, id int64, t
 			}
 		}
 	}
+}
+
+// remoteRequestSpec is one typed request in a batched app-server round trip.
+type remoteRequestSpec struct {
+	method appserver.Method
+	params any
+	target any
+}
+
+// remoteRequestOutcome records one batched request's reply.
+type remoteRequestOutcome struct {
+	// id is the JSON-RPC id used for the request; zero when the send failed.
+	id int64
+	// settled reports that a reply for this request arrived.
+	settled bool
+	err     error
+}
+
+// remoteSessionRequestBatch sends every request before reading any reply and
+// then dispatches replies by id through one reader. Rust's app-server request
+// handle multiplexes concurrent typed requests the same way; a second
+// waitResponse on one connection would otherwise drop, and race on, the other
+// request's reply.
+func remoteSessionRequestBatch(ctx context.Context, client *remoteAppServerTUIClient, specs []remoteRequestSpec) []remoteRequestOutcome {
+	outcomes := make([]remoteRequestOutcome, len(specs))
+	if client == nil || client.transport == nil {
+		err := errors.New("remote app-server transport is not connected")
+		for i := range outcomes {
+			outcomes[i].err = err
+		}
+		return outcomes
+	}
+	for i, spec := range specs {
+		id, err := client.sendRequest(ctx, spec.method, spec.params)
+		if err != nil {
+			for j := i; j < len(outcomes); j++ {
+				outcomes[j].err = err
+			}
+			return outcomes
+		}
+		outcomes[i].id = id
+	}
+	pending := len(specs)
+	for pending > 0 {
+		message, err := client.readRemoteMessage(ctx)
+		if err != nil {
+			for i := range outcomes {
+				if !outcomes[i].settled {
+					outcomes[i].err = err
+				}
+			}
+			return outcomes
+		}
+		if len(message.ID) > 0 && strings.TrimSpace(message.Method) == "" {
+			got, idErr := remoteRequestIDString(message.ID)
+			if idErr != nil {
+				continue
+			}
+			index := -1
+			for i := range outcomes {
+				if !outcomes[i].settled && fmt.Sprint(outcomes[i].id) == got {
+					index = i
+					break
+				}
+			}
+			if index < 0 {
+				continue
+			}
+			outcomes[index].settled = true
+			pending--
+			if message.Error != nil {
+				outcomes[index].err = &remoteRPCError{
+					Code:    message.Error.Code,
+					Message: strings.TrimSpace(message.Error.Message),
+					Data:    cloneAnyMapApp(message.Error.Data),
+				}
+				continue
+			}
+			if specs[index].target != nil && len(message.Result) > 0 {
+				outcomes[index].err = json.Unmarshal(message.Result, specs[index].target)
+			}
+			continue
+		}
+		if strings.TrimSpace(message.Method) == "" {
+			continue
+		}
+		if len(message.ID) > 0 {
+			if remoteServerRequestWaitsForUser(message.Method) {
+				go func(message remoteAppServerMessage) {
+					_ = client.respondServerRequest(ctx, message)
+				}(message)
+			} else {
+				_ = client.respondServerRequest(ctx, message)
+			}
+			continue
+		}
+		if err := client.handleNotification(message); err != nil {
+			for i := range outcomes {
+				if !outcomes[i].settled {
+					outcomes[i].err = err
+				}
+			}
+			return outcomes
+		}
+	}
+	return outcomes
+}
+
+// cancelRemoteThreadSearch asks the server to stop an abandoned thread/search.
+// Rust sends thread/search/cancel on a remote handle when a task-mention search
+// is superseded or times out (#62132); the acknowledgement is best-effort and
+// bounded by taskMentionCancelTimeout.
+func cancelRemoteThreadSearch(client *remoteAppServerTUIClient, requestID int64) {
+	if client == nil || requestID <= 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), taskMentionCancelTimeout)
+	defer cancel()
+	remoteSessionRequestBatch(ctx, client, []remoteRequestSpec{{
+		method: appserver.MethodThreadSearchCancel,
+		params: appserver.ThreadSearchCancelParams{RequestID: appserver.IntID(requestID)},
+	}})
 }
 
 func (c *remoteAppServerTUIClient) readOne(ctx context.Context) error {

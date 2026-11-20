@@ -1,6 +1,7 @@
 package tea
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"sync/atomic"
@@ -28,6 +29,31 @@ func (m *Model) nextTaskSearchGeneration() (uint64, *atomic.Uint64) {
 	}
 	m.taskSearchGeneration.Store(m.mentionTaskSearchGeneration)
 	return m.mentionTaskSearchGeneration, m.taskSearchGeneration
+}
+
+// beginTaskMentionSearch cancels the search it replaces and returns the new
+// search's context (Rust task_mentions::TaskSearch::spawn).
+func (m *Model) beginTaskMentionSearch() context.Context {
+	if m == nil {
+		return context.Background()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	previous := m.taskMentionSearchCancel
+	m.taskMentionSearchCancel = cancel
+	if previous != nil {
+		previous()
+	}
+	return ctx
+}
+
+// cancelTaskMentionSearch stops the in-flight task-mention search, if any.
+func (m *Model) cancelTaskMentionSearch() {
+	if m == nil || m.taskMentionSearchCancel == nil {
+		return
+	}
+	cancel := m.taskMentionSearchCancel
+	m.taskMentionSearchCancel = nil
+	cancel()
 }
 
 // DynamicToolThreadStartedMsg reports a task the TUI started or resumed while
