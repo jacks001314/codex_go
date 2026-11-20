@@ -50702,11 +50702,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "N/A by async-scorer carrier: the commit keys Guardian v2 async scorer conversation backends, cached scores, authorization and classifier history by policy revision, and shares admission capacity across those backends.",
+    "Go has no async scorer to key: appserver/modelGuardianReviewer.Review runs the synchronous review for each call, and guardianScoreProgress/guardianWrapperLag only track tool-call lag per thread (Rust GuardianV2ScoreProgress, #39001). There is no cached approval, retained classifier conversation, policy-revision backend, or cross-policy score-failure record in the Go tree, so overlapping turns cannot observe another policy's cached score.",
+    "Late actions from older turns are therefore already decided by the current call's own policy: the lag gate denies an approval whose source action has not been scored, which is the same outcome the Rust change reaches by separating score caches."
    ],
    "kind": "runtime",
    "sha": "6d94d4af1070d8c7230a1027a3a18753e0796c4e",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Isolate Guardian v2 score caches by policy revision (#62083)"
   },
   {
