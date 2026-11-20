@@ -520,6 +520,11 @@ func (r *RuntimeRouter) notifyWorkspaceRoutingToConnection(connectionID string) 
 		if r.authChangeTracker.Snapshot().OwnerGeneration != ownerGeneration {
 			return
 		}
-		r.notifyToConnection(connectionID, NotificationAccountUpdated, r.requireAccount().AccountUpdated())
+		notification := r.requireAccount().AccountUpdated()
+		// Rust #62145 marks the initial saved-workspace routing notification so
+		// clients can tell it apart from login, logout and workspace switches.
+		reason := auth.AccountUpdateReasonWorkspaceRoutingReady
+		notification.Reason = &reason
+		r.notifyToConnection(connectionID, NotificationAccountUpdated, notification)
 	}()
 }

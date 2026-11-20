@@ -79,16 +79,16 @@ func TestGuardianTranscriptFormatSelectionLikeRust(t *testing.T) {
 	}
 }
 
-// The JSON grammar must precede the reviewer policy instructions so configured
-// policy text cannot remove provenance guidance.
+// Rust #62090 keeps the reviewer policy and output contract first and appends
+// the JSON provenance grammar, so the contract still terminates the prompt.
 func TestApplyGuardianTranscriptInstructionsLikeRust(t *testing.T) {
 	line := ApplyGuardianTranscriptInstructions("policy", GuardianTranscriptFormatLine)
 	if line != "policy" {
 		t.Fatalf("line instructions = %q, want unchanged policy", line)
 	}
 	jsonInstructions := ApplyGuardianTranscriptInstructions("policy", GuardianTranscriptFormatJSON)
-	if !strings.HasPrefix(jsonInstructions, GuardianTranscriptJSONInstructions+"\n\npolicy") {
-		t.Fatalf("json instructions = %q, want the provenance grammar before the policy", jsonInstructions)
+	if jsonInstructions != "policy\n\n"+GuardianTranscriptJSONInstructions {
+		t.Fatalf("json instructions = %q, want the provenance grammar after the policy", jsonInstructions)
 	}
 }
 

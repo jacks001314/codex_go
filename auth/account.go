@@ -588,7 +588,24 @@ type GetAccountResponse struct {
 type AccountUpdatedNotification struct {
 	AuthMode *string   `json:"authMode"`
 	PlanType *PlanType `json:"planType"`
+	// Reason is set when initial routing discovery completes for the same
+	// authenticated owner (Rust #62145); login, logout and workspace switches
+	// serialize it as null.
+	Reason *AccountUpdateReason `json:"reason"`
 }
+
+// AccountUpdateReason mirrors Rust v2 AccountUpdateReason, the reason carried
+// by an account/updated notification.
+type AccountUpdateReason string
+
+const (
+	// AccountUpdateReasonWorkspaceRoutingReady marks the initial saved-workspace
+	// routing notification sent to a connection once discovery resolved for an
+	// unchanged authenticated owner.
+	AccountUpdateReasonWorkspaceRoutingReady AccountUpdateReason = "workspaceRoutingReady"
+	// AccountUpdateReasonUnknown is Rust's catch-all variant.
+	AccountUpdateReasonUnknown AccountUpdateReason = "unknown"
+)
 
 type GetAccountRateLimitsResponse struct {
 	RateLimits            RateLimitSnapshot             `json:"rateLimits"`

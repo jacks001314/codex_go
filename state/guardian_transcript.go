@@ -273,11 +273,13 @@ func RenderGuardianTranscript(entries []GuardianTranscriptEntry, format Guardian
 	return rendered
 }
 
-// ApplyGuardianTranscriptInstructions prepends the JSON provenance grammar for
-// reviewers that receive JSON transcript records (#51465).
+// ApplyGuardianTranscriptInstructions appends the JSON provenance grammar for
+// reviewers that receive JSON transcript records (#51465). Rust #62090 moved
+// the grammar behind the configured policy and output contract so the review
+// contract still terminates the instructions and provenance follows it.
 func ApplyGuardianTranscriptInstructions(instructions string, format GuardianTranscriptFormat) string {
 	if format != GuardianTranscriptFormatJSON {
 		return instructions
 	}
-	return GuardianTranscriptJSONInstructions + "\n\n" + instructions
+	return instructions + "\n\n" + GuardianTranscriptJSONInstructions
 }
