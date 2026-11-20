@@ -52711,11 +52711,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "tui/markdown/math_render.go treats \\widetilde like \\tilde in the single-grapheme accent path, so display math renders the combining tilde (U+0303) instead of falling back to LaTeX source; a multi-grapheme argument keeps the source fallback rather than accenting only its first letter (Rust #62554).",
+    "tests: tui/markdown TestMathWidetildeUsesCombiningTildeLikeRust covers the braced and unbraced forms against the \\tilde render and the multi-grapheme fallback"
    ],
    "kind": "runtime",
    "sha": "325123ae4a72faedf66939795bd0affd5c3939dd",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Render `\\widetilde` in terminal Markdown math (#62554)"
   },
   {
@@ -52865,11 +52866,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "tui/markdown/math_render_structured.go renders display-only \\underbrace{expression}_{label} as a Unicode brace spanning the expression's terminal columns with the label centered under the marker tip at the expression's baseline, bounding the layout by the column budget (Rust #62577).",
+    "Inline math, a non-braced or missing label, an unsupported argument, a nested underbrace and an over-width layout keep the existing source fallback.",
+    "tests: tui/markdown TestMathUnderbraceSnapshotLikeRust reproduces Rust's unicode_math_underbrace snapshot byte for byte (Boolean clauses, short expressions, label wider than its expression); TestMathUnderbraceFallsBackLikeRust covers the fallback list and the atomic source restore"
    ],
    "kind": "runtime",
    "sha": "2f0374456fd5cd280ee76de54220ab8315a0f8d0",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Render LaTeX underbraces in TUI display math (#62577)"
   },
   {
