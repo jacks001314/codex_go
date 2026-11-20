@@ -1631,6 +1631,16 @@ func (m *Manager) startWithOptions(params *StartParams, options *StartOptions, a
 	if m == nil {
 		return nil, nil, fmt.Errorf("%w: manager is nil", ErrInvalidRealtimeRequest)
 	}
+	existingCallAuth := ExistingCallAuthModelProvider
+	if options != nil && options.Attachment != nil {
+		existingCallAuth = options.Attachment.ExistingCallAuth
+	}
+	if existingCallAuth.requiresExternalHeaders() &&
+		(config.Transport.Type != "existingCall" || strings.TrimSpace(config.Transport.SidebandBaseURL) == "") {
+		// Rust #62114: external headers only suit a host-selected observer whose
+		// endpoint the host named itself.
+		return nil, nil, fmt.Errorf("%w: external header authentication requires an existing call with an explicit sideband URL", ErrInvalidRealtimeRequest)
+	}
 	// Rust #60443: a caller may cancel a pending attachment or bound how long
 	// it may take to publish its connection. Interrupting the attempt reuses
 	// the start context so the dial and the frameless session handshake stop
@@ -1726,7 +1736,18 @@ func (m *Manager) startWithOptions(params *StartParams, options *StartOptions, a
 	if config.Transport.Type == "existingCall" && backend != nil && backend.SidebandBaseURL != "" {
 		// The client already created and negotiated the call; Core only joins
 		// its sideband control socket.
-		sideband = newRealtimeSideband(config.ThreadID, config.Transport.CallID, backend, config)
+		sidebandBackend := backend
+		if existingCallAuth.requiresExternalHeaders() {
+			// Rust #62114: the host-selected observer authenticates with its own
+			// external headers, which the runtime hook resolves on every
+			// handshake. Without that hook there is no header credential to use,
+			// and the model provider's headers are exactly what must not travel.
+			if backend.RuntimeAuthHeaders == nil {
+				return nil, nil, fmt.Errorf("%w: external header authentication requires header-based authentication", ErrInvalidRealtimeRequest)
+			}
+			sidebandBackend = realtimeExternalHeaderBackend(backend)
+		}
+		sideband = newRealtimeSideband(config.ThreadID, config.Transport.CallID, sidebandBackend, config)
 		sideband.existingCall = true
 	}
 

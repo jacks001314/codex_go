@@ -25,6 +25,31 @@ type AttachmentOptions struct {
 	// StartBefore is the optional caller deadline for publishing the
 	// connection. Cleanup can still finish after the deadline passes.
 	StartBefore *time.Time
+	// ExistingCallAuth selects how an existing call's sideband authenticates
+	// (Rust #62114). The model provider is the default; external headers suit a
+	// trusted host observing a call it authenticated itself.
+	ExistingCallAuth ExistingCallAuth
+}
+
+// ExistingCallAuth selects the credential an attached existing call uses.
+type ExistingCallAuth string
+
+const (
+	// ExistingCallAuthModelProvider uses the model provider's authentication and
+	// runtime destination checks.
+	ExistingCallAuthModelProvider ExistingCallAuth = ""
+	// ExistingCallAuthExternalHeaders uses the selected auth manager's external
+	// headers and the host's transport instead. A model provider's headers may
+	// carry inference authentication, so they never reach that observer. The
+	// trusted host must authorize the destination, call owner and calling
+	// workload before selecting it, and it is never derived from a client URL.
+	ExistingCallAuthExternalHeaders ExistingCallAuth = "externalHeaders"
+)
+
+// requiresExternalHeaders reports whether the attachment authenticates with the
+// host's external headers.
+func (a ExistingCallAuth) requiresExternalHeaders() bool {
+	return a == ExistingCallAuthExternalHeaders
 }
 
 // AttachmentCancellation mirrors Rust's `watch::Receiver<bool>` used for

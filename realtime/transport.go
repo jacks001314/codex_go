@@ -267,6 +267,20 @@ func realtimeSidebandBackendForTransport(backend *TransportBackendConfig, transp
 	return clone
 }
 
+// realtimeExternalHeaderBackend drops the model provider's headers from an
+// existing call's sideband, because they may carry inference authentication.
+// The runtime-auth hook stays, since it resolves the host's external headers on
+// each handshake, and the dial applies the realtime session headers itself.
+func realtimeExternalHeaderBackend(backend *TransportBackendConfig) *TransportBackendConfig {
+	if backend == nil {
+		return nil
+	}
+	clone := *backend
+	clone.Headers = make(http.Header)
+	clone.CallHeaders = make(http.Header)
+	return &clone
+}
+
 func createRealtimeWebRTCCall(ctx context.Context, backend *TransportBackendConfig, config *SessionConfig) (*realtimeWebRTCCall, error) {
 	endpoint, err := realtimeCallURL(backend.WebRTCCallBaseURL, config)
 	if err != nil {
