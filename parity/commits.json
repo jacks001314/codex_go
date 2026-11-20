@@ -52703,11 +52703,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "The commit sets GN_ARGS in the rusty_v8 release and V8 canary workflows so mksnapshot can load ICU data. Go has no rusty_v8 or V8 workflow.",
+    "plan: update/plan_2026_11_20.md batch 4"
    ],
    "kind": "runtime",
    "sha": "d9f6fcff940fac1ec2f371d25c6768829e7c654c",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Stage ICU data for mksnapshot in rusty_v8 builds (#62558)"
   },
   {
@@ -52739,11 +52740,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "The commit fixes timing races inside Rust core integration tests (steering cancellation, realtime handoff ordering, streaming tool usage). Go's suites use their own harness and keep their own ordering guarantees; there is no Rust test file to port.",
+    "plan: update/plan_2026_11_20.md batch 4"
    ],
    "kind": "runtime",
    "sha": "692292695bbacbd3e39eb3f3bf36129a94712806",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Fix timing races in core integration tests (#62564)"
   },
   {
@@ -52751,11 +52753,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "The commit replaces a ten-second real-time wait in one Rust OTLP headers-helper test with Tokio's paused clock and a named pipe. It changes no product behaviour, and Go's helper tests use their own bounded fixtures.",
+    "plan: update/plan_2026_11_20.md batch 4"
    ],
    "kind": "runtime",
    "sha": "617ad20df0a3658ab7cff155531260b5edeac3ef",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Remove the real-time wait from the OTLP headers helper timeout test (#62566)"
   },
   {
@@ -52811,11 +52814,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "tui/thread_label.go CloudThreadLabelPrefix requests emoji presentation (U+2601 U+FE0F) like Rust's ThreadLabel::Cloud, and tui/terminal_title.go keeps that selector only when it directly follows the cloud marker in Unicode titles, so GNU Screen titles stay printable ASCII (Rust #62573).",
+    "tests: tui TestTerminalTitleKeepsCloudEmojiSelectorLikeRust, TestCloudThreadLabelSurvivesTerminalTitleLikeRust, TestCloudThreadLabelPrefixLikeRust, plus the cloud-label tests in tui/agents_overview, tui/bottom_pane/mentions_v2, tui/chatwidget and tui/tea",
+    "plan: update/plan_2026_11_20.md batch 4"
    ],
    "kind": "runtime",
    "sha": "6eea32808167c4b87508e9611ba116f061ee315c",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Use the cloud emoji for cloud thread labels (#62573)"
   },
   {
@@ -52907,11 +52912,14 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "sandbox/windowssandbox/elevated/runner_client.go adds errorLogonTypeNotGranted (1385) and explains the logon policy denial in RunnerLogonError: Windows security policy blocked the sandbox account from signing in, check the Allow/Deny log on locally permissions, contact an administrator on a managed PC (Rust #62593).",
+    "The code is absent from isRefreshableWindowsError, so a policy denial never triggers a sandbox credential refresh.",
+    "tests: sandbox/windowssandbox/elevated TestLogonPolicyDenialExplainsWhyTheCommandCannotStartLikeRust, TestOtherRunnerLogonErrorsStayUnexplainedLikeRust",
+    "plan: update/plan_2026_11_20.md batch 4"
    ],
    "kind": "runtime",
    "sha": "bc75380d6a5ee05584ad432162157799a8a2d646",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Explain Windows sandbox logon policy failures (#62593)"
   },
   {
@@ -53159,11 +53167,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "The commit recompresses staged npm release tarballs with libdeflate before upload. Go releases are Go binaries built by its own pipeline and have no npm staging step.",
+    "plan: update/plan_2026_11_20.md batch 4"
    ],
    "kind": "runtime",
    "sha": "983feef7a1968279960480e79d06f46b06800134",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Shrink npm release tarballs with libdeflate (#62643)"
   },
   {
@@ -53177,9 +53186,23 @@
    "sha": "10ca17496f5c934b9cf4baacda95c4a785f95630",
    "status": "audit_pending",
    "subject": "Pass inherited history visibility to the thread store (#62644)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "The commit makes scripts/install/install.sh call /usr/bin/stat for the standalone release device checks. Go's scripts/install.sh is a 59-line bootstrap without release pruning, and appserverdaemon/release_pruning.go reads device ids through syscall.Stat_t rather than shelling out to stat, so the GNU/BSD stat ambiguity cannot occur.",
+    "verified: no 'stat -f' or prune_standalone_releases in scripts/install.sh",
+    "plan: update/plan_2026_11_20.md batch 4"
+   ],
+   "kind": "runtime",
+   "sha": "2c1b4c7c357fd03979bcc27cc6e256a71f6cf2f3",
+   "status": "not_applicable",
+   "subject": "Fix standalone release pruning on macOS with GNU coreutils (#62648)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "10ca17496f5c934b9cf4baacda95c4a785f95630",
+ "rustToInclusive": "2c1b4c7c357fd03979bcc27cc6e256a71f6cf2f3",
  "schemaVersion": 1
 }
