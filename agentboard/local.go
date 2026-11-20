@@ -19,6 +19,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -92,6 +93,9 @@ type LocalAgentMessageBoard struct {
 	db        *sql.DB
 	host      Host
 	access    accessMode
+	// nestedJSONPointer enables decoded-JSON literal search on this live
+	// handle (Rust LocalAgentMessageBoard::nested_json_pointer, #62133).
+	nestedJSONPointer string
 }
 
 // storedPost mirrors Rust's StoredPost payload.
@@ -1212,7 +1216,7 @@ func (b *LocalAgentMessageBoard) searchPostsAt(ctx context.Context, caller strin
 	if query.Query != nil {
 		needle = foldCase(*query.Query)
 	}
-	jsonPointer := ""
+	jsonPointer := b.nestedJSONPointer
 	if scope != nil {
 		jsonPointer = scope.jsonSearchPointer
 	}
@@ -1643,3 +1647,19 @@ func minInt(left int, right int) int {
 
 var _ Board = (*LocalAgentMessageBoard)(nil)
 var _ AgentMessageBoard = (*LocalAgentMessageBoard)(nil)
+
+// WithJSONSearch returns a live handle whose post searches also match decoded
+// JSON literals at pointer. Other handles keep their existing search behavior
+// (Rust AgentMessageBoard::with_json_search, local/queries.rs).
+func (b *LocalAgentMessageBoard) WithJSONSearch(pointer string) (AgentMessageBoard, error) {
+	if b == nil || b.db == nil {
+		return nil, errors.New("message board is unavailable")
+	}
+	pointer = strings.TrimSpace(pointer)
+	if pointer == "" {
+		return nil, errors.New("JSON search requires a pointer")
+	}
+	clone := *b
+	clone.nestedJSONPointer = pointer
+	return &clone, nil
+}

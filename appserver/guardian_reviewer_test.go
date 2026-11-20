@@ -691,7 +691,7 @@ func instructionsOrEmpty(request *model.AgentRequest) string {
 func TestGuardianReviewInstructionsPrecedenceLikeRust(t *testing.T) {
 	contract := state.GuardianOutputContractPrompt()
 	// No catalog and no config keeps the bundled documents.
-	bundled := guardianReviewInstructions(nil, nil)
+	bundled := guardianReviewInstructions(nil, nil, GuardianConversationHistoryRetrieval)
 	wantBundled := state.RenderGuardianPolicyInstructions(state.GuardianPolicy(), "", state.GuardianPolicyTemplate(), contract)
 	if bundled != wantBundled {
 		t.Fatalf("bundled instructions drifted:\n%q\nwant\n%q", bundled, wantBundled)
@@ -703,7 +703,7 @@ func TestGuardianReviewInstructionsPrecedenceLikeRust(t *testing.T) {
 	// The catalog's policy and template win over the bundled ones.
 	policy := "Catalog policy."
 	template := "Catalog template:\n{{ tenant_policy_config }}"
-	catalog := guardianReviewInstructions(nil, &model.AutoReviewMessages{Policy: &policy, PolicyTemplate: &template})
+	catalog := guardianReviewInstructions(nil, &model.AutoReviewMessages{Policy: &policy, PolicyTemplate: &template}, GuardianConversationHistoryRetrieval)
 	if want := state.RenderGuardianPolicyInstructions(policy, "", template, contract); catalog != want {
 		t.Fatalf("catalog instructions = %q, want %q", catalog, want)
 	}
@@ -717,7 +717,7 @@ func TestGuardianReviewInstructionsPrecedenceLikeRust(t *testing.T) {
 		Values:       map[string]any{"auto_review": map[string]any{"experimental_policy_template": configuredTemplate}},
 		Requirements: &config.ConfigRequirements{GuardianPolicyConfig: &managed},
 	}
-	overridden := guardianReviewInstructions(cfg, &model.AutoReviewMessages{Policy: &policy, PolicyTemplate: &template})
+	overridden := guardianReviewInstructions(cfg, &model.AutoReviewMessages{Policy: &policy, PolicyTemplate: &template}, GuardianConversationHistoryRetrieval)
 	if want := state.RenderGuardianPolicyInstructions(managed, "", state.GuardianPolicyTemplate(), contract); overridden != want {
 		t.Fatalf("trusted-template instructions = %q, want %q", overridden, want)
 	}
@@ -734,7 +734,7 @@ func TestGuardianReviewInstructionsPrecedenceLikeRust(t *testing.T) {
 			GuardianExtraPolicy:  &managedExtra,
 		},
 	}
-	got := guardianReviewInstructions(withExtra, &model.AutoReviewMessages{Policy: &policy, PolicyTemplate: &template})
+	got := guardianReviewInstructions(withExtra, &model.AutoReviewMessages{Policy: &policy, PolicyTemplate: &template}, GuardianConversationHistoryRetrieval)
 	if want := state.RenderGuardianPolicyInstructions(managed, managedExtra, state.GuardianPolicyTemplate(), contract); got != want {
 		t.Fatalf("extra-policy instructions = %q, want %q", got, want)
 	}

@@ -843,7 +843,7 @@ func (r *RuntimeRouter) guardianReviewPlanForTurnContext(ctx context.Context, th
 	plan := guardianReviewPlan{
 		Selection:          selection,
 		AutoReview:         autoReview,
-		Instructions:       guardianReviewInstructions(cfg, autoReview),
+		Instructions:       guardianReviewInstructions(cfg, autoReview, GuardianConversationHistoryRetrieval),
 		NodeReplPolicy:     guardianNodeReplPolicy(autoReview),
 		CyberAccessProgram: model.GuardianCyberAccessProgram(active.RunConfig.CyberAccessProgram),
 		ReasoningSummary:   reasoningSummary,
@@ -998,20 +998,13 @@ func managedGuardianRulesPresent(cfg *config.Config) bool {
 	return false
 }
 
-// guardianReviewInstructions adds the reviewer-only prompt sections (conversation
-// history retrieval and the JSON transcript grammar) to the base instructions.
-func guardianReviewInstructions(cfg *config.Config, autoReview *model.AutoReviewMessages) string {
+// guardianReviewInstructions adds the reviewer-only prompt sections (the
+// guidance for the retrieval tools this session installed and the JSON
+// transcript grammar) to the base instructions.
+func guardianReviewInstructions(cfg *config.Config, autoReview *model.AutoReviewMessages, retrieval GuardianReviewRetrieval) string {
 	instructions := guardianReviewBaseInstructions(cfg, autoReview)
-	if cfg != nil &&
-		features.Enabled(cfg.FeatureSettings(), "guardian_conversation_history_tools") &&
-		features.Enabled(cfg.FeatureSettings(), "apps") {
-		historyPrompt := guardianHistoryInstructions
-		if override, ok := cfg.GuardianConversationHistoryPrompt(); ok {
-			historyPrompt = override
-		}
-		if historyPrompt != "" {
-			instructions += "\n" + historyPrompt
-		}
+	if guidance := retrieval.guidance(cfg); guidance != "" {
+		instructions += "\n" + guidance
 	}
 	format := state.GuardianTranscriptFormatLine
 	if cfg != nil {

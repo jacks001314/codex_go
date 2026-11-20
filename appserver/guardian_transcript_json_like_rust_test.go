@@ -72,7 +72,7 @@ func TestGuardianTranscriptJSONModeLikeRust(t *testing.T) {
 	if err != nil || cfg == nil {
 		t.Fatalf("effectiveConfigForTurn() = %#v, %v", cfg, err)
 	}
-	instructions := guardianReviewInstructions(cfg, nil)
+	instructions := guardianReviewInstructions(cfg, nil, GuardianConversationHistoryRetrieval)
 	if !strings.HasSuffix(instructions, "\n\n"+state.GuardianTranscriptJSONInstructions) {
 		t.Fatalf("reviewer instructions do not end with the JSON provenance grammar: %q", instructions[max(0, len(instructions)-120):])
 	}

@@ -52,8 +52,11 @@ const (
 	MessageBoardToolSearchPosts   MessageBoardTool = "search_posts"
 	MessageBoardToolReadThread    MessageBoardTool = "read_thread"
 	MessageBoardToolReadPost      MessageBoardTool = "read_post"
-	MessageBoardToolSubscribe     MessageBoardTool = "subscribe"
-	MessageBoardToolUnsubscribe   MessageBoardTool = "unsubscribe"
+	// MessageBoardToolSubscribedChannels lists the caller's own channel
+	// subscriptions on a live board (Rust #62133).
+	MessageBoardToolSubscribedChannels MessageBoardTool = "subscribed_channels"
+	MessageBoardToolSubscribe          MessageBoardTool = "subscribe"
+	MessageBoardToolUnsubscribe        MessageBoardTool = "unsubscribe"
 	// MessageBoardToolPost posts, subscribes the author unless opted out, and
 	// notifies recipients.
 	MessageBoardToolPost MessageBoardTool = "post"
@@ -95,11 +98,12 @@ var MessageBoardToolNames = []string{
 // messageBoardParallelTools mirrors Rust's supports_parallel_tool_calls: the
 // read-only channel tools may run in parallel, mutations may not.
 var messageBoardParallelTools = map[string]bool{
-	"get_channels": true,
-	"list_threads": true,
-	"search_posts": true,
-	"read_thread":  true,
-	"read_post":    true,
+	"get_channels":        true,
+	"subscribed_channels": true,
+	"list_threads":        true,
+	"search_posts":        true,
+	"read_thread":         true,
+	"read_post":           true,
 }
 
 // MessageBoardToolOverride carries one tool's catalog overrides (Rust
@@ -289,6 +293,11 @@ func messageBoardSpecFor(name string) messageBoardToolSpec {
 		return messageBoardToolSpec{
 			description: "List channels, most recently active first, or search by a case-insensitive part of the name. Creating a channel or posting in it counts as activity.",
 			fields:      []string{"query", "recent_first", "limit", "cursor"},
+		}
+	case "subscribed_channels":
+		return messageBoardToolSpec{
+			description: "List the names of channels you are currently subscribed to.",
+			fields:      []string{"limit", "cursor"},
 		}
 	case "list_threads":
 		return messageBoardToolSpec{
@@ -500,6 +509,20 @@ func (t *messageBoardTool) execute(ctx context.Context, raw string, invocation *
 				Direction: direction(args.RecentFirst),
 				Page:      page(limit, args.Cursor, scale),
 			})
+		})
+	case "subscribed_channels":
+		var args subscribedChannelsArgs
+		if err := decodeMessageBoardArgs(invocation, &args); err != nil {
+			return nil, err
+		}
+		lister, ok := t.board.(subscriptionLister)
+		if !ok {
+			// Rust only exposes this tool on a live AgentMessageBoard.
+			return nil, modelError("listing subscriptions requires a live message board")
+		}
+		limit := pageLimit(args.Limit)
+		return messageBoardBoundedRead(budget, limit, func(scale int) (any, error) {
+			return lister.SubscribedChannels(ctx, t.caller, page(limit, args.Cursor, scale))
 		})
 	case "list_threads":
 		var args listThreadsArgs
@@ -856,6 +879,21 @@ type getChannelsArgs struct {
 }
 
 func (a *getChannelsArgs) validate() error {
+	return requireNonZeroField("limit", a.Limit)
+}
+
+// subscriptionLister is the live-board surface behind the
+// subscribed_channels tool (Rust AgentMessageBoard::subscribed_channels).
+type subscriptionLister interface {
+	SubscribedChannels(ctx context.Context, caller string, page PageRequest) (*Page[string], error)
+}
+
+type subscribedChannelsArgs struct {
+	Limit  *int    `json:"limit"`
+	Cursor *string `json:"cursor"`
+}
+
+func (a *subscribedChannelsArgs) validate() error {
 	return requireNonZeroField("limit", a.Limit)
 }
 

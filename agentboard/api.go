@@ -65,6 +65,10 @@ type AgentMessageBoard interface {
 	Board
 	// StorageNamespace is the durable namespace this board was opened in.
 	StorageNamespace() string
+	// WithJSONSearch returns a live handle whose searches also match decoded
+	// JSON literals at the pointer, leaving other handles unchanged (Rust
+	// AgentMessageBoard::with_json_search, #62133).
+	WithJSONSearch(pointer string) (AgentMessageBoard, error)
 	// CaptureReadView freezes the channel catalog and the post cutoff.
 	CaptureReadView(ctx context.Context) (*BoardReadView, error)
 	// SubscribedChannels lists the caller's live channel memberships.
