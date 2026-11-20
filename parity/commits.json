@@ -52716,11 +52716,16 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "runtimeutil.HookCharge now carries Units plus an Overflow flag; appserver/hooks_runner.go adds each successful price with BudgetUnitsSum.CheckedAdd and reports a bare overflow without the removed invalid-price diagnostic (Rust codex_hooks HookCharge::Units/Overflow, #62559).",
+    "runtimeutil.Budget.RecordUsageWithHookCharge validates the hook units, rejects a non-finite provider+hook total and a cumulative posted overflow before staging, and only then posts the staged bill; enforcing budgets still close the work gate while advisory budgets stay open (Rust RolloutBudget::record_usage/checked_add/reject_overflow, #62559).",
+    "appserver.applyModelRequestHookCharge refuses an overflowing hook total before calling host accounting, and stopNativeBudgetOnOverflow stops the local budget when it enforces its limit, so a host account never receives a partial charge.",
+    "Rust also dropped the non-finite posted-total special cases in enforce_posted_limit/remaining_units; Go computes both from the staged finite balance, so no equivalent branch remains.",
+    "tests: runtimeutil TestBudgetRecordHookChargeOverflowRejectsBeforePostingLikeRust, TestBudgetRecordUsageOverflowPreservesPostedBalanceLikeRust, TestBudgetRecordUsageOverflowLeavesAdvisoryBudgetOpen; appserver TestPostModelRequestMCPHookOverflowReportsOverflowLikeRust, TestApplyModelRequestHookChargeRejectsOverflowBeforePostingLikeRust, TestApplyModelRequestHookChargeOverflowSkipsHostReportLikeRust",
+    "plan: update/plan_2026_11_20.md batch 5"
    ],
    "kind": "runtime",
    "sha": "65d69f25b4cd552398f0097ab22745e44bebe0e6",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Reject overflowing rollout budget charges before posting (#62559)"
   },
   {
@@ -53035,11 +53040,14 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "appserver/usage_accounting.go routes every completed response through the host's UsageAccounting or the native budget and applies the host decision in applyUsageAccountingDecision: Exhausted calls markHostBudgetExhausted for the whole rollout tree, ExhaustedForTurn marks only that turn so turnBudgetExhaustedError returns ErrSessionBudgetExceeded (Rust #62621).",
+    "Host-wide exhaustion stops new work: rolloutBudgetCheck refuses generation requests, tool handlers and MCP handoff when hostBudgetExhaustedFor or the native budget reports exhaustion, and turn_runtime fails the turn that observed it. The native path stops work through Budget.stopNewToolsLocked, which covers Rust's controller branch (Go has no separate controller runtime).",
+    "Rust's commit threads SamplingUsage into record_numeric_usage in each accounting path; the reported behaviours are unchanged and covered in Go by appserver TestUsageAccountingExhaustedStopsNewWorkLikeRust (reporting turn fails with sessionBudgetExceeded, later turns never reach the model) and TestUsageAccountingExhaustedForTurnFailsOnlyThatTurnLikeRust.",
+    "plan: update/plan_2026_11_20.md batch 5"
    ],
    "kind": "runtime",
    "sha": "26f70f94609c213b6eb7fc048ac6c2a88f7c9f59",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Handle rollout budget decisions in each accounting path (#62621)"
   },
   {

@@ -25,17 +25,30 @@ type TokenUsage struct {
 var ErrInvalidRolloutBudgetUnits = errors.New("response.completed usage.codex_rollout_budget_units must be finite and non-negative")
 
 // HookCharge is the synchronous post-hook contribution of one model response
-// (Rust codex_hooks::HookCharge, #61580). Overflowed reports that summing the
-// individual hook prices exceeded f64 range; Units is then the largest
-// individual price, a real lower bound rather than the whole bill.
+// (Rust codex_hooks::HookCharge, #61580). Overflow reports that summing the
+// individual hook prices exceeded f64 range, so the receipt carries no
+// representable total and is rejected before posting (Rust #62559).
 type HookCharge struct {
-	Units      float64
-	Overflowed bool
+	Units    float64
+	Overflow bool
 }
 
 // ErrInvalidRolloutBudgetCharge is returned when a charge is non-finite or
 // negative. Mirrors Rust's fatal `invalid rollout budget charge`.
 var ErrInvalidRolloutBudgetCharge = errors.New("invalid rollout budget charge")
+
+// ErrRolloutChargeAmountOverflow rejects a response whose provider and hook
+// charges overflow f64 before posting (Rust #62559 reject_overflow).
+var ErrRolloutChargeAmountOverflow = errors.New("responseChargeAmount must be finite")
+
+// ErrRolloutBudgetUsedOverflow rejects a response whose cumulative posted
+// balance overflows f64 while the previously posted balance is preserved
+// (Rust #62559 reject_overflow).
+var ErrRolloutBudgetUsedOverflow = errors.New("totalBudgetUsed must be finite")
+
+// ErrRolloutHookChargeOverflow reports a hook total that overflowed before it
+// could reach the budget (Rust HookCharge::Overflow, #62559).
+var ErrRolloutHookChargeOverflow = errors.New("responseChargeAmount: total hook cost exceeds f64 range")
 
 func (u *TokenUsage) NonCachedInput() int64 {
 	if u == nil {
@@ -87,6 +100,39 @@ func (s *BudgetUnitsSum) Add(units float64) {
 		return
 	}
 	s.remainder = ((sum - next) + remainder) / scale
+}
+
+// CheckedAdd reports the sum with units added, or false when the receipt is
+// invalid or unrepresentable, leaving this sum unchanged (Rust
+// BudgetUnitsSum::checked_add, #62559).
+func (s BudgetUnitsSum) CheckedAdd(units float64) (BudgetUnitsSum, bool) {
+	if math.IsNaN(units) || math.IsInf(units, 0) || units < 0 {
+		return s, false
+	}
+	if units == 0 {
+		return s, true
+	}
+	// Near math.MaxFloat64 the first addition can overflow before a negative
+	// remainder brings it back into range, so halve both inputs for that step.
+	scale := 1.0
+	if math.IsInf(s.total+units, 1) {
+		scale = 0.5
+	}
+	previous := s.total * scale
+	scaled := units * scale
+	sum := previous + scaled
+	lost := (previous - sum) + scaled
+	if previous < scaled {
+		lost = (scaled - sum) + previous
+	}
+	remainder := s.remainder*scale + lost
+	next := math.Max(sum+remainder, previous)
+	total := next / scale
+	remainder = ((sum - next) + remainder) / scale
+	if !isRepresentableBudgetSum(total) || !isRepresentableBudgetSum(remainder) {
+		return s, false
+	}
+	return BudgetUnitsSum{total: total, remainder: remainder}, true
 }
 
 // Total reports the posted spending so far.
@@ -172,19 +218,11 @@ func (b *Budget) RecordUsageWithHookCharge(usage *TokenUsage, hook HookCharge) (
 	if !b.configured {
 		return false, nil
 	}
+	if hook.Overflow {
+		return b.rejectOverflowLocked(ErrRolloutHookChargeOverflow)
+	}
 	if math.IsNaN(hook.Units) || math.IsInf(hook.Units, 0) || hook.Units < 0 {
 		return false, ErrInvalidRolloutBudgetCharge
-	}
-	if hook.Overflowed {
-		// All allowances are finite. No future nonnegative receipt can make
-		// this total representable; the remaining allowance is known zero.
-		b.posted.Add(math.Inf(1))
-		if !b.config.Advisory {
-			b.stopNewToolsLocked()
-		}
-	}
-	if math.IsInf(b.posted.Total(), 1) {
-		return !b.config.Advisory, nil
 	}
 	var units float64
 	if usage != nil {
@@ -194,20 +232,43 @@ func (b *Budget) RecordUsageWithHookCharge(usage *TokenUsage, hook HookCharge) (
 			return false, err
 		}
 	}
-	b.posted.Add(units)
-	b.posted.Add(hook.Units)
-	if math.IsInf(b.posted.Total(), 1) {
-		if !b.config.Advisory {
-			b.stopNewToolsLocked()
-		}
-		return false, ErrInvalidRolloutBudgetCharge
+	if !isFiniteBudgetUnits(units + hook.Units) {
+		return b.rejectOverflowLocked(ErrRolloutChargeAmountOverflow)
 	}
+	posted, ok := b.posted.CheckedAdd(units)
+	if ok {
+		posted, ok = posted.CheckedAdd(hook.Units)
+	}
+	if !ok {
+		return b.rejectOverflowLocked(ErrRolloutBudgetUsedOverflow)
+	}
+	b.posted = posted
 	// Equality is allowed, including one rounding step (0.1 + 0.2 versus 0.3).
 	exhausted := !b.config.Advisory && b.posted.Total() > math.Nextafter(b.config.LimitBudget, math.Inf(1))
 	if exhausted {
 		b.stopNewToolsLocked()
 	}
 	return exhausted, nil
+}
+
+// rejectOverflowLocked declines new work before refusing an unrepresentable
+// receipt, so a budget that enforces its limit keeps its gate (Rust #62559).
+func (b *Budget) rejectOverflowLocked(err error) (bool, error) {
+	if !b.config.Advisory {
+		b.stopNewToolsLocked()
+	}
+	return false, err
+}
+
+// isFiniteBudgetUnits reports whether units can be posted as-is.
+func isFiniteBudgetUnits(units float64) bool {
+	return isRepresentableBudgetSum(units) && units >= 0
+}
+
+// isRepresentableBudgetSum reports whether a compensated-summation part is
+// finite. The remainder is a rounding correction and may be negative.
+func isRepresentableBudgetSum(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
 // RecordHookCharge charges synchronous post-hook units on their own. A hook
@@ -298,6 +359,22 @@ func max64(a int64, b int64) int64 {
 		return a
 	}
 	return b
+}
+
+// Config reports the configured budget so callers can tell whether a native
+// budget enforces its limit (Rust RolloutBudget::config, #62559).
+func (b *Budget) Config() (BudgetConfig, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.config, b.configured
+}
+
+// StopOnOverflow declines new work after an unrepresentable receipt (Rust
+// RolloutBudget::stop_on_overflow, #62559).
+func (b *Budget) StopOnOverflow() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.stopNewToolsLocked()
 }
 
 // Exhausted reports whether the shared budget has stopped new tool work.

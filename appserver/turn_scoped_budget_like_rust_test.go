@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 
@@ -126,5 +127,71 @@ func TestUsageAccountingExhaustedForTurnFailsOnlyThatTurnLikeRust(t *testing.T) 
 	agent.mu.Unlock()
 	if calls != 2 {
 		t.Fatalf("model calls = %d, want both turns to sample", calls)
+	}
+}
+
+// Rust #62621: a host's Exhausted decision stops new work across the rollout
+// tree, so the reporting turn fails and no later turn reaches the model.
+func TestUsageAccountingExhaustedStopsNewWorkLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	accounting := &scriptedUsageAccounting{decisions: []runtimeutil.UsageAccountingDecision{
+		runtimeutil.UsageAccountingExhausted,
+	}}
+	agent := &budgetingTurnAgent{usage: model.AgentUsage{InputTokens: 5, OutputTokens: 7, TotalTokens: 12}}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:    NewRouter(store),
+		Turns:           turn.NewTurnService(),
+		ThreadStatus:    NewThreadStatusManager(),
+		Agent:           agent,
+		UsageAccounting: accounting,
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	if router.hostBudgetExhaustedFor(threadID) {
+		t.Fatal("thread started already exhausted")
+	}
+
+	first := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "first turn",
+	}))
+	if first.Error != nil {
+		t.Fatalf("first turn start error: %+v", first.Error)
+	}
+	firstTurnID := first.Result.(*turn.TurnStartResponse).Turn.ID
+	firstCompleted := waitForTurnCompletedStatus(t, sink, firstTurnID, TurnStatusFailed)
+	if firstCompleted.Turn.Error == nil || firstCompleted.Turn.Error.CodexErrorInfo != "sessionBudgetExceeded" {
+		t.Fatalf("first turn error = %#v, want sessionBudgetExceeded", firstCompleted.Turn.Error)
+	}
+	if !router.hostBudgetExhaustedFor(threadID) {
+		t.Fatal("host exhaustion was not recorded for the rollout tree")
+	}
+	if err := router.rolloutBudgetCheck(threadID)(); !errors.Is(err, ErrSessionBudgetExceeded) {
+		t.Fatalf("work gate error = %v, want ErrSessionBudgetExceeded", err)
+	}
+
+	// New work stays refused, so the model is never asked again.
+	second := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "second turn",
+	}))
+	if second.Error == nil {
+		secondTurnID := second.Result.(*turn.TurnStartResponse).Turn.ID
+		secondCompleted := waitForTurnCompletedStatus(t, sink, secondTurnID, TurnStatusFailed)
+		if secondCompleted.Turn.Error == nil || secondCompleted.Turn.Error.CodexErrorInfo != "sessionBudgetExceeded" {
+			t.Fatalf("second turn error = %#v, want sessionBudgetExceeded", secondCompleted.Turn.Error)
+		}
+	}
+	agent.mu.Lock()
+	calls := agent.calls
+	agent.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("model calls = %d, want only the reporting turn", calls)
 	}
 }

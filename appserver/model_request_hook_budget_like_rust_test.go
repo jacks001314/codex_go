@@ -139,18 +139,18 @@ func TestPostModelRequestMCPHookKeepsValidSiblingPriceLikeRust(t *testing.T) {
 	}
 }
 
-// Overflow keeps the largest individual price as a real lower bound and
-// reports Rust's terminal message.
-func TestPostModelRequestMCPHookOverflowKeepsLowerBoundLikeRust(t *testing.T) {
+// An unrepresentable hook total carries no units and no invalid-price
+// diagnostic; the receipt is refused before posting (Rust #62559).
+func TestPostModelRequestMCPHookOverflowReportsOverflowLikeRust(t *testing.T) {
 	result := runBillablePostHook(t, &sequencedMcpHookExecutor{outputs: []HookMcpOutput{
 		budgetPrice(1e308),
 		budgetPrice(1e308),
 	}}, postModelRequestMCPHook("first", 1), postModelRequestMCPHook("second", 2))
-	if result.ModelRequestHookCharge != (HookCharge{Units: 1e308, Overflowed: true}) {
-		t.Fatalf("hook charge = %#v, want the 1e308 lower bound and overflow", result.ModelRequestHookCharge)
+	if result.ModelRequestHookCharge != (HookCharge{Overflow: true}) {
+		t.Fatalf("hook charge = %#v, want a bare overflow", result.ModelRequestHookCharge)
 	}
-	if result.ModelRequestHookInvalidPrice != "total hook cost exceeds f64 range" {
-		t.Fatalf("invalid price = %q", result.ModelRequestHookInvalidPrice)
+	if result.ModelRequestHookInvalidPrice != "" {
+		t.Fatalf("invalid price = %q, want no overflow diagnostic", result.ModelRequestHookInvalidPrice)
 	}
 }
 
@@ -195,15 +195,14 @@ func TestApplyModelRequestHookChargeSurfacesInvalidPriceLikeRust(t *testing.T) {
 	}
 }
 
-func TestApplyModelRequestHookChargeClosesLargestAllowanceOnOverflowLikeRust(t *testing.T) {
+func TestApplyModelRequestHookChargeRejectsOverflowBeforePostingLikeRust(t *testing.T) {
 	budget := runtimeutil.NewBudget()
 	budget.Configure(runtimeutil.BudgetConfig{LimitBudget: math.MaxFloat64, PrefillTokenWeight: 1, SamplingTokenWeight: 1})
 	router := NewRuntimeRouter(RuntimeServices{})
 	router.rolloutBudget = budget
 
 	err := router.applyModelRequestHookCharge("thread-1", "turn-1", &HookRunResult{
-		ModelRequestHookCharge:       HookCharge{Units: 1e308, Overflowed: true},
-		ModelRequestHookInvalidPrice: "total hook cost exceeds f64 range",
+		ModelRequestHookCharge: HookCharge{Overflow: true},
 	})
 	if !errors.Is(err, model.ErrUsageAccountingFailed) || !strings.Contains(err.Error(), "total hook cost exceeds f64 range") {
 		t.Fatalf("error = %v, want the overflow accounting failure", err)
@@ -211,4 +210,36 @@ func TestApplyModelRequestHookChargeClosesLargestAllowanceOnOverflowLikeRust(t *
 	if !budget.Exhausted() {
 		t.Fatal("overflow did not close the work gate")
 	}
+	// The refused receipt never reached the balance.
+	exhausted, usageErr := budget.RecordUsage(runtimeutil.TokenUsage{CodexRolloutBudgetUnits: json.Number("1")})
+	if usageErr != nil || exhausted {
+		t.Fatalf("charge after overflow: exhausted=%v err=%v", exhausted, usageErr)
+	}
+}
+
+// A host-owned account must not receive a partial charge for an
+// unrepresentable hook total (Rust #62559).
+func TestApplyModelRequestHookChargeOverflowSkipsHostReportLikeRust(t *testing.T) {
+	accounting := &recordingUsageAccounting{}
+	router := NewRuntimeRouter(RuntimeServices{UsageAccounting: accounting})
+
+	err := router.applyModelRequestHookCharge("thread-1", "turn-1", &HookRunResult{
+		ModelRequestHookCharge: HookCharge{Overflow: true},
+	})
+	if !errors.Is(err, model.ErrUsageAccountingFailed) || !strings.Contains(err.Error(), "total hook cost exceeds f64 range") {
+		t.Fatalf("error = %v, want the overflow accounting failure", err)
+	}
+	if len(accounting.reports) != 0 {
+		t.Fatalf("host reports = %#v, want none", accounting.reports)
+	}
+}
+
+// recordingUsageAccounting keeps every report a host received.
+type recordingUsageAccounting struct {
+	reports []runtimeutil.AgentUsageReport
+}
+
+func (a *recordingUsageAccounting) ReportUsage(report runtimeutil.AgentUsageReport) (runtimeutil.UsageAccountingDecision, error) {
+	a.reports = append(a.reports, report)
+	return runtimeutil.UsageAccountingContinue, nil
 }

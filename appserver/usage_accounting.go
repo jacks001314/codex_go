@@ -83,15 +83,30 @@ func (r *RuntimeRouter) reportHookChargeToHost(threadID string, turnID string, c
 		return false, nil
 	}
 	decision, err := accounting.ReportUsage(runtimeutil.AgentUsageReport{
-		ThreadID:                        strings.TrimSpace(threadID),
-		TurnID:                          strings.TrimSpace(turnID),
-		AdditionalBudgetUnits:           charge.Units,
-		AdditionalBudgetUnitsOverflowed: charge.Overflowed,
+		ThreadID:              strings.TrimSpace(threadID),
+		TurnID:                strings.TrimSpace(turnID),
+		AdditionalBudgetUnits: charge.Units,
 	})
 	if err != nil {
 		return true, fmt.Errorf("%w: Host usage accounting failed: %v", model.ErrUsageAccountingFailed, err)
 	}
 	return true, r.applyUsageAccountingDecision(threadID, turnID, decision)
+}
+
+// stopNativeBudgetOnOverflow declines new work after an unrepresentable hook
+// total when a native rollout budget enforces its limit. A host-owned bill
+// leaves the local budget untouched (Rust #62559).
+func (r *RuntimeRouter) stopNativeBudgetOnOverflow(threadID string) {
+	if r == nil || r.services.UsageAccounting != nil {
+		return
+	}
+	budget := r.rolloutBudgetForThread(threadID)
+	if budget == nil {
+		return
+	}
+	if config, ok := budget.Config(); ok && !config.Advisory {
+		budget.StopOnOverflow()
+	}
 }
 
 // applyUsageAccountingDecision records what an Exhausted decision means for

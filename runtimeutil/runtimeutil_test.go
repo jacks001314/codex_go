@@ -203,20 +203,58 @@ func TestBudgetRecordHookChargeCombinesInOneRecordLikeRust(t *testing.T) {
 	}
 }
 
-func TestBudgetRecordHookChargeOverflowKeepsLowerBoundLikeRust(t *testing.T) {
+func TestBudgetRecordHookChargeOverflowRejectsBeforePostingLikeRust(t *testing.T) {
 	budget := NewBudget()
 	budget.Configure(BudgetConfig{LimitBudget: math.MaxFloat64, PrefillTokenWeight: 1, SamplingTokenWeight: 1})
-	exhausted, err := budget.RecordHookCharge(HookCharge{Units: 1e308, Overflowed: true})
-	if err != nil {
-		t.Fatalf("RecordHookCharge error = %v", err)
+	exhausted, err := budget.RecordHookCharge(HookCharge{Overflow: true})
+	if !errors.Is(err, ErrRolloutHookChargeOverflow) {
+		t.Fatalf("RecordHookCharge error = %v, want ErrRolloutHookChargeOverflow", err)
 	}
-	if !exhausted {
-		t.Fatal("overflowed hook total did not close even the largest allowance")
+	if exhausted {
+		t.Fatal("an unrepresentable receipt reported exhaustion")
 	}
-	// A later provider bill cannot make the overflowing total representable.
+	// Enforcement-enabled budgets still decline new work, but the refusal
+	// left the posted balance untouched.
+	if !budget.Exhausted() {
+		t.Fatal("overflow did not close the work gate")
+	}
 	exhausted, err = budget.RecordUsage(TokenUsage{CodexRolloutBudgetUnits: json.Number("1")})
-	if err != nil || !exhausted {
+	if err != nil || exhausted {
 		t.Fatalf("provider charge after overflow: exhausted=%v err=%v", exhausted, err)
+	}
+}
+
+func TestBudgetRecordUsageOverflowPreservesPostedBalanceLikeRust(t *testing.T) {
+	budget := NewBudget()
+	budget.Configure(BudgetConfig{LimitBudget: math.MaxFloat64, PrefillTokenWeight: 1, SamplingTokenWeight: 1})
+	if _, err := budget.RecordUsage(TokenUsage{CodexRolloutBudgetUnits: json.Number("1e308")}); err != nil {
+		t.Fatalf("first charge error = %v", err)
+	}
+	// The cumulative balance would overflow, so the staged bill is dropped.
+	_, err := budget.RecordUsage(TokenUsage{CodexRolloutBudgetUnits: json.Number("1e308")})
+	if !errors.Is(err, ErrRolloutBudgetUsedOverflow) {
+		t.Fatalf("second charge error = %v, want ErrRolloutBudgetUsedOverflow", err)
+	}
+	budget.mu.Lock()
+	posted := budget.posted.Total()
+	budget.mu.Unlock()
+	if posted != 1e308 {
+		t.Fatalf("posted balance = %v, want the preserved 1e308", posted)
+	}
+}
+
+func TestBudgetRecordUsageOverflowLeavesAdvisoryBudgetOpen(t *testing.T) {
+	budget := NewBudget()
+	budget.Configure(BudgetConfig{Advisory: true, LimitBudget: 10, PrefillTokenWeight: 1, SamplingTokenWeight: 1})
+	_, err := budget.RecordUsageWithHookCharge(
+		&TokenUsage{CodexRolloutBudgetUnits: json.Number("1e308")},
+		HookCharge{Units: 1e308},
+	)
+	if !errors.Is(err, ErrRolloutChargeAmountOverflow) {
+		t.Fatalf("charge error = %v, want ErrRolloutChargeAmountOverflow", err)
+	}
+	if budget.Exhausted() {
+		t.Fatal("an advisory budget stopped new work")
 	}
 }
 

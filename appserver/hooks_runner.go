@@ -74,10 +74,12 @@ type McpToolHookExecutor interface {
 }
 
 // HookCharge is the synchronous post-hook contribution carried by one
-// PostModelRequest run (Rust codex_hooks::HookCharge, #61580).
+// PostModelRequest run (Rust codex_hooks::HookCharge, #61580). Overflow
+// reports a total that exceeded f64 range, which is rejected before
+// posting (Rust #62559).
 type HookCharge struct {
-	Units      float64
-	Overflowed bool
+	Units    float64
+	Overflow bool
 }
 
 type HookRunRequest struct {
@@ -168,7 +170,7 @@ func (r *HookRunner) Run(ctx context.Context, request *HookRunRequest) (*HookRun
 	// response. Prices become visible together, after the whole group ran, and
 	// a failed sibling never erases another handler's contribution.
 	var hookUnits runtimeutil.BudgetUnitsSum
-	var largestHookPrice float64
+	hookUnitsRepresentable := true
 	for _, metadata := range selected {
 		if metadata.ExecutionMode == HookExecutionAsync && request.EventName != HookEventSessionEnd {
 			r.scheduleAsyncHook(ctx, request, metadata)
@@ -193,9 +195,12 @@ func (r *HookRunner) Run(ctx context.Context, request *HookRunRequest) (*HookRun
 		if request.BillableModelRequest && hookRunSucceeded(runResult) {
 			if price, priceErr := modelRequestHookPrice(runResult.StructuredContent); priceErr != "" {
 				result.ModelRequestHookInvalidPrice = priceErr
-			} else {
-				largestHookPrice = max(largestHookPrice, price)
-				hookUnits.Add(price)
+			} else if hookUnitsRepresentable {
+				next, added := hookUnits.CheckedAdd(price)
+				hookUnitsRepresentable = added
+				if added {
+					hookUnits = next
+				}
 			}
 		}
 		effect := hookRunEffect(request.EventName, runResult)
@@ -224,12 +229,12 @@ func (r *HookRunner) Run(ctx context.Context, request *HookRunRequest) (*HookRun
 	}
 	result.Runs = runs
 	if request.BillableModelRequest {
-		result.ModelRequestHookCharge.Units = hookUnits.Total()
-		if !isFiniteNumber(result.ModelRequestHookCharge.Units) {
-			// An individual price is a real lower bound even when the sum
-			// rounded past f64 range.
-			result.ModelRequestHookCharge = HookCharge{Units: largestHookPrice, Overflowed: true}
-			result.ModelRequestHookInvalidPrice = "total hook cost exceeds f64 range"
+		// An unrepresentable sum is rejected before posting, so the receipt
+		// carries no lower bound and no invalid-price diagnostic (Rust #62559).
+		if hookUnitsRepresentable {
+			result.ModelRequestHookCharge = HookCharge{Units: hookUnits.Total()}
+		} else {
+			result.ModelRequestHookCharge = HookCharge{Overflow: true}
 		}
 	}
 	return result, nil

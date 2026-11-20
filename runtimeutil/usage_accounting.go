@@ -3,16 +3,16 @@ package runtimeutil
 // AgentUsageReport is one completed response's bill handed to a host's usage
 // accounting (Rust AgentUsageReport, core/src/agent/host/usage.rs, #61958).
 // Usage is nil when the response reported no provider totals; the hook
-// contribution then travels on AdditionalBudgetUnits.
+// contribution then travels on AdditionalBudgetUnits. An unrepresentable hook
+// total is rejected before reporting, so every report is billable as sent
+// (Rust #62559).
 type AgentUsageReport struct {
 	ThreadID string
 	TurnID   string
 	Usage    *TokenUsage
 	// AdditionalBudgetUnits is the synchronous post-hook price settled with the
-	// response. Overflowed reports that summing the individual hook prices
-	// exceeded f64 range, so the value is a real lower bound.
-	AdditionalBudgetUnits           float64
-	AdditionalBudgetUnitsOverflowed bool
+	// response.
+	AdditionalBudgetUnits float64
 }
 
 // UsageAccountingDecision is a host's answer to one AgentUsageReport. Every

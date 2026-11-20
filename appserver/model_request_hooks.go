@@ -102,13 +102,21 @@ func (r *RuntimeRouter) runModelRequestHook(ctx context.Context, threadID string
 // applyModelRequestHookCharge posts a billable PostModelRequest run's hook
 // price to the thread's shared rollout budget, or to the host's accounting
 // when one is installed (Rust #61580/#61958). A bad price surfaces as a
-// terminal failure only after its valid siblings were posted.
+// terminal failure only after its valid siblings were posted; an
+// unrepresentable total is refused before anything is posted (#62559).
 func (r *RuntimeRouter) applyModelRequestHookCharge(threadID string, turnID string, hookResult *HookRunResult) error {
 	if hookResult == nil {
 		return nil
 	}
-	if charge := hookResult.ModelRequestHookCharge; charge.Units != 0 || charge.Overflowed {
-		hookCharge := runtimeutil.HookCharge{Units: charge.Units, Overflowed: charge.Overflowed}
+	charge := hookResult.ModelRequestHookCharge
+	if charge.Overflow {
+		// An unrepresentable hook total is refused before any host report, so
+		// a partial charge never reaches the account (Rust #62559).
+		r.stopNativeBudgetOnOverflow(threadID)
+		return fmt.Errorf("%w: %v", model.ErrUsageAccountingFailed, runtimeutil.ErrRolloutHookChargeOverflow)
+	}
+	if charge.Units != 0 {
+		hookCharge := runtimeutil.HookCharge{Units: charge.Units}
 		if handled, err := r.reportHookChargeToHost(threadID, turnID, hookCharge); handled {
 			if err != nil {
 				return err
