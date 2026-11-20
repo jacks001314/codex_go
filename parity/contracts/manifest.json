@@ -2342,6 +2342,7 @@
     "ext/guardian-v3/src/retrieval_tools.rs",
     "ext/guardian-v3/src/selection.rs",
     "ext/guardian-v3/src/subscription_tools.rs",
+    "ext/guardian-v3/src/delivery.rs",
     "message-board/src/local/json_search.rs",
     "message-board/src/local/catalog.rs",
     "message-board/src/read_view.rs"
@@ -2350,11 +2351,12 @@
     "agentboard",
     "agentboard/guardian_retrieval.go",
     "agentboard/guardian_subscriptions.go",
+    "agentboard/guardian_inbox.go",
     "appserver/guardian_review_retrieval.go"
    ],
    "phase": "P1",
    "status": "complete",
-   "verifier": "TestGuardianRetrievalSearchesLiveUnsubscribedPostsLikeRust;TestGuardianSubscriptionToolsChangeOnlyCallerLikeRust;TestLocalBoardFixedReadViewFreezesCatalogAndCutoffLikeRust;TestGuardianBoardRetrievalGuidanceLikeRust;TestGuardianRetrievalGuidanceSelectsInstalledToolsLikeRust;TestLocalBoardAppendWithSubscribersUsesInsertionStateLikeRust;TestLocalBoardReadPostTextsByIDLikeRust"
+   "verifier": "TestGuardianRetrievalSearchesLiveUnsubscribedPostsLikeRust;TestGuardianSubscriptionToolsChangeOnlyCallerLikeRust;TestLocalBoardFixedReadViewFreezesCatalogAndCutoffLikeRust;TestGuardianBoardRetrievalGuidanceLikeRust;TestGuardianRetrievalGuidanceSelectsInstalledToolsLikeRust;TestLocalBoardAppendWithSubscribersUsesInsertionStateLikeRust;TestLocalBoardReadPostTextsByIDLikeRust;TestGuardianInboxDeliversQueuedEvidenceInSourceOrderLikeRust;TestGuardianInboxRetainsEvidenceAcrossSubscriptionChangesLikeRust;TestGuardianInboxRejectsWrongBoardOrCallerLikeRust"
   },
   {
    "id": "world-state-skill-catalog-delta-grants",

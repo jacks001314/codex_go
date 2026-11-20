@@ -51130,9 +51130,9 @@
     "codex_go"
    ],
    "evidence": [
-    "Landed: live retrieval and caller-scoped subscription tools (see #62133), plus LocalAgentMessageBoard.AppendWithSubscribers, which reports the subscribers present inside the post's write transaction and none on an idempotent retry (landed 7e854776); the in-memory and remote boards reject it like Rust's trait default.",
-    "Pending: the Guardian v3 housekeeper and per-actor inbox that consume this call, the catch-up acknowledgement that waits for a requested history position, and the cutoff/housekeeper rewrites (Rust cutoff.rs, housekeeper.rs, inbox.rs, sampling.rs).",
-    "Tests: go test ./agentboard -run 'AppendWithSubscribers' -count=1"
+    "Landed: live retrieval and caller-scoped subscription tools (see #62133), LocalAgentMessageBoard.AppendWithSubscribers, which reports the subscribers present inside the post's write transaction and none on an idempotent retry (landed 7e854776), and GuardianLiveDelivery/GuardianActorInbox, which queue one committed post per derived ordinal for every actor subscribed at insertion, reject evidence that is not newer than the queue head, and retain the queue across later subscription changes (landed fc1afa5b).",
+    "Pending: the housekeeper that routes originals and publishes them after every destination commits, the catch-up acknowledgement that waits for a requested history position, and the cutoff/housekeeper/sampling rewrites (Rust cutoff.rs, housekeeper.rs, sampling.rs).",
+    "Tests: go test ./agentboard -run 'AppendWithSubscribers|GuardianInbox' -count=1"
    ],
    "kind": "runtime",
    "sha": "5916098d02247b6c9a91a0c89af5259b0ddc4112",
@@ -51144,9 +51144,9 @@
     "codex_go"
    ],
    "evidence": [
-    "Landed: LocalAgentMessageBoard.ReadPostTextsByID reads whole bodies in caller order for at most one board page, fails on an unknown post, and the captured view answers it through its own cutoff (landed 7e854776).",
-    "Pending: the per-conversation delivery bookkeeping that drains an actor's inbox when its reviewer is idle, injects whole originals within the reviewer's model budget without starting a turn, delivers each queued original once, and replays the inbox in a replacement conversation (Rust actor.rs, conversation.rs, inbox.rs, delivery.rs).",
-    "Tests: go test ./agentboard -run 'ReadPostTextsByID' -count=1"
+    "Landed: LocalAgentMessageBoard.ReadPostTextsByID reads whole bodies in caller order for at most one board page and fails on an unknown post (landed 7e854776); GuardianActorInbox.Deliver drains a finite queue prefix up to the observed length, reads bodies a page at a time, admits one whole-original batch in source order within the reviewer's model budget, advances its cursor only after the callback records the item, and lets a replacement conversation replay the queue from its own cursor (landed fc1afa5b).",
+    "Pending: draining the inbox when a reviewer becomes idle and before reserving its conversation for a verdict, and the retained-conversation bookkeeping that injects admitted originals without starting a model turn (Rust actor.rs, conversation.rs).",
+    "Tests: go test ./agentboard -run 'ReadPostTextsByID|GuardianInbox' -count=1"
    ],
    "kind": "runtime",
    "sha": "9e3681977bee58e7b423def05bfcdb38db0c25e1",
