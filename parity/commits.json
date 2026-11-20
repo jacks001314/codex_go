@@ -21614,11 +21614,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 322 (audit): N/A - Go's Linux sandbox launcher always emits --unshare-pid and has no LinuxSandboxPidNamespace startup choice, helper namespace argument, or inherit mode. There is no exec-server startup/config carrier for preserving the caller PID namespace."
+    "Rust #47989 startup-only PID namespace inheritance. Go carrier: linuxsandbox.LinuxSandboxPIDNamespace (isolate default, inherit opt-in) is validated at sandbox.BuildCommandRunPlan and only ever set from trusted executor startup (app.runExecServer -> Server.SetLinuxSandboxPIDNamespace -> FileSystemSandboxContext/process launch, plus execserver.RemoteConfig for remote executors); CreateCommandArgsForLinuxSandbox emits --inherit-pid-namespace first after the helper so default argv stays byte-identical for older helpers. The helper parses the hidden --inherit-pid-namespace flag, validateLinuxSandboxCommand keeps --no-proc rejected for transparent TCP, execBubblewrap omits --unshare-pid and --proc /proc (injectAsPid1 therefore omits --as-pid-1), masks /proc when the inherited view must be hidden, and binds the caller procfs read-only for a :minimal policy; the inner seccomp stage receives the same flag so it reuses the inherited namespace.",
+    "Tests: go test ./sandbox ./sandbox/linuxsandbox ./execserver -run 'PIDNamespace' -count=1; go test ./sandbox/... ./execserver/... -count=1; go vet ./app ./sandbox ./sandbox/linuxsandbox ./execserver ./cli; GOOS=linux go build ./... and GOOS=linux go vet ./sandbox/... ./execserver/... (the helper is //go:build linux and cannot execute on this Windows checkout, so the linux-only cases are cross-compiled and the shared argv, gate and startup-state carriers are exercised by tests that run here)."
    ],
    "kind": "security",
    "sha": "aa380897f67b91e1a47d530d7286d497b6726d3f",
-   "status": "not_applicable",
+   "status": "complete",
    "subject": "Add startup-only PID namespace inheritance to exec-server (#47989)"
   },
   {
@@ -50833,15 +50834,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Flag surface only: cli/cli.go parses the global --linux-sandbox-pid-namespace into ExecServerOptions.LinuxSandboxPIDNamespace with clap's isolate/inherit error, but no package consumes that value, so requesting inherit changes nothing today.",
-    "The launcher always isolates the PID namespace: sandbox/linuxsandbox/linux.go builds `bwrap --die-with-parent --unshare-pid` unconditionally (#61372 carrier), so Rust's inherit path - reuse the existing /proc view, verify socket visibility before starting the command - has no Go equivalent.",
-    "Transparent TCP is still refused rather than allowed under inherit: linux.go rejects it when `cmd.NoProc` with 'transparent TCP requires managed networking and private bubblewrap namespaces', which is the message Rust #62100 rewrote to 'managed networking, bubblewrap, and procfs' once inherit became acceptable.",
-    "Rust's separate relay/workload supervision does not map onto the Go topology: sandbox/linuxsandbox/transparent_tcp_workload_linux.go serves the relay in-process (prepareTransparentTCPRelay plus relay.start) and starts the workload with exec.Command, so there is no relay child to fork, no codex_process_hardening::disable_process_dumping equivalent for relay descriptors, and no relay-exit setpgid kill of the workload group.",
-    "blocked on a Linux host: these files are //go:build linux, so the residual cannot be compiled or exercised from this Windows checkout; implement the inherit arg/gate change plus its supervisor semantics on a Linux runner together with Rust's inherited-namespace coverage."
+    "Rust #62100 transparent TCP with inherited PID namespaces. validateLinuxSandboxCommand now allows --transparent-tcp together with --inherit-pid-namespace and reports \"transparent TCP requires managed networking, bubblewrap, and procfs\" for the remaining rejections. Go carrier: linuxsandbox.LinuxSandboxPIDNamespace (isolate default, inherit opt-in) is validated at sandbox.BuildCommandRunPlan and only ever set from trusted executor startup (app.runExecServer -> Server.SetLinuxSandboxPIDNamespace -> FileSystemSandboxContext/process launch, plus execserver.RemoteConfig for remote executors); CreateCommandArgsForLinuxSandbox emits --inherit-pid-namespace first after the helper so default argv stays byte-identical for older helpers. The helper parses the hidden --inherit-pid-namespace flag, validateLinuxSandboxCommand keeps --no-proc rejected for transparent TCP, execBubblewrap omits --unshare-pid and --proc /proc (injectAsPid1 therefore omits --as-pid-1), masks /proc when the inherited view must be hidden, and binds the caller procfs read-only for a :minimal policy; the inner seccomp stage receives the same flag so it reuses the inherited namespace.",
+    "In inherited mode runTransparentTCPCommand starts the workload in its own process group with Pdeathsig SIGKILL, so the workload cannot outlive the in-process relay, and waitForTransparentTCPCommand kills that group when the relay data path stops before the command exits (relay.stopped). Go serves the relay in-process instead of forking a relay child, so there is no relay descriptor to harden; the existing TUN probe readiness check already proves socket identities are visible before the workload starts. Background descendants that outlive a normally exiting inherited-mode workload are not reaped, matching the documented Rust limit.",
+    "Tests: go test ./sandbox ./sandbox/linuxsandbox ./execserver -run 'PIDNamespace|TransparentTCP' -count=1; go test ./sandbox/... ./execserver/... -count=1; GOOS=linux go vet ./sandbox/... ./execserver/..."
    ],
-   "kind": "runtime",
+   "kind": "security",
    "sha": "5cba3aec84fb7fb13785ab9da330ee6debca21e6",
-   "status": "partial",
+   "status": "complete",
    "subject": "Support transparent TCP with inherited PID namespaces (#62100)"
   },
   {
