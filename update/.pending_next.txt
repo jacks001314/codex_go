@@ -2,7 +2,6 @@
 f99317520575edcb1dd9e732222152be32dd273c	2026-11-17	Add policy-checked dispatch for bundled App hooks (#62080)
 6d94d4af1070d8c7230a1027a3a18753e0796c4e	2026-11-17	Isolate Guardian v2 score caches by policy revision (#62083)
 5cba3aec84fb7fb13785ab9da330ee6debca21e6	2026-11-17	Support transparent TCP with inherited PID namespaces (#62100)
-39a7b53fa47fc987acf7d2c268588da7cb5202ed	2026-11-17	Trust the bundled Memory session hook without saved hashes (#62112)
 8dcd56d0cb84fa8220c6056d3ecdb861b7b7b61c	2026-11-17	Add external header auth for existing realtime calls (#62114)
 5f775c7f4f5f3e0b3bb6eb499b280e023e697f71	2026-11-17	Add `/rc` to manage remote control from the TUI (#62121)
 7d7af7b903a82123ce9362f8ac5a7048d924918d	2026-11-17	Share picker setup for the TUI status line and terminal title (#62126)

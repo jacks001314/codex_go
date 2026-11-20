@@ -50922,11 +50922,14 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "appserver/bundled_hooks.go bundledHookAppConnectorID recognizes the exact bundled Memory SessionStart declaration (codex-dream-memory@openai-bundled, matcher ^(startup|compact)$, codex_apps / codex_dream_memory.get_mec, empty input) and discovery marks it builtin so it is trusted without a saved hash and hidden from hooks/list (Rust #62112).",
+    "Dispatch still proves the identity: HookMetadata.expectedAppConnectorID reaches HookMcpCall and RuntimeRouter.validateBundledAppHookTarget requires the host Apps server without an environment and the registered connector in the live tool catalog.",
+    "tests: appserver TestBundledMemoryHookAppConnectorIDLikeRust, TestBundledMemoryHookTrustRequiresExactDeclarationLikeRust (exact/wildcard matcher/non-empty input), TestBundledMemoryHookRunnerCarriesConnectorLikeRust",
+    "plan: update/plan_2026_11_20.md batch 3"
    ],
    "kind": "runtime",
    "sha": "39a7b53fa47fc987acf7d2c268588da7cb5202ed",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Trust the bundled Memory session hook without saved hashes (#62112)"
   },
   {
