@@ -49,9 +49,10 @@ func TestStatuslineProviderReselectionRestartsFailedReaderLikeRust(t *testing.T)
 	}
 }
 
-// Rust #61985 reloading_the_effective_feature_gate: a config reload that turns
-// the extensions gate off hides the provider and turning it back on restages it.
-func TestStatuslineProviderConfigReloadTogglesGateLikeRust(t *testing.T) {
+// Rust #62387 reloading_the_local_provider_preserves_the_server_feature_gate:
+// the extensions gate belongs to the launch, so a saved local preference that
+// flips tui_extensions_statusline no longer moves the live provider read.
+func TestStatuslineProviderConfigReloadKeepsStartupGateLikeRust(t *testing.T) {
 	compressStatuslineProviderClock(t, 5*time.Millisecond, time.Second)
 	model := statuslineProviderPollingModel(t,
 		func(context.Context, StatuslineProviderResourceRequest) ([]StatuslineProviderContent, error) {
@@ -61,23 +62,21 @@ func TestStatuslineProviderConfigReloadTogglesGateLikeRust(t *testing.T) {
 	if model.statuslineProviderRead == nil {
 		t.Fatal("enabled gate did not stage the provider")
 	}
+	staged := model.statuslineProviderRead
 
 	model.applyLocalSettingsValues(SettingsWriteResult{FeatureSettings: map[string]bool{"tui_extensions_statusline": false}})
 	model.refreshStatusControls()
-	if model.statuslineProviderRead != nil {
-		t.Fatal("disabled gate kept the provider read")
+	if model.statuslineProviderRead != staged {
+		t.Fatal("a local settings reload ended the launch's provider read")
 	}
-	if strings.Contains(model.statusLineContent(), statuslineProviderInitializing) {
-		t.Fatalf("disabled gate kept provider content: %q", model.statusLineContent())
+	if got := model.statusLineContent(); got != statuslineProviderInitializing {
+		t.Fatalf("local settings reload footer = %q", got)
 	}
 
 	model.applyLocalSettingsValues(SettingsWriteResult{FeatureSettings: map[string]bool{"tui_extensions_statusline": true}})
 	model.refreshStatusControls()
-	if model.statuslineProviderRead == nil {
-		t.Fatal("re-enabled gate did not restage the provider")
-	}
-	if got := model.statusLineContent(); got != statuslineProviderInitializing {
-		t.Fatalf("re-enabled gate footer = %q", got)
+	if model.statuslineProviderRead != staged {
+		t.Fatal("a local settings reload restaged the provider")
 	}
 }
 

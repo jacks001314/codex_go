@@ -66,7 +66,8 @@ func TestStatusLineSetupOffersCustomAuthoringLikeRust(t *testing.T) {
 	}
 
 	disabled := statuslineAuthoringModel(t, nil, false)
-	disabled.featureSettings = map[string]bool{}
+	// Rust #62387: the gate is the launch value, not the live preferences.
+	disabled.statuslineFeatureEnabled = false
 	disabled.openStatusLineSetup()
 	for _, id := range statuslineSetupOptionIDs(disabled) {
 		if id == statuslineProviderPickerActionID || id == statuslineCreateCustomActionID {

@@ -491,8 +491,13 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	// server. Consent runs before server settings are read so a newly saved
 	// decision is part of the configuration this session starts with.
 	interactiveRemoteTrustCheck(ctx, endpoint, root, shouldRunInteractiveTUI(stdin, stdout))
+	// Rust #62387: the custom status line gate belongs to the connected app
+	// server's effective configuration. A failed or missing read leaves it off
+	// instead of falling back to this client's own configuration file.
+	statuslineFeatureEnabled := false
 	if remoteSettings, err := interactiveRemoteLoadSettings(ctx, endpoint); err == nil {
 		settings = remoteSettings
+		statuslineFeatureEnabled = codextea.StatuslineFeatureEnabledFromConfig(remoteSettings.FeatureSettings)
 	}
 	settings = interactiveScreenReaderAnimationSettings(settings)
 	keymapConfig := interactiveKeymapConfig(root)
@@ -737,6 +742,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnReadIDEContext:                 interactiveIDEContextReader,
 		OnApproveAutoReviewDenial:        interactiveRemoteApproveAutoReviewDenialHandler(ctx, endpoint),
 		FeatureSettings:                  settings.FeatureSettings,
+		StatuslineFeatureEnabled:         &statuslineFeatureEnabled,
 		MultiAgentV2MaxConcurrentThreads: settings.MultiAgentV2MaxConcurrentThreads,
 		DaybreakDefault:                  settings.DaybreakDefault,
 		UseMemories:                      settings.UseMemories,

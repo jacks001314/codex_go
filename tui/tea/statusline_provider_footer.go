@@ -18,7 +18,6 @@ import (
 	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/config"
-	"codex_go/features"
 	bottompane "codex_go/tui/bottom_pane"
 )
 
@@ -215,7 +214,7 @@ func (m *Model) selectedStatuslineProvider() *config.StatusLineProviderSelection
 	if m == nil || m.statuslineDisconnected || m.readOnlyThread {
 		return nil
 	}
-	if !features.Enabled(m.featureSettings, "tui_extensions_statusline") {
+	if !m.customStatuslineEnabled() {
 		return nil
 	}
 	// A host without the resolve/read hooks cannot serve the provider, so the

@@ -1866,6 +1866,12 @@ type Options struct {
 	InitialMessages       <-chan bubbletea.Msg
 	InitialHistoryCells   []historycell.HistoryCell
 	FeatureSettings       map[string]bool
+	// StatuslineFeatureEnabled overrides where this launch's custom status line
+	// gate comes from (Rust #62387 startup::statusline_enabled). A caller that
+	// read the connected app server's effective configuration sets it so a failed
+	// read leaves the gate off instead of falling back to the TUI's own
+	// configuration; nil derives the gate from FeatureSettings.
+	StatuslineFeatureEnabled *bool
 	// MultiAgentV2MaxConcurrentThreads feeds the Ultra reasoning concurrency
 	// warning in the session-only model picker (Rust #45831).
 	MultiAgentV2MaxConcurrentThreads int
@@ -3262,6 +3268,13 @@ type Model struct {
 	// statuslineProviderRead is the footer read bound to the displayed thread,
 	// saved provider, and working directory (Rust ActiveStatuslineRead, #61979).
 	statuslineProviderRead *activeStatuslineProviderRead
+	// statuslineFeatureEnabled is the custom status line gate this launch read
+	// from the connected app server's effective configuration (Rust #62387
+	// ChatWidget::statusline_feature_enabled). It is deliberately not re-read
+	// from featureSettings, so saving the /experimental toggle or reloading local
+	// status line preferences only takes effect on the next launch.
+	statuslineFeatureEnabled bool
+
 	// statuslineDisconnected hides provider content while the app-server
 	// transport is down (Rust #61985 statusline_disconnected): reads would only
 	// fail, so the built-in status line takes the footer until a new session
@@ -3747,6 +3760,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		mcpStartup:                       chatwidget.NewMcpStartupRoundState(),
 		initialMessages:                  options.InitialMessages,
 		featureSettings:                  cloneBoolMapTea(options.FeatureSettings),
+		statuslineFeatureEnabled:         statuslineFeatureEnabledForLaunch(options),
 		multiAgentV2MaxConcurrentThreads: options.MultiAgentV2MaxConcurrentThreads,
 		daybreakEnabled:                  daybreakFeatureEnabledForAccount(options.FeatureSettings, options.HasChatGPTAccount, state.AccountDisplay) && options.DaybreakDefault,
 		disablePasteBurst:                options.DisablePasteBurst,

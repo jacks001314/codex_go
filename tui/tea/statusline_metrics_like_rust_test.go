@@ -154,7 +154,7 @@ func TestStatuslineMetricsAppliesAnalyticsConsentLikeRust(t *testing.T) {
 func TestStatuslineMetricsRecordsPickerOpenedLikeRust(t *testing.T) {
 	sink := &recordingStatuslineSink{}
 	model := NewModel(codextui.NewState(nil), Options{Width: 80, Height: 24})
-	model.featureSettings = map[string]bool{"tui_extensions_statusline": true}
+	model.statuslineFeatureEnabled = true
 	model.statuslineMetrics = newStatuslineMetricsWithEnv(
 		statuslineMetricsConfig(config.OtelExporterKindStatsig, "", nil), sink, "codex-tui", cleanStatuslineEnv)
 
@@ -166,7 +166,7 @@ func TestStatuslineMetricsRecordsPickerOpenedLikeRust(t *testing.T) {
 	// The feature gate stays in front of the counters: a disabled statusline
 	// never opens the picker and never records.
 	sink.calls = nil
-	model.featureSettings = map[string]bool{"tui_extensions_statusline": false}
+	model.statuslineFeatureEnabled = false
 	_ = model.openStatuslineProviderPicker()
 	if len(sink.calls) != 0 {
 		t.Fatalf("disabled feature recorded %#v", sink.calls)
@@ -282,7 +282,7 @@ func TestStatuslineMetricsFirstPromptModesLikeRust(t *testing.T) {
 
 	// Without the feature the counter still reports, labelled feature_off.
 	sink.calls = nil
-	model.featureSettings = map[string]bool{"tui_extensions_statusline": false}
+	model.statuslineFeatureEnabled = false
 	model.switchThreadID("thread-off")
 	model.submitRequest(SubmitRequest{Prompt: "off"}, false)
 	if len(sink.calls) != 1 || sink.calls[0].tags["mode"] != "feature_off" {

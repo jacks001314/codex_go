@@ -91,7 +91,8 @@ func TestStatusLineSetupOffersProviderPickerLikeRust(t *testing.T) {
 	}
 
 	plain := statuslineProviderPickerModel(t, nil, nil, &[]SettingsEdit{})
-	plain.featureSettings = map[string]bool{}
+	// Rust #62387: the gate is the launch value, not the live preferences.
+	plain.statuslineFeatureEnabled = false
 	plain.openStatusLineSetup()
 	for _, option := range plain.modal.options {
 		if option.ID == statuslineProviderPickerActionID {

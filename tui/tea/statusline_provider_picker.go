@@ -9,7 +9,6 @@ import (
 	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/config"
-	"codex_go/features"
 )
 
 // Rust parity: codex-rs/tui/src/app/statusline_picker.rs (#61988).
@@ -113,13 +112,14 @@ func parseProviderOptionID(id string) (server string, tool string, ok bool) {
 	return server, tool, true
 }
 
-// statuslineStatuslinePickerEnabled mirrors the Rust feature gate around the
-// "Choose a statusline plugin" action.
+// statuslineProviderPickerEnabled mirrors the startup-frozen custom status line
+// gate in front of the "Choose a statusline plugin" action (Rust #62387
+// open_statusline_picker -> ChatWidget::custom_statusline_enabled).
 func (m *Model) statuslineProviderPickerEnabled() bool {
 	if m == nil {
 		return false
 	}
-	return features.Enabled(m.featureSettings, "tui_extensions_statusline")
+	return m.customStatuslineEnabled()
 }
 
 // openStatuslineProviderPicker stashes the open item editor and shows the

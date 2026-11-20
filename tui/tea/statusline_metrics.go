@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"codex_go/config"
-	"codex_go/features"
 	"codex_go/telemetry"
 )
 
@@ -121,7 +120,7 @@ func (s *StatuslineMetrics) RecordFirstPrompt(mode string) {
 
 // statuslineFirstPromptMode mirrors Rust's record_first_prompt mode match.
 func (m *Model) statuslineFirstPromptMode() string {
-	if !features.Enabled(m.featureSettings, "tui_extensions_statusline") {
+	if !m.customStatuslineEnabled() {
 		return "feature_off"
 	}
 	if m.selectedStatuslineProvider() != nil {
