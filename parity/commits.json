@@ -50530,11 +50530,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Rust removed a bubblewrap special case that overlaid /etc/ssh/ssh_config.d with an empty directory. Go's Linux sandbox path never binds that directory, so there is no Go special case to remove; filesystem policy already governs it.",
+    "verified: no ssh_config masking exists under sandbox/ (rg -i 'ssh_config|/etc/ssh' sandbox)",
+    "plan: update/plan_2026_11_20.md batch 2"
    ],
    "kind": "runtime",
    "sha": "595f497f15a3e3239a62f6b99cf61067df00f0d0",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Stop masking system SSH configuration drop-ins in Linux sandboxes (#62058)"
   },
   {
@@ -50542,11 +50544,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "The commit switches Bazel's MCP permission-hook tests to Bazel's Python runtime. Go has no Bazel build or Python hook fixtures; its hook tests run under go test.",
+    "plan: update/plan_2026_11_20.md batch 2"
    ],
    "kind": "runtime",
    "sha": "8b5223dd7bb74bd486a6d126e388c1566f8a8ae7",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Use Bazel's Python runtime for MCP permission hook tests (#62061)"
   },
   {
@@ -50568,11 +50571,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Rust queues turn/interrupt requests and settles them when the target turn reaches a terminal event. Go's handleTurnInterrupt validates the target turn synchronously (turn.ErrInterruptTurnMismatch / ErrNoActiveTurnToInterrupt), replies before publishing the interrupted lifecycle, and has no pending-request queue or thread-listener shutdown path, so the delayed-terminal-event acknowledgement race cannot occur.",
+    "verified: appserver/runtime_router.go handleTurnInterrupt/interruptRuntimeTurn and turnInterruptRuntimeError",
+    "plan: update/plan_2026_11_20.md batch 2"
    ],
    "kind": "runtime",
    "sha": "58627e6feac9f69cbbb405d85f4f7343eca75a35",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Fix turn interrupt reply ordering and shutdown handling (#62066)"
   },
   {
@@ -50580,11 +50585,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "The commit refreshes Cargo dependency locks and RustSec advisory exceptions. Go resolves its dependencies through go.mod/go.sum and has no Cargo lockfiles or RustSec gate.",
+    "plan: update/plan_2026_11_20.md batch 2"
    ],
    "kind": "runtime",
    "sha": "7444076df4fbbc7cb265f6ca35d194dcb4b67af6",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Refresh dependency locks and RustSec advisory exceptions (#62067)"
   },
   {
@@ -50646,11 +50652,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Rust rewrites the SyncFull/SyncDelta history-review preambles in guardian-context composition. Go composes the reviewer prompt from transcript sections ('Recent transcript:' plus the vendored policy template) and never emits that preamble, so the text has no Go carrier.",
+    "verified: no 'request action you are assessing' / 'since your last approval assessment' text in the Go tree (rg over *.go)",
+    "plan: update/plan_2026_11_20.md batch 2"
    ],
    "kind": "runtime",
    "sha": "ce5a565ba0f2e459e953bb18f1cedd5440f46d6b",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Simplify Guardian history review preambles (#62074)"
   },
   {
@@ -50731,11 +50739,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "state/guardian_transcript.go ApplyGuardianTranscriptInstructions appends the JSON transcript provenance grammar after the reviewer instructions, so the configured policy and output contract stay first and the contract still terminates the prompt (Rust #62090).",
+    "tests: state TestApplyGuardianTranscriptInstructionsLikeRust; appserver TestGuardianTranscriptJSONModeLikeRust asserts the reviewer instructions end with the provenance grammar",
+    "plan: update/plan_2026_11_20.md batch 1"
    ],
    "kind": "runtime",
    "sha": "bc2c328483ee60e82e08ad48f3a5efbb5712f914",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Append transcript provenance to Guardian JSON instructions (#62090)"
   },
   {
@@ -50887,11 +50897,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "The commit logs macOS platform user-verification enrollment diagnostics from the Rust user-verification crate's Secure Enclave provider. Go has no macOS platform user-verification module (its MCP user-verification handling covers challenge/attestation), so there is no enrollment path to instrument.",
+    "plan: update/plan_2026_11_20.md batch 2"
    ],
    "kind": "runtime",
    "sha": "8011b92bc82d4cc1b6dc3f35c0cd28768c797c97",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Log macOS user verification enrollment failure diagnostics (#62107)"
   },
   {
@@ -51037,11 +51048,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "agent.PreparedChildContext carries BaseInstructions (text plus custom/model provenance) and DeveloperInstructions; appserver/host_invocation.go preparedChildInheritedInstructions projects the parent record's base instructions and resolves the V2 subagent developer override before the parent's developer instructions (Rust #62128).",
+    "tests: appserver TestPrepareChildPreservesInheritedInstructionsLikeRust, TestPrepareChildOmitsAbsentDeveloperInstructionsLikeRust",
+    "landed in 8564ec61; plan: update/plan_2026_11_20.md batch 2"
    ],
    "kind": "runtime",
    "sha": "e73da8bd1be78317a8748867606dd143a6c6a63b",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Preserve base and developer instructions in host child preparation (#62128)"
   },
   {
@@ -51146,11 +51159,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "app/session.go lists resume-picker rows from the local state database first (UseStateDBOnly) and only falls back to the filesystem scan when the database has nothing to serve (Rust #62138).",
+    "tests: app/named_session_lookup_test.go asserts UseStateDBOnly for named-session lookups; app/interactive_resume_bounded_page_like_rust_test.go covers the bounded page read",
+    "landed in 8564ec61; plan: update/plan_2026_11_20.md batch 2"
    ],
    "kind": "runtime",
    "sha": "3e5f072ca1e3e75e3151656d411d094489e3faa2",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Use the state database first for TUI analytics thread lists (#62138)"
   },
   {
@@ -51226,11 +51241,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "auth.AccountUpdatedNotification carries Reason *AccountUpdateReason (workspaceRoutingReady/unknown) serialized as null for login, logout and workspace switches; appserver/workspace_routing.go sets workspaceRoutingReady on the initial saved-workspace routing notification when the credential owner is unchanged (Rust #62145).",
+    "tests: appserver TestWorkspaceRoutingReadyAccountUpdateReasonLikeRust, TestAccountUpdatedPlainReasonIsNullLikeRust",
+    "plan: update/plan_2026_11_20.md batch 1"
    ],
    "kind": "runtime",
    "sha": "67d8266e06e469e5aef78a23881c7e19c37030b0",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Signal workspace routing readiness in account updates (#62145)"
   },
   {
@@ -52437,9 +52454,729 @@
    "sha": "c764c44a0559b36e016efefcfeb473966162e5d5",
    "status": "audit_pending",
    "subject": "Let extensions attach metadata to MCP tool requests (#62435)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "83f73a818cb319a19aab0b2d99ee3c1d562e6110",
+   "status": "audit_pending",
+   "subject": "Defer Git worktree status until the turn starts (#62437)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "739f934a15983c3d117ce9677c20bcc99370713f",
+   "status": "audit_pending",
+   "subject": "Add Windows MXC sandbox launch diagnostics (#62439)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "b9559ff737000a4fcf7a0e12c3353cca1ea4d008",
+   "status": "audit_pending",
+   "subject": "Update the `openai-docs` skill for GPT-6.2 (#62447)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "083bf59b6b01582f62171249f6a6ff0686928229",
+   "status": "audit_pending",
+   "subject": "Send authorized connector results over Responses WebSockets (#62474)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "336dc645fbaf00b3f0b56f598aa872b244f687b5",
+   "status": "audit_pending",
+   "subject": "Use gRPC for all code-mode host connections (#62476)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "6271f35f527bf7709b9af5e4e752e9f122706a17",
+   "status": "audit_pending",
+   "subject": "Box the thread startup future in `spawn_thread` (#62477)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "d52a39b307b77e81cd272d08189341d944542b82",
+   "status": "audit_pending",
+   "subject": "Honor elastic budgets for attached Guardian reviews (#62489)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "b0ecad9cf9c08318d79e9d7f91520e609d1c4d1a",
+   "status": "audit_pending",
+   "subject": "Refresh managed Guardian policy across Codex threads (#62496)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "1826d80eca9793d686bb39c9d272fd7db892a565",
+   "status": "audit_pending",
+   "subject": "Expose Daybreak availability in model discovery (#62499)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "39c29c3bb620f91e84a3bb266bb496dfb697c101",
+   "status": "audit_pending",
+   "subject": "Add Statsig counters for `exec_command` latency (#62507)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "097558c1bdfc6318cb0ce80a64816ca4d61c7814",
+   "status": "audit_pending",
+   "subject": "Reuse the parsed bundled model catalog (#62525)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "dabe0643a4876ed94adbea3101d40228c96264a9",
+   "status": "audit_pending",
+   "subject": "Avoid cloning the `PostToolUse` hook payload (#62532)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "27e16c08c39de52a51af7c6105daa3821961469f",
+   "status": "audit_pending",
+   "subject": "Add built-in namespace guidance and budget tool description prefixes (#62534)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "0b248182be6ff496c7b11401e3217c4c380848ca",
+   "status": "audit_pending",
+   "subject": "Respect app-server turn admission for agent mailbox wakes (#62537)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "f6a1b619125edfb3eeaf19866493889e32f97e22",
+   "status": "audit_pending",
+   "subject": "Borrow user input in extension turn contexts (#62540)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "ab00c6d640e19d771d77859dc3eeff66f8a9168f",
+   "status": "audit_pending",
+   "subject": "Prevent remote app-server shutdown from hanging on a full queue (#62547)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "76aa61878757298bebde2d4382194ba1a8f9335a",
+   "status": "audit_pending",
+   "subject": "Render multiline Mermaid flowchart edge labels (#62550)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "ac784eb10e6d02486b00d383b64822b69473c0e8",
+   "status": "audit_pending",
+   "subject": "Enable MCP connection sharing by default (#62552)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "325123ae4a72faedf66939795bd0affd5c3939dd",
+   "status": "audit_pending",
+   "subject": "Render `\\widetilde` in terminal Markdown math (#62554)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "4d517cce4abf9ccfe999b0a078d1b84f6043709b",
+   "status": "audit_pending",
+   "subject": "Preserve process state across concurrent unified exec updates (#62557)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "d9f6fcff940fac1ec2f371d25c6768829e7c654c",
+   "status": "audit_pending",
+   "subject": "Stage ICU data for mksnapshot in rusty_v8 builds (#62558)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "65d69f25b4cd552398f0097ab22745e44bebe0e6",
+   "status": "audit_pending",
+   "subject": "Reject overflowing rollout budget charges before posting (#62559)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "308ab1b895229dbd258167cdbc97f450fca3d741",
+   "status": "audit_pending",
+   "subject": "Document how to render TUI shortcut labels (#62560)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "692292695bbacbd3e39eb3f3bf36129a94712806",
+   "status": "audit_pending",
+   "subject": "Fix timing races in core integration tests (#62564)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "617ad20df0a3658ab7cff155531260b5edeac3ef",
+   "status": "audit_pending",
+   "subject": "Remove the real-time wait from the OTLP headers helper timeout test (#62566)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "65454c7b994e01cfe594b4c3b0f9971bf70aafdb",
+   "status": "audit_pending",
+   "subject": "Add OpenTelemetry for subagent lifecycles (#62567)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "0762dfa710e76125173ceceeb12bb8a24b82e598",
+   "status": "audit_pending",
+   "subject": "Box the managed credential loading future (#62568)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "99870c4f4921ee03f820e8e322ef97ed671ea6ef",
+   "status": "audit_pending",
+   "subject": "Add justification to custom statusline rows (#62569)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "3869f396aa6d748015b3636e8f97ed9d353371b9",
+   "status": "audit_pending",
+   "subject": "Keep async Guardian scoring active for serving probes (#62571)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "6eea32808167c4b87508e9611ba116f061ee315c",
+   "status": "audit_pending",
+   "subject": "Use the cloud emoji for cloud thread labels (#62573)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "2f0374456fd5cd280ee76de54220ab8315a0f8d0",
+   "status": "audit_pending",
+   "subject": "Render LaTeX underbraces in TUI display math (#62577)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "40a848caf4b540e0d12d00c3e7c1b4de7dd7b4dc",
+   "status": "audit_pending",
+   "subject": "Allow macOS installer cleanup despite unrelated mount warnings (#62582)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "81ef12b6174a0a04cb8f6ee337fcde61686a6ab8",
+   "status": "audit_pending",
+   "subject": "Refresh open sidebar file previews when files change (#62583)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "90dd6cf9df1d3236a7f8085f65eb76c75277646f",
+   "status": "audit_pending",
+   "subject": "Enforce refreshed Guardian policy on running threads (#62585)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "8b2070d29f95c17d5b7e17c77107740d3e340b3a",
+   "status": "audit_pending",
+   "subject": "Centralize schema selection for config diagnostics (#62587)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "5f8c36e8368cb97720bd9c21b2dafacccbdc9679",
+   "status": "audit_pending",
+   "subject": "Support a host-selected inference provider for Guardian (#62588)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "30c69e60a36897a74dd5a5ca1c7747eb613ed0ad",
+   "status": "audit_pending",
+   "subject": "Remove cumulative MCP attribution from requests and rollouts (#62589)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "bc75380d6a5ee05584ad432162157799a8a2d646",
+   "status": "audit_pending",
+   "subject": "Explain Windows sandbox logon policy failures (#62593)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "665e0a9a65555d8705a66d358fbb6ea964f864ce",
+   "status": "audit_pending",
+   "subject": "Stream app-server `fs/readFile` responses over stdio (#62599)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "93000976e8f7f38a1a840fc1f973779b2d044b16",
+   "status": "audit_pending",
+   "subject": "Retry transient exec-server connection failures (#62601)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "b16fddf9d03f39cff7e21dea1af1ed0201f1100c",
+   "status": "audit_pending",
+   "subject": "Apply additional context when turn input is delivered (#62602)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "75f2d93e7cac9fc63540b786b8adc0f3e205b5dc",
+   "status": "audit_pending",
+   "subject": "Expose current turn admission state on `CodexThread` (#62604)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "efcc0cf917330e397ad6f34f1445e0bc32a0286e",
+   "status": "audit_pending",
+   "subject": "Enable Guardian V2 scoring with an explicit Guardian provider (#62607)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "6633c6e09ab64bb1cb15c16ce8ad1da927406c06",
+   "status": "audit_pending",
+   "subject": "Apply backpressure to app-server request replay on thread resume (#62609)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "6a8a81166aa243fe210382dfe988d94a70a4bef2",
+   "status": "audit_pending",
+   "subject": "Refresh plugin recommendations after installed state changes (#62610)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "db263d4f5471f4fd2e91ae0955556ace66aeb1c5",
+   "status": "audit_pending",
+   "subject": "Refresh Guardian policy on config reload and account changes (#62614)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "5bdb5e8b3c4b43e4a10e53f2f8a3813d318d1f9c",
+   "status": "audit_pending",
+   "subject": "Split in-memory execution policy rules into a separate crate (#62615)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "26f70f94609c213b6eb7fc048ac6c2a88f7c9f59",
+   "status": "audit_pending",
+   "subject": "Handle rollout budget decisions in each accounting path (#62621)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "d0264b756e02078c16eb51e96556a2a494421887",
+   "status": "audit_pending",
+   "subject": "Share slash command argument range mapping in the TUI (#62624)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "ead489ac4d06b13a69909173469a17be126348a4",
+   "status": "audit_pending",
+   "subject": "Retry Guardian model discovery in the background (#62627)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "583ec348cf9007361d09513c716549c41d4d8128",
+   "status": "audit_pending",
+   "subject": "Centralize thread context ID allocation (#62633)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "30607648d995f17baa93f23b6bc385f52158bbd4",
+   "status": "audit_pending",
+   "subject": "Centralize request and prefix ID handling in `ThreadContextIds` (#62635)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "f16c998db5285b34d65e764c91721fa16ee8a9e6",
+   "status": "audit_pending",
+   "subject": "Reduce rollout scanning overhead when listing threads (#62636)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "78f6b113039b6cd6119bc857081d726c8924df9d",
+   "status": "audit_pending",
+   "subject": "Add center and end alignment to status line rows (#62637)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "9224da4ce189c14d9423af2ac573f2ab3abb7969",
+   "status": "audit_pending",
+   "subject": "Defer queue-only mail after a retained final answer (#62639)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "e720e6c80bbddb4e30611d1f501dbff82933eaff",
+   "status": "audit_pending",
+   "subject": "Reuse executor Discovery V2 inventories across turns (#62640)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "7642e80723386d113ee5c95647164f72e3d68d6d",
+   "status": "audit_pending",
+   "subject": "Release persisted MCP tool results from active-turn memory (#62641)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "64026788f3ad6021bac81fd484abf036b97903d1",
+   "status": "audit_pending",
+   "subject": "Hide the warning navigation hint for a single warning (#62642)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "983feef7a1968279960480e79d06f46b06800134",
+   "status": "audit_pending",
+   "subject": "Shrink npm release tarballs with libdeflate (#62643)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+   ],
+   "kind": "runtime",
+   "sha": "10ca17496f5c934b9cf4baacda95c4a785f95630",
+   "status": "audit_pending",
+   "subject": "Pass inherited history visibility to the thread store (#62644)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "c764c44a0559b36e016efefcfeb473966162e5d5",
+ "rustToInclusive": "10ca17496f5c934b9cf4baacda95c4a785f95630",
  "schemaVersion": 1
 }
