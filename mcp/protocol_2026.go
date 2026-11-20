@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"codex_go/features"
 )
 
 const (
@@ -66,16 +68,19 @@ func hostOwnedAppsProtocolModeFromValues(values map[string]any) MCPProtocolMode 
 }
 
 func mcpFeatureEnabled(values map[string]any, key string) bool {
-	features, _ := values["features"].(map[string]any)
-	switch feature := features[key].(type) {
+	table, _ := values["features"].(map[string]any)
+	switch feature := table[key].(type) {
 	case bool:
 		return feature
 	case map[string]any:
-		if enabled, _ := feature["enabled"].(bool); enabled {
-			return true
+		if enabled, ok := feature["enabled"].(bool); ok {
+			return enabled
 		}
 	}
-	return false
+	// Rust reads these keys through Features, which applies the registry
+	// default, so a stable default-on feature stays enabled without an explicit
+	// setting (#62366 lazy stdio startup, #62552 connection sharing).
+	return features.Defaults()[key]
 }
 
 // effectiveMCPProtocolMode mirrors Rust McpConnectionSet resolution (#44571): a
@@ -255,6 +260,16 @@ func validateMCPModernDiscovery(result *json.RawMessage) error {
 		}
 	}
 	return errMCPModernProtocolUnsupported
+}
+
+// isEmptyMCPDiscoveryResult reports whether a `server/discover` reply carried no
+// result at all, which some legacy helpers send for unknown methods (#62552).
+func isEmptyMCPDiscoveryResult(result *json.RawMessage) bool {
+	if result == nil {
+		return true
+	}
+	trimmed := bytes.TrimSpace(*result)
+	return len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) || bytes.Equal(trimmed, []byte("{}"))
 }
 
 func isMCPDiscoveryFallbackError(err error) bool {

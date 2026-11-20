@@ -386,8 +386,9 @@ type RuntimeConfig struct {
 	// tool catalog and connect on first use.
 	LazyStdioStartup bool
 	// DiscoverLocalStdio mirrors Rust McpConfig::discover_local_stdio (feature
-	// mcp_connection_sharing, disabled by default): eligible local stdio servers
-	// are probed with `server/discover` before the legacy handshake (#57210).
+	// mcp_connection_sharing, stable and on by default since #62552): eligible
+	// local stdio servers are probed with `server/discover` before the legacy
+	// handshake (#57210).
 	DiscoverLocalStdio bool
 	// NetworkPolicyMetadata, when set, supplies call-scoped network policy
 	// metadata to trusted ChatGPT MCP servers (Rust NetworkPolicyMetadataProvider,

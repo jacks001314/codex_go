@@ -865,6 +865,12 @@ func (c *stdioClient) discoverModernProtocol(ctx context.Context, options *stdio
 	if response != nil && response.Error != nil {
 		return nil, newMCPRemoteError("server/discover", response.Error)
 	}
+	if isEmptyMCPDiscoveryResult(response.Result) {
+		// Rust #62552: some legacy helpers answer unknown methods with {}. Treat
+		// that as an unsupported method so the same pipe can run the legacy
+		// initialize instead of failing the whole handshake.
+		return nil, errMCPModernProtocolUnsupported
+	}
 	if err := validateMCPModernDiscovery(response.Result); err != nil {
 		if isMCPLegacyInitializeResult(response.Result) {
 			// A helper that treats its first request as initialize has already
@@ -923,11 +929,47 @@ func (c *stdioClient) restartLegacyHandshake(ctx context.Context, options *stdio
 		return err
 	}
 	stderr := c.currentStderr()
-	if err := c.initializeLegacyHandshake(ctx, options); err != nil {
+	// Rust #62552: a legacy restart gets the configured startup timeout again
+	// instead of the remainder of the discovery attempt, so a helper that needs
+	// longer than the discovery watchdog still initializes.
+	retryCtx, cancelRetry := c.freshStartupContext(ctx)
+	defer cancelRetry()
+	if err := c.initializeLegacyHandshake(retryCtx, options); err != nil {
 		_ = c.Close()
 		return decorateMCPStdioError(err, stderr)
 	}
 	return nil
+}
+
+// freshStartupContext bounds a legacy restart with the configured startup
+// timeout while still following the caller's cancellation (Rust #62552 gives
+// the legacy retry a fresh timeout).
+func (c *stdioClient) freshStartupContext(parent context.Context) (context.Context, context.CancelFunc) {
+	limit := c.startupTimeout()
+	if limit <= 0 {
+		return context.WithCancel(parent)
+	}
+	ctx, cancelTimeout := context.WithTimeout(context.WithoutCancel(parent), limit)
+	// The parent's own deadline is what the retry replaces; an explicit
+	// cancellation still aborts it.
+	stop := context.AfterFunc(parent, func() {
+		if errors.Is(parent.Err(), context.Canceled) {
+			cancelTimeout()
+		}
+	})
+	return ctx, func() {
+		stop()
+		cancelTimeout()
+	}
+}
+
+// startupTimeout reports the configured startup budget for this server; zero
+// means the caller's deadline alone applies.
+func (c *stdioClient) startupTimeout() time.Duration {
+	if c == nil || c.config == nil {
+		return 0
+	}
+	return c.config.StartupTimeout
 }
 
 // stopProcessForRestart tears down only the current helper so this client can

@@ -199,7 +199,9 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs #57210): try protocol discovery before
 	// initializing eligible local stdio servers, and share those connections
 	// across chats when they negotiate MCP 2026-07-28 (#57211).
-	{Key: "mcp_connection_sharing", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust #62552: local stdio discovery is stable and on by default, so eligible
+	// local helpers are probed with `server/discover` before the legacy handshake.
+	{Key: "mcp_connection_sharing", Stage: StageStable, DefaultEnabled: true},
 	// Rust (codex-rs/features/src/lib.rs #61444): use the app server's
 	// process-local launch directories for shared REPL stdio servers.
 	{Key: "mcp_shared_repl_cwd", Stage: StageUnderDevelopment, DefaultEnabled: false},

@@ -52,6 +52,7 @@ func TestMCPDiscoverLocalStdioHandshakeRecoveryLikeRust(t *testing.T) {
 		mode       string
 		wantStarts int
 		wantModern bool
+		startup    time.Duration
 	}{
 		{mode: "legacy", wantStarts: 2},
 		{mode: "legacy-init-first", wantStarts: 1},
@@ -59,6 +60,8 @@ func TestMCPDiscoverLocalStdioHandshakeRecoveryLikeRust(t *testing.T) {
 		{mode: "legacy-reject-late-initialize", wantStarts: 2},
 		{mode: "legacy-silent", wantStarts: 2},
 		{mode: "legacy-versions", wantStarts: 1},
+		{mode: "legacy-empty", wantStarts: 1},
+		{mode: "legacy-slow-initialize", wantStarts: 2, startup: 1200 * time.Millisecond},
 		{mode: "modern", wantStarts: 1, wantModern: true},
 	}
 	for _, test := range tests {
@@ -66,11 +69,15 @@ func TestMCPDiscoverLocalStdioHandshakeRecoveryLikeRust(t *testing.T) {
 			if err := os.Remove(markers); err != nil && !os.IsNotExist(err) {
 				t.Fatalf("Remove(%q) error = %v", markers, err)
 			}
+			startup := test.startup
+			if startup == 0 {
+				startup = 6 * time.Second
+			}
 			client := newMCPStdioClient(&ServerConfig{
 				Command:        executable,
 				Args:           []string{"-test.run=TestMCPDiscoverLocalStdioHandshakeRecoveryLikeRust", "--"},
 				ProtocolMode:   MCPProtocolDiscoverLocalStdio,
-				StartupTimeout: 6 * time.Second,
+				StartupTimeout: startup,
 				Env: map[string]string{
 					mcpDiscoveryHelperEnv:     "1",
 					mcpDiscoveryHelperModeEnv: test.mode,
@@ -217,11 +224,20 @@ func TestMCPConnectionSharingGatesLocalStdioDiscoveryLikeRust(t *testing.T) {
 		t.Fatalf("docs config = %#v, ok=%v, want discovery mode", config, ok)
 	}
 
+	// Rust #62552 promoted the flag to stable and default-on, so an absent key
+	// still enables discovery.
+	enabledByDefault := RuntimeConfigFromValues(map[string]any{
+		"mcp_servers": map[string]any{"docs": map[string]any{"command": "helper"}},
+	}, "")
+	if !enabledByDefault.DiscoverLocalStdio {
+		t.Fatal("discovery is disabled by default")
+	}
 	disabled := RuntimeConfigFromValues(map[string]any{
+		"features":    map[string]any{"mcp_connection_sharing": false},
 		"mcp_servers": map[string]any{"docs": map[string]any{"command": "helper"}},
 	}, "")
 	if disabled.DiscoverLocalStdio {
-		t.Fatal("discovery is enabled by default")
+		t.Fatal("an explicit opt-out still enabled discovery")
 	}
 	config, ok = NewMCPService(disabled).serverConfig("docs")
 	if !ok || config.ProtocolMode != MCPProtocolLegacy {
@@ -351,6 +367,12 @@ func runMCPDiscoveryHelper(t *testing.T) {
 			continue
 		case method == "server/discover" && mode == "legacy-versions":
 			fail(-32022, "unsupported protocol", map[string]any{"supported": []string{defaultMCPProtocol}})
+		case method == "server/discover" && mode == "legacy-empty":
+			reply(map[string]any{})
+		case method == "server/discover" && mode == "legacy-slow-initialize":
+			// Stay silent: the discovery watchdog expires, so the legacy
+			// handshake has to run on a fresh helper with its own budget.
+			continue
 		case method == "server/discover" && mode == "auth":
 			fail(401, "unauthorized", nil)
 			return
@@ -368,6 +390,11 @@ func runMCPDiscoveryHelper(t *testing.T) {
 				"capabilities":      map[string]any{"tools": map[string]any{}},
 			})
 		case method == "initialize":
+			if mode == "legacy-slow-initialize" {
+				// Within a fresh startup timeout, but longer than what is left of
+				// the original discovery attempt (#62552).
+				time.Sleep(800 * time.Millisecond)
+			}
 			if mode == "legacy-reject-late-initialize" && index != 0 {
 				fail(-32600, "initialize must be the first request", nil)
 				continue
