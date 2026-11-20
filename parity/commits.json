@@ -51081,11 +51081,15 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "MCPEMASubjectToken (mcp/ema_exchange.go) distinguishes a refresh-token subject from an ID-token subject, and ExchangeMCPEMAIDJAGWithCredentials sends subject_token_type urn:ietf:params:oauth:token-type:id_token for the latter after rejecting an empty subject or an unknown type before any request.",
+    "MCPEMAStoredSubject (mcp/ema_identity.go) mirrors Rust stored_ema_subject: a non-empty refresh token wins and only needs the stored ID token to corroborate issuer, subject and audience bindings (expiry ignored), while a sign-in without a refresh token promotes a live ID token to the exchange subject; an expired or unbindable assertion, or a missing one, becomes EMAAuthFailureReauthenticationRequired. MCPEMAStoredIdentityIsUsable mirrors stored_ema_identity_is_usable for credential status, and storedEnterpriseCredential pins the subject before a saved sign-in is reused (mcp/ema_runtime.go).",
+    "validateEnterpriseOAuthCredentials no longer requires a refresh token, so an IdP that omits one still completes sign-in; the flow keeps requesting openid offline_access and stores the ID token as the exchange subject (mcp/enterprise_oauth_login.go, mcp/enterprise_oauth_flow.go).",
+    "tests: mcp TestEnterpriseOAuthLoginWithoutRefreshTokenLikeRust, TestValidateEnterpriseOAuthCredentialsMatchesRust, TestMCPEMAStoredSubjectLikeRust, TestMCPEMAExchangePublicClientRoundTripPreservesSignedNarrowing (refresh and id_token subjects), TestEMAAuthManagerExchangesStoredIDTokenWithoutRefreshTokenLikeRust",
+    "landed in 1a50ed5e4dc9a1d7678943d0b15f87f2a3c1dd59; plan: update/plan_2026_11_20.md batch 20"
    ],
    "kind": "runtime",
    "sha": "7066a55a7b94345757758385a538c72fda571b84",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Support enterprise MCP sign-in without refresh tokens (#62129)"
   },
   {
