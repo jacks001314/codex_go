@@ -1329,19 +1329,15 @@ func NewStatusLineSetupView(configured []bottompane.StatusLineItem, useThemeColo
 		Selected:    useThemeColors,
 		ThemeColors: true,
 	})
-	for _, item := range AllStatusLineItems() {
-		id := StatusLineItemID(item)
-		preview := ""
-		if previewItem := StatusLineItemPreviewItem(item); previewItem != "" {
-			preview, _ = previewData.ValueFor(previewItem)
-		}
+	for _, row := range statusSurfacePickerRows(previewData, configured, AllStatusLineItems(),
+		StatusLineItemID, StatusLineItemPreviewItem, StatusLineItemDescription) {
 		items = append(items, StatusLineSetupItem{
-			Item:        item,
-			ID:          id,
-			Name:        id,
-			Description: StatusLineItemDescription(item, previewData),
-			Preview:     preview,
-			Selected:    containsStatusLineItem(configured, item),
+			Item:        row.Item,
+			ID:          row.ID,
+			Name:        row.Name,
+			Description: row.Description,
+			Preview:     row.Preview,
+			Selected:    row.Selected,
 		})
 	}
 	line, ok := previewData.StatusLineForItems(configured, useThemeColors)
@@ -1379,19 +1375,15 @@ func NewTerminalTitleSetupView(configured []TerminalTitleItem, previewData Statu
 		configured = NewStatusSurfaceSelections(nil, nil).TerminalTitleItems
 	}
 	items := make([]TerminalTitleSetupItem, 0, len(AllTerminalTitleItems()))
-	for _, item := range AllTerminalTitleItems() {
-		id := item.ID()
-		preview := ""
-		if previewItem, ok := item.PreviewItem(); ok {
-			preview, _ = previewData.ValueFor(previewItem)
-		}
+	for _, row := range statusSurfacePickerRows(previewData, configured, AllTerminalTitleItems(),
+		TerminalTitleItem.ID, terminalTitlePreviewItem, TerminalTitleItemDescription) {
 		items = append(items, TerminalTitleSetupItem{
-			Item:        item,
-			ID:          id,
-			Name:        id,
-			Description: TerminalTitleItemDescription(item, previewData),
-			Preview:     preview,
-			Selected:    containsTerminalTitleItem(configured, item),
+			Item:        row.Item,
+			ID:          row.ID,
+			Name:        row.Name,
+			Description: row.Description,
+			Preview:     row.Preview,
+			Selected:    row.Selected,
 		})
 	}
 	previewText, _ := PreviewLineForTitleItems(configured, previewData)
@@ -1401,6 +1393,90 @@ func NewTerminalTitleSetupView(configured []TerminalTitleItem, previewData Statu
 		Items:       items,
 		PreviewText: previewText,
 	}
+}
+
+// statusSurfacePickerRow is one selectable row of a status-surface setup
+// picker.
+type statusSurfacePickerRow[T comparable] struct {
+	Item        T
+	ID          string
+	Name        string
+	Description string
+	Preview     string
+	Selected    bool
+}
+
+// statusSurfacePickerRows builds the status line and terminal title setup rows
+// with one helper (Rust #62126 StatusSurfacePreviewData::picker_items):
+// configured rows keep their order, a repeated row or one the picker cannot
+// offer is dropped, every remaining canonical row follows in enum order, and
+// the two usage-limit rows carry their live name when the preview has a live
+// value.
+func statusSurfacePickerRows[T comparable](
+	previewData StatusSurfacePreviewData,
+	configured []T,
+	all []T,
+	id func(T) string,
+	previewItem func(T) StatusSurfacePreviewItem,
+	description func(T, StatusSurfacePreviewData) string,
+) []statusSurfacePickerRow[T] {
+	offerable := make(map[T]struct{}, len(all))
+	for _, item := range all {
+		offerable[item] = struct{}{}
+	}
+	seen := make(map[T]struct{}, len(all))
+	rows := make([]statusSurfacePickerRow[T], 0, len(all))
+	appendRow := func(item T, selected bool) {
+		rowID := id(item)
+		previewKey := previewItem(item)
+		preview := ""
+		if previewKey != "" {
+			preview, _ = previewData.ValueFor(previewKey)
+		}
+		rows = append(rows, statusSurfacePickerRow[T]{
+			Item:        item,
+			ID:          rowID,
+			Name:        rateLimitPickerName(previewData, previewKey, rowID),
+			Description: description(item, previewData),
+			Preview:     preview,
+			Selected:    selected,
+		})
+	}
+	for _, item := range configured {
+		if _, ok := offerable[item]; !ok {
+			continue
+		}
+		if _, repeat := seen[item]; repeat {
+			continue
+		}
+		seen[item] = struct{}{}
+		appendRow(item, true)
+	}
+	for _, item := range all {
+		if _, repeat := seen[item]; repeat {
+			continue
+		}
+		appendRow(item, false)
+	}
+	return rows
+}
+
+// rateLimitPickerName prefers the live usage-limit name for the two limit rows
+// and keeps the canonical id otherwise, matching Rust's picker copy.
+func rateLimitPickerName(previewData StatusSurfacePreviewData, previewItem StatusSurfacePreviewItem, fallback string) string {
+	switch previewItem {
+	case StatusPreviewFiveHourLimit, StatusPreviewWeeklyLimit:
+		return previewData.RateLimitItemName(previewItem, fallback)
+	default:
+		return fallback
+	}
+}
+
+// terminalTitlePreviewItem adapts TerminalTitleItem::preview_item to the
+// picker-row callback, where "" means the row has no previewed value.
+func terminalTitlePreviewItem(item TerminalTitleItem) StatusSurfacePreviewItem {
+	previewItem, _ := item.PreviewItem()
+	return previewItem
 }
 
 func AllStatusLineItems() []bottompane.StatusLineItem {

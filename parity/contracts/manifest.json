@@ -671,7 +671,7 @@
    "rustPaths": [
     "protocol/src/environment.rs",
     "core/src/session/environment.rs",
-    "execpolicy/src/policy.rs",
+    "execpolicy-rules/src/policy.rs",
     "core/src/tools/approvals.rs"
    ],
    "kind": "shared-fixtures",
@@ -2332,12 +2332,12 @@
    "kind": "source-surface",
    "rustPaths": [
     "ext/guardian-v3/src/retrieval_tools.rs",
-    "ext/guardian-v3/src/selection.rs",
+    "ext/guardian-v3/src/evidence.rs",
     "ext/guardian-v3/src/subscription_tools.rs",
     "ext/guardian-v3/src/delivery.rs",
     "message-board/src/local/json_search.rs",
     "message-board/src/local/catalog.rs",
-    "message-board/src/read_view.rs"
+    "message-board/src/api.rs"
    ],
    "goPaths": [
     "agentboard",
@@ -2799,9 +2799,9 @@
    "kind": "source-surface",
    "rustPaths": [
     "code-mode-protocol/src/grpc/codex.code_mode.v1.proto",
-    "code-mode-protocol/src/host/mod.rs",
-    "code-mode-protocol/src/host/payload.rs",
-    "code-mode/src/remote_session.rs",
+    "code-mode-protocol/src/grpc/mod.rs",
+    "code-mode/src/grpc_session/conversion.rs",
+    "code-mode/src/grpc_session/mod.rs",
     "code-mode-runtime/src/service.rs",
     "code-mode-host/src/lib.rs",
     "code-mode-host/src/grpc/mod.rs",
@@ -3574,6 +3574,24 @@
    "phase": "P3",
    "status": "complete",
    "verifier": "TestStatusLineSetupOffersCustomAuthoringLikeRust;TestStatusLineCreateCustomBindsBundledSkillLikeRust;TestStatusLineCreateCustomFallsBackWithoutSkillLikeRust;TestStatusLineCreateCustomActivatesOnEnterLikeRust;TestStatusLineCreateCustomPreservesPreviousDraftLikeRust;TestStatusLineCreateCustomDropsStaleSkillReadLikeRust"
+  },
+  {
+   "id": "tui-status-surface-picker-rows",
+   "kind": "terminal-ui",
+   "rustPaths": [
+    "tui/src/bottom_pane/status_surface_preview.rs",
+    "tui/src/bottom_pane/status_line_setup.rs",
+    "tui/src/bottom_pane/title_setup.rs",
+    "tui/src/bottom_pane/multi_select_picker.rs"
+   ],
+   "goPaths": [
+    "tui/chatwidget/status_controls.go",
+    "tui/chatwidget/status_surfaces.go",
+    "tui/tea/status_controls.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestStatusSurfacePickersShareConfiguredOrderingLikeRust;TestStatusSurfacePickersUseLiveRateLimitCopyLikeRust"
   },
   {
    "id": "gpt-6.2-model-catalog",

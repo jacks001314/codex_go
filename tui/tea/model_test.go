@@ -6881,9 +6881,13 @@ func TestModelStatusLineSetupModalTogglesAndSaves(t *testing.T) {
 		t.Fatalf("status line setup must always expose the theme colour option:\n%s", view)
 	}
 
-	// Rust #60027 lists "Use theme colors" first; move to the model item
-	// before toggling it on.
-	model.Update(key(keymsg.KeyDown))
+	// Rust #60027 lists "Use theme colors" first, and Rust #62126 keeps the
+	// configured rows in their configured order ahead of the remaining enum
+	// rows, so the default status line leads the picker.
+	if len(model.modal.options) < 4 || model.modal.options[1].ID != "model-with-reasoning" {
+		t.Fatalf("picker rows = %#v, want the configured rows first", model.modal.options[:min(4, len(model.modal.options))])
+	}
+	model.modal.selected = modalOptionIndexByID(t, model.modal.options, "model")
 	model.Update(key(keymsg.KeySpace))
 	model.Update(key(keymsg.KeyEnter))
 	if view := model.viewString(); !strings.Contains(view, "gpt-5") {
