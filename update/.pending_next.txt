@@ -4,8 +4,6 @@
 ea6b64fd12b804ca1fbce54f772df6ac44d538ad	2026-11-17	Use the local session index in the multi-backend resume picker (#62127)
 7066a55a7b94345757758385a538c72fda571b84	2026-11-17	Support enterprise MCP sign-in without refresh tokens (#62129)
 3bf4e138fe0b27aed7dfa3ea5e0a382e3ac5bf1f	2026-11-17	Stream partial thread search results and support cancellation (#62132)
-5916098d02247b6c9a91a0c89af5259b0ddc4112	2026-11-17	Use live evidence retrieval and subscriber inboxes in Guardian (#62135)
-9e3681977bee58e7b423def05bfcdb38db0c25e1	2026-11-17	Deliver subscribed evidence to idle Guardian reviewers (#62136)
 f39fcc1bfbcb04afbe7df8793545bf4a00f5f266	2026-11-17	Hold Cloud reply streams until history can be refreshed (#62140)
 2f5c413e19776bc684ac781b57dc069e4ab9fa21	2026-11-18	Batch mouse wheel scrolling in the TUI (#62146)
 18352dc4e8757d652e4102a17abc76601847b8da	2026-11-18	Show subagents and their status in the TUI sidebar chooser (#62149)

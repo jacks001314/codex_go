@@ -51139,9 +51139,9 @@
     "codex_go"
    ],
    "evidence": [
-    "Landed: live retrieval and caller-scoped subscription tools (see #62133), LocalAgentMessageBoard.AppendWithSubscribers, which reports the subscribers present inside the post's write transaction and none on an idempotent retry (landed 7e854776), and GuardianLiveDelivery/GuardianActorInbox, which queue one committed post per derived ordinal for every actor subscribed at insertion, reject evidence that is not newer than the queue head, and retain the queue across later subscription changes (landed fc1afa5b).",
-    "Pending: the housekeeper that routes originals and publishes them after every destination commits, the catch-up acknowledgement that waits for a requested history position, and the cutoff/housekeeper/sampling rewrites (Rust cutoff.rs, housekeeper.rs, sampling.rs).",
-    "Tests: go test ./agentboard -run 'AppendWithSubscribers|GuardianInbox' -count=1"
+    "Landed: live retrieval and caller-scoped subscription tools (see #62133), LocalAgentMessageBoard.AppendWithSubscribers, which reports the subscribers present inside the post's write transaction and none on an idempotent retry (landed 7e854776), GuardianLiveDelivery/GuardianActorInbox, which queue one committed post per derived ordinal for every actor subscribed at insertion and reject evidence that is not newer than the queue head (landed fc1afa5b), and GuardianHousekeeper, which lists the board catalog for the decider, accepts only a decision that routes every source in order with distinct known-or-described destinations, refreshes changed descriptions, appends under the ordinal request id and publishes the committed posts (landed 8a152420).",
+    "Pending: the host runtime pieces the housekeeper samples through - the captured evidence snapshot with original-evidence encoding, the evidence cursor with pending/acknowledge, and the tool-free sampler conversation with its budget and account-change cancellation - plus the catch-up acknowledgement that waits for a requested history position.",
+    "Tests: go test ./agentboard -run 'AppendWithSubscribers|GuardianInbox|GuardianHousekeeper' -count=1"
    ],
    "kind": "runtime",
    "sha": "5916098d02247b6c9a91a0c89af5259b0ddc4112",
@@ -51153,9 +51153,9 @@
     "codex_go"
    ],
    "evidence": [
-    "Landed: LocalAgentMessageBoard.ReadPostTextsByID reads whole bodies in caller order for at most one board page and fails on an unknown post (landed 7e854776); GuardianActorInbox.Deliver drains a finite queue prefix up to the observed length, reads bodies a page at a time, admits one whole-original batch in source order within the reviewer's model budget, advances its cursor only after the callback records the item, and lets a replacement conversation replay the queue from its own cursor (landed fc1afa5b).",
+    "Landed: LocalAgentMessageBoard.ReadPostTextsByID reads whole bodies in caller order for at most one board page and fails on an unknown post (landed 7e854776); GuardianActorInbox.Deliver drains a finite queue prefix up to the observed length, admits one whole-original batch in source order within the reviewer's model budget, advances its cursor only after the callback records the item, and lets a replacement conversation replay the queue (landed fc1afa5b); GuardianHousekeeper publishes each committed original to those inboxes (landed 8a152420).",
     "Pending: draining the inbox when a reviewer becomes idle and before reserving its conversation for a verdict, and the retained-conversation bookkeeping that injects admitted originals without starting a model turn (Rust actor.rs, conversation.rs).",
-    "Tests: go test ./agentboard -run 'ReadPostTextsByID|GuardianInbox' -count=1"
+    "Tests: go test ./agentboard -run 'ReadPostTextsByID|GuardianInbox|GuardianHousekeeper' -count=1"
    ],
    "kind": "runtime",
    "sha": "9e3681977bee58e7b423def05bfcdb38db0c25e1",

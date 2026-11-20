@@ -2341,11 +2341,12 @@
     "agentboard/guardian_retrieval.go",
     "agentboard/guardian_subscriptions.go",
     "agentboard/guardian_inbox.go",
+    "agentboard/guardian_housekeeper.go",
     "appserver/guardian_review_retrieval.go"
    ],
    "phase": "P1",
    "status": "complete",
-   "verifier": "TestGuardianRetrievalSearchesLiveUnsubscribedPostsLikeRust;TestGuardianSubscriptionToolsChangeOnlyCallerLikeRust;TestGuardianBoardRetrievalGuidanceLikeRust;TestGuardianRetrievalGuidanceSelectsInstalledToolsLikeRust;TestLocalBoardAppendWithSubscribersUsesInsertionStateLikeRust;TestLocalBoardReadPostTextsByIDLikeRust;TestGuardianInboxDeliversQueuedEvidenceInSourceOrderLikeRust;TestGuardianInboxRetainsEvidenceAcrossSubscriptionChangesLikeRust;TestGuardianInboxRejectsWrongBoardOrCallerLikeRust"
+   "verifier": "TestGuardianRetrievalSearchesLiveUnsubscribedPostsLikeRust;TestGuardianSubscriptionToolsChangeOnlyCallerLikeRust;TestGuardianBoardRetrievalGuidanceLikeRust;TestGuardianRetrievalGuidanceSelectsInstalledToolsLikeRust;TestLocalBoardAppendWithSubscribersUsesInsertionStateLikeRust;TestLocalBoardReadPostTextsByIDLikeRust;TestGuardianInboxDeliversQueuedEvidenceInSourceOrderLikeRust;TestGuardianInboxRetainsEvidenceAcrossSubscriptionChangesLikeRust;TestGuardianInboxRejectsWrongBoardOrCallerLikeRust;TestGuardianHousekeeperRoutesAndPublishesLikeRust;TestGuardianHousekeeperRejectsInvalidRoutingLikeRust;TestGuardianHousekeeperStopsAfterErrorLikeRust;TestGuardianHousekeeperInstructionsLikeRust"
   },
   {
    "id": "world-state-skill-catalog-delta-grants",
