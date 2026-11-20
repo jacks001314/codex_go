@@ -500,21 +500,41 @@ func (b *LocalAgentMessageBoard) UpsertChannel(ctx context.Context, caller strin
 // fanout finish even if the tool caller disconnects; delivery is attempted once
 // and a failed notice never fails the committed post.
 func (b *LocalAgentMessageBoard) Post(ctx context.Context, caller string, request PostRequest) (*PostMetadata, error) {
-	return b.writePost(ctx, caller, request, postDiscussion)
+	return b.writePost(ctx, caller, request, postDiscussion, nil)
 }
 
 // Append stores evidence without automatic subscriptions or notifications, even
 // on a discussion board. It uses the same access checks, caller-scoped request
 // IDs and durable write path as posting (Rust #56461).
 func (b *LocalAgentMessageBoard) Append(ctx context.Context, caller string, request AppendRequest) (*PostMetadata, error) {
-	return b.writePost(ctx, caller, PostRequest{
+	return b.writePost(ctx, caller, appendPostRequest(request), postSilentAppend, nil)
+}
+
+// AppendWithSubscribers stores evidence silently and also reports the agents
+// subscribed to the destination when the post was inserted, so a host consumer
+// can queue it without re-reading the board. Subscription state after the write
+// never decides delivery. A retry of the same request returns the original
+// metadata and no subscribers (Rust #62135).
+func (b *LocalAgentMessageBoard) AppendWithSubscribers(ctx context.Context, caller string, request AppendRequest) (*PostMetadata, []string, error) {
+	var subscribers []string
+	metadata, err := b.writePost(ctx, caller, appendPostRequest(request), postSilentAppendWithSubscribers, &subscribers)
+	if err != nil {
+		return nil, nil, err
+	}
+	return metadata, subscribers, nil
+}
+
+// appendPostRequest is the discussion request a silent append would have made,
+// so posts and appends share one durable shape.
+func appendPostRequest(request AppendRequest) PostRequest {
+	return PostRequest{
 		RequestID:   request.RequestID,
 		Destination: request.Destination,
 		Text:        request.Text,
-	}, postSilentAppend)
+	}
 }
 
-func (b *LocalAgentMessageBoard) writePost(ctx context.Context, caller string, request PostRequest, behavior postBehavior) (*PostMetadata, error) {
+func (b *LocalAgentMessageBoard) writePost(ctx context.Context, caller string, request PostRequest, behavior postBehavior, captured *[]string) (*PostMetadata, error) {
 	action := "channel.post"
 	if request.Destination.Kind == "thread" {
 		action = "channel.reply"
@@ -527,10 +547,10 @@ func (b *LocalAgentMessageBoard) writePost(ctx context.Context, caller string, r
 	}
 	// The write must not be aborted by the caller's cancellation (Rust posts on
 	// a detached task and awaits its handle).
-	return b.postInner(context.WithoutCancel(ctx), caller, request, behavior)
+	return b.postInner(context.WithoutCancel(ctx), caller, request, behavior, captured)
 }
 
-func (b *LocalAgentMessageBoard) postInner(ctx context.Context, caller string, request PostRequest, behavior postBehavior) (*PostMetadata, error) {
+func (b *LocalAgentMessageBoard) postInner(ctx context.Context, caller string, request PostRequest, behavior postBehavior, captured *[]string) (*PostMetadata, error) {
 	if err := validatePostRequest(request); err != nil {
 		return nil, err
 	}
@@ -546,7 +566,7 @@ func (b *LocalAgentMessageBoard) postInner(ctx context.Context, caller string, r
 	if err != nil {
 		return nil, err
 	}
-	if behavior == postSilentAppend {
+	if behavior != postDiscussion {
 		requestJSON = "[" + "\"append\"," + requestJSON + "]"
 	}
 	if existing, err := b.existingPost(ctx, b.db, requestID, requestJSON); err != nil {
@@ -586,13 +606,20 @@ func (b *LocalAgentMessageBoard) postInner(ctx context.Context, caller string, r
 	if err != nil {
 		return nil, err
 	}
-	if behavior == postDiscussion {
+	if behavior != postSilentAppend {
+		// Subscribers read inside the write transaction are the ones that decide
+		// delivery, so a later change cannot rewrite what this post owed.
 		subscribed, err := b.subscribedRecipients(ctx, tx, target)
 		if err != nil {
 			return nil, err
 		}
-		for _, recipient := range subscribed {
-			recipients[recipient] = struct{}{}
+		if captured != nil {
+			*captured = subscribed
+		}
+		if behavior == postDiscussion {
+			for _, recipient := range subscribed {
+				recipients[recipient] = struct{}{}
+			}
 		}
 	}
 	delete(recipients, caller)
@@ -625,7 +652,7 @@ func (b *LocalAgentMessageBoard) postInner(ctx context.Context, caller string, r
 	if err := tx.commit(ctx); err != nil {
 		return nil, err
 	}
-	if behavior == postSilentAppend {
+	if behavior != postDiscussion {
 		return &post.Metadata, nil
 	}
 	notifyRecipients(ctx, b.host, recipients, post.preview(previewChars))
@@ -920,6 +947,58 @@ func (b *LocalAgentMessageBoard) subscribedChannelNames(ctx context.Context, tx 
 // ReadPost reads a bounded slice of one post; offsets count Unicode characters.
 func (b *LocalAgentMessageBoard) ReadPost(ctx context.Context, caller string, request ReadPostRequest) (*PostContent, error) {
 	return b.readPostAt(ctx, caller, request, nil)
+}
+
+// ReadPostTextsByID reads whole post bodies for the given IDs in the caller's
+// order. It is the batch read a host consumer uses to admit queued evidence, so
+// it accepts at most one board page and fails rather than dropping an unknown
+// post (Rust #62136).
+func (b *LocalAgentMessageBoard) ReadPostTextsByID(ctx context.Context, caller string, ids []string) ([]string, error) {
+	if _, err := b.host.AgentPath(ctx, caller); err != nil {
+		return nil, err
+	}
+	if len(ids) > DefaultPageLimit {
+		return nil, invalid("requested posts exceed one board page")
+	}
+	if len(ids) == 0 {
+		return []string{}, nil
+	}
+	placeholders := make([]string, len(ids))
+	arguments := make([]any, 0, len(ids)+1)
+	arguments = append(arguments, b.identity)
+	for index, id := range ids {
+		placeholders[index] = "?"
+		arguments = append(arguments, id)
+	}
+	rows, err := b.db.QueryContext(ctx,
+		"SELECT id, json_extract(payload, '$.text') FROM posts WHERE board=? AND id IN ("+strings.Join(placeholders, ",")+")",
+		arguments...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	texts := make(map[string]string, len(ids))
+	for rows.Next() {
+		var id string
+		var text sql.NullString
+		if err := rows.Scan(&id, &text); err != nil {
+			return nil, err
+		}
+		texts[id] = text.String
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	ordered := make([]string, len(ids))
+	for index, id := range ids {
+		text, ok := texts[id]
+		if !ok {
+			return nil, invalid("post not found in this board")
+		}
+		ordered[index] = text
+	}
+	return ordered, nil
 }
 
 // readPostAt is ReadPost bounded by a captured view. Membership, not content,

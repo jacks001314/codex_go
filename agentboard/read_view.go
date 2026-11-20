@@ -383,6 +383,31 @@ func (v *BoardReadView) Append(context.Context, string, AppendRequest) (*PostMet
 	return nil, ErrBoardReadViewReadOnly
 }
 
+// AppendWithSubscribers refuses a fixed view for the same reason as Append.
+func (v *BoardReadView) AppendWithSubscribers(context.Context, string, AppendRequest) (*PostMetadata, []string, error) {
+	return nil, nil, ErrBoardReadViewReadOnly
+}
+
+// ReadPostTextsByID reads through the captured cutoff, like every other read
+// view query, so a post appended after the capture is missing.
+func (v *BoardReadView) ReadPostTextsByID(ctx context.Context, caller string, ids []string) ([]string, error) {
+	if v == nil || v.board == nil {
+		return nil, ErrBoardReadViewReadOnly
+	}
+	if len(ids) > DefaultPageLimit {
+		return nil, invalid("requested posts exceed one board page")
+	}
+	texts := make([]string, 0, len(ids))
+	for _, id := range ids {
+		post, err := v.board.loadPostAt(ctx, v.board.db, id, v.scope())
+		if err != nil {
+			return nil, err
+		}
+		texts = append(texts, post.Text)
+	}
+	return texts, nil
+}
+
 // SetSubscription is rejected: a read view never mutates the board.
 func (v *BoardReadView) SetSubscription(context.Context, string, SubscriptionRequest) (*SubscriptionState, error) {
 	return nil, ErrBoardReadViewReadOnly

@@ -188,6 +188,18 @@ func (b *RemoteBoard) Append(_ context.Context, _ string, _ AppendRequest) (*Pos
 	return nil, invalid("remote message boards do not support silent append")
 }
 
+// AppendWithSubscribers rejects requests for the same reason, and the remote
+// protocol has no subscriber snapshot either (Rust #62135).
+func (b *RemoteBoard) AppendWithSubscribers(_ context.Context, _ string, _ AppendRequest) (*PostMetadata, []string, error) {
+	return nil, nil, invalid("remote message boards do not support appending with subscribers")
+}
+
+// ReadPostTextsByID rejects requests: the remote protocol exposes only paged
+// reads, so a batch body read cannot be expressed (Rust #62136).
+func (b *RemoteBoard) ReadPostTextsByID(_ context.Context, _ string, _ []string) ([]string, error) {
+	return nil, invalid("remote message boards do not support reading a page of post bodies")
+}
+
 func (b *RemoteBoard) CreateChannel(ctx context.Context, caller string, request CreateChannelRequest) (*ChannelSummary, error) {
 	params := struct {
 		ChannelName  string `json:"channel_name"`

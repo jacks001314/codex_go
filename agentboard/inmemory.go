@@ -364,6 +364,19 @@ func (b *InMemoryBoard) Append(ctx context.Context, caller string, request Appen
 	}, postSilentAppend)
 }
 
+// AppendWithSubscribers rejects requests: only the local board records
+// subscriptions durably, so it is the only backend that can report the agents a
+// post was queued for (Rust #62135).
+func (b *InMemoryBoard) AppendWithSubscribers(_ context.Context, _ string, _ AppendRequest) (*PostMetadata, []string, error) {
+	return nil, nil, invalid("in-memory message boards do not support appending with subscribers")
+}
+
+// ReadPostTextsByID rejects requests: Rust's in-memory board keeps the trait
+// default, so only a durable board can batch a page of bodies (Rust #62136).
+func (b *InMemoryBoard) ReadPostTextsByID(_ context.Context, _ string, _ []string) ([]string, error) {
+	return nil, invalid("in-memory message boards do not support reading a page of post bodies")
+}
+
 func (b *InMemoryBoard) postInner(ctx context.Context, caller string, request PostRequest, behavior postBehavior) (*PostMetadata, error) {
 	if err := validatePostRequest(request); err != nil {
 		return nil, err

@@ -44,10 +44,21 @@ type Board interface {
 	// an error. Backends without silent-write support reject it rather than
 	// falling back to posting (Rust #56461).
 	Append(ctx context.Context, caller string, request AppendRequest) (*PostMetadata, error)
+	// AppendWithSubscribers is a silent append that also returns the agents
+	// subscribed to the destination at the moment of insertion, so a trusted
+	// host consumer can queue evidence without re-reading the board. An
+	// idempotent retry returns the original metadata and no subscribers
+	// (Rust #62135).
+	AppendWithSubscribers(ctx context.Context, caller string, request AppendRequest) (*PostMetadata, []string, error)
 	ListThreads(ctx context.Context, caller string, query ThreadQuery) (*Page[ThreadSummary], error)
 	SearchPosts(ctx context.Context, caller string, query PostQuery) (*Page[PostPreview], error)
 	ReadThread(ctx context.Context, caller string, request ReadThreadRequest) (*ThreadPage, error)
 	ReadPost(ctx context.Context, caller string, request ReadPostRequest) (*PostContent, error)
+	// ReadPostTextsByID loads whole post bodies in caller-supplied ID order,
+	// bounded to one board page, so a trusted host consumer can admit evidence
+	// without rebuilding paged previews. A missing post fails the whole read
+	// (Rust #62136).
+	ReadPostTextsByID(ctx context.Context, caller string, ids []string) ([]string, error)
 	// SetSubscription changes a channel subscription (new roots) or a thread
 	// subscription (replies). Any member may change another member's
 	// subscription.
@@ -187,6 +198,9 @@ type postBehavior int
 const (
 	postDiscussion postBehavior = iota
 	postSilentAppend
+	// postSilentAppendWithSubscribers is a silent append for a consumer that
+	// needs the subscribers present at insertion (Rust #62135).
+	postSilentAppendWithSubscribers
 )
 
 // ThreadSort selects the thread ordering key.
