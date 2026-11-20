@@ -69,7 +69,7 @@ type ModelPicker struct {
 }
 
 func BundledModelPickerOptions() []ModelPickerOption {
-	manager := model.NewStaticModelsManager(model.BundledModelsResponse())
+	manager := model.NewBundledModelsManager()
 	return ModelPickerOptionsFromPresets(manager.ListModels(model.RefreshOffline))
 }
 

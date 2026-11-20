@@ -558,7 +558,7 @@ func (c *runtimeAgentController) modelsManagerForSpawn() model.ModelsManager {
 	if runner, ok := c.router.services.Agent.(*model.ResponsesAgentRunner); ok && runner != nil && runner.ModelsManager != nil {
 		return runner.ModelsManager
 	}
-	return model.NewStaticModelsManager(model.BundledModelsResponse())
+	return model.NewBundledModelsManager()
 }
 
 // spawnAgentDefaults returns the invoking turn's configured subagent defaults

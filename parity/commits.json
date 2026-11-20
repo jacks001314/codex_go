@@ -52583,11 +52583,15 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "model/catalog.go parses the embedded bundled catalog through sync.OnceValues, so the JSON is decoded once per process instead of on every fallback lookup (Rust #62525 LazyLock).",
+    "BundledModelsResponse still hands out an owned snapshot (cloneModelsResponse) because callers apply request overrides and merge remote models; NewBundledModelsManager shares the parsed entries instead, StaticModelsManager.GetCatalogModel reads them without cloning every entry, and ConstructCatalogModelFromCandidates copies only the model it resolves before rewriting its slug and request overrides.",
+    "Bundled lookups now go through model.NewBundledModelsManager() in exec, app, appserver and tui so a per-request base-instructions override cannot rewrite the shared catalog entry.",
+    "tests: model TestBundledModelsManagerKeepsSharedCatalogAcrossOverridesLikeRust (override applied once, later lookup and a fresh manager see the original), TestEmbeddedModelsCatalogIsParsedOnceLikeRust (same parsed entries reused)",
+    "plan: update/plan_2026_11_20.md batch 6"
    ],
    "kind": "runtime",
    "sha": "097558c1bdfc6318cb0ce80a64816ca4d61c7814",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Reuse the parsed bundled model catalog (#62525)"
   },
   {
@@ -52595,11 +52599,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Go never stores a PostToolUse payload on a tool result, so there is no clone to remove: tool/hooks.go postToolUsePayload builds it from the successful output through PostToolUsePayloadProvider (or a fresh struct) and tool/registry.go passes that pointer on for assistant-message capture and post-tool-use hooks (Rust #62532 takes the payload instead of cloning it).",
+    "plan: update/plan_2026_11_20.md batch 6"
    ],
    "kind": "runtime",
    "sha": "dabe0643a4876ed94adbea3101d40228c96264a9",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Avoid cloning the `PostToolUse` hook payload (#62532)"
   },
   {

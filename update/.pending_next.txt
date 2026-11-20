@@ -78,8 +78,6 @@ d52a39b307b77e81cd272d08189341d944542b82	2026-11-19	Honor elastic budgets for at
 b0ecad9cf9c08318d79e9d7f91520e609d1c4d1a	2026-11-19	Refresh managed Guardian policy across Codex threads (#62496)
 1826d80eca9793d686bb39c9d272fd7db892a565	2026-11-19	Expose Daybreak availability in model discovery (#62499)
 39c29c3bb620f91e84a3bb266bb496dfb697c101	2026-11-19	Add Statsig counters for `exec_command` latency (#62507)
-097558c1bdfc6318cb0ce80a64816ca4d61c7814	2026-11-19	Reuse the parsed bundled model catalog (#62525)
-dabe0643a4876ed94adbea3101d40228c96264a9	2026-11-19	Avoid cloning the `PostToolUse` hook payload (#62532)
 27e16c08c39de52a51af7c6105daa3821961469f	2026-11-19	Add built-in namespace guidance and budget tool description prefixes (#62534)
 0b248182be6ff496c7b11401e3217c4c380848ca	2026-11-19	Respect app-server turn admission for agent mailbox wakes (#62537)
 f6a1b619125edfb3eeaf19866493889e32f97e22	2026-11-19	Borrow user input in extension turn contexts (#62540)

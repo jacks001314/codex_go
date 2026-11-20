@@ -8055,7 +8055,7 @@ func effectiveRestoredModelContextWindow(modelID string) int64 {
 	if modelID == "" {
 		return 0
 	}
-	info := model.NewStaticModelsManager(model.BundledModelsResponse()).GetModelInfo(modelID, nil)
+	info := model.NewBundledModelsManager().GetModelInfo(modelID, nil)
 	window := info.ContextWindow
 	if window <= 0 {
 		window = info.MaxContextWindow
@@ -8186,7 +8186,7 @@ func runtimeModelMultiAgentVersion(r *RuntimeRouter, modelID string) (agent.Mult
 			version = strings.TrimSpace(info.MultiAgentVersion)
 		}
 	} else {
-		info := model.NewStaticModelsManager(model.BundledModelsResponse()).GetModelInfo(modelID, nil)
+		info := model.NewBundledModelsManager().GetModelInfo(modelID, nil)
 		version = strings.TrimSpace(info.MultiAgentVersion)
 	}
 	switch strings.ToLower(version) {
@@ -18937,7 +18937,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	if catalogModelInfo == nil {
 		manager := r.modelsManagerForConfig(cfg)
 		if manager == nil {
-			manager = model.NewStaticModelsManager(model.BundledModelsResponse())
+			manager = model.NewBundledModelsManager()
 		}
 		if defaultID := strings.TrimSpace(manager.GetDefaultModel("", true, model.RefreshOffline)); defaultID != "" {
 			catalogModelInfo = r.modelInfoForRuntimeWithConfigAndOriginator(defaultID, cfg, originator)

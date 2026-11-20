@@ -14392,7 +14392,7 @@ func boolConfigValue(cfg *config.Config, key string) bool {
 }
 
 func defaultModelForAppTurn() string {
-	manager := model.NewStaticModelsManager(model.BundledModelsResponse())
+	manager := model.NewBundledModelsManager()
 	return manager.GetDefaultModel("", true, model.RefreshOffline)
 }
 

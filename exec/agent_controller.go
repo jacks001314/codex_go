@@ -319,7 +319,7 @@ func (r *Runner) multiAgentToolsForRun(ctx context.Context, req *Request, cfg *c
 		modelID := execMultiAgentModelForRun(req, cfg, modelsManager)
 		catalogManager := modelsManager
 		if catalogManager == nil {
-			catalogManager = model.NewStaticModelsManager(model.BundledModelsResponse())
+			catalogManager = model.NewBundledModelsManager()
 		}
 		modelInfo := catalogManager.GetModelInfo(modelID, nil)
 		if turn.MultiAgentToolsInCodeMode(&modelInfo, v2Config.NonCodeModeOnly) {
@@ -362,7 +362,7 @@ func (r *Runner) multiAgentToolsForRun(ctx context.Context, req *Request, cfg *c
 
 func execModelSupportsToolSearch(req *Request, cfg *config.Config, modelsManager model.ModelsManager) bool {
 	if modelsManager == nil {
-		modelsManager = model.NewStaticModelsManager(model.BundledModelsResponse())
+		modelsManager = model.NewBundledModelsManager()
 	}
 	modelID := execMultiAgentModelForRun(req, cfg, modelsManager)
 	return modelsManager.GetModelInfo(modelID, nil).SupportsSearchTool
@@ -390,7 +390,7 @@ func execMultiAgentVersionForRun(req *Request, cfg *config.Config, agentsConfig 
 		}
 	}
 	if modelsManager == nil {
-		modelsManager = model.NewStaticModelsManager(model.BundledModelsResponse())
+		modelsManager = model.NewBundledModelsManager()
 	}
 	modelID := execMultiAgentModelForRun(req, cfg, modelsManager)
 	switch strings.ToLower(strings.TrimSpace(modelsManager.GetModelInfo(modelID, nil).MultiAgentVersion)) {
@@ -422,7 +422,7 @@ func execMultiAgentModelForRun(req *Request, cfg *config.Config, modelsManager m
 		return value
 	}
 	if modelsManager == nil {
-		modelsManager = model.NewStaticModelsManager(model.BundledModelsResponse())
+		modelsManager = model.NewBundledModelsManager()
 	}
 	return modelsManager.GetDefaultModel("", true, model.RefreshOffline)
 }
@@ -441,7 +441,7 @@ func execModelsManagerForAgent(agentRunner model.AgentRunner) model.ModelsManage
 	if ok && responses != nil && responses.ModelsManager != nil {
 		return responses.ModelsManager
 	}
-	return model.NewStaticModelsManager(model.BundledModelsResponse())
+	return model.NewBundledModelsManager()
 }
 
 func execMultiAgentV2UsageHint(req *Request, options *execMultiAgentTools) string {

@@ -6520,17 +6520,17 @@ func interactiveStringFromSharedProfile(root *cli.RootOptions) string {
 }
 
 func interactiveDefaultModel() string {
-	manager := modelpkg.NewStaticModelsManager(modelpkg.BundledModelsResponse())
+	manager := modelpkg.NewBundledModelsManager()
 	return strings.TrimSpace(manager.GetDefaultModel("", true, modelpkg.RefreshOffline))
 }
 
 func interactiveDefaultReasoningEffort(modelID string) string {
-	manager := modelpkg.NewStaticModelsManager(modelpkg.BundledModelsResponse())
+	manager := modelpkg.NewBundledModelsManager()
 	return strings.TrimSpace(manager.GetModelInfo(strings.TrimSpace(modelID), nil).DefaultReasoningLevel)
 }
 
 func interactiveServiceTierCommands(modelID string) []bottompane.ServiceTierCommand {
-	manager := modelpkg.NewStaticModelsManager(modelpkg.BundledModelsResponse())
+	manager := modelpkg.NewBundledModelsManager()
 	info := manager.GetModelInfo(strings.TrimSpace(modelID), nil)
 	return bottompane.ServiceTierCommandsFromIDs(info.ServiceTiers)
 }

@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"codex_go/features"
@@ -1362,6 +1363,20 @@ type StaticModelsManager struct {
 	origin       ModelOrigin
 }
 
+// NewBundledModelsManager builds a models manager over the process-wide
+// bundled catalog. The shared entries are never mutated: lookups copy the
+// resolved model before applying request overrides (Rust #62525 borrows the
+// shared catalog for fallback lookups).
+func NewBundledModelsManager() *StaticModelsManager {
+	if catalog, err := loadBundledModelsResponse(); err == nil && len(catalog.Models) > 0 {
+		return NewStaticModelsManager(catalog)
+	}
+	if catalog, ok := sharedEmbeddedModelsCatalog(); ok {
+		return &StaticModelsManager{remoteModels: catalog.Models, origin: ModelOriginBundled}
+	}
+	return NewStaticModelsManager(fallbackBundledModelsResponse())
+}
+
 // NewStaticModelsManager builds a catalog whose entries are bundled models.
 func NewStaticModelsManager(modelCatalog ModelsResponse) *StaticModelsManager {
 	return NewStaticModelsManagerWithOrigin(modelCatalog, ModelOriginBundled)
@@ -1416,7 +1431,9 @@ func (m *StaticModelsManager) GetModelInfo(model string, config *ModelsManagerCo
 }
 
 func (m *StaticModelsManager) GetCatalogModel(model string, config *ModelsManagerConfig) CatalogModel {
-	return ConstructCatalogModelFromCandidates(model, m.GetRemoteModels(), m.origin, config)
+	// ConstructCatalogModelFromCandidates copies only the model it resolves,
+	// so the catalog can be read without cloning every entry (Rust #62525).
+	return ConstructCatalogModelFromCandidates(model, m.remoteModels, m.origin, config)
 }
 
 func (m *StaticModelsManager) RefreshIfNewETag(_ string) {}
@@ -1431,8 +1448,10 @@ func BundledModelsResponse() ModelsResponse {
 	if catalog, err := loadBundledModelsResponse(); err == nil && len(catalog.Models) > 0 {
 		return catalog
 	}
-	if catalog, err := loadEmbeddedModelsResponse(); err == nil && len(catalog.Models) > 0 {
-		return catalog
+	if catalog, ok := sharedEmbeddedModelsCatalog(); ok {
+		// Callers own this snapshot and may apply request overrides to it, so
+		// hand out a copy of the shared parse (Rust #62525).
+		return cloneModelsResponse(catalog)
 	}
 	return fallbackBundledModelsResponse()
 }
@@ -1443,6 +1462,21 @@ func BundledModelsCatalogJSON() []byte {
 	return bundledModelsCatalogJSON
 }
 
+// embeddedModelsCatalog parses the catalog compiled into the binary exactly
+// once. Its contents are fixed for the process lifetime (Rust #62525
+// LazyLock BUNDLED_CATALOG).
+var embeddedModelsCatalog = sync.OnceValues(loadEmbeddedModelsResponse)
+
+// sharedEmbeddedModelsCatalog returns the process-wide bundled catalog. The
+// result must be treated as read-only.
+func sharedEmbeddedModelsCatalog() (ModelsResponse, bool) {
+	catalog, err := embeddedModelsCatalog()
+	if err != nil || len(catalog.Models) == 0 {
+		return ModelsResponse{}, false
+	}
+	return catalog, true
+}
+
 // loadEmbeddedModelsResponse parses the catalog compiled into the binary.
 func loadEmbeddedModelsResponse() (ModelsResponse, error) {
 	var catalog ModelsResponse
@@ -1450,6 +1484,12 @@ func loadEmbeddedModelsResponse() (ModelsResponse, error) {
 		return ModelsResponse{}, err
 	}
 	return catalog, nil
+}
+
+// cloneModelsResponse copies a catalog so a caller can own and mutate it
+// without touching the shared parse.
+func cloneModelsResponse(in ModelsResponse) ModelsResponse {
+	return ModelsResponse{Models: cloneModelInfos(in.Models)}
 }
 
 // LoadModelsResponseFromFile mirrors Rust's load_catalog_json for the
@@ -2467,7 +2507,9 @@ func ConstructCatalogModelFromCandidates(model string, candidates []ModelInfo, o
 		origin = ModelOriginBundled
 	}
 	if ok {
-		info = remote
+		// The candidate may belong to a shared catalog, so copy it before the
+		// slug and request overrides rewrite it (Rust #62525).
+		info = cloneModelInfo(remote)
 		info.Slug = model
 		info.UsedFallbackModelMetadata = false
 	} else {

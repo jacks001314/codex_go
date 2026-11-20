@@ -2028,7 +2028,7 @@ func (r *Runner) imageGenerationOptionsForRun(cfg *config.Config, resolvedAuth *
 		snapshot,
 		managedResidencyForConfig(cfg),
 	)
-	modelInfo := model.NewStaticModelsManager(model.BundledModelsResponse()).GetModelInfo(modelID, nil)
+	modelInfo := model.NewBundledModelsManager().GetModelInfo(modelID, nil)
 	if !imageGenerationStandaloneEnabled(*provider, runtimeProvider.Capabilities(), &modelInfo, snapshot, cfg.FeatureSettings()) {
 		return nil, nil
 	}
@@ -2064,7 +2064,7 @@ func (r *Runner) hostedToolsForRun(cfg *config.Config, resolvedAuth *auth.Resolv
 		return nil, err
 	}
 	runtimeProvider := model.CreateRuntimeProviderForID(providerID, *provider, snapshot)
-	modelInfo := model.NewStaticModelsManager(model.BundledModelsResponse()).GetModelInfo(modelID, nil)
+	modelInfo := model.NewBundledModelsManager().GetModelInfo(modelID, nil)
 	capabilities := runtimeProvider.Capabilities()
 	tools := []any{}
 	if standaloneWebSearch == nil && !modelInfo.UseResponsesLite && capabilities.WebSearch {
@@ -5469,7 +5469,7 @@ func execModelInfo(modelID string, cfg *config.Config) model.ModelInfo {
 	if catalog := model.ModelsCatalogFromConfigValues(configValues(cfg)); catalog != nil {
 		return model.NewStaticModelsManager(*catalog).GetModelInfo(modelID, modelConfig)
 	}
-	return model.NewStaticModelsManager(model.BundledModelsResponse()).GetModelInfo(modelID, modelConfig)
+	return model.NewBundledModelsManager().GetModelInfo(modelID, modelConfig)
 }
 
 // fallbackModelMetadataWarning mirrors Rust's
@@ -7732,7 +7732,7 @@ func effectiveModel(req *Request, cfg *config.Config) string {
 	if value := stringConfigValue(cfg, "model"); value != "" {
 		return value
 	}
-	manager := model.NewStaticModelsManager(model.BundledModelsResponse())
+	manager := model.NewBundledModelsManager()
 	return manager.GetDefaultModel("", true, model.RefreshOffline)
 }
 
@@ -7740,7 +7740,7 @@ func modelSupportsParallelToolCalls(modelID string) bool {
 	if strings.TrimSpace(modelID) == "" {
 		return false
 	}
-	manager := model.NewStaticModelsManager(model.BundledModelsResponse())
+	manager := model.NewBundledModelsManager()
 	info := manager.GetModelInfo(modelID, nil)
 	// Rust build_prompt always sets `parallel_tool_calls: true` and the request
 	// applies only the responses-lite gate.
@@ -7760,7 +7760,7 @@ func modelUsesResponsesLite(modelID string) bool {
 	if strings.TrimSpace(modelID) == "" {
 		return false
 	}
-	manager := model.NewStaticModelsManager(model.BundledModelsResponse())
+	manager := model.NewBundledModelsManager()
 	info := manager.GetModelInfo(modelID, nil)
 	return info.UseResponsesLite
 }
@@ -7859,7 +7859,7 @@ func effectiveServiceTier(cfg *config.Config, modelID string) string {
 	if value == "" {
 		return ""
 	}
-	manager := model.NewStaticModelsManager(model.BundledModelsResponse())
+	manager := model.NewBundledModelsManager()
 	info := manager.GetModelInfo(modelID, nil)
 	// Rust #46230/#51253: a configured flex tier survives policy changes, while
 	// Fast and Ultra Fast each follow their own feature gate.
