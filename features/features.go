@@ -447,7 +447,14 @@ var Registry = []Spec{
 	// Rust #60027 (codex-rs/features/src/lib.rs): enables experimental MCP
 	// status line providers. Configured status lines and their picker previews
 	// always stay on the native renderer, so this flag no longer changes them.
-	{Key: "tui_extensions_statusline", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust #62387 exposes it from /experimental as "Custom status line".
+	{
+		Key:                         "tui_extensions_statusline",
+		Stage:                       StageExperimental,
+		ExperimentalName:            "Custom status line",
+		ExperimentalMenuDescription: "Restart the TUI, then use /statusline.",
+		ExperimentalAnnouncement:    "",
+	},
 	{Key: "step_model_switching", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs 307ce6cda9): write_stdin_approval
 	// added; compaction_image_budget promoted to stable/default-on (sync28).
