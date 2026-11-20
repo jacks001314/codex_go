@@ -2306,6 +2306,25 @@
    "verifier": "TestEnvironmentsWorldStateSnapshotMatchesRustLikeRust;TestEnvironmentsWorldStateFullRenderSkipsRemovalsLikeRust;TestDecodeEnvironmentWorldStateLegacyGoShapeLikeRust;TestEnvironmentContextDateRemovalRendersUnavailableOnceLikeRust;TestCompactEnvironmentContextSkipsDateRemovalNoticeLikeRust;TestEnvironmentWorldStateRemovalSnapshotLikeRust"
   },
   {
+   "id": "config-server-login-method",
+   "kind": "source-surface",
+   "rustPaths": [
+    "cloud-config/src/bundle_loader.rs",
+    "login/src/oauth_session_login.rs",
+    "login/src/oauth_session_storage.rs",
+    "login/src/oauth/device.rs"
+   ],
+   "goPaths": [
+    "app/config_server_login.go",
+    "app/config_server_login_tui.go",
+    "auth/gateway_login_attempt.go",
+    "auth/gateway_device.go"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestConfigServerDeviceSignInLikeRust;TestConfigServerDeviceSignInRequiresEndpointLikeRust;TestConfigServerSignInFailureGuidanceLikeRust;TestConfigServerSignInReservesCredentialLikeRust;TestGatewayLoginAttemptReservesCredentialLikeRust;TestGatewayLoginIfRequiredReusesSavedGrantLikeRust;TestGatewayDeviceAuthorizationCarriesResourceLikeRust;TestConfigServerSignInIsReusedUntilLogoutLikeRust"
+  },
+  {
    "id": "guardian-reviewer-retrieval",
    "kind": "source-surface",
    "rustPaths": [

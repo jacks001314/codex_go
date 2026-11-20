@@ -50671,11 +50671,14 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "app/config_server_login.go gains ConfigServerLoginMethod: a required config server signs in with device authorization when the CLI selected --device-auth (prompt rendered by configServerDeviceCodeMessage), reports \"Device sign-in requires config_server.oauth.device_authorization_url\" when the endpoint is absent, and reports ConfigServerLoginFailureMessage guidance for any other failure. app/config_server_bundle.go now carries the server's device_authorization_url into the gateway config.",
+    "auth/gateway_login_attempt.go adds the per-credential cross-process sign-in reservation (LoginIfRequired checks the saved grant under the store lock, then reserves secrets/<SECRET>.login.lock and returns ErrGatewayLoginInProgress to a second attempt) with Close releasing it on completion or cancellation; browser and device entry points reserve before signing in.",
+    "auth/gateway_device.go sends the configured OAuth resource with the device authorization request and every token poll, and ErrGatewayDeviceVerificationURL now reports the authorization server rather than the gateway.",
+    "Tests: go test ./app -run 'ConfigServer' -count=1; go test ./auth -run 'LoginAttempt|LoginIfRequired|DeviceAuthorizationCarriesResource|SignInFailureReportsGuidance' -count=1"
    ],
    "kind": "runtime",
    "sha": "2df29476aef67dd879fbd30ddd635bce25309078",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Support device-code login for config servers (#62079)"
   },
   {

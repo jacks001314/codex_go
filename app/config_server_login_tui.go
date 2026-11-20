@@ -35,10 +35,12 @@ func ensureInteractiveStartupConfigServerLogin(ctx context.Context, root *cli.Ro
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return interactiveStartupConfigServerLogin(ctx, codexHome, loaded.Requirements, func(url string) {
+	// The TUI owns the terminal, so startup always takes the browser handoff and
+	// never a device-code prompt (Rust passes ConfigServerLoginMethod::Browser).
+	return interactiveStartupConfigServerLogin(ctx, codexHome, loaded.Requirements, ConfigServerLoginMethod{OnURL: func(url string) {
 		if stderr == nil {
 			return
 		}
 		fmt.Fprintf(stderr, "Sign in to the configuration server. If your browser did not open, navigate to this URL:\n\n%s\n\n", url)
-	})
+	}})
 }

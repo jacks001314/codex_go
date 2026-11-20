@@ -38,13 +38,18 @@ client_id = "company-client"
 		gotServerURL string
 	)
 	restore := interactiveStartupConfigServerLogin
-	interactiveStartupConfigServerLogin = func(ctx context.Context, codexHome string, reqs *config.ConfigRequirements, onURL func(string)) error {
+	interactiveStartupConfigServerLogin = func(ctx context.Context, codexHome string, reqs *config.ConfigRequirements, method ConfigServerLoginMethod) error {
 		called = true
 		gotHome = codexHome
 		if reqs != nil && reqs.ConfigServer != nil {
 			gotServerURL = reqs.ConfigServer.BaseURL
 		}
-		onURL("https://config.example.com/authorize?login=1")
+		if method.DeviceCode {
+			t.Error("startup must not request a device-code prompt")
+		}
+		if method.OnURL != nil {
+			method.OnURL("https://config.example.com/authorize?login=1")
+		}
 		return nil
 	}
 	defer func() { interactiveStartupConfigServerLogin = restore }()
@@ -73,7 +78,7 @@ func TestInteractiveStartupSkipsLoginWithoutRequiredServerLikeRust(t *testing.T)
 
 	called := false
 	restore := interactiveStartupConfigServerLogin
-	interactiveStartupConfigServerLogin = func(context.Context, string, *config.ConfigRequirements, func(string)) error {
+	interactiveStartupConfigServerLogin = func(context.Context, string, *config.ConfigRequirements, ConfigServerLoginMethod) error {
 		called = true
 		return nil
 	}

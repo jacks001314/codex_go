@@ -80,13 +80,13 @@ func TestConfigServerSignInIsReusedUntilLogoutLikeRust(t *testing.T) {
 			}
 		}()
 	}
-	if err := ensureConfigServerLoginWith(ctx, home, requirements, server.Client(), store, onURL); err != nil {
+	if err := ensureConfigServerLoginWith(ctx, home, requirements, server.Client(), store, ConfigServerLoginMethod{OnURL: onURL}); err != nil {
 		t.Fatalf("ensureConfigServerLoginWith() error = %v", err)
 	}
 	if signIns != 1 || authorizations.Load() != 1 {
 		t.Fatalf("sign-ins = %d, token requests = %d, want one of each", signIns, authorizations.Load())
 	}
-	if err := ensureConfigServerLoginWith(ctx, home, requirements, server.Client(), store, onURL); err != nil {
+	if err := ensureConfigServerLoginWith(ctx, home, requirements, server.Client(), store, ConfigServerLoginMethod{OnURL: onURL}); err != nil {
 		t.Fatalf("second ensureConfigServerLoginWith() error = %v", err)
 	}
 	if signIns != 1 || authorizations.Load() != 1 {
@@ -100,7 +100,7 @@ func TestConfigServerSignInIsReusedUntilLogoutLikeRust(t *testing.T) {
 	if err != nil || removedAgain {
 		t.Fatalf("second logout = %v, %v, want no stored grant", removedAgain, err)
 	}
-	if err := ensureConfigServerLoginWith(ctx, home, requirements, server.Client(), store, onURL); err != nil {
+	if err := ensureConfigServerLoginWith(ctx, home, requirements, server.Client(), store, ConfigServerLoginMethod{OnURL: onURL}); err != nil {
 		t.Fatalf("ensureConfigServerLoginWith() after logout error = %v", err)
 	}
 	if signIns != 2 {
@@ -110,9 +110,9 @@ func TestConfigServerSignInIsReusedUntilLogoutLikeRust(t *testing.T) {
 
 // A configuration without a config server keeps the anonymous behaviour.
 func TestConfigServerLoginWithoutServerIsNoopLikeRust(t *testing.T) {
-	if err := ensureConfigServerLoginWith(context.Background(), t.TempDir(), nil, nil, newConfigServerTestStore(), func(string) {
+	if err := ensureConfigServerLoginWith(context.Background(), t.TempDir(), nil, nil, newConfigServerTestStore(), ConfigServerLoginMethod{OnURL: func(string) {
 		t.Fatal("no sign-in is expected without a config server")
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("ensureConfigServerLoginWith() error = %v", err)
 	}
 	if removed, err := logoutConfigServerWith(context.Background(), t.TempDir(), nil, nil, newConfigServerTestStore()); err != nil || removed {

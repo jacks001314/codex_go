@@ -124,6 +124,11 @@ func configServerOAuthSessionConfig(oauth *config.ConfigServerOAuth) auth.Gatewa
 		RedirectPort:     oauth.RedirectPort,
 		Scopes:           append([]string(nil), oauth.Scopes...),
 	}
+	// Rust hands the whole OAuthSessionConfig to the manager, so a config server
+	// that declares device authorization keeps it (#62079).
+	if oauth.DeviceAuthorizationURL != nil {
+		session.DeviceAuthorizationURL = *oauth.DeviceAuthorizationURL
+	}
 	if oauth.Resource != nil {
 		session.Resource = *oauth.Resource
 	}

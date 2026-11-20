@@ -30,7 +30,7 @@ var (
 	// ErrGatewayDeviceCodeExpired reports that the short code ran out.
 	ErrGatewayDeviceCodeExpired = errors.New("Device authorization expired; start sign-in again")
 	// ErrGatewayDeviceVerificationURL reports an unsafe verification target.
-	ErrGatewayDeviceVerificationURL = errors.New("The gateway returned an invalid device verification URL")
+	ErrGatewayDeviceVerificationURL = errors.New("The authorization server returned an invalid device verification URL")
 )
 
 type gatewayDeviceAuthorization struct {
@@ -51,16 +51,22 @@ func (m *GatewayAuthManager) SupportsDeviceAuthorization() bool {
 
 // LoginWithDeviceCode runs the caller-initiated device sign-in. onPrompt
 // receives the verification URL and code; completion means the credential was
-// saved and is visible to existing request consumers.
+// saved and is visible to existing request consumers. The credential is reserved
+// for this process for the whole approval (#62079).
 func (m *GatewayAuthManager) LoginWithDeviceCode(ctx context.Context, onPrompt func(GatewayDeviceCodePrompt)) error {
-	if m == nil {
-		return errors.New("provider OAuth manager is unavailable")
-	}
-	if err := validateGatewayAuthConfig(m.config); err != nil {
+	attempt, err := m.reserveLogin()
+	if err != nil {
 		return err
 	}
+	defer func() { _ = attempt.Close() }()
+	return attempt.LoginWithDeviceCode(ctx, onPrompt, GatewayLoginFailureMessage)
+}
+
+// loginWithDeviceCode is the sign-in body shared by the direct entry point and a
+// held reservation.
+func (m *GatewayAuthManager) loginWithDeviceCode(ctx context.Context, onPrompt func(GatewayDeviceCodePrompt), failureMessage string) error {
 	if strings.TrimSpace(m.config.DeviceAuthorizationURL) == "" {
-		return errors.New("The provider does not configure device authorization")
+		return errors.New("The configured gateway does not specify gateway_oauth.device_authorization_url")
 	}
 	if !m.beginLoginAttempt() {
 		return ErrGatewayLoginInProgress
@@ -74,9 +80,7 @@ func (m *GatewayAuthManager) LoginWithDeviceCode(ctx context.Context, onPrompt f
 	defer m.mu.Unlock()
 	accessToken, err := m.authorizeDevice(ctx, onPrompt)
 	if err != nil {
-		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			err = ErrGatewayLoginCanceled
-		}
+		err = gatewaySignInFailure(ctx, err, failureMessage)
 		m.publishStatus(GatewayAuthStatus{Kind: GatewayAuthStatusFailed, Message: err.Error()}, "")
 		return err
 	}
@@ -142,6 +146,11 @@ func (m *GatewayAuthManager) requestDeviceAuthorization(ctx context.Context) (ga
 	if scope := strings.Join(m.config.Scopes, " "); strings.TrimSpace(scope) != "" {
 		form.Set("scope", scope)
 	}
+	// The configured OAuth resource binds the grant to that audience on both the
+	// authorization and token requests (Rust #62079 device authorization).
+	if resource := strings.TrimSpace(m.config.Resource); resource != "" {
+		form.Set("resource", resource)
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		return gatewayDeviceAuthorization{}, errors.New("Device authorization request failed")
@@ -185,11 +194,15 @@ func (m *GatewayAuthManager) pollDeviceToken(ctx context.Context, authorization 
 			return gatewayTokenResponse{}, ErrGatewayDeviceCodeExpired
 		}
 		var response gatewayTokenResponse
-		err := m.oauth().exchange(ctx, [][2]string{
+		parameters := [][2]string{
 			{"grant_type", "urn:ietf:params:oauth:grant-type:device_code"},
 			{"client_id", m.config.ClientID},
 			{"device_code", authorization.DeviceCode},
-		}, []string{authorization.DeviceCode}, &response)
+		}
+		if resource := strings.TrimSpace(m.config.Resource); resource != "" {
+			parameters = append(parameters, [2]string{"resource", resource})
+		}
+		err := m.oauth().exchange(ctx, parameters, []string{authorization.DeviceCode}, &response)
 		if err == nil {
 			return response, nil
 		}

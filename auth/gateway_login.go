@@ -304,14 +304,37 @@ func gatewayTokenFingerprint(token *gatewayStoredToken) string {
 // LoginWithBrowser runs the caller-initiated browser sign-in. onURL receives the
 // authorization URL for the caller to hand to the client; completion means the
 // credential was saved and is visible to existing request consumers (Rust
-// GatewayAuthManager::login_with_browser).
+// GatewayAuthManager::login_with_browser). The credential is reserved for this
+// process for the whole approval, so a concurrent attempt fails instead of
+// racing the same grant (#62079).
 func (m *GatewayAuthManager) LoginWithBrowser(ctx context.Context, onURL func(string)) error {
-	if m == nil {
-		return errors.New("provider OAuth manager is unavailable")
-	}
-	if err := validateGatewayAuthConfig(m.config); err != nil {
+	attempt, err := m.reserveLogin()
+	if err != nil {
 		return err
 	}
+	defer func() { _ = attempt.Close() }()
+	return attempt.LoginWithBrowser(ctx, onURL, GatewayLoginFailureMessage)
+}
+
+// reserveLogin validates the configuration and reserves this credential's
+// sign-in for the caller.
+func (m *GatewayAuthManager) reserveLogin() (*GatewayLoginAttempt, error) {
+	if m == nil {
+		return nil, errors.New("provider OAuth manager is unavailable")
+	}
+	if err := validateGatewayAuthConfig(m.config); err != nil {
+		return nil, err
+	}
+	lock, err := tryLockGatewayLogin(m.codexHome, m.CredentialID())
+	if err != nil {
+		return nil, err
+	}
+	return &GatewayLoginAttempt{manager: m, lock: lock}, nil
+}
+
+// loginWithBrowser is the sign-in body shared by the direct entry point and a
+// held reservation.
+func (m *GatewayAuthManager) loginWithBrowser(ctx context.Context, onURL func(string), failureMessage string) error {
 	if !m.beginLoginAttempt() {
 		return ErrGatewayLoginInProgress
 	}
@@ -327,9 +350,7 @@ func (m *GatewayAuthManager) LoginWithBrowser(ctx context.Context, onURL func(st
 	defer m.mu.Unlock()
 	accessToken, err := m.authorizeWithURL(ctx, onURL)
 	if err != nil {
-		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			err = ErrGatewayLoginCanceled
-		}
+		err = gatewaySignInFailure(ctx, err, failureMessage)
 		m.publishStatus(GatewayAuthStatus{Kind: GatewayAuthStatusFailed, Message: err.Error()}, "")
 		return err
 	}

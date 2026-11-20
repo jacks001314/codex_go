@@ -66,6 +66,34 @@ func gatewayCredentialSecretName(credentialID string) (*safety.SecretName, error
 	return name, nil
 }
 
+// gatewayLoginLockSuffix names the per-credential sign-in reservation held from
+// the saved-grant check until the sign-in finishes or is canceled (Rust #62079
+// storage::try_lock_login). The credential store lock is separate: it covers
+// only the read and write of the store, not the user approval in between.
+const gatewayLoginLockSuffix = ".login.lock"
+
+// tryLockGatewayLogin reserves a sign-in for one credential across Codex
+// processes. A second attempt reports ErrGatewayLoginInProgress instead of
+// racing the same grant, and other credentials keep independent sign-ins.
+func tryLockGatewayLogin(codexHome string, credentialID string) (*gatewayCredentialLock, error) {
+	name, err := gatewayCredentialSecretName(credentialID)
+	if err != nil {
+		return nil, err
+	}
+	directory := filepath.Join(codexHome, "secrets")
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		return nil, fmt.Errorf("failed to create provider OAuth lock directory %s: %w", directory, err)
+	}
+	lock, acquired, err := tryAcquireGatewayCredentialLock(filepath.Join(directory, name.String()+gatewayLoginLockSuffix))
+	if err != nil {
+		return nil, err
+	}
+	if !acquired {
+		return nil, ErrGatewayLoginInProgress
+	}
+	return lock, nil
+}
+
 // gatewayAuthStorage reads and writes gateway credentials in their own encrypted
 // namespace with an independent keyring key, or in a single JSON file when the
 // provider selects the file-backed store (Rust #58219 OAuthCredentialsStore).

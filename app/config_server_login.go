@@ -7,6 +7,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"path/filepath"
 
@@ -25,15 +26,38 @@ func newConfigServerAuthManager(codexHome string, server *config.ConfigServer, c
 	return auth.NewOAuthSessionManager(configServerOAuthSessionConfig(server.OAuth), codexHome, client, store)
 }
 
+// ConfigServerLoginFailureMessage mirrors Rust CONFIG_SERVER_LOGIN_FAILURE: a
+// config-server sign-in failure points at its own configuration instead of the
+// generic gateway guidance.
+const ConfigServerLoginFailureMessage = "Config server sign-in failed. Check config_server.oauth and the credential store."
+
+// ConfigServerLoginMethod selects how a missing config-server grant is obtained.
+// The CLI login flow shares one method with the ChatGPT sign-in it precedes, so
+// `--device-auth` cannot silently fall back to a browser authorization (#62079).
+type ConfigServerLoginMethod struct {
+	// OnURL receives the browser authorization URL. Device-code sign-ins ignore it.
+	OnURL func(string)
+	// DeviceCode requests device authorization instead of browser sign-in.
+	DeviceCode bool
+	// Present receives the device verification URL and code.
+	Present func(auth.GatewayDeviceCodePrompt)
+}
+
+// configServerDeviceCodeMessage renders the prompt a config-server device sign-in
+// shows (Rust config_server_device_code_message).
+func configServerDeviceCodeMessage(prompt auth.GatewayDeviceCodePrompt) string {
+	return fmt.Sprintf("To sign in to the config server, open %s and enter code %s.", prompt.VerificationURL, prompt.UserCode)
+}
+
 // ensureConfigServerLogin reuses a stored config-server grant and otherwise
-// signs in interactively, leaving refresh handling to the bundle loader
-// (Rust ensure_config_server_login).
-func ensureConfigServerLogin(ctx context.Context, codexHome string, requirements *config.ConfigRequirements, onURL func(string)) error {
-	return ensureConfigServerLoginWith(ctx, codexHome, requirements, nil, keyring.New(), onURL)
+// signs in with the selected method, leaving refresh handling to the bundle
+// loader (Rust ensure_config_server_login).
+func ensureConfigServerLogin(ctx context.Context, codexHome string, requirements *config.ConfigRequirements, method ConfigServerLoginMethod) error {
+	return ensureConfigServerLoginWith(ctx, codexHome, requirements, nil, keyring.New(), method)
 }
 
 // ensureConfigServerLoginWith is the dependency-injected form used by tests.
-func ensureConfigServerLoginWith(ctx context.Context, codexHome string, requirements *config.ConfigRequirements, client *http.Client, store keyring.Store, onURL func(string)) error {
+func ensureConfigServerLoginWith(ctx context.Context, codexHome string, requirements *config.ConfigRequirements, client *http.Client, store keyring.Store, method ConfigServerLoginMethod) error {
 	if requirements == nil {
 		return nil
 	}
@@ -41,15 +65,24 @@ func ensureConfigServerLoginWith(ctx context.Context, codexHome string, requirem
 	if manager == nil {
 		return nil
 	}
-	if _, err := manager.AuthorizationID(ctx); err != nil {
-		if !errors.Is(err, auth.ErrGatewayLoginRequired) {
-			return err
-		}
-		if err := manager.LoginWithBrowser(ctx, onURL); err != nil {
-			return err
-		}
+	// The grant check and the reservation happen together, so a saved grant is
+	// reused and a concurrent sign-in for the same credential is refused rather
+	// than raced (Rust #62079 start_login_if_required).
+	attempt, err := manager.LoginIfRequired()
+	if err != nil {
+		return err
 	}
-	return nil
+	if attempt == nil {
+		return nil
+	}
+	defer func() { _ = attempt.Close() }()
+	if !method.DeviceCode {
+		return attempt.LoginWithBrowser(ctx, method.OnURL, ConfigServerLoginFailureMessage)
+	}
+	if !manager.SupportsDeviceAuthorization() {
+		return errors.New("Device sign-in requires config_server.oauth.device_authorization_url")
+	}
+	return attempt.LoginWithDeviceCode(ctx, method.Present, ConfigServerLoginFailureMessage)
 }
 
 // logoutConfigServer removes the config server's stored grant and reports

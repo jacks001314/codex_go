@@ -1,4 +1,3 @@
-2df29476aef67dd879fbd30ddd635bce25309078	2026-11-17	Support device-code login for config servers (#62079)
 f99317520575edcb1dd9e732222152be32dd273c	2026-11-17	Add policy-checked dispatch for bundled App hooks (#62080)
 6d94d4af1070d8c7230a1027a3a18753e0796c4e	2026-11-17	Isolate Guardian v2 score caches by policy revision (#62083)
 5cba3aec84fb7fb13785ab9da330ee6debca21e6	2026-11-17	Support transparent TCP with inherited PID namespaces (#62100)

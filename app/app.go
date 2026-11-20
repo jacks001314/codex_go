@@ -2751,9 +2751,20 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 	// device-code flows) or signs in first and then stores the API key or access
 	// token. `login status` never signs in.
 	if opts.Action != "status" && loadedConfig.RequiresRemoteConfig() {
-		if err := ensureConfigServerLogin(ctx, codexHome, loadedConfig.Requirements, func(url string) {
+		configServerLogin := ConfigServerLoginMethod{OnURL: func(url string) {
 			fmt.Fprintf(stderr, "Sign in to the configuration server. If your browser did not open, navigate to this URL:\n\n%s\n\n", url)
-		}); err != nil {
+		}}
+		if opts.DeviceAuth {
+			// Rust #62079: the selected device-code flow also signs in to a
+			// required config server, instead of opening a browser there.
+			configServerLogin = ConfigServerLoginMethod{
+				DeviceCode: true,
+				Present: func(prompt auth.GatewayDeviceCodePrompt) {
+					fmt.Fprintln(stderr, configServerDeviceCodeMessage(prompt))
+				},
+			}
+		}
+		if err := ensureConfigServerLogin(ctx, codexHome, loadedConfig.Requirements, configServerLogin); err != nil {
 			return exitMessagef("Error logging in: %v", err)
 		}
 		reloaded, err := loadManagedLoginConfig(ctx, codexHome, opts.ConfigOverrides)
