@@ -51105,11 +51105,17 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "appserver registers the experimental thread/search/stream, thread/search/cancel and thread/search/stream/cancel methods plus the thread/search/partial notification, and the streamed page is built by the same Router.searchThreads path as thread/search (appserver/protocol.go, router.go, runtime_router.go, notifications.go, schema.go).",
+    "session.ListRecordsObserved reports matched records in discovery order while the authoritative page is still assembled, caps reported rows at the caller's bound, and returns ErrListCancelled when the observer stops (session/store.go); Router.searchThreads caps provisional rows at min(pageSize, 8) and rejects a streaming term over 65,536 trimmed UTF-8 bytes as invalid params.",
+    "RuntimeRouter keys each cancellation by connection, search family and JSON-RPC request id, acknowledges unknown, repeated and cross-family cancellations, and stops every search a closing connection owns, so the two families cannot cancel each other.",
+    "The TUI task-mention search mirrors Rust task_mentions::TaskSearch: the joined thread/search and title listing is bounded at 10s, title matches survive an abandoned search, a superseded query cancels its in-flight search, the remote client sends both requests before reading either reply and dispatches replies by id, an abandoned remote search sends thread/search/cancel under a 1s bound, and Cloud endpoints skip the search they do not implement (app/task_mentions.go, app/remote_tui.go, tui/tea/dynamic_tools.go, tui/tea/skill_popup.go).",
+    "The vendored precomputed protocol exports were re-copied from the anchor and their SHA-256 pins recomputed (appserver/schema_test.go), so go test ./parity no longer reports protocol drift.",
+    "tests: appserver TestThreadSearchStream* / TestThreadSearchCancel* / TestThreadSearchDisconnect* / TestThreadSearchStreamMethodsRequireExperimentalAPILikeRust, session TestListRecordsObserved*, app TestRemoteSessionRequestBatchDispatchesOutOfOrderRepliesLikeRust / TestRemoteTaskMentionSearchCancelsAbandonedSearchLikeRust / TestSearchTaskMentionsBoundsTheSearchAndKeepsTitleMatchesLikeRust, tui/tea TestModelTaskMentionSearchCancelsSupersededQueryLikeRust",
+    "landed in 741c410a; plan: update/plan_2026_11_20.md batch 18"
    ],
    "kind": "runtime",
    "sha": "3bf4e138fe0b27aed7dfa3ea5e0a382e3ac5bf1f",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Stream partial thread search results and support cancellation (#62132)"
   },
   {
