@@ -38,6 +38,7 @@ import (
 	"codex_go/features"
 	"codex_go/gitutils"
 	"codex_go/install"
+	"codex_go/internal/pprofserver"
 	"codex_go/memories"
 	"codex_go/model"
 	codexnetwork "codex_go/network"
@@ -80,7 +81,32 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	return RunWithOptions(ctx, args, stdin, stdout, stderr, nil)
 }
 
+// startProfilingFromEnv starts the opt-in runtime profile listener configured by
+// CODEX_PPROF_ADDR. It never fails startup: a mistyped address only produces a
+// warning on stderr.
+func startProfilingFromEnv(stderr io.Writer) func() {
+	addr := pprofserver.AddrFromEnv(os.Getenv)
+	if addr == "" {
+		return func() {}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	bound, err := pprofserver.Start(ctx, addr)
+	if err != nil {
+		cancel()
+		if stderr != nil {
+			fmt.Fprintf(stderr, "warning: %v\n", err)
+		}
+		return func() {}
+	}
+	if stderr != nil {
+		fmt.Fprintf(stderr, "pprof listening on http://%s/debug/pprof/\n", bound)
+	}
+	return cancel
+}
+
 func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runOpts *RunOptions) error {
+	stopProfiling := startProfilingFromEnv(stderr)
+	defer stopProfiling()
 	if handled, err := runRootMeta(args, stdout); handled || err != nil {
 		return err
 	}

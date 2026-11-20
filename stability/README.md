@@ -109,3 +109,20 @@ unless a duration is set (the scripts always set it).
   a gate is never made green by widening its budget.
 - UI latency budgets are reference-machine numbers; compare relative changes
   when running on a busy host (see risk R3 in the plan).
+
+## Profiling a live process
+
+Set `CODEX_PPROF_ADDR` to a loopback `host:port` before starting a codex
+process (TUI, `app-server`, `exec`, or the managed daemon child) to serve the
+standard Go profiles:
+
+```powershell
+$env:CODEX_PPROF_ADDR = "127.0.0.1:6060"
+codex app-server daemon restart
+go tool pprof "http://127.0.0.1:6060/debug/pprof/heap"
+curl.exe "http://127.0.0.1:6060/debug/pprof/goroutine?debug=1"
+```
+
+The managed daemon inherits the environment of the process that restarts it, so
+export the variable there first. Non-loopback addresses are rejected with a
+warning and startup continues, keeping profiles on the local host.
