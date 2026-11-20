@@ -53240,9 +53240,39 @@
    "sha": "2c1b4c7c357fd03979bcc27cc6e256a71f6cf2f3",
    "status": "not_applicable",
    "subject": "Fix standalone release pruning on macOS with GNU coreutils (#62648)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "appserver.GetMetadataResponse gains SizeBytes *uint64 serialized as sizeBytes with no omitempty, so a directory or other non-regular target answers an explicit null while an older server that omits the field decodes as nil, matching Rust's Option<u64> without skip_serializing_if (#62653, landed 41552bd0).",
+    "FSService.GetMetadata fills it from the resolved target only when info.Mode().IsRegular(), so a symlink to a regular file reports the target's size; Rust's fs_processor does the same with metadata.is_file.then_some(metadata.size).",
+    "Tests: go test ./appserver -run 'FSGetMetadata|Metadata' -count=1 (fs_metadata_size_like_rust_test.go covers the file, directory, symlink and legacy-omission shapes)"
+   ],
+   "kind": "runtime",
+   "sha": "e787cf7024fa66e4ec26c6c2ba9c122e045dedb9",
+   "status": "complete",
+   "subject": "Return file sizes from `fs/getMetadata` (#62653)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "thread/injectItems accepts alwaysInThread and alwaysInChildren next to default and always (appserver/injected_items.go), and retentionctx.HarnessMetadata plus compact.ChildRetention resolve Rust's child_retention(): an explicit retain_in_children wins, and an older rollout that only set retain_across_windows: true still pins children (#62654, landed 41552bd0).",
+    "alwaysInThread records retain_across_windows: true with retain_in_children: false, alwaysInChildren records false with true, and always/default keep the pre-#62654 metadata so saved rollouts behave the same. Retained tool exchanges must now be adjacent with the same policy on both items.",
+    "Fresh-child inheritance and full-history forks both follow child retention: retainedItemsForFreshChild selects with compact.SelectChildRetainedPositions and copies retain_in_children into the rewritten metadata, while excludeChildExcludedItems scrubs the items a client kept for its own thread only.",
+    "The compact selection sites thread the pin explicitly (newestHistoryItemGroups/selectRetainedItems take isPinned), so remote compaction keeps selecting client items on a window reset while pinning by is_always_retained, as Rust's retained_client_items now does.",
+    "Tests: go test ./compact ./appserver ./retainedctx -run 'Retention|Injected|Forked|FreshChild|Metadata' -count=1 (injected_retention_scopes_like_rust_test.go, agent_retained_items_like_rust_test.go, retain_across_windows_like_rust_test.go)"
+   ],
+   "kind": "runtime",
+   "sha": "a0a30c40e8dbcc44af52e2df64dcce64368d4422",
+   "status": "complete",
+   "subject": "Add thread and child retention policies for injected items (#62654)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "2c1b4c7c357fd03979bcc27cc6e256a71f6cf2f3",
+ "rustToInclusive": "a0a30c40e8dbcc44af52e2df64dcce64368d4422",
  "schemaVersion": 1
 }
