@@ -109,6 +109,39 @@ func bundledHookCoversEvent(hook bundledHook, event HookEventName) bool {
 	return false
 }
 
+// Bundled Memory session hook constants (Rust bundled_hooks.rs, #62112).
+const (
+	bundledMemoryHookPluginID    = "codex-dream-memory@openai-bundled"
+	bundledMemoryHookMatcher     = "^(startup|compact)$"
+	bundledMemoryHookServer      = "codex_apps"
+	bundledMemoryHookTool        = "codex_dream_memory.get_mec"
+	bundledMemoryHookConnectorID = "connector_openai_codex_dream_memory"
+)
+
+// bundledHookAppConnectorID mirrors Rust plugin::bundled_hook_app_connector_id:
+// the exact bundled Memory SessionStart declaration is a built-in hook, so it is
+// trusted without a saved hash. Dispatch must still verify the registered
+// connector identity and approval policy before the call runs.
+func bundledHookAppConnectorID(pluginID string, event HookEventName, matcher *string, handler hookJSONHandlerConfigWire) string {
+	if handler.hookHandlerType() != HookHandlerMCPTool {
+		return ""
+	}
+	if pluginID != bundledMemoryHookPluginID || event != HookEventSessionStart {
+		return ""
+	}
+	if matcher == nil || *matcher != bundledMemoryHookMatcher {
+		return ""
+	}
+	if strings.TrimSpace(handler.Server) != bundledMemoryHookServer ||
+		strings.TrimSpace(handler.Tool) != bundledMemoryHookTool {
+		return ""
+	}
+	if len(handler.Input) != 0 {
+		return ""
+	}
+	return bundledMemoryHookConnectorID
+}
+
 // hideBuiltinHooks drops builtin entries from a public hooks-list response
 // (Rust app-server catalog_processor.rs hooks_to_info). The discovered hooks
 // themselves are untouched, so the engine still runs builtin cleanup hooks.

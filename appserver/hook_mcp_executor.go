@@ -22,6 +22,9 @@ func (r *RuntimeRouter) Execute(ctx context.Context, call HookMcpCall) (HookMcpO
 	if server == "" || toolName == "" {
 		return HookMcpOutput{}, fmt.Errorf("MCP hook requires server and tool")
 	}
+	if err := r.validateBundledAppHookTarget(server, toolName, call); err != nil {
+		return HookMcpOutput{}, err
+	}
 	if call.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, call.Timeout)
@@ -79,6 +82,29 @@ func (r *RuntimeRouter) Execute(ctx context.Context, call HookMcpCall) (HookMcpO
 		return HookMcpOutput{}, fmt.Errorf("MCP tool returned an error: %s", text)
 	}
 	return HookMcpOutput{Text: text, StructuredContent: response.StructuredContent}, nil
+}
+
+// validateBundledAppHookTarget enforces the identity a built-in bundled App
+// hook was declared with (Rust #62112): the call must use the host Apps server
+// without an execution environment, and the registered tool catalog must still
+// expose the expected connector. Approvals and policy checks below still apply.
+func (r *RuntimeRouter) validateBundledAppHookTarget(server string, toolName string, call HookMcpCall) error {
+	expected := strings.TrimSpace(call.ExpectedAppConnectorID)
+	if expected == "" {
+		return nil
+	}
+	if server != mcp.RuntimeCodexAppsMCPServerName || strings.TrimSpace(call.EnvironmentID) != "" {
+		return fmt.Errorf("bundled App hook must use the host Apps server")
+	}
+	lookup := r.executorHookToolLookup("")
+	var info *mcp.RuntimeToolInfo
+	if lookup != nil {
+		info = lookup(server, toolName)
+	}
+	if info == nil || strings.TrimSpace(info.ConnectorID) != expected {
+		return fmt.Errorf("App hook connector or approval policy does not permit automatic execution")
+	}
+	return nil
 }
 
 func validateHookMcpEnvironment(server string, config mcp.ServerConfig, environmentID string) error {

@@ -234,6 +234,10 @@ type HookMetadata struct {
 	// environment. Nil means the handler runs in this process: host-local
 	// hooks and local environment hooks both keep the local command runner.
 	environmentExecutor HookEnvironmentExecutor
+	// expectedAppConnectorID is the registered connector a bundled App hook
+	// must reach (Rust #62112). It is discovery-only metadata and never
+	// serialized; the MCP executor enforces it before the call runs.
+	expectedAppConnectorID string
 }
 
 func (m *HookMetadata) Validate() error {

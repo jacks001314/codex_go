@@ -48,6 +48,10 @@ type HookMcpCall struct {
 	// SkipDormantReplCleanup lets a bundled REPL cleanup return an empty
 	// success when the local stdio server was never started (Rust #61437).
 	SkipDormantReplCleanup bool
+	// ExpectedAppConnectorID is the exact bundled App identity a built-in hook
+	// must reach; the executor enforces the live connector and approval policy
+	// (Rust #62112).
+	ExpectedAppConnectorID string
 	Server                 string
 	Tool                   string
 	EnvironmentID          string
@@ -461,12 +465,13 @@ func (r *HookRunner) runMcpToolHook(ctx context.Context, metadata HookMetadata, 
 		SkipDormantReplCleanup: metadata.Builtin &&
 			mcp.IsNodeReplBackedServer(ptrStringValue(metadata.Server)) &&
 			ptrStringValue(metadata.Tool) == "turn_ended",
-		Server:        ptrStringValue(metadata.Server),
-		Tool:          ptrStringValue(metadata.Tool),
-		EnvironmentID: strings.TrimSpace(ptrStringValue(metadata.EnvironmentID)),
-		Metadata:      cloneAnyMap(request.Metadata),
-		Input:         input,
-		Timeout:       remaining,
+		ExpectedAppConnectorID: metadata.expectedAppConnectorID,
+		Server:                 ptrStringValue(metadata.Server),
+		Tool:                   ptrStringValue(metadata.Tool),
+		EnvironmentID:          strings.TrimSpace(ptrStringValue(metadata.EnvironmentID)),
+		Metadata:               cloneAnyMap(request.Metadata),
+		Input:                  input,
+		Timeout:                remaining,
 	})
 	cancel()
 	completed := r.now()

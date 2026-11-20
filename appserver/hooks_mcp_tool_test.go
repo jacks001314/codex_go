@@ -10,17 +10,18 @@ import (
 )
 
 type recordingMcpToolHookExecutor struct {
-	server      string
-	tool        string
-	skipDormant bool
-	input       map[string]any
-	envID       string
-	meta        map[string]any
-	output      string
-	structured  any
-	err         error
-	timeout     time.Duration
-	called      bool
+	server                 string
+	tool                   string
+	skipDormant            bool
+	input                  map[string]any
+	envID                  string
+	meta                   map[string]any
+	expectedAppConnectorID string
+	output                 string
+	structured             any
+	err                    error
+	timeout                time.Duration
+	called                 bool
 }
 
 func (e *recordingMcpToolHookExecutor) Execute(ctx context.Context, call HookMcpCall) (HookMcpOutput, error) {
@@ -31,6 +32,7 @@ func (e *recordingMcpToolHookExecutor) Execute(ctx context.Context, call HookMcp
 	e.input = call.Input
 	e.envID = call.EnvironmentID
 	e.meta = call.Metadata
+	e.expectedAppConnectorID = call.ExpectedAppConnectorID
 	e.timeout = call.Timeout
 	return HookMcpOutput{Text: e.output, StructuredContent: e.structured}, e.err
 }

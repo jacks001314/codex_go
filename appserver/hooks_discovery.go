@@ -852,6 +852,13 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 	for handlerIndex := range group.Hooks {
 		handler := group.Hooks[handlerIndex]
 		handlerType := handler.hookHandlerType()
+		// Rust #62112: the exact bundled Memory SessionStart declaration is a
+		// built-in hook, so it is trusted without a saved hash. Dispatch still
+		// verifies the registered connector before running it.
+		expectedAppConnectorID := ""
+		if source.PluginID != nil && strings.TrimSpace(*source.PluginID) != "" {
+			expectedAppConnectorID = bundledHookAppConnectorID(strings.TrimSpace(*source.PluginID), event, matcher, handler)
+		}
 		// Rust bundled_hooks.rs: a known cleanup handler from an unsigned
 		// bundled plugin is treated as builtin (trusted and enabled without a
 		// recorded hash). The local discovery path has no enabled-tool catalog,
@@ -860,6 +867,7 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 		if source.PluginID != nil && strings.TrimSpace(*source.PluginID) != "" {
 			builtin = isAllowlistedBundledCleanupHook(strings.TrimSpace(*source.PluginID), event, matcher, handler, nil)
 		}
+		builtin = builtin || expectedAppConnectorID != ""
 		switch handlerType {
 		case HookHandlerCommand:
 			command := handler.commandForPlatform()
@@ -962,29 +970,30 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 				}
 			}
 			metadata := HookMetadata{
-				Key:             key,
-				EventName:       event,
-				HandlerType:     HookHandlerMCPTool,
-				ExecutionMode:   HookExecutionSync,
-				Matcher:         cloneString(matcher),
-				Server:          &server,
-				Tool:            &toolName,
-				Input:           inputTemplate,
-				TimeoutSec:      timeoutSec,
-				StatusMessage:   handler.statusMessage(),
-				SourcePath:      source.Path,
-				compiledMatcher: compiledMatcher,
-				Source:          source.Source,
-				PluginID:        cloneString(source.PluginID),
-				DisplayOrder:    displayOrder,
-				Builtin:         builtin,
-				Enabled:         hookEnabled(false, builtin, state),
-				IsManaged:       false,
-				CurrentHash:     currentHash,
-				TrustStatus:     trustStatus,
-				pluginTrust:     pluginTrust,
-				BypassTrust:     source.BypassTrust,
-				Env:             cloneHookEnv(source.Env),
+				Key:                    key,
+				EventName:              event,
+				HandlerType:            HookHandlerMCPTool,
+				ExecutionMode:          HookExecutionSync,
+				Matcher:                cloneString(matcher),
+				Server:                 &server,
+				Tool:                   &toolName,
+				Input:                  inputTemplate,
+				TimeoutSec:             timeoutSec,
+				StatusMessage:          handler.statusMessage(),
+				SourcePath:             source.Path,
+				compiledMatcher:        compiledMatcher,
+				Source:                 source.Source,
+				PluginID:               cloneString(source.PluginID),
+				DisplayOrder:           displayOrder,
+				Builtin:                builtin,
+				Enabled:                hookEnabled(false, builtin, state),
+				IsManaged:              false,
+				CurrentHash:            currentHash,
+				TrustStatus:            trustStatus,
+				pluginTrust:            pluginTrust,
+				BypassTrust:            source.BypassTrust,
+				Env:                    cloneHookEnv(source.Env),
+				expectedAppConnectorID: expectedAppConnectorID,
 			}
 			entry.Hooks = append(entry.Hooks, metadata)
 			displayOrder++
