@@ -408,7 +408,7 @@ func (p *mathParser) command() (mathLayout, bool) {
 			return mathLayout{}, false
 		}
 	case name == "hat" || name == "widehat" || name == "bar" || name == "tilde" ||
-		name == "vec" || name == "dot" || name == "ddot":
+		name == "widetilde" || name == "vec" || name == "dot" || name == "ddot":
 		arg, ok := p.argument()
 		if !ok {
 			return mathLayout{}, false
@@ -422,7 +422,7 @@ func (p *mathParser) command() (mathLayout, bool) {
 		switch name {
 		case "bar":
 			accent = "\u0304"
-		case "tilde":
+		case "tilde", "widetilde":
 			accent = "\u0303"
 		case "vec":
 			accent = "\u20d7"
