@@ -1733,9 +1733,14 @@ func interactiveRemoteTaskMentionSearch(ctx context.Context, endpoint *appserver
 		if err != nil {
 			return nil, err
 		}
-		defer client.close()
 		cloud := endpointAppServerTransport(endpoint) == appServerTransportCloud
-		return searchTaskMentionsWithRunner(reqCtx, remoteTaskMentionSearchRunner(client, cloud), query, strings.TrimSpace(currentThreadID), cwd), nil
+		detached := false
+		run := remoteTaskMentionSearchRunner(client, cloud, func() { detached = true })
+		matches := searchTaskMentionsWithRunner(reqCtx, run, query, strings.TrimSpace(currentThreadID), cwd)
+		if !detached {
+			client.close()
+		}
+		return matches, nil
 	}
 }
 
@@ -1745,7 +1750,7 @@ func interactiveRemoteTaskMentionSearch(ctx context.Context, endpoint *appserver
 // AppServerRequestHandle. The hosted Cloud backend implements only the title
 // listing, so the search half is skipped there (Rust
 // AppServerRequestHandle::Cloud).
-func remoteTaskMentionSearchRunner(client *remoteAppServerTUIClient, cloud bool) taskMentionSearchRunner {
+func remoteTaskMentionSearchRunner(client *remoteAppServerTUIClient, cloud bool, detach func()) taskMentionSearchRunner {
 	return func(ctx context.Context, search appserver.ThreadSearchParams, listed appserver.ThreadListParams) (
 		appserver.ThreadSearchResponse, error, appserver.ThreadListResponse, error,
 	) {
@@ -1763,9 +1768,14 @@ func remoteTaskMentionSearchRunner(client *remoteAppServerTUIClient, cloud bool)
 		}
 		searchOutcome, listOutcome := outcomes[0], outcomes[1]
 		if !searchOutcome.settled && searchOutcome.id > 0 {
-			// Rust cancels a superseded or timed-out remote search instead of
-			// leaving it to run out its own budget (#62132).
-			cancelRemoteThreadSearch(client, searchOutcome.id)
+			// Rust cancels a superseded or timed-out remote search in the
+			// background so a slow cancellation reply cannot delay titles that
+			// are already available (#62132). The goroutine then owns the
+			// connection.
+			if detach != nil {
+				detach()
+			}
+			cancelRemoteThreadSearchAsync(client, searchOutcome.id)
 		}
 		return searchResponse, searchOutcome.err, listResponse, listOutcome.err
 	}
@@ -4577,6 +4587,20 @@ func cancelRemoteThreadSearch(client *remoteAppServerTUIClient, requestID int64)
 		method: appserver.MethodThreadSearchCancel,
 		params: appserver.ThreadSearchCancelParams{RequestID: appserver.IntID(requestID)},
 	}})
+}
+
+// cancelRemoteThreadSearchAsync cancels an abandoned thread/search without
+// delaying results that are already available. The goroutine owns the
+// connection and closes it once the cancellation finishes (Rust
+// task_mentions::search_with_cancellation spawns the cancel the same way).
+func cancelRemoteThreadSearchAsync(client *remoteAppServerTUIClient, requestID int64) {
+	if client == nil {
+		return
+	}
+	go func() {
+		defer client.close()
+		cancelRemoteThreadSearch(client, requestID)
+	}()
 }
 
 func (c *remoteAppServerTUIClient) readOne(ctx context.Context) error {

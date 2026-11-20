@@ -182,7 +182,8 @@ func TestRemoteTaskMentionSearchCancelsAbandonedSearchLikeRust(t *testing.T) {
 			cancel()
 		}
 	})
-	run := remoteTaskMentionSearchRunner(&remoteAppServerTUIClient{transport: transport}, false)
+	detached := false
+	run := remoteTaskMentionSearchRunner(&remoteAppServerTUIClient{transport: transport}, false, func() { detached = true })
 	_, searchErr, listed, listErr := run(ctx, appserver.ThreadSearchParams{SearchTerm: "q"}, appserver.ThreadListParams{})
 	if searchErr == nil {
 		t.Fatal("abandoned search reported success")
@@ -193,13 +194,17 @@ func TestRemoteTaskMentionSearchCancelsAbandonedSearchLikeRust(t *testing.T) {
 	if len(listed.Data) != 1 || listed.Data[0].ID != "listed" {
 		t.Fatalf("title listing = %#v, want the already-available match", listed)
 	}
-	var cancelled bool
-	for _, request := range transport.observed() {
-		if request.Method == string(appserver.MethodThreadSearchCancel) {
-			cancelled = true
+	if !detached {
+		t.Fatal("abandoned search kept the connection open")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, request := range transport.observed() {
+			if request.Method == string(appserver.MethodThreadSearchCancel) {
+				return
+			}
 		}
+		time.Sleep(time.Millisecond)
 	}
-	if !cancelled {
-		t.Fatal("abandoned search was not cancelled")
-	}
+	t.Fatal("abandoned search was not cancelled")
 }
