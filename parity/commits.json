@@ -50930,11 +50930,16 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "realtime.ExistingCallAuth mirrors RealtimeExistingCallAuth: model-provider authentication is the default and ExternalHeaders is an explicit host choice (realtime/attachment.go).",
+    "Admission matches Rust handle_attach: external headers require transport == existingCall with a non-empty host-named sideband URL and header-based authentication, rejecting before any WebSocket handshake (realtime/realtime.go).",
+    "realtimeExternalHeaderBackend drops the model provider's header snapshot so inference credentials never reach the observer, while the runtime-auth hook and the realtime session headers still travel (realtime/transport.go).",
+    "The appserver keeps Rust's default: no in-repo surface selects ExternalHeaders, because only an embedding host may name an observer endpoint (appserver/realtime_runtime.go).",
+    "tests: realtime TestExistingCallAuthModelProviderKeepsModelProviderCredentialsLikeRust, TestExistingCallAuthExternalHeadersDropsModelProviderCredentialsLikeRust, TestExistingCallAuthExternalHeadersRequiresExplicitSidebandURLLikeRust (configured sideband, websocket), TestExistingCallAuthExternalHeadersRequiresHeaderAuthenticationLikeRust",
+    "plan: update/plan_2026_11_20.md batch 8"
    ],
    "kind": "runtime",
    "sha": "8dcd56d0cb84fa8220c6056d3ecdb861b7b7b61c",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Add external header auth for existing realtime calls (#62114)"
   },
   {
