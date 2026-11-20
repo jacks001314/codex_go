@@ -50833,11 +50833,15 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Flag surface only: cli/cli.go parses the global --linux-sandbox-pid-namespace into ExecServerOptions.LinuxSandboxPIDNamespace with clap's isolate/inherit error, but no package consumes that value, so requesting inherit changes nothing today.",
+    "The launcher always isolates the PID namespace: sandbox/linuxsandbox/linux.go builds `bwrap --die-with-parent --unshare-pid` unconditionally (#61372 carrier), so Rust's inherit path - reuse the existing /proc view, verify socket visibility before starting the command - has no Go equivalent.",
+    "Transparent TCP is still refused rather than allowed under inherit: linux.go rejects it when `cmd.NoProc` with 'transparent TCP requires managed networking and private bubblewrap namespaces', which is the message Rust #62100 rewrote to 'managed networking, bubblewrap, and procfs' once inherit became acceptable.",
+    "Rust's separate relay/workload supervision does not map onto the Go topology: sandbox/linuxsandbox/transparent_tcp_workload_linux.go serves the relay in-process (prepareTransparentTCPRelay plus relay.start) and starts the workload with exec.Command, so there is no relay child to fork, no codex_process_hardening::disable_process_dumping equivalent for relay descriptors, and no relay-exit setpgid kill of the workload group.",
+    "blocked on a Linux host: these files are //go:build linux, so the residual cannot be compiled or exercised from this Windows checkout; implement the inherit arg/gate change plus its supervisor semantics on a Linux runner together with Rust's inherited-namespace coverage."
    ],
    "kind": "runtime",
    "sha": "5cba3aec84fb7fb13785ab9da330ee6debca21e6",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Support transparent TCP with inherited PID namespaces (#62100)"
   },
   {
