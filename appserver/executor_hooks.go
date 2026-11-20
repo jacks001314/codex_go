@@ -395,13 +395,7 @@ func executorHookRuntimeTools(service *mcp.MCPService, cfg *config.Config, threa
 		return nil
 	}
 	tools := mcp.RuntimeToolsFromStatuses(response.Data)
-	var evaluator *apps.AppToolPolicyEvaluator
-	if cfg != nil {
-		evaluator = apps.NewAppToolPolicyEvaluatorWithRequirements(
-			apps.AppsConfigFromValues(cfg.Values),
-			appsRequirementsForConfig(cfg),
-		)
-	}
+	evaluator := appToolPolicyEvaluatorFor(cfg)
 	filtered := tools[:0]
 	for _, tool := range tools {
 		if !mcp.IsCodexAppsMCPServerName(tool.ServerName) {
@@ -420,9 +414,30 @@ func executorHookRuntimeTools(service *mcp.MCPService, cfg *config.Config, threa
 	return filtered
 }
 
+// appToolPolicyEvaluatorFor builds the App tool policy for a configuration, or
+// nil when nothing constrains App tools.
+func appToolPolicyEvaluatorFor(cfg *config.Config) *apps.AppToolPolicyEvaluator {
+	if cfg == nil {
+		return nil
+	}
+	return apps.NewAppToolPolicyEvaluatorWithRequirements(
+		apps.AppsConfigFromValues(cfg.Values),
+		appsRequirementsForConfig(cfg),
+	)
+}
+
 func codexAppsToolPolicyAllows(tool *mcp.RuntimeToolInfo, evaluator *apps.AppToolPolicyEvaluator) bool {
 	if tool == nil || evaluator == nil {
 		return true
+	}
+	return appToolPolicyFor(tool, evaluator).Enabled
+}
+
+// appToolPolicyFor is the effective enablement and approval mode of one App
+// tool under the current configuration.
+func appToolPolicyFor(tool *mcp.RuntimeToolInfo, evaluator *apps.AppToolPolicyEvaluator) apps.AppToolPolicy {
+	if tool == nil {
+		return apps.AppToolPolicy{}
 	}
 	var destructiveHint, openWorldHint *bool
 	if tool.Tool.Annotations != nil {
@@ -435,7 +450,7 @@ func codexAppsToolPolicyAllows(tool *mcp.RuntimeToolInfo, evaluator *apps.AppToo
 		ToolTitle:       tool.Tool.Title,
 		DestructiveHint: destructiveHint,
 		OpenWorldHint:   openWorldHint,
-	}).Enabled
+	})
 }
 
 func executorManifestRelativePath(root string, manifestPath string) string {

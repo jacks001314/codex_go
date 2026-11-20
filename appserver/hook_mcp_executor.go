@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"codex_go/apps"
 	"codex_go/mcp"
 )
 
@@ -61,6 +62,12 @@ func (r *RuntimeRouter) Execute(ctx context.Context, call HookMcpCall) (HookMcpO
 	if err := service.WaitForServerStartup(ctx, server, ""); err != nil {
 		return HookMcpOutput{}, err
 	}
+	// Rust #62080: recheck admission immediately before dispatch, because a
+	// policy, catalog or credential change during startup must stop the call. A
+	// call that was dispatched is never retried, so this is the last gate.
+	if err := r.validateBundledAppHookTarget(server, toolName, call); err != nil {
+		return HookMcpOutput{}, err
+	}
 	var arguments map[string]any
 	if len(call.Input) > 0 {
 		arguments = call.Input
@@ -85,10 +92,29 @@ func (r *RuntimeRouter) Execute(ctx context.Context, call HookMcpCall) (HookMcpO
 }
 
 // validateBundledAppHookTarget enforces the identity a built-in bundled App
-// hook was declared with (Rust #62112): the call must use the host Apps server
-// without an execution environment, and the registered tool catalog must still
-// expose the expected connector. Approvals and policy checks below still apply.
+// hook was declared with (Rust #62112/#62080): the call must use the host Apps
+// server without an execution environment, the registered tool catalog must
+// still expose the expected connector, and the current policy must let that
+// tool run without asking the user.
 func (r *RuntimeRouter) validateBundledAppHookTarget(server string, toolName string, call HookMcpCall) error {
+	// Ordinary hooks never reach the Apps catalog or config, so keep the lookup
+	// and policy lazy: resolving them here would refresh MCP state for calls
+	// that have no bundled App identity to prove (#62080).
+	if strings.TrimSpace(call.ExpectedAppConnectorID) == "" {
+		return nil
+	}
+	return validateBundledAppHookTargetWith(
+		r.executorHookToolLookup(""),
+		appToolPolicyEvaluatorFor(r.effectiveMCPConfigForThread("")),
+		server,
+		toolName,
+		call,
+	)
+}
+
+// validateBundledAppHookTargetWith is the dependency-injected form so the
+// identity and policy rules can be checked without an MCP runtime.
+func validateBundledAppHookTargetWith(lookup func(server string, tool string) *mcp.RuntimeToolInfo, evaluator *apps.AppToolPolicyEvaluator, server string, toolName string, call HookMcpCall) error {
 	expected := strings.TrimSpace(call.ExpectedAppConnectorID)
 	if expected == "" {
 		return nil
@@ -96,7 +122,6 @@ func (r *RuntimeRouter) validateBundledAppHookTarget(server string, toolName str
 	if server != mcp.RuntimeCodexAppsMCPServerName || strings.TrimSpace(call.EnvironmentID) != "" {
 		return fmt.Errorf("bundled App hook must use the host Apps server")
 	}
-	lookup := r.executorHookToolLookup("")
 	var info *mcp.RuntimeToolInfo
 	if lookup != nil {
 		info = lookup(server, toolName)
@@ -104,7 +129,28 @@ func (r *RuntimeRouter) validateBundledAppHookTarget(server string, toolName str
 	if info == nil || strings.TrimSpace(info.ConnectorID) != expected {
 		return fmt.Errorf("App hook connector or approval policy does not permit automatic execution")
 	}
+	if !bundledAppHookRunsWithoutApproval(info, evaluator) {
+		return fmt.Errorf("App hook connector or approval policy does not permit automatic execution")
+	}
 	return nil
+}
+
+// bundledAppHookRunsWithoutApproval mirrors Rust bundled_app_hook_connector: a
+// built-in App hook carries the connector identity only while the policy still
+// enables the tool and needs no user approval for the call. Hooks have no
+// approval prompt, so a call that would need one must not run silently.
+func bundledAppHookRunsWithoutApproval(tool *mcp.RuntimeToolInfo, evaluator *apps.AppToolPolicyEvaluator) bool {
+	if tool == nil {
+		return false
+	}
+	if evaluator == nil {
+		return true
+	}
+	policy := appToolPolicyFor(tool, evaluator)
+	if !policy.Enabled {
+		return false
+	}
+	return !mcp.RequiresMCPToolApprovalForMode(tool.Tool.Annotations, policy.Approval)
 }
 
 func validateHookMcpEnvironment(server string, config mcp.ServerConfig, environmentID string) error {
