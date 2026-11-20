@@ -536,10 +536,16 @@ var Registry = []Spec{
 	{Key: "async_compaction", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust #59598: restrict background compaction to root sessions.
 	{Key: "async_compaction_root_only", Stage: StageUnderDevelopment, DefaultEnabled: false},
-	// Rust #59973 (247934cfe5): gRPC over stdio is the default transport for the
-	// process-owned code-mode host; stdio stays reachable through an explicit
-	// `features.code_mode_host_grpc = false` opt-out.
-	{Key: "code_mode_host_grpc", Stage: StageStable, DefaultEnabled: true},
+	// Rust #62271 (29cb67623c): local realtime frame history is gated on
+	// paginated storage and stays off until that path is enabled.
+	{Key: "realtime_frames_local", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust #62690 (0f3a4756f9): administrators can turn Codex daemon updates
+	// off; the setting is on by default.
+	{Key: "daemon_updates", Stage: StageStable, DefaultEnabled: true},
+	// Rust #62476 (336dc645fb) removed the legacy framed stdio protocol: every
+	// process-owned code-mode host connection now uses gRPC over stdio, and this
+	// setting is deprecated and ignored.
+	{Key: "code_mode_host_grpc", Stage: StageRemoved, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs #58159): let the process-owned
 	// code-mode host apply output budgets before sending results to Core.
 	// Rust #59973 (247934cfe5): the host applies its own output budget before

@@ -1642,11 +1642,9 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		if provider == nil {
 			if run.CodeModeHostEnabled || run.DisableCodeModeFallback {
 				program := install.Current().CodeModeHostProgram()
-				if run.Config != nil && features.Enabled(run.Config.FeatureSettings(), "code_mode_host_grpc") {
-					provider = codemode.NewGrpcProcessProvider(program)
-				} else {
-					provider = codemode.NewProcessProvider(program)
-				}
+				// Rust #62476: the legacy framed stdio protocol is gone and the
+				// code_mode_host_grpc setting is deprecated and ignored.
+				provider = codemode.NewGrpcProcessProvider(program)
 				// Rust #58159: the opt-in flag lets the process-owned host
 				// truncate output before it crosses the transport.
 				if run.Config != nil && features.Enabled(run.Config.FeatureSettings(), "code_mode_host_output_truncation") {

@@ -2347,19 +2347,12 @@ func (r *RuntimeRouter) sampleCodeModeProcessMetrics(ctx context.Context) (tool.
 	return sampler.SampleProcessMetrics(ctx)
 }
 
-// newRuntimeCodeModeProcessProvider mirrors Rust #52723's feature selection:
-// code_mode_host_grpc selects gRPC over stdio for the process-owned host.
+// newRuntimeCodeModeProcessProvider builds the process-owned code-mode host
+// provider. Rust #62476 removed the legacy framed stdio protocol and deprecated
+// the code_mode_host_grpc setting, so every launch uses gRPC over stdio and both
+// values of that setting are ignored.
 func newRuntimeCodeModeProcessProvider(options *RuntimeRouterOptions, program string) tool.CodeModeRemoteProvider {
-	// The enablement map only carries explicit overrides, so resolve through
-	// features.Enabled: the registered defaults (gRPC over stdio and host-side
-	// output truncation are default-on after Rust #59973) apply when a key is
-	// absent, while an explicit opt-out still selects the legacy stdio provider.
-	var provider tool.CodeModeRemoteProvider
-	if options != nil && features.Enabled(options.FeatureEnablement, "code_mode_host_grpc") {
-		provider = codemode.NewGrpcProcessProvider(program)
-	} else {
-		provider = codemode.NewProcessProvider(program)
-	}
+	var provider tool.CodeModeRemoteProvider = codemode.NewGrpcProcessProvider(program)
 	// Rust #58159: LocalServerOutputProvider wraps only Core's built-in
 	// providers; injected providers retain control of their session settings.
 	if options != nil && features.Enabled(options.FeatureEnablement, "code_mode_host_output_truncation") {
