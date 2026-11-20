@@ -3271,7 +3271,7 @@
    ],
    "phase": "P2",
    "status": "complete",
-   "verifier": "TestStatuslineProviderReselectionRestartsFailedReaderLikeRust;TestStatuslineProviderConfigReloadTogglesGateLikeRust;TestStatuslineProviderDisconnectShowsBuiltinAndReattachRestartsLikeRust"
+   "verifier": "TestStatuslineProviderReselectionRestartsFailedReaderLikeRust;TestStatuslineProviderConfigReloadKeepsStartupGateLikeRust;TestStatuslineProviderDisconnectShowsBuiltinAndReattachRestartsLikeRust"
   },
   {
    "id": "tui-statusline-provider-snapshot-gate",
@@ -3288,11 +3288,12 @@
     "tui/tea/status_controls.go",
     "tui/tea/thread_usage.go",
     "tui/chatwidget/status_controls.go",
-    "tui/tea/statusline_provider_snapshot_like_rust_test.go"
+    "tui/tea/statusline_provider_snapshot_like_rust_test.go",
+    "tui/tea/statusline_feature.go"
    ],
    "phase": "P2",
    "status": "complete",
-   "verifier": "TestStatuslineProviderFailedReadStopsSnapshotConsumersLikeRust;TestStatusControlsSelectionsStayItemBasedWithProviderLikeRust;TestStatusControlsProviderRequestsWorkspaceHeadlineWithoutItemsLikeRust"
+   "verifier": "TestStatuslineProviderFailedReadStopsSnapshotConsumersLikeRust;TestStatusControlsSelectionsStayItemBasedWithProviderLikeRust;TestStatusControlsProviderRequestsWorkspaceHeadlineWithoutItemsLikeRust;TestCustomStatuslineGateFollowsServerStartupConfigLikeRust"
   },
   {
    "id": "tui-statusline-provider-picker",

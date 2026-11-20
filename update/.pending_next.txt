@@ -48,7 +48,6 @@ fecf5cc672538029b3b1adc00204a78e416a19a3	2026-11-18	Reconsider denials in attach
 7d458c8fc5cfc99ec447e3af6c173949660c268b	2026-11-18	Preserve sandbox writable roots across client and server platforms (#62376)
 b967993f35239b86ee3c6a9c8f54b8146e31ddfa	2026-11-18	Preserve workspace roots across client and server platforms (#62377)
 e1b755849216aacd40574b5ccf9ee18d18b1a867	2026-11-19	Prepare managed proxy settings once per sandbox command (#62386)
-2d581656514cf4d87a43e20f3a8be4a0a2696025	2026-11-19	Expose custom status lines in `/experimental` (#62387)
 b5e1f3ae9d810dec3fe005fcc55552766b577bdb	2026-11-19	Highlight clickable links and controls on hover in the fullscreen TUI (#62390)
 92745114438c038dee88263ac4a6a91405dd85af	2026-11-19	Reconcile unfinished Cloud replies in the TUI transcript (#62403)
 508a42966658b4f1d018ea471522beed791537ce	2026-11-19	Deduplicate large tool output strings in rollout traces (#62407)

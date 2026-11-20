@@ -52261,11 +52261,15 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "features/features.go moves tui_extensions_statusline off under-development into the experimental stage with Rust's row, so /experimental lists Custom status line with the \"Restart the TUI, then use /statusline.\" guidance and no announcement (Rust FeatureSpec for Feature::TuiExtensionsStatusLine).",
+    "The gate is a launch value: Options.StatuslineFeatureEnabled carries the value app/remote_tui.go resolves out of the connected app server's config/read response (a failed or missing read leaves it off instead of falling back to this client's configuration file), NewModel freezes it on Model.statuslineFeatureEnabled, and customStatuslineEnabled is the only consumer in front of the footer provider read, the /statusline provider picker plus custom-authoring rows, and the first-prompt mode metric (tui/tea/statusline_feature.go; Rust startup::statusline_enabled plus ChatWidget::custom_statusline_enabled).",
+    "A saved /experimental toggle, a local settings reload and a thread switch keep the launch value, featureSettings is no longer consulted by the status line, and the bundled create-statusline skill points at the /experimental opt-in instead of tui_extensions_statusline in the client configuration (systemskills/assets/samples/create-statusline/SKILL.md).",
+    "tests: tui/tea TestCustomStatuslineGateFollowsServerStartupConfigLikeRust, TestCustomStatuslineGateUsesServerSnapshotLikeRust, TestExperimentalStatuslineToggleAppliesOnNextLaunchLikeRust, TestCustomStatuslineGateSurvivesThreadSwitchLikeRust, TestStatuslineProviderConfigReloadKeepsStartupGateLikeRust; go test ./tui/tea -count=1; go test ./app -run 'Remote|Settings|Statusline|StatusLine' -count=1",
+    "plan: update/plan_2026_11_20.md batch 12"
    ],
    "kind": "runtime",
    "sha": "2d581656514cf4d87a43e20f3a8be4a0a2696025",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Expose custom status lines in `/experimental` (#62387)"
   },
   {
