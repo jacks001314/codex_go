@@ -1,5 +1,4 @@
 5cba3aec84fb7fb13785ab9da330ee6debca21e6	2026-11-17	Support transparent TCP with inherited PID namespaces (#62100)
-7d7af7b903a82123ce9362f8ac5a7048d924918d	2026-11-17	Share picker setup for the TUI status line and terminal title (#62126)
 ea6b64fd12b804ca1fbce54f772df6ac44d538ad	2026-11-17	Use the local session index in the multi-backend resume picker (#62127)
 7066a55a7b94345757758385a538c72fda571b84	2026-11-17	Support enterprise MCP sign-in without refresh tokens (#62129)
 3bf4e138fe0b27aed7dfa3ea5e0a382e3ac5bf1f	2026-11-17	Stream partial thread search results and support cancellation (#62132)

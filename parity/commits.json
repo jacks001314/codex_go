@@ -51043,11 +51043,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "tui/chatwidget/status_controls.go builds both status-surface setup pickers with one statusSurfacePickerRows helper (Rust StatusSurfacePreviewData::picker_items): configured rows keep their configured order, a repeated row collapses to its first canonical position, and every remaining row follows in enum order, so the status line and terminal title pickers can no longer drift apart. The two usage-limit rows take their live name from RateLimitItemName (the description already did), so a live \"usage 10% left\" reads as the generic usage limit in both pickers. Tests: go test ./tui/chatwidget -run 'TestStatusSurfacePickersShareConfiguredOrderingLikeRust|TestStatusSurfacePickersUseLiveRateLimitCopyLikeRust' -count=1; go test ./tui/chatwidget ./tui/tea ./tui/bottom_pane -count=1. Residual: Rust also opts the terminal-title MultiSelectPicker into accepts_input_when_disconnected while the shared picker defaults to refusing it; Go's TUI has no disconnected-view input gate to opt into (a disconnect exits the app), so the flag and its default have no Go counterpart."
    ],
    "kind": "runtime",
    "sha": "7d7af7b903a82123ce9362f8ac5a7048d924918d",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Share picker setup for the TUI status line and terminal title (#62126)"
   },
   {
