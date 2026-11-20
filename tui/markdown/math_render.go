@@ -329,7 +329,7 @@ func (p *mathParser) command() (mathLayout, bool) {
 		}
 		return p.displayOperator(symbol)
 	case name == "begin" || name == "boxed" || name == "underset" || name == "overset" ||
-		name == "substack" || name == "mathcal":
+		name == "underbrace" || name == "substack" || name == "mathcal":
 		return p.structuredCommand(name)
 	case name == "frac" || name == "dfrac" || name == "tfrac":
 		numerator, ok := p.compactArgument()

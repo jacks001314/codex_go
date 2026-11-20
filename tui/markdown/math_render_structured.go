@@ -174,6 +174,8 @@ func (p *mathParser) structuredCommand(name string) (mathLayout, bool) {
 		}
 		// Parenthesize the base so an annotation cannot attach to only its last atom.
 		return mathText("(" + baseText + ")" + string(marker) + "{" + annotationText + "}"), true
+	case "underbrace":
+		return p.underbrace()
 	case "substack":
 		remaining := strings.TrimLeftFunc(p.remaining, unicode.IsSpace)
 		if !strings.HasPrefix(remaining, "{") {
@@ -222,6 +224,82 @@ func (p *mathParser) structuredCommand(name string) (mathLayout, bool) {
 	default:
 		return mathLayout{}, false
 	}
+}
+
+// underbrace renders Rust's `\underbrace{expression}_{label}`: a Unicode brace
+// spanning the expression's terminal columns with a centered label beneath it,
+// composed at the expression's baseline so surrounding math stays aligned.
+// Inline math, unsupported arguments and layouts wider than the column budget
+// keep the existing source fallback.
+func (p *mathParser) underbrace() (mathLayout, bool) {
+	if p.mode == mathModeInline || !p.stackAnnotations {
+		return mathLayout{}, false
+	}
+	remaining := strings.TrimLeftFunc(p.remaining, unicode.IsSpace)
+	if !strings.HasPrefix(remaining, "{") {
+		return mathLayout{}, false
+	}
+	p.remaining = remaining
+	expression, ok := p.compactArgument()
+	if !ok {
+		return mathLayout{}, false
+	}
+	expressionText, single := expression.single()
+	if !single {
+		return mathLayout{}, false
+	}
+	expressionText = strings.TrimSpace(expressionText)
+	remaining = strings.TrimLeftFunc(p.remaining, unicode.IsSpace)
+	if !strings.HasPrefix(remaining, "_") {
+		return mathLayout{}, false
+	}
+	remaining = strings.TrimLeftFunc(remaining[1:], unicode.IsSpace)
+	if !strings.HasPrefix(remaining, "{") {
+		return mathLayout{}, false
+	}
+	p.remaining = remaining
+	label, ok := p.compactArgument()
+	if !ok {
+		return mathLayout{}, false
+	}
+	labelText, single := label.single()
+	if !single {
+		return mathLayout{}, false
+	}
+	labelText = strings.TrimSpace(labelText)
+	width := codextui.DisplayWidth(expressionText)
+	labelWidth := codextui.DisplayWidth(labelText)
+	if width == 0 || labelWidth == 0 {
+		return mathLayout{}, false
+	}
+	// The marker tip and the label share one left-center column.
+	tip := (width - 1) / 2
+	labelCenter := (labelWidth - 1) / 2
+	expressionPadding := max(labelCenter-tip, 0)
+	labelPadding := max(tip-labelCenter, 0)
+	// Rust's MAX_COLUMNS bound: a brace that cannot fit stays source.
+	if max(expressionPadding+width, labelPadding+labelWidth) > mathMaxColumns {
+		return mathLayout{}, false
+	}
+	var marker string
+	switch width {
+	case 1:
+		marker = "\u252c"
+	case 2:
+		marker = "\u2514\u2518"
+	default:
+		marker = "\u2514" + strings.Repeat("\u2500", (width-3)/2) + "\u252c" +
+			strings.Repeat("\u2500", (width-2)/2) + "\u2518"
+	}
+	padding := strings.Repeat(" ", expressionPadding)
+	return mathLayout{
+		rows: []string{
+			padding + expressionText,
+			padding + marker,
+			strings.Repeat(" ", labelPadding) + labelText,
+		},
+		baseline: 0,
+	}, true
 }
 
 // grid mirrors Rust's `grid`: display-only `aligned` and `pmatrix` blocks.
