@@ -140,6 +140,10 @@ func BuildRuntimeExposure(allTools []RuntimeToolInfo, connectors []RuntimeConnec
 }
 
 func RuntimeToolsFromStatuses(statuses []MCPServerStatus) []RuntimeToolInfo {
+	// Rust #62320 traces the per-server projection of raw client tools into
+	// model tools, policy, owner, and plugin attribution included.
+	span := startCatalogSpan("mcp.tools.prepare_for_model")
+	defer span.End()
 	out := make([]RuntimeToolInfo, 0)
 	for i := range statuses {
 		status := statuses[i]
@@ -216,6 +220,8 @@ type runtimeToolNameCandidate struct {
 // identities and model-visible callable names. Raw names remain available for
 // tools/call while callable names are sanitized, prefixed, and deduplicated.
 func NormalizeRuntimeToolsForModel(tools []RuntimeToolInfo) []RuntimeToolInfo {
+	span := startCatalogSpan("mcp.binding.normalize_tools")
+	defer span.End()
 	candidates := make([]runtimeToolNameCandidate, 0, len(tools))
 	seenRawTools := map[string]bool{}
 	for i := range tools {

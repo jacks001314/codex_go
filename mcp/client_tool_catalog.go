@@ -26,6 +26,8 @@ func (c *clientToolCatalog) read(read func(revision uint64, tools []MCPToolInfo)
 	if c == nil || read == nil {
 		return
 	}
+	span := startCatalogSpan("mcp.catalog.read_snapshot")
+	defer span.End()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	read(c.revision, c.tools)
@@ -56,16 +58,28 @@ func (c *clientToolCatalog) refresh(fetch func() ([]MCPToolInfo, error)) error {
 	if c == nil {
 		return nil
 	}
+	refreshWait := startCatalogSpan("mcp.catalog.refresh_lock_wait")
 	c.refreshMu.Lock()
+	refreshWait.End()
 	defer c.refreshMu.Unlock()
+	fetchSpan := startCatalogSpan("mcp.catalog.fetch")
 	tools, err := fetch()
+	fetchSpan.End()
 	if err != nil {
 		return err
 	}
+	// The single write lock covers both waits Rust instruments separately: an
+	// in-flight call holding catalog authority, then publication.
+	callsWait := startCatalogSpan("mcp.catalog.active_calls_wait")
+	publicationWait := startCatalogSpan("mcp.catalog.publication_lock_wait")
 	c.mu.Lock()
+	callsWait.End()
+	publicationWait.End()
 	defer c.mu.Unlock()
+	publishSpan := startCatalogSpan("mcp.catalog.publish")
 	c.tools = cloneMCPToolInfos(tools)
 	c.revision++
+	publishSpan.End()
 	return nil
 }
 

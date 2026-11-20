@@ -2635,6 +2635,8 @@ func (r *RuntimeRouter) installOtelProvider(provider *telemetry.OtelProvider, me
 			tracer = provider.Tracer()
 		}
 		r.services.ThreadRouter.SetTracer(tracer)
+		// Rust #62320: the MCP catalog spans record through the same tracer.
+		mcp.SetCatalogTracer(mcpCatalogTracerFor(tracer))
 	}
 	if provider == nil {
 		return

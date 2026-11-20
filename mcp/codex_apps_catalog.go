@@ -107,6 +107,10 @@ func (s *MCPService) finishAppsToolRefresh(generation uint64) bool {
 // finished. Callers must not hold s.mu: refreshes fetch outside the runtime
 // gate, and waiting outside it lets a superseded refresh retry.
 func (s *MCPService) WaitForAppsToolRefresh(ctx context.Context) error {
+	// Rust #62320 traces the wait for the Apps client before a catalog
+	// capture can list its tools.
+	span := startCatalogSpan("mcp.apps.client_ready_wait")
+	defer span.End()
 	if s == nil {
 		return nil
 	}
