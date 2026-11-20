@@ -51670,11 +51670,16 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "config.GuardianPolicySnapshot carries the observation as one value: revision, cloud bundle binding, the Guardian requirements (allowed reviewers, required models, policy text) and the managed auto_review fallbacks it was resolved from (config/guardian_policy.go).",
+    "LoadGuardianPolicySnapshot reads only the keys a Guardian refresh owns, so an unrelated invalid managed setting cannot block a policy update, and it rejects a bundle whose config server the machine requirements do not select (ValidateAppliedConfigServer).",
+    "Config.ApplyGuardianPolicy replaces only those requirements, keeps the non-managed fallbacks, and validates the merged auto_review afterwards, so an invalid managed scalar stays published until a higher-precedence session layer makes the merged value valid; Config.RetainGuardianPolicyFrom keeps a published policy across a rebuild and GuardianPolicyConfig resolves the merged fallbacks instead of the loaded values.",
+    "tests: config TestGuardianRefreshValidatesFallbackAfterMergingRetainedLayersLikeRust covers the invalid unrelated managed setting, the retained layers, the session override that restores validity, and the removal of stale policy text when its bundle disappears",
+    "The publication consumer (ThreadManager-side revision reservation and live-thread application) is Rust #62496, still queued.",
+    "plan: update/plan_2026_11_20.md batch 9"
    ],
    "kind": "runtime",
    "sha": "17e79ae616f2ea6b089e268f80461a7d3a4d8d45",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Support independent refreshes of managed Guardian policy (#62274)"
   },
   {
