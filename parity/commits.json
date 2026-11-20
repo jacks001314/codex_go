@@ -50985,11 +50985,16 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "tui/chatwidget/remote_control.go renders Rust's remote_control::menu and pairing views: Enable or Disable follows the live status, a status that is off while the saved preference is on offers Disable again with the restart explanation, Add device appears only once a daemon answers and explains its prerequisite, and an unverifiable session keeps one disabled row with the reason (Rust #62121).",
+    "tui/tea/remote_control.go runs every operation through a 30-second bound with Rust's distinct status-read and mutation timeout wording, refuses a second command while one runs, maps daemon answers through the same outcome table (managed-requirements refusal, ChatGPT sign-in guidance, mutation retry wording, missing pairing code), and pairs the answer with the preference persisted for the next restart.",
+    "The command is registered as /rc with the /remote alias and joins upstream's inline-argument, side-conversation and during-task availability lists; the app-side runner (app/remote_control_tui.go) drives only a verified local daemon over its control socket, adds remoteControl/status/read to the daemon client, refuses a daemon older than 0.163.0-alpha.2 with Rust's /daemon guidance, and reads app-server-daemon/settings.json for the saved preference.",
+    "A manual pairing code is redacted from the outcome string, so it cannot reach event logs.",
+    "tests: tui/chatwidget TestRemoteControlMenuStatesLikeRust, TestRemoteControlPairingViewLikeRust, TestRemoteControlOutcomesAreRedactedLikeRust, TestRemoteControlOutcomeMappingLikeRust, TestRemoteControlTimeoutsLikeRust, TestRemoteControlSavedPreferenceLikeRust, TestRemoteControlRequestsLikeRust, TestRemoteControlItemActionsLikeRust; tui/tea TestRemoteControlSlashOpensMenuLikeRust, TestRemoteControlWithoutDaemonShowsUnavailableLikeRust, TestRemoteControlMenuRunsActionsLikeRust, TestRemoteControlRunnerFailureShowsUnavailableLikeRust, TestRemoteControlDisableReportsInfoLikeRust, TestRemoteControlPendingGuardLikeRust; app TestRemoteControlSettingsFileLikeRust, TestRemoteControlSavedPreferenceLikeRust, TestRemoteControlDaemonSupportedLikeRust, TestRemoteControlServerRefusalLikeRust, TestInteractiveRemoteControlRunnerNeedsVerifiedDaemonLikeRust.",
+    "Rust also lets /rc manage the parked local daemon while a cloud session is displayed; Go's TUI holds one backend, so a cloud session leaves the menu reporting that remote control needs the local background server."
    ],
    "kind": "runtime",
    "sha": "5f775c7f4f5f3e0b3bb6eb499b280e023e697f71",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Add `/rc` to manage remote control from the TUI (#62121)"
   },
   {
