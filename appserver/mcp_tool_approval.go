@@ -388,7 +388,7 @@ func (h *appserverMCPToolApprovalHandler) mcpToolApprovalReviewer(request *mcp.M
 		return state.ReviewerUser
 	}
 	reviewer := h.router.approvalsReviewerForTurn(h.threadID, h.turnID)
-	cfg := h.router.effectiveMCPConfigForThread(h.threadID)
+	cfg := h.router.approvalsReviewerConfigForTurn(h.threadID, h.turnID)
 	model := ""
 	if active := h.router.activeTurnParams(h.threadID); active != nil {
 		model = strings.TrimSpace(active.Model)

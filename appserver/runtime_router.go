@@ -22439,11 +22439,24 @@ func (r *RuntimeRouter) approvalsReviewerForTurn(threadID string, turnID string)
 	if active == nil {
 		return state.ReviewerUser
 	}
-	cfg, err := r.effectiveConfigForTurn(active.Params)
-	if err != nil {
-		return state.ReviewerUser
+	return state.ReviewerFromString(turnApprovalsReviewerForTurn(r.approvalsReviewerConfigForTurn(threadID, turnID), active.Params))
+}
+
+// approvalsReviewerConfigForTurn resolves reviewer inputs against the issuing
+// turn's captured configuration, so a live Guardian policy change cannot waive a
+// review the turn already requires (Rust #62276). A turn without a captured
+// configuration keeps the live MCP view.
+func (r *RuntimeRouter) approvalsReviewerConfigForTurn(threadID string, turnID string) *config.Config {
+	if r != nil {
+		active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+		if active != nil && active.RunConfig != nil && active.RunConfig.Config != nil {
+			return active.RunConfig.Config
+		}
 	}
-	return state.ReviewerFromString(turnApprovalsReviewerForTurn(cfg, active.Params))
+	if cfg := r.effectiveMCPConfigForThread(threadID); cfg != nil {
+		return cfg
+	}
+	return &config.Config{Values: map[string]any{}}
 }
 
 // guardianApprovalOutcome is the Guardian review's verdict for one approval
