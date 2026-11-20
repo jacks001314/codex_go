@@ -50686,11 +50686,15 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Hook MCP dispatch now proves the bundled App identity and the current authority: appserver.validateBundledAppHookTargetWith requires the host Apps server without an execution environment, the expected connector in the live catalog, and bundledAppHookRunsWithoutApproval, which mirrors Rust's bundled_app_hook_connector by refusing a tool the current App policy disables or would need approval for (landed 6e3cb52e).",
+    "Execute rechecks that admission right after WaitForServerStartup and immediately before CallTool, and a dispatched call is never retried, so a policy, catalog or credential change during startup stops the call. Ordinary hooks keep the checks lazy so they never resolve the Apps catalog or config.",
+    "App-only tools need no separate carrier: executorHookRuntimeTools reads the hook catalog from the Apps client status (MCPServerStatusDetailToolsAndAuthOnly) rather than the model tool list, so hidden App tools are dispatchable without being exposed to the model.",
+    "Rust's refresh-before-prepare and admission capture/retry loop have no Go counterpart: Go resolves the tool inside CallTool against the started service, and the pre-dispatch recheck re-reads the effective config, so a stale binding cannot bypass newer App policy.",
+    "Tests: go test ./appserver -run 'TestBundledAppHookRequiresAutomaticExecutionPolicyLikeRust|TestBundledAppHookTargetChecksIdentityLikeRust|TestBundledReplCleanupLeavesDormantServerLikeRust' -count=1"
    ],
    "kind": "runtime",
    "sha": "f99317520575edcb1dd9e732222152be32dd273c",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Add policy-checked dispatch for bundled App hooks (#62080)"
   },
   {
