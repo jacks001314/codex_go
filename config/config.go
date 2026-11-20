@@ -66,6 +66,18 @@ type Config struct {
 	// the latest config-server bundle (Rust #57175
 	// ConfigManager::current_managed_config_loader). It is never serialized.
 	cloudConfigLoader *CloudConfigLoader
+	// guardianConfig holds the managed `auto_review` fallbacks a published
+	// Guardian policy snapshot brought, merged with the local layers that stay
+	// on this configuration (Rust #62274 ConfigLayerStack::guardian_config). It
+	// is nil until the first publication, when the merged config values answer
+	// instead. Never serialized.
+	guardianConfig []GuardianFallbackLayer
+	// guardianBinding is the policy revision that published those fallbacks
+	// (Rust ConfigLayerStack::guardian_binding). Never serialized.
+	guardianBinding *CloudConfigBundleBinding
+	// guardianPolicyRevision is the revision this configuration carries, zero
+	// before the first publication. Never serialized.
+	guardianPolicyRevision int64
 	// resolvedMemoryVersion is the memory pipeline selected during config load.
 	// Fresh profiles with memories enabled select V2 when no V1 workspace exists
 	// (Rust #56211); an explicit `memories.version` still wins. It is never
@@ -2133,6 +2145,16 @@ func (c *Config) GuardianV2TranscriptFormat() string {
 func (c *Config) GuardianPolicyConfig() (string, bool) {
 	if c == nil {
 		return "", false
+	}
+	if c.guardianConfig != nil {
+		// A published Guardian policy snapshot owns the policy text, so the
+		// merged fallbacks answer instead of the loaded config values (Rust
+		// #62274 ConfigLayerStack::guardian_config).
+		fallback, err := c.guardianPolicyFallback()
+		if err != nil {
+			return "", false
+		}
+		return guardianPolicyFallbackText(c.Requirements, fallback)
 	}
 	if c.Requirements != nil && c.Requirements.GuardianPolicyConfig != nil {
 		if value := strings.TrimSpace(*c.Requirements.GuardianPolicyConfig); value != "" {
