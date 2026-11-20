@@ -1637,20 +1637,6 @@
    "verifier": "TestSuspendAgentTreePersistsQueuedTerminalResultsLikeRust;TestSuspendAgentTreeStopsTurnsAndPreservesStateLikeRust;TestLoadSuspendedAgentRestoresIdentityWithoutStartingLikeRust"
   },
   {
-   "id": "message-board-bulk-subscriptions",
-   "kind": "source-surface",
-   "rustPaths": [
-    "message-board/src/local.rs",
-    "message-board/src/local/queries.rs"
-   ],
-   "goPaths": [
-    "agentboard"
-   ],
-   "phase": "P1",
-   "status": "complete",
-   "verifier": "TestLocalBoardSubscriptionsOptOutsAndDeletionLikeRust;TestLocalBoardBulkSubscriptionsAreAtomicLikeRust"
-  },
-  {
    "id": "message-board-fixed-read-view",
    "kind": "source-surface",
    "rustPaths": [

@@ -414,6 +414,3 @@ func (v *BoardReadView) SetSubscription(context.Context, string, SubscriptionReq
 }
 
 // SetSubscriptions is rejected: a read view never mutates the board.
-func (v *BoardReadView) SetSubscriptions(context.Context, string, BulkSubscriptionsRequest) (*BulkSubscriptionsState, error) {
-	return nil, ErrBoardReadViewReadOnly
-}

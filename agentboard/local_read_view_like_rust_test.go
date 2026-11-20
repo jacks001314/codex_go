@@ -79,7 +79,4 @@ func TestLocalBoardFixedReadViewFreezesCatalogAndCutoffLikeRust(t *testing.T) {
 	if _, err := view.SetSubscription(ctx, root, SubscriptionRequest{Target: SubscriptionTarget{Kind: "channel", ChannelName: "alpha"}, Change: Subscribe}); !errors.Is(err, ErrBoardReadViewReadOnly) {
 		t.Fatalf("view SetSubscription() error = %v, want read-only", err)
 	}
-	if _, err := view.SetSubscriptions(ctx, root, BulkSubscriptionsRequest{Channels: []string{"alpha"}}); !errors.Is(err, ErrBoardReadViewReadOnly) {
-		t.Fatalf("view SetSubscriptions() error = %v, want read-only", err)
-	}
 }

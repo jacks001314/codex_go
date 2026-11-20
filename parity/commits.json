@@ -44164,11 +44164,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Go agentboard/local.go implements atomic bulk channel subscription updates in one transaction with all-or-nothing rollback; verified by TestLocalBoardBulkSubscriptionsAreAtomicLikeRust"
+    "Superseded: this commit added atomic bulk channel subscription updates, and upstream #62137 removed set_subscriptions again, keeping individual subscription changes through set_subscription. Go removed SetSubscriptions/BulkSubscriptionsRequest with the same cleanup, so there is no surviving Go carrier to verify.",
+    "Individual subscription changes stay covered by agentboard TestLocalBoardSubscriptionsOptOutsAndDeletionLikeRust and TestGuardianSubscriptionToolsChangeOnlyCallerLikeRust."
    ],
    "kind": "persistence",
    "sha": "eb485f57ba02ca8cdedfcc07aca0f9d75c8faefd",
-   "status": "complete",
+   "status": "not_applicable",
    "subject": "Add atomic bulk channel subscription updates (#59998)"
   },
   {
@@ -51158,8 +51159,9 @@
     "codex_go"
    ],
    "evidence": [
-    "Landed: the captured-view reviewer selection module is removed, so reviewer subscriptions no longer read a fixed catalog (landed 30710765).",
-    "Pending: removing BoardReadView, its snapshot-specific tool bindings and the captured catalog/post cutoff from local queries, and dropping set_subscriptions while keeping individual subscription changes. Go still carries agentboard/read_view.go, BulkSubscriptionsRequest/SetSubscriptions and the read-view tests, and guardian_delivery.go still plans against a captured view."
+    "Landed: the captured-view reviewer selection module is removed, and so are bulk channel subscriptions: SetSubscriptions, BulkSubscriptionsRequest/BulkSubscriptionsState, their local-board transaction helpers and the read-view refusal are gone, leaving individual SetSubscription changes as the only way to change membership (Rust #62137).",
+    "Pending: removing BoardReadView, its snapshot-specific tool bindings and the captured catalog/post cutoff from local queries (Go still carries agentboard/read_view.go, the boardReadScope threading in local.go queries, and guardian_delivery.go's captured-view planning).",
+    "Tests: go test ./agentboard -count=1"
    ],
    "kind": "runtime",
    "sha": "44de9d99ef5a9ea3a04c00e09bec8ebd67707868",
