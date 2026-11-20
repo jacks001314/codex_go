@@ -128,6 +128,17 @@ func layoutUINode(node *preparedUINode, width int, limit int, visit func(y int, 
 	if row.gap < uint64(gap) {
 		gap = int(row.gap)
 	}
+	// A between row hands each band the columns it did not fill, so its items
+	// reach both edges at every width.
+	placeBand := func(children []*preparedUINode, used int, y int) int {
+		spare := 0
+		if row.justify == UIRowJustifyBetween && used < width {
+			spare = width - used
+		}
+		return layoutUIBand(children, width, limit-y, gap, spare, row.paint, func(rowOffset int, fragment uiFragment) {
+			visit(y+rowOffset, fragment)
+		})
+	}
 	y := 0
 	start := 0
 	used := 0
@@ -137,9 +148,7 @@ func layoutUINode(node *preparedUINode, width int, limit int, visit func(y int, 
 			preferred = width + 1
 		}
 		if row.wrap == UIRowWrapWrap && index > start && used+gap+preferred > width {
-			y += layoutUIBand(row.children[start:index], width, limit-y, gap, row.paint, func(rowOffset int, fragment uiFragment) {
-				visit(y+rowOffset, fragment)
-			})
+			y += placeBand(row.children[start:index], used, y)
 			if y == limit {
 				return y
 			}
@@ -151,13 +160,11 @@ func layoutUINode(node *preparedUINode, width int, limit int, visit func(y int, 
 		}
 		used += preferred
 	}
-	y += layoutUIBand(row.children[start:], width, limit-y, gap, row.paint, func(rowOffset int, fragment uiFragment) {
-		visit(y+rowOffset, fragment)
-	})
+	y += placeBand(row.children[start:], used, y)
 	return y
 }
 
-func layoutUIBand(children []*preparedUINode, width int, limit int, gap int, paint uiPaint, visit func(y int, fragment uiFragment)) int {
+func layoutUIBand(children []*preparedUINode, width int, limit int, gap int, spare int, paint uiPaint, visit func(y int, fragment uiFragment)) int {
 	if limit <= 0 {
 		return 0
 	}
@@ -167,13 +174,23 @@ func layoutUIBand(children []*preparedUINode, width int, limit int, gap int, pai
 		}
 		return int(cells)
 	}
-	reserved := gap * max(len(children)-1, 0)
+	gaps := max(len(children)-1, 0)
+	// Round each item's cumulative share of the spare columns to the nearest
+	// cell, which keeps both edges fixed as the width changes.
+	share := func(index int) int {
+		if gaps == 0 {
+			return 0
+		}
+		return (index*spare + gaps/2) / gaps
+	}
+	reserved := gap * gaps
 	for _, child := range children {
 		reserved += bounded(child.widths.minimum)
 	}
+	reserved += share(gaps)
 	offset := 0
 	ends := make([]int, 0, 4)
-	for _, child := range children {
+	for index, child := range children {
 		minimum := bounded(child.widths.minimum)
 		reserved -= minimum
 		available := bounded(child.widths.preferred)
@@ -187,13 +204,17 @@ func layoutUIBand(children []*preparedUINode, width int, limit int, gap int, pai
 		if available < minimum {
 			available = minimum
 		}
-		if available < 1 {
-			available = 1
+		// Only the child's layout width is clamped; an empty child still
+		// advances the band by the columns it was assigned (Rust
+		// `available.clamp(1, width)`), so its siblings keep their edges.
+		childWidth := available
+		if childWidth < 1 {
+			childWidth = 1
 		}
-		if available > width {
-			available = width
+		if childWidth > width {
+			childWidth = width
 		}
-		layoutUINode(child, available, limit, func(y int, part uiFragment) {
+		layoutUINode(child, childWidth, limit, func(y int, part uiFragment) {
 			for len(ends) <= y {
 				ends = append(ends, 0)
 			}
@@ -210,8 +231,12 @@ func layoutUIBand(children []*preparedUINode, width int, limit int, gap int, pai
 				ends[y] += part.width()
 			}
 		})
-		offset += available + gap
-		reserved -= gap
+		nextGap := 0
+		if index < gaps {
+			nextGap = gap + share(index+1) - share(index)
+		}
+		offset += available + nextGap
+		reserved -= nextGap
 		if reserved < 0 {
 			reserved = 0
 		}

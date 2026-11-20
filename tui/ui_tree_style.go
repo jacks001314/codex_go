@@ -164,6 +164,26 @@ func ParseUIRowWrap(raw string) (UIRowWrap, error) {
 	}
 }
 
+// UIRowJustify is the wire row justification token. A row without one keeps the
+// authored gap between its children.
+type UIRowJustify string
+
+const (
+	// UIRowJustifyStart packs items at the leading edge with the configured gap.
+	UIRowJustifyStart UIRowJustify = "start"
+	// UIRowJustifyBetween distributes spare columns between items on each line.
+	UIRowJustifyBetween UIRowJustify = "between"
+)
+
+func ParseUIRowJustify(raw string) (UIRowJustify, error) {
+	switch justify := UIRowJustify(raw); justify {
+	case UIRowJustifyStart, UIRowJustifyBetween:
+		return justify, nil
+	default:
+		return "", fmt.Errorf("ui row justify %q is not supported", raw)
+	}
+}
+
 func uiHexColor(raw UIColor) (RGB, bool) {
 	if len(raw) != 7 || raw[0] != '#' {
 		return RGB{}, false

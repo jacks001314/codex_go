@@ -56,8 +56,11 @@ type preparedUIWidths struct {
 }
 
 type preparedUINode struct {
-	text   *preparedUIText
-	row    *preparedUIRow
+	text *preparedUIText
+	row  *preparedUIRow
+	// empty marks a flex item whose element prepared to nothing, so the row
+	// still spends a gap on it (Rust prepare::NodeKind::Empty).
+	empty  bool
 	widths preparedUIWidths
 }
 
@@ -65,6 +68,7 @@ type preparedUIRow struct {
 	children []*preparedUINode
 	gap      uint64
 	wrap     UIRowWrap
+	justify  UIRowJustify
 	paint    uiPaint
 }
 
@@ -122,7 +126,7 @@ func prepareUINode(node *UINode, paint uiPaint) *preparedUINode {
 	if len(items) == 1 {
 		return items[0]
 	}
-	return prepareUIRow(items, 0, UIRowWrapNowrap, paint)
+	return prepareUIRow(items, 0, UIRowWrapNowrap, "", paint)
 }
 
 func collectUIInline(items *[]*preparedUINode, inline *uiInlineText, node *UINode, paint uiPaint) {
@@ -142,13 +146,22 @@ func collectUIInline(items *[]*preparedUINode, inline *uiInlineText, node *UINod
 			paint.background = *node.Background
 			paint.hasBackground = true
 		}
-		children := make([]*preparedUINode, 0, len(node.Children))
-		for _, child := range node.Children {
-			if prepared := prepareUINode(child, paint); prepared != nil {
-				children = append(children, prepared)
+		var children []*preparedUINode
+		if node.Justify != nil {
+			children = flexUIItems(node.Children, paint)
+		} else {
+			children = make([]*preparedUINode, 0, len(node.Children))
+			for _, child := range node.Children {
+				if prepared := prepareUINode(child, paint); prepared != nil {
+					children = append(children, prepared)
+				}
 			}
 		}
-		if row := prepareUIRow(children, node.Gap, node.Wrap, paint); row != nil {
+		justify := UIRowJustify("")
+		if node.Justify != nil {
+			justify = *node.Justify
+		}
+		if row := prepareUIRow(children, node.Gap, node.Wrap, justify, paint); row != nil {
 			*items = append(*items, row)
 		}
 		return
@@ -196,15 +209,13 @@ func prepareUIText(inline *uiInlineText) *preparedUINode {
 	return &preparedUINode{text: &text, widths: widths}
 }
 
-func prepareUIRow(children []*preparedUINode, gap uint64, wrap UIRowWrap, paint uiPaint) *preparedUINode {
+func prepareUIRow(children []*preparedUINode, gap uint64, wrap UIRowWrap, justify UIRowJustify, paint uiPaint) *preparedUINode {
 	kept := make([]*preparedUINode, 0, len(children))
 	for _, child := range children {
-		if child == nil {
+		if child == nil || child.isEmpty() {
 			continue
 		}
-		if child.widths.preferred > 0 || child.row != nil || (child.text != nil && child.text.hasAuthoredBreak) {
-			kept = append(kept, child)
-		}
+		kept = append(kept, child)
 	}
 	if len(kept) == 0 {
 		return nil
@@ -227,9 +238,47 @@ func prepareUIRow(children []*preparedUINode, gap uint64, wrap UIRowWrap, paint 
 		widths.preferred += child.widths.preferred
 	}
 	return &preparedUINode{
-		row:    &preparedUIRow{children: kept, gap: gap, wrap: wrap, paint: paint},
+		row:    &preparedUIRow{children: kept, gap: gap, wrap: wrap, justify: justify, paint: paint},
 		widths: widths,
 	}
+}
+
+// flexUIItems groups consecutive bare strings into one item so an explicit
+// justify can position the authored text and row elements independently (Rust
+// prepare::flex_items).
+func flexUIItems(children []*UINode, paint uiPaint) []*preparedUINode {
+	items := make([]*preparedUINode, 0, len(children))
+	inline := &uiInlineText{}
+	flush := func() {
+		if text := prepareUIText(inline); text != nil {
+			items = append(items, text)
+		}
+		*inline = uiInlineText{}
+	}
+	for _, child := range children {
+		if child == nil {
+			continue
+		}
+		if child.Kind == UINodeString {
+			inline.pushLeaf(child.Text, paint)
+			continue
+		}
+		flush()
+		if prepared := prepareUINode(child, paint); prepared != nil {
+			items = append(items, prepared)
+			continue
+		}
+		// An element that prepared to nothing still separates flex gaps.
+		items = append(items, &preparedUINode{empty: true})
+	}
+	flush()
+	return items
+}
+
+// isEmpty reports a prepared text node that paints no cells and authored no
+// break, so its parent row drops it instead of spending a gap on it.
+func (n *preparedUINode) isEmpty() bool {
+	return n.widths.preferred == 0 && n.text != nil && !n.text.hasAuthoredBreak
 }
 
 func (in *uiInlineText) pushLeaf(raw string, paint uiPaint) {

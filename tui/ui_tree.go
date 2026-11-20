@@ -103,9 +103,12 @@ type UINode struct {
 	Title      *string
 	Props      UITextProps
 	Background *UIColor
-	Wrap       UIRowWrap
-	Gap        uint64
-	Children   []*UINode
+	// Justify groups adjacent bare strings into one item and positions the items
+	// along the row (Rust RowProps::justify). Nil keeps the authored gaps.
+	Justify  *UIRowJustify
+	Wrap     UIRowWrap
+	Gap      uint64
+	Children []*UINode
 }
 
 // ParseUITree decodes one whole JSON tree and validates every node, including
@@ -172,9 +175,17 @@ func decodeUINode(data []byte) (*UINode, error) {
 	}
 	node := &UINode{Kind: UINodeKind(kind)}
 	propsRaw, hasProps := fields["props"]
-	props, err := decodeUIProps(propsRaw)
-	if err != nil {
-		return nil, err
+	var props map[string]json.RawMessage
+	// Rust serializes RowProps as a struct, so serde also accepts the
+	// positional form `[gap, background, wrap, justify]`; every other node
+	// reads named props only.
+	if node.Kind == UINodeRow && hasProps && isUIPropsSequence(propsRaw) {
+		props = map[string]json.RawMessage{}
+	} else {
+		props, err = decodeUIProps(propsRaw)
+		if err != nil {
+			return nil, err
+		}
 	}
 	childrenRaw, hasChildren := fields["children"]
 	switch node.Kind {
@@ -213,13 +224,14 @@ func decodeUINode(data []byte) (*UINode, error) {
 		}
 		node.Children = children
 	case UINodeRow:
-		gap, background, wrap, err := decodeUIRowProps(propsRaw, hasProps, props)
+		gap, background, wrap, justify, err := decodeUIRowProps(propsRaw, hasProps, props)
 		if err != nil {
 			return nil, err
 		}
 		node.Gap = gap
 		node.Background = background
 		node.Wrap = wrap
+		node.Justify = justify
 		children, err := decodeRequiredUIChildren(childrenRaw, hasChildren)
 		if err != nil {
 			return nil, err
@@ -238,6 +250,12 @@ func decodeUINode(data []byte) (*UINode, error) {
 		return nil, fmt.Errorf("unsupported ui node type %q", kind)
 	}
 	return node, nil
+}
+
+// isUIPropsSequence reports the positional props form a serde struct accepts.
+func isUIPropsSequence(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && trimmed[0] == '['
 }
 
 func decodeUIProps(raw json.RawMessage) (map[string]json.RawMessage, error) {
@@ -307,71 +325,86 @@ func decodeUIStringToken(raw json.RawMessage, name string) (string, bool, error)
 	return value, true, nil
 }
 
-func decodeUIRowProps(raw json.RawMessage, present bool, props map[string]json.RawMessage) (uint64, *UIColor, UIRowWrap, error) {
+func decodeUIRowProps(raw json.RawMessage, present bool, props map[string]json.RawMessage) (uint64, *UIColor, UIRowWrap, *UIRowJustify, error) {
 	if !present {
-		return 0, nil, "", errors.New("ui row node missing props")
+		return 0, nil, "", nil, errors.New("ui row node missing props")
 	}
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) > 0 && trimmed[0] == '[' {
 		var entries []json.RawMessage
 		if err := json.Unmarshal(trimmed, &entries); err != nil {
-			return 0, nil, "", err
+			return 0, nil, "", nil, err
 		}
-		if len(entries) < 1 || len(entries) > 3 {
-			return 0, nil, "", errors.New("ui row props tuple must carry 1 to 3 entries")
+		if len(entries) < 1 || len(entries) > 4 {
+			return 0, nil, "", nil, errors.New("ui row props tuple must carry 1 to 4 entries")
 		}
 		gap, err := decodeUIRowGap(entries[0])
 		if err != nil {
-			return 0, nil, "", err
+			return 0, nil, "", nil, err
 		}
 		var background *UIColor
 		if len(entries) >= 2 {
 			value, present, err := decodeUIStringToken(entries[1], "background")
 			if err != nil {
-				return 0, nil, "", err
+				return 0, nil, "", nil, err
 			}
 			if present {
 				color, err := ParseUIColor(value)
 				if err != nil {
-					return 0, nil, "", err
+					return 0, nil, "", nil, err
 				}
 				background = &color
 			}
 		}
 		wrap := UIRowWrapNowrap
-		if len(entries) == 3 {
+		if len(entries) >= 3 {
 			value, present, err := decodeUIStringToken(entries[2], "wrap")
 			if err != nil {
-				return 0, nil, "", err
+				return 0, nil, "", nil, err
 			}
 			if !present {
-				return 0, nil, "", errors.New("ui row wrap must be a string")
+				return 0, nil, "", nil, errors.New("ui row wrap must be a string")
 			}
 			wrap, err = ParseUIRowWrap(value)
 			if err != nil {
-				return 0, nil, "", err
+				return 0, nil, "", nil, err
 			}
 		}
-		return gap, background, wrap, nil
+		var justify *UIRowJustify
+		if len(entries) == 4 {
+			value, present, err := decodeUIStringToken(entries[3], "justify")
+			if err != nil {
+				return 0, nil, "", nil, err
+			}
+			if !present {
+				return 0, nil, "", nil, errors.New("ui row justify must be a string")
+			}
+			parsed, err := ParseUIRowJustify(value)
+			if err != nil {
+				return 0, nil, "", nil, err
+			}
+			justify = &parsed
+		}
+		return gap, background, wrap, justify, nil
 	}
 	gapRaw, ok := props["gap"]
 	if !ok {
-		return 0, nil, "", errors.New("ui row node missing props.gap")
+		return 0, nil, "", nil, errors.New("ui row node missing props.gap")
 	}
 	gap, err := decodeUIRowGap(gapRaw)
 	if err != nil {
-		return 0, nil, "", err
+		return 0, nil, "", nil, err
 	}
 	var background *UIColor
 	if raw, ok := props["background"]; ok {
 		value, present, err := decodeUIStringToken(raw, "background")
 		if err != nil {
-			return 0, nil, "", err
+			return 0, nil, "", nil, err
 		}
 		if present {
 			color, err := ParseUIColor(value)
 			if err != nil {
-				return 0, nil, "", err
+				return 0, nil, "", nil, err
 			}
 			background = &color
 		}
@@ -380,20 +413,35 @@ func decodeUIRowProps(raw json.RawMessage, present bool, props map[string]json.R
 	if raw, ok := props["wrap"]; ok {
 		value, present, err := decodeUIStringToken(raw, "wrap")
 		if err != nil {
-			return 0, nil, "", err
+			return 0, nil, "", nil, err
 		}
 		if !present {
-			return 0, nil, "", errors.New("ui row wrap must be a string")
+			return 0, nil, "", nil, errors.New("ui row wrap must be a string")
 		}
 		wrap, err = ParseUIRowWrap(value)
 		if err != nil {
-			return 0, nil, "", err
+			return 0, nil, "", nil, err
 		}
 	}
-	if err := rejectUnknownProps(props, "gap", "background", "wrap"); err != nil {
-		return 0, nil, "", err
+	var justify *UIRowJustify
+	if raw, ok := props["justify"]; ok {
+		value, present, err := decodeUIStringToken(raw, "justify")
+		if err != nil {
+			return 0, nil, "", nil, err
+		}
+		if !present {
+			return 0, nil, "", nil, errors.New("ui row justify must be a string")
+		}
+		parsed, err := ParseUIRowJustify(value)
+		if err != nil {
+			return 0, nil, "", nil, err
+		}
+		justify = &parsed
 	}
-	return gap, background, wrap, nil
+	if err := rejectUnknownProps(props, "gap", "background", "wrap", "justify"); err != nil {
+		return 0, nil, "", nil, err
+	}
+	return gap, background, wrap, justify, nil
 }
 
 // decodeJSONObject rejects duplicate keys, which encoding/json's map decoder
@@ -592,6 +640,9 @@ func (n *UINode) MarshalJSON() ([]byte, error) {
 		}
 		if n.Wrap != "" && n.Wrap != UIRowWrapNowrap {
 			props["wrap"] = string(n.Wrap)
+		}
+		if n.Justify != nil {
+			props["justify"] = string(*n.Justify)
 		}
 		encodedProps, _ := json.Marshal(props)
 		out["props"] = encodedProps
