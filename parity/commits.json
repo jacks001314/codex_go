@@ -51054,11 +51054,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Go's resume picker lists one backend per picker (tui.SessionPickerState has no multi-source aggregator, matching the earlier #58722 not_applicable verdict), so the shared listing mode that made local backends use the default store in Rust cannot arise. The per-backend outcome still matches: a local page starts from the state index and only falls back to the store for a first page the database cannot serve (interactiveSessionPickerItemsForScope / interactiveSessionPickerStateItems), while a remote page already sends thread/list without useStateDbOnly, i.e. PageLoadMode::StoreDefault (remoteTUIThreadListParams).",
+    "tests: app TestSessionPickerSourceModesMatchRustPerBackendDefaults pins the remote store-default request; plan: update/plan_2026_11_20.md batch 19"
    ],
    "kind": "runtime",
    "sha": "ea6b64fd12b804ca1fbce54f772df6ac44d538ad",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Use the local session index in the multi-backend resume picker (#62127)"
   },
   {
