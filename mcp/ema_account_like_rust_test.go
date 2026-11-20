@@ -304,13 +304,7 @@ func TestEMAAuthManagerPrefersAccountGrantLikeRust(t *testing.T) {
 		Issuer: server.URL + "/idp", ClientID: "idp-client",
 	}}
 	scope := EMAAuthScope{UserID: "user-1", WorkspaceID: "account-1"}
-	if err := NewOAuthStoreWithMode(home, OAuthCredentialsStoreFile).Save(&OAuthTokenSet{
-		ServerName:   EMAAuthCredentialName(profile.IDP, scope),
-		ServerURL:    profile.IDP.Issuer,
-		ClientID:     profile.IDP.ClientID,
-		RefreshToken: "enterprise-refresh",
-		AccessToken:  "idp-access",
-	}); err != nil {
+	if err := NewOAuthStoreWithMode(home, OAuthCredentialsStoreFile).Save(mcpEMATestStoredGrant(t, profile, scope, "enterprise-refresh")); err != nil {
 		t.Fatal(err)
 	}
 	tokens := mcpEMAAccountTestTokens(t, profile.IDP, "account-client", "login-1")
@@ -346,13 +340,7 @@ func TestEMAAuthManagerFallsBackToEnterpriseSignInLikeRust(t *testing.T) {
 		Issuer: server.URL + "/idp", ClientID: "idp-client",
 	}}
 	scope := EMAAuthScope{UserID: "user-1", WorkspaceID: "account-1"}
-	if err := NewOAuthStoreWithMode(home, OAuthCredentialsStoreFile).Save(&OAuthTokenSet{
-		ServerName:   EMAAuthCredentialName(profile.IDP, scope),
-		ServerURL:    profile.IDP.Issuer,
-		ClientID:     profile.IDP.ClientID,
-		RefreshToken: "enterprise-refresh",
-		AccessToken:  "idp-access",
-	}); err != nil {
+	if err := NewOAuthStoreWithMode(home, OAuthCredentialsStoreFile).Save(mcpEMATestStoredGrant(t, profile, scope, "enterprise-refresh")); err != nil {
 		t.Fatal(err)
 	}
 	snapshot := &auth.AuthDotJSON{AuthMode: "chatgpt", Tokens: mcpEMAAccountTestTokens(t, profile.IDP, "account-client", "login-1")}

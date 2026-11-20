@@ -124,12 +124,14 @@ func enterpriseAuthorizationURL(authURL string) (string, error) {
 	return parsed.String(), nil
 }
 
-// validateEnterpriseOAuthCredentials requires a refresh token and a valid OIDC
-// identity assertion before a grant may be staged (Rust
-// validate_enterprise_credentials). Error text never includes credential data.
+// validateEnterpriseOAuthCredentials requires a valid OIDC identity assertion
+// before a grant may be staged (Rust validate_enterprise_credentials, #62129).
+// An enterprise IdP may issue no refresh token, so the assertion is the only
+// mandatory credential; the exchange later presents it directly when needed.
+// Error text never includes credential data.
 func validateEnterpriseOAuthCredentials(tokens *OAuthTokenSet) error {
-	if tokens == nil || strings.TrimSpace(tokens.RefreshToken) == "" {
-		return errors.New("enterprise IdP login did not return a refresh token")
+	if tokens == nil {
+		return errors.New("enterprise IdP login did not return credentials")
 	}
 	assertion := strings.TrimSpace(tokens.IDToken)
 	if assertion == "" {

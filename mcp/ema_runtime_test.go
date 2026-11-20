@@ -51,13 +51,7 @@ func TestEMAAuthManagerReportsStoredGrantAndRejectsChangedOwner(t *testing.T) {
 	scope := EMAAuthScope{UserID: "user-1", WorkspaceID: "account-1"}
 	credentialName := EMAAuthCredentialName(profile.IDP, scope)
 	store := NewOAuthStoreWithMode(home, OAuthCredentialsStoreFile)
-	if err := store.Save(&OAuthTokenSet{
-		ServerName:   credentialName,
-		ServerURL:    profile.IDP.Issuer,
-		ClientID:     profile.IDP.ClientID,
-		RefreshToken: "refresh-token",
-		AccessToken:  "idp-access",
-	}); err != nil {
+	if err := store.Save(mcpEMATestStoredGrant(t, profile, scope, "refresh-token")); err != nil {
 		t.Fatal(err)
 	}
 	config := &ServerConfig{URL: "https://resource.example/mcp", Auth: ServerAuthEMAAuth, OAuthClientID: "mcp-client", OAuthResource: "https://resource.example/mcp"}
@@ -102,13 +96,7 @@ func TestEMAAuthManagerRevokesOnLoginGenerationChangeLikeRust(t *testing.T) {
 		Issuer: "https://idp.example", ClientID: "idp-client",
 	}}
 	scope := EMAAuthScope{UserID: "user-1", WorkspaceID: "account-1"}
-	if err := NewOAuthStoreWithMode(home, OAuthCredentialsStoreFile).Save(&OAuthTokenSet{
-		ServerName:   EMAAuthCredentialName(profile.IDP, scope),
-		ServerURL:    profile.IDP.Issuer,
-		ClientID:     profile.IDP.ClientID,
-		RefreshToken: "refresh-token",
-		AccessToken:  "idp-access",
-	}); err != nil {
+	if err := NewOAuthStoreWithMode(home, OAuthCredentialsStoreFile).Save(mcpEMATestStoredGrant(t, profile, scope, "refresh-token")); err != nil {
 		t.Fatal(err)
 	}
 	config := &ServerConfig{URL: "https://resource.example/mcp", Auth: ServerAuthEMAAuth, OAuthClientID: "mcp-client", OAuthResource: "https://resource.example/mcp"}
@@ -200,13 +188,7 @@ func TestAttachEnterpriseMCPAuthorizationSharesCredentialStatusAcrossServers(t *
 		Issuer: "https://idp.example", ClientID: "idp-client",
 	}}
 	store := NewOAuthStoreWithMode(home, OAuthCredentialsStoreFile)
-	if err := store.Save(&OAuthTokenSet{
-		ServerName:   EMAAuthCredentialName(profile.IDP, scope),
-		ServerURL:    profile.IDP.Issuer,
-		ClientID:     profile.IDP.ClientID,
-		RefreshToken: "refresh-token",
-		AccessToken:  "idp-access",
-	}); err != nil {
+	if err := store.Save(mcpEMATestStoredGrant(t, profile, scope, "refresh-token")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -228,13 +210,7 @@ func TestEMAAuthManagerRevokesWhenAccountLoginChangesLikeRust(t *testing.T) {
 		Issuer: "https://idp.example", ClientID: "idp-client",
 	}}
 	scope := EMAAuthScope{UserID: "user-1", WorkspaceID: "account-1"}
-	if err := NewOAuthStoreWithMode(home, OAuthCredentialsStoreFile).Save(&OAuthTokenSet{
-		ServerName:   EMAAuthCredentialName(profile.IDP, scope),
-		ServerURL:    profile.IDP.Issuer,
-		ClientID:     profile.IDP.ClientID,
-		RefreshToken: "refresh-token",
-		AccessToken:  "idp-access",
-	}); err != nil {
+	if err := NewOAuthStoreWithMode(home, OAuthCredentialsStoreFile).Save(mcpEMATestStoredGrant(t, profile, scope, "refresh-token")); err != nil {
 		t.Fatal(err)
 	}
 	accountCurrent := false
@@ -265,6 +241,62 @@ func TestEMAAuthManagerRevokesWhenAccountLoginChangesLikeRust(t *testing.T) {
 	}
 	if manager.CredentialsAvailable() {
 		t.Fatal("revoked manager must not report enterprise credentials")
+	}
+}
+
+// TestEMAAuthManagerExchangesStoredIDTokenWithoutRefreshTokenLikeRust mirrors
+// #62129: a saved enterprise sign-in that received no refresh token presents
+// its live ID token as the ID-JAG exchange subject.
+func TestEMAAuthManagerExchangesStoredIDTokenWithoutRefreshTokenLikeRust(t *testing.T) {
+	recorder := &mcpEMAExchangeRecorder{}
+	server := mcpEMAAccountTestServer(t, recorder)
+	home := t.TempDir()
+	profile := managedconfig.MCPEnterpriseManagedAuthConfig{IDP: managedconfig.MCPServerIdPOAuthConfig{
+		Issuer: server.URL + "/idp", ClientID: "idp-client",
+	}}
+	scope := EMAAuthScope{UserID: "user-1", WorkspaceID: "account-1"}
+	grant := mcpEMATestStoredGrant(t, profile, scope, "")
+	if err := NewOAuthStoreWithMode(home, OAuthCredentialsStoreFile).Save(grant); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewEMAAuthManager("enterprise", &ServerConfig{
+		URL:           server.URL + "/mcp",
+		Auth:          ServerAuthEMAAuth,
+		OAuthClientID: "mcp-client",
+		OAuthResource: server.URL + "/mcp",
+		Scopes:        []string{"files.read"},
+	}, EMAAuthOptions{
+		CodexHome:  home,
+		StoreMode:  OAuthCredentialsStoreFile,
+		Profile:    profile,
+		Scope:      scope,
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !manager.CredentialsAvailable() {
+		t.Fatal("an ID-token-only enterprise grant must report available credentials")
+	}
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/mcp", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ApplyHTTPRequest(request, nil); err != nil {
+		t.Fatalf("ApplyHTTPRequest() error = %v", err)
+	}
+	if got := request.Header.Get("Authorization"); got != "Bearer resource-token" {
+		t.Fatalf("Authorization = %q", got)
+	}
+	requests := recorder.idpRequests()
+	if len(requests) != 1 {
+		t.Fatalf("IdP requests = %#v, want one exchange", requests)
+	}
+	if got := requests[0].Get("subject_token"); got != grant.IDToken {
+		t.Fatalf("subject_token = %q, want the stored ID token", got)
+	}
+	if got := requests[0].Get("subject_token_type"); got != mcpEMASubjectTokenIDToken {
+		t.Fatalf("subject_token_type = %q, want the ID token type", got)
 	}
 }
 

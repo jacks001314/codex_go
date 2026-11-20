@@ -264,7 +264,7 @@ func TestMCPEMAExchangeConfidentialClientAuthenticationLikeRust(t *testing.T) {
 					ClientID:     "mcp-client",
 					ClientSecret: "resource-secret",
 				},
-				RefreshToken:       "opaque-refresh-token",
+				SubjectToken:       MCPEMARefreshTokenSubject("opaque-refresh-token"),
 				IDPHTTPClient:      server.Client(),
 				ResourceHTTPClient: server.Client(),
 			})
@@ -318,15 +318,17 @@ func TestMCPEMAExchangePublicClientRoundTripPreservesSignedNarrowing(t *testing.
 	requestedScopes := []string{"files.read", "files.write"}
 	now := time.Now().Unix()
 	for _, test := range []struct {
-		scopes       []string
-		echoScope    bool
-		refreshToken string
+		scopes      []string
+		echoScope   bool
+		subject     string
+		subjectType string
 	}{
-		{requestedScopes, true, "opaque-refresh-token"},
-		{nil, true, "opaque-refresh-token"},
-		{nil, false, "opaque-refresh-token"},
-		{requestedScopes, true, ""},
-		{requestedScopes, true, " \t"},
+		{requestedScopes, true, "opaque-refresh-token", mcpEMASubjectTokenRefresh},
+		{nil, true, "opaque-refresh-token", mcpEMASubjectTokenRefresh},
+		{nil, false, "opaque-refresh-token", mcpEMASubjectTokenRefresh},
+		{nil, true, "test-id-token", mcpEMASubjectTokenIDToken},
+		{requestedScopes, true, "", mcpEMASubjectTokenRefresh},
+		{requestedScopes, true, " \t", mcpEMASubjectTokenRefresh},
 	} {
 		var requests []*http.Request
 		var bodies []string
@@ -369,6 +371,10 @@ func TestMCPEMAExchangePublicClientRoundTripPreservesSignedNarrowing(t *testing.
 		issuer := server.URL + "/idp"
 		audience := server.URL + "/as"
 		resource := server.URL + "/mcp"
+		subject := MCPEMARefreshTokenSubject(test.subject)
+		if test.subjectType == mcpEMASubjectTokenIDToken {
+			subject = MCPEMAIDTokenSubject(test.subject)
+		}
 		token, err := ExchangeMCPEMAIDJAG(context.Background(), MCPEMAIDJAGExchangeRequest{
 			Resource:                         resource,
 			Scopes:                           test.scopes,
@@ -378,11 +384,11 @@ func TestMCPEMAExchangePublicClientRoundTripPreservesSignedNarrowing(t *testing.
 			IDPTokenEndpoint:                 issuer + "/token",
 			IDPIssuer:                        issuer,
 			IDPClientID:                      "idp-client",
-			RefreshToken:                     test.refreshToken,
+			SubjectToken:                     subject,
 			IDPHTTPClient:                    server.Client(),
 			ResourceHTTPClient:               server.Client(),
 		})
-		if strings.TrimSpace(test.refreshToken) == "" {
+		if strings.TrimSpace(test.subject) == "" {
 			if err == nil {
 				t.Fatal("invalid subject must fail before HTTP")
 			}
@@ -417,8 +423,8 @@ func TestMCPEMAExchangePublicClientRoundTripPreservesSignedNarrowing(t *testing.
 		wantFirst := map[string]string{
 			"grant_type":           mcpEMATokenExchangeGrantType,
 			"requested_token_type": idJAGTokenType,
-			"subject_token":        test.refreshToken,
-			"subject_token_type":   "urn:ietf:params:oauth:token-type:refresh_token",
+			"subject_token":        test.subject,
+			"subject_token_type":   test.subjectType,
 			"audience":             audience,
 			"resource":             resource,
 			"client_id":            "idp-client",

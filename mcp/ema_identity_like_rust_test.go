@@ -25,6 +25,23 @@ func mcpEMATestOIDCToken(t *testing.T, issuer string, audience string, expiresAt
 	})
 }
 
+// mcpEMATestStoredGrant saves an enterprise sign-in whose ID token binds the
+// profile issuer and IdP client, which Rust requires before reusing a grant
+// (#55685, #62129). A non-empty refresh token takes precedence over the
+// assertion as the exchange subject.
+func mcpEMATestStoredGrant(t *testing.T, profile managedconfig.MCPEnterpriseManagedAuthConfig, scope EMAAuthScope, refreshToken string) *OAuthTokenSet {
+	t.Helper()
+	return &OAuthTokenSet{
+		ServerName:   EMAAuthCredentialName(profile.IDP, scope),
+		ServerURL:    profile.IDP.Issuer,
+		ClientID:     profile.IDP.ClientID,
+		Issuer:       profile.IDP.Issuer,
+		RefreshToken: refreshToken,
+		AccessToken:  "idp-access",
+		IDToken:      mcpEMATestOIDCToken(t, profile.IDP.Issuer, profile.IDP.ClientID, time.Now().Add(time.Hour).Unix()),
+	}
+}
+
 // TestMCPEMAOIDCIdentityRequiresNonEmptyExpectationsLikeRust mirrors #55685:
 // an empty expected issuer or client can never bind an assertion, even when
 // the token carries matching empty claims.
@@ -90,6 +107,85 @@ func TestMCPEMAAccountOIDCIdentityIgnoresExpiryLikeRust(t *testing.T) {
 	}
 }
 
+// TestMCPEMAStoredSubjectLikeRust mirrors #62129: a saved enterprise sign-in
+// prefers its refresh token, which only needs the ID token to corroborate the
+// login binding, and falls back to a live ID token when the IdP issued no
+// refresh token. An expired or unbindable ID token without a refresh token
+// requires a new sign-in.
+func TestMCPEMAStoredSubjectLikeRust(t *testing.T) {
+	const issuer = "https://idp.example"
+	const clientID = "idp-client"
+	live := mcpEMATestOIDCToken(t, issuer, clientID, time.Now().Add(time.Hour).Unix())
+	expired := mcpEMATestOIDCToken(t, issuer, clientID, time.Now().Add(-time.Hour).Unix())
+	grant := func(refreshToken string, idToken string) *OAuthTokenSet {
+		return &OAuthTokenSet{
+			ServerURL:    issuer,
+			Issuer:       issuer,
+			ClientID:     clientID,
+			RefreshToken: refreshToken,
+			IDToken:      idToken,
+		}
+	}
+	requireReauthentication := func(t *testing.T, tokens *OAuthTokenSet) {
+		t.Helper()
+		_, err := MCPEMAStoredSubject(tokens)
+		var failure *EMAAuthFailure
+		if !errors.As(err, &failure) || failure.Code != EMAAuthFailureReauthenticationRequired {
+			t.Fatalf("MCPEMAStoredSubject() error = %v, want reauthentication", err)
+		}
+	}
+
+	t.Run("refresh token takes precedence over an expired ID token", func(t *testing.T) {
+		subject, err := MCPEMAStoredSubject(grant("stored-refresh", expired))
+		if err != nil {
+			t.Fatalf("MCPEMAStoredSubject() error = %v", err)
+		}
+		if subject.Type != mcpEMASubjectTokenRefresh || subject.Token != "stored-refresh" {
+			t.Fatalf("subject = %#v, want the refresh token", subject)
+		}
+	})
+
+	t.Run("live ID token is the subject without a refresh token", func(t *testing.T) {
+		subject, err := MCPEMAStoredSubject(grant("", live))
+		if err != nil {
+			t.Fatalf("MCPEMAStoredSubject() error = %v", err)
+		}
+		if subject.Type != mcpEMASubjectTokenIDToken || subject.Token != live {
+			t.Fatalf("subject = %#v, want the ID token", subject)
+		}
+	})
+
+	t.Run("unusable records require a new sign-in", func(t *testing.T) {
+		requireReauthentication(t, grant("", expired))
+		requireReauthentication(t, grant("", mcpEMATestOIDCToken(t, "https://other.example", clientID, time.Now().Add(time.Hour).Unix())))
+		requireReauthentication(t, grant("", mcpEMATestOIDCToken(t, issuer, "other-client", time.Now().Add(time.Hour).Unix())))
+		requireReauthentication(t, grant("stored-refresh", ""))
+		requireReauthentication(t, nil)
+		// A refresh token still needs its ID token to corroborate the binding.
+		requireReauthentication(t, grant("stored-refresh", mcpEMATestOIDCToken(t, "https://other.example", clientID, time.Now().Add(time.Hour).Unix())))
+	})
+
+	t.Run("usability matrix", func(t *testing.T) {
+		for _, test := range []struct {
+			name   string
+			tokens *OAuthTokenSet
+			want   bool
+		}{
+			{"refresh grant", grant("stored-refresh", expired), true},
+			{"live ID token", grant("", live), true},
+			{"expired ID token", grant("", expired), false},
+			{"missing ID token", grant("stored-refresh", ""), false},
+			{"other issuer", &OAuthTokenSet{ServerURL: "https://other.example", Issuer: "https://other.example", ClientID: clientID, RefreshToken: "stored-refresh", IDToken: live}, false},
+			{"unbound issuer", &OAuthTokenSet{ServerURL: issuer, ClientID: clientID, RefreshToken: "stored-refresh", IDToken: live}, false},
+			{"other client", &OAuthTokenSet{ServerURL: issuer, Issuer: issuer, ClientID: "other-client", RefreshToken: "stored-refresh", IDToken: live}, false},
+		} {
+			if got := MCPEMAStoredIdentityIsUsable(test.tokens, issuer, clientID); got != test.want {
+				t.Fatalf("%s usability = %v, want %v", test.name, got, test.want)
+			}
+		}
+	})
+}
+
 // TestResolveMCPEMAAccountIDPIdentityLikeRust mirrors #55685: the account IdP
 // identity resolver binds the account record to trusted issuer and client
 // provenance, then discovers the refresh-token endpoint.
@@ -120,7 +216,8 @@ func TestResolveMCPEMAAccountIDPIdentityLikeRust(t *testing.T) {
 			t.Fatalf("ResolveMCPEMAAccountIDPIdentity() error = %v", err)
 		}
 		if identity.TokenEndpoint != server.URL+"/token" ||
-			identity.RefreshToken != "account-refresh-token" ||
+			identity.SubjectToken.Token != "account-refresh-token" ||
+			identity.SubjectToken.Type != mcpEMASubjectTokenRefresh ||
 			identity.Credentials != lease {
 			t.Fatalf("identity = %#v", identity)
 		}
@@ -131,7 +228,7 @@ func TestResolveMCPEMAAccountIDPIdentityLikeRust(t *testing.T) {
 			return credentials.name
 		})
 		if mapped.Credentials != "account-grant" || mapped.TokenEndpoint != identity.TokenEndpoint ||
-			mapped.RefreshToken != identity.RefreshToken {
+			mapped.SubjectToken != identity.SubjectToken {
 			t.Fatalf("mapped identity = %#v", mapped)
 		}
 	})
@@ -286,7 +383,7 @@ func TestExchangeMCPEMAIDJAGReleasesCredentialsBeforeResourceIOLikeRust(t *testi
 			IDPTokenEndpoint:                 server.URL + "/idp/token",
 			IDPIssuer:                        server.URL + "/idp",
 			IDPClientID:                      "idp-client",
-			RefreshToken:                     "opaque-refresh-token",
+			SubjectToken:                     MCPEMARefreshTokenSubject("opaque-refresh-token"),
 			IDPHTTPClient:                    server.Client(),
 			ResourceHTTPClient:               server.Client(),
 		}

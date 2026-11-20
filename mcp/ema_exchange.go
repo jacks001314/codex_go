@@ -20,6 +20,8 @@ import (
 const (
 	mcpEMATokenExchangeGrantType = "urn:ietf:params:oauth:grant-type:token-exchange"
 	mcpEMAJWTBearerGrantType     = "urn:ietf:params:oauth:grant-type:jwt-bearer"
+	mcpEMASubjectTokenRefresh    = "urn:ietf:params:oauth:token-type:refresh_token"
+	mcpEMASubjectTokenIDToken    = "urn:ietf:params:oauth:token-type:id_token"
 )
 
 // mcpEMAExchangeTimeout bounds each exchange request (Rust uses 30s).
@@ -38,6 +40,40 @@ func (t MCPEMAAccessToken) String() string {
 
 func (t MCPEMAAccessToken) GoString() string {
 	return t.String()
+}
+
+// MCPEMASubjectToken is an issuer-bound exchange subject (Rust EmaSubjectToken).
+// The IdP verifies the credential during the exchange, so an enterprise login
+// can present either a refresh token or, when the IdP issues none, a live OIDC
+// ID token. Use MCPEMARefreshTokenSubject or MCPEMAIDTokenSubject to build one.
+type MCPEMASubjectToken struct {
+	Token string
+	Type  string
+}
+
+// MCPEMARefreshTokenSubject wraps an IdP refresh token as the exchange subject.
+func MCPEMARefreshTokenSubject(token string) MCPEMASubjectToken {
+	return MCPEMASubjectToken{Token: token, Type: mcpEMASubjectTokenRefresh}
+}
+
+// MCPEMAIDTokenSubject wraps a live OIDC ID token as the exchange subject when
+// the IdP issued no refresh token.
+func MCPEMAIDTokenSubject(token string) MCPEMASubjectToken {
+	return MCPEMASubjectToken{Token: token, Type: mcpEMASubjectTokenIDToken}
+}
+
+// validate rejects a subject that carries no credential or an unknown token
+// type before any credentialed request is sent.
+func (s MCPEMASubjectToken) validate() error {
+	if strings.TrimSpace(s.Token) == "" {
+		return errors.New("enterprise IdP exchange subject must not be empty")
+	}
+	switch s.Type {
+	case mcpEMASubjectTokenRefresh, mcpEMASubjectTokenIDToken:
+		return nil
+	default:
+		return fmt.Errorf("unsupported enterprise IdP exchange subject type %q", s.Type)
+	}
 }
 
 func mcpEMADurationPtrString(value *time.Duration) string {
@@ -64,9 +100,11 @@ type MCPEMAIDJAGExchangeRequest struct {
 	// (Rust #56001). A zero Method selects the public-client form.
 	IDPClientAuthentication      mcpEMAClientAuthentication
 	ResourceClientAuthentication mcpEMAClientAuthentication
-	RefreshToken                 string
-	IDPHTTPClient                *http.Client
-	ResourceHTTPClient           *http.Client
+	// SubjectToken is the IdP credential presented to the token exchange: a
+	// refresh token when one was issued, otherwise a live OIDC ID token.
+	SubjectToken       MCPEMASubjectToken
+	IDPHTTPClient      *http.Client
+	ResourceHTTPClient *http.Client
 }
 
 // ExchangeMCPEMAIDJAG mirrors Rust exchange_id_jag: an enterprise IdP
@@ -115,8 +153,8 @@ func ExchangeMCPEMAIDJAGWithCredentials[L, R any](
 	if strings.TrimSpace(request.MCPClientID) == "" || strings.TrimSpace(request.IDPClientID) == "" {
 		return nil, zero, errors.New("enterprise authorization requires the registered IdP and MCP client IDs")
 	}
-	if strings.TrimSpace(request.RefreshToken) == "" {
-		return nil, zero, errors.New("enterprise IdP refresh token must not be empty")
+	if err := request.SubjectToken.validate(); err != nil {
+		return nil, zero, err
 	}
 	idpAuth := request.IDPClientAuthentication
 	if idpAuth.ClientID == "" {
@@ -159,8 +197,8 @@ func ExchangeMCPEMAIDJAGWithCredentials[L, R any](
 		{"requested_token_type", idJAGTokenType},
 		{"audience", request.AuthorizationServerIssuer},
 		{"resource", request.Resource},
-		{"subject_token", request.RefreshToken},
-		{"subject_token_type", "urn:ietf:params:oauth:token-type:refresh_token"},
+		{"subject_token", request.SubjectToken.Token},
+		{"subject_token_type", request.SubjectToken.Type},
 	}
 	if len(request.Scopes) > 0 {
 		params = append(params, [2]string{"scope", strings.Join(request.Scopes, " ")})
@@ -187,7 +225,7 @@ func ExchangeMCPEMAIDJAGWithCredentials[L, R any](
 	if err != nil {
 		return nil, zero, err
 	}
-	// Only the IdP receives the refresh token. Release its lease before the
+	// Only the IdP receives the subject token. Release its lease before the
 	// resource authorization server sees any request.
 	receipt := finishIDP(credentials)
 	// Only the signed assertion carries authority to the Resource AS. Repeating

@@ -179,7 +179,7 @@ func (m *EMAAuthManager) CredentialsAvailable() bool {
 		}
 	}
 	tokens, err := NewOAuthStoreWithMode(m.codexHome, m.storeMode).Load(EMAAuthCredentialName(m.profile.IDP, m.scope), m.profile.IDP.Issuer)
-	return err == nil && tokens != nil && strings.TrimSpace(tokens.RefreshToken) != ""
+	return err == nil && MCPEMAStoredIdentityIsUsable(tokens, m.profile.IDP.Issuer, m.profile.IDP.ClientID)
 }
 
 // emaCredentialKey identifies one account-scoped enterprise IdP grant lookup.
@@ -518,17 +518,22 @@ func (m *EMAAuthManager) pinCredentialSource(ctx context.Context) (emaCredential
 // storedEnterpriseCredential loads the account-scoped enterprise grant. A
 // missing record returns nil so selection can consider the Codex account grant;
 // a record for another IdP client stays a configuration error that must not
-// silently fall back to a different credential.
+// silently fall back to a different credential. A record without a usable
+// exchange subject (Rust pin_ema_credentials, #62129) requires a new sign-in
+// instead of being treated as a credential.
 func (m *EMAAuthManager) storedEnterpriseCredential() (*OAuthTokenSet, error) {
 	tokens, err := NewOAuthStoreWithMode(m.codexHome, m.storeMode).Load(EMAAuthCredentialName(m.profile.IDP, m.scope), m.profile.IDP.Issuer)
 	if err != nil {
 		return nil, err
 	}
-	if tokens == nil || strings.TrimSpace(tokens.RefreshToken) == "" {
+	if tokens == nil {
 		return nil, nil
 	}
 	if storedClientID := strings.TrimSpace(tokens.ClientID); storedClientID != strings.TrimSpace(m.profile.IDP.ClientID) {
 		return nil, errors.New("stored enterprise IdP credentials do not match the configured issuer and client")
+	}
+	if _, err := MCPEMAStoredSubject(tokens); err != nil {
+		return nil, err
 	}
 	return tokens, nil
 }
@@ -647,10 +652,14 @@ func (m *EMAAuthManager) exchangeKeyringToken(ctx context.Context, client *http.
 	if err := validateMCPEMAIDPTokenExchangeCapability(idp); err != nil {
 		return nil, err
 	}
+	subjectToken, err := MCPEMAStoredSubject(tokens)
+	if err != nil {
+		return nil, emaCredentialFailure(EMACredentialKindKeyring, err)
+	}
 	request.IDPTokenEndpoint = idp.TokenEndpoint
 	request.IDPClientAuthentication = idp.ClientAuthentication
 	request.IDPClientID = m.profile.IDP.ClientID
-	request.RefreshToken = tokens.RefreshToken
+	request.SubjectToken = subjectToken
 	token, err := ExchangeMCPEMAIDJAG(ctx, request)
 	if err != nil {
 		// Rust #55691: a rejected enterprise grant is retired only when the
@@ -712,7 +721,7 @@ func (m *EMAAuthManager) exchangeAccountToken(ctx context.Context, client *http.
 	request.IDPTokenEndpoint = identity.TokenEndpoint
 	request.IDPClientAuthentication = identity.ClientAuthentication
 	request.IDPClientID = m.accountClientID
-	request.RefreshToken = identity.RefreshToken
+	request.SubjectToken = identity.SubjectToken
 	token, receipt, err := ExchangeMCPEMAIDJAGWithCredentials(ctx, request, lease, func(held *auth.AccountOAuthGrantLease) *auth.AccountOAuthGrant {
 		return held.Release()
 	})

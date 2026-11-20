@@ -23,9 +23,10 @@ const (
 	DefaultMCPServerEnvironmentID = "local"
 	ServerAuthOAuth               = "oauth"
 	ServerAuthChatGPT             = "chatgpt"
-	// ServerAuthEMAAuth exchanges an enterprise IdP refresh token for
-	// resource-specific authorization (Rust #44832). EMA connections are not
-	// enabled in this version; the mode only drives config provenance.
+	// ServerAuthEMAAuth exchanges an enterprise IdP refresh token or a current
+	// ID token for resource-specific authorization (Rust #44832, #62129). EMA
+	// connections are not enabled in this version; the mode only drives config
+	// provenance.
 	ServerAuthEMAAuth                  = "ema_auth"
 	codexConnectorsTokenEnvVar         = "CODEX_CONNECTORS_TOKEN"
 	legacyCodexAppsRegistrationID      = "legacy_codex_apps"

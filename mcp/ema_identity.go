@@ -11,28 +11,30 @@ import (
 )
 
 // Enterprise IdP identity resolution mirrors Rust
-// codex-rs/rmcp-client/src/ema_identity.rs (#55685): an admitted refresh token
-// is paired with the IdP token endpoint and client authentication that may
-// receive it, plus the caller-owned credential lease that guards it.
+// codex-rs/rmcp-client/src/ema_identity.rs (#55685, #62129): an admitted
+// exchange subject (a refresh token, or a live ID token when the IdP issued no
+// refresh token) is paired with the IdP token endpoint and client
+// authentication that may receive it, plus the caller-owned credential lease
+// that guards it.
 
-// MCPEMAIDPIdentity is an opaque IdP refresh token paired with the credentials
-// admitted for its exchange. Credentials are caller-owned: a mapped lease must
-// keep its owned refresh guard until the IdP exchange finishes.
+// MCPEMAIDPIdentity is an opaque IdP exchange subject paired with the
+// credentials admitted for its exchange. Credentials are caller-owned: a mapped
+// lease must keep its owned refresh guard until the IdP exchange finishes.
 type MCPEMAIDPIdentity[L any] struct {
 	TokenEndpoint        string
-	RefreshToken         string
+	SubjectToken         MCPEMASubjectToken
 	ClientAuthentication mcpEMAClientAuthentication
 	Credentials          L
 }
 
 // MapMCPEMAIDPIdentityCredentials mirrors Rust EmaIdpIdentity::map_credentials:
-// replace the credential lease while preserving the endpoint, refresh token,
+// replace the credential lease while preserving the endpoint, subject token,
 // and approved client authentication. The mapping must retain its owned
 // refresh guard until the IdP exchange finishes.
 func MapMCPEMAIDPIdentityCredentials[L, U any](identity MCPEMAIDPIdentity[L], mapCredentials func(L) U) MCPEMAIDPIdentity[U] {
 	return MCPEMAIDPIdentity[U]{
 		TokenEndpoint:        identity.TokenEndpoint,
-		RefreshToken:         identity.RefreshToken,
+		SubjectToken:         identity.SubjectToken,
 		ClientAuthentication: identity.ClientAuthentication,
 		Credentials:          mapCredentials(identity.Credentials),
 	}
@@ -87,10 +89,64 @@ func ResolveMCPEMAAccountIDPIdentity[L any](ctx context.Context, request MCPEMAA
 	}
 	return MCPEMAIDPIdentity[L]{
 		TokenEndpoint:        metadata.TokenEndpoint,
-		RefreshToken:         request.RefreshToken,
+		SubjectToken:         MCPEMARefreshTokenSubject(request.RefreshToken),
 		ClientAuthentication: metadata.ClientAuthentication,
 		Credentials:          request.Credentials,
 	}, nil
+}
+
+// MCPEMAStoredSubject mirrors Rust stored_ema_subject: resolve the subject an
+// enterprise sign-in presents to the ID-JAG exchange. A non-empty refresh token
+// is preferred; it only corroborates the stored ID token's issuer, audience and
+// account binding, so an expired ID token still leaves a valid refresh grant
+// usable. Without a refresh token the ID token itself is the exchange
+// credential, so it must also still be live. An unusable record requires a new
+// sign-in instead of silently falling back to another credential.
+func MCPEMAStoredSubject(tokens *OAuthTokenSet) (MCPEMASubjectToken, error) {
+	if tokens == nil {
+		return MCPEMASubjectToken{}, &EMAAuthFailure{
+			Code:    EMAAuthFailureReauthenticationRequired,
+			Context: "enterprise IdP session is missing; sign in again",
+		}
+	}
+	assertion := tokens.IDToken
+	if strings.TrimSpace(assertion) == "" {
+		return MCPEMASubjectToken{}, &EMAAuthFailure{
+			Code:    EMAAuthFailureReauthenticationRequired,
+			Context: "enterprise IdP session has no OIDC ID token; sign in again",
+		}
+	}
+	invalidIdentity := &EMAAuthFailure{
+		Code:    EMAAuthFailureReauthenticationRequired,
+		Context: "stored enterprise IdP identity is invalid; sign in again",
+	}
+	if refreshToken := tokens.RefreshToken; strings.TrimSpace(refreshToken) != "" {
+		if _, err := mcpEMAOIDCIdentity(assertion, tokens.ServerURL, tokens.ClientID); err != nil {
+			return MCPEMASubjectToken{}, invalidIdentity
+		}
+		return MCPEMARefreshTokenSubject(refreshToken), nil
+	}
+	if err := ValidateMCPEMAOIDCIdentityAssertion(assertion, tokens.ServerURL, tokens.ClientID); err != nil {
+		return MCPEMASubjectToken{}, &EMAAuthFailure{
+			Code:    EMAAuthFailureReauthenticationRequired,
+			Context: "enterprise IdP ID token is expired or invalid; sign in again",
+		}
+	}
+	return MCPEMAIDTokenSubject(assertion), nil
+}
+
+// MCPEMAStoredIdentityIsUsable mirrors Rust stored_ema_identity_is_usable: a
+// saved enterprise sign-in can authenticate the registration only when it is
+// bound to the configured issuer and client and yields an exchange subject.
+func MCPEMAStoredIdentityIsUsable(tokens *OAuthTokenSet, issuer string, clientID string) bool {
+	if tokens == nil {
+		return false
+	}
+	if tokens.ServerURL != issuer || strings.TrimSpace(tokens.Issuer) != issuer || tokens.ClientID != clientID {
+		return false
+	}
+	_, err := MCPEMAStoredSubject(tokens)
+	return err == nil
 }
 
 // MCPEMAAccountOIDCIdentityIsUsable mirrors Rust

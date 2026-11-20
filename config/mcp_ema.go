@@ -21,7 +21,8 @@ import (
 )
 
 // MCPServerAuthEMAAuth is the MCP server auth mode that exchanges an enterprise
-// IdP refresh token for resource-specific authorization.
+// IdP refresh token or, if none was issued, a current ID token for
+// resource-specific authorization.
 const MCPServerAuthEMAAuth = "ema_auth"
 
 // MCPEMATokenEndpointAuthMethod is the token-endpoint authentication selected

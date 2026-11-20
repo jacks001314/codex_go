@@ -148,7 +148,7 @@ func TestMCPEMAExchangeClassifiesAuthFailuresByStageLikeRust(t *testing.T) {
 				IDPTokenEndpoint:                 server.URL + "/idp/token",
 				IDPIssuer:                        server.URL + "/idp",
 				IDPClientID:                      "idp-client",
-				RefreshToken:                     "opaque-refresh-token",
+				SubjectToken:                     MCPEMARefreshTokenSubject("opaque-refresh-token"),
 				IDPHTTPClient:                    server.Client(),
 				ResourceHTTPClient:               server.Client(),
 			})
@@ -190,13 +190,7 @@ func TestEMAAuthManagerHoldsRequestsWhilePolicyStaleLikeRust(t *testing.T) {
 		Issuer: "https://idp.example", ClientID: "idp-client",
 	}}
 	scope := EMAAuthScope{UserID: "user-1", WorkspaceID: "account-1"}
-	if err := NewOAuthStoreWithMode(home, OAuthCredentialsStoreFile).Save(&OAuthTokenSet{
-		ServerName:   EMAAuthCredentialName(profile.IDP, scope),
-		ServerURL:    profile.IDP.Issuer,
-		ClientID:     profile.IDP.ClientID,
-		RefreshToken: "refresh-token",
-		AccessToken:  "idp-access",
-	}); err != nil {
+	if err := NewOAuthStoreWithMode(home, OAuthCredentialsStoreFile).Save(mcpEMATestStoredGrant(t, profile, scope, "refresh-token")); err != nil {
 		t.Fatal(err)
 	}
 	serverConfig := &ServerConfig{
@@ -301,13 +295,7 @@ func TestEMAAuthManagerPrefersPolicyChangeOverRenewalFailureLikeRust(t *testing.
 		Issuer: "https://idp.example", ClientID: "idp-client",
 	}}
 	scope := EMAAuthScope{UserID: "user-1", WorkspaceID: "account-1"}
-	if err := NewOAuthStoreWithMode(home, OAuthCredentialsStoreFile).Save(&OAuthTokenSet{
-		ServerName:   EMAAuthCredentialName(profile.IDP, scope),
-		ServerURL:    profile.IDP.Issuer,
-		ClientID:     profile.IDP.ClientID,
-		RefreshToken: "refresh-token",
-		AccessToken:  "idp-access",
-	}); err != nil {
+	if err := NewOAuthStoreWithMode(home, OAuthCredentialsStoreFile).Save(mcpEMATestStoredGrant(t, profile, scope, "refresh-token")); err != nil {
 		t.Fatal(err)
 	}
 	policy := managedconfig.NewCloudConfigBundlePolicy()
@@ -434,13 +422,7 @@ func TestEMAAuthManagerInvalidatesOnlyRejectedEnterpriseGrantsLikeRust(t *testin
 			scope := EMAAuthScope{UserID: "user-1", WorkspaceID: "account-1"}
 			credentialName := EMAAuthCredentialName(profile.IDP, scope)
 			store := NewOAuthStoreWithMode(home, OAuthCredentialsStoreFile)
-			if err := store.Save(&OAuthTokenSet{
-				ServerName:   credentialName,
-				ServerURL:    profile.IDP.Issuer,
-				ClientID:     profile.IDP.ClientID,
-				RefreshToken: "refresh-token",
-				AccessToken:  "idp-access",
-			}); err != nil {
+			if err := store.Save(mcpEMATestStoredGrant(t, profile, scope, "refresh-token")); err != nil {
 				t.Fatal(err)
 			}
 			manager, err := NewEMAAuthManager("enterprise", &ServerConfig{

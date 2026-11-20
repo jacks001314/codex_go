@@ -271,8 +271,8 @@ func TestStartEnterpriseOAuthLoginConfidentialClientLikeRust(t *testing.T) {
 }
 
 // TestEnterpriseOAuthLoginRejectsIncompleteGrant covers the staged validation:
-// a token response without a refresh token or OIDC identity assertion cannot be
-// staged.
+// a token response without an OIDC identity assertion cannot be staged, because
+// the assertion is the one mandatory enterprise credential (#62129).
 func TestEnterpriseOAuthLoginRejectsIncompleteGrant(t *testing.T) {
 	ctx := context.Background()
 	server := enterpriseTestIdP(t, nil, func() map[string]any {
@@ -289,7 +289,72 @@ func TestEnterpriseOAuthLoginRejectsIncompleteGrant(t *testing.T) {
 		t.Fatalf("start enterprise login: %v", err)
 	}
 	if _, err := handle.Complete(ctx, "/callback?code=code-1&state="+url.QueryEscape(handle.session.State)); err == nil {
-		t.Fatal("a grant without a refresh token must not be staged")
+		t.Fatal("a grant without an OIDC identity assertion must not be staged")
+	}
+}
+
+// TestEnterpriseOAuthLoginWithoutRefreshTokenLikeRust mirrors #62129: an
+// enterprise IdP may omit a refresh token even though Codex requests
+// offline_access. The login still completes and stores the ID token as the
+// exchange subject.
+func TestEnterpriseOAuthLoginWithoutRefreshTokenLikeRust(t *testing.T) {
+	ctx := context.Background()
+	clientID := "eci-prd-pub-codex-123"
+	var server *httptest.Server
+	server = enterpriseTestIdP(t, func(metadata map[string]any) {
+		// RFC 8414 permits metadata to omit offline_access while still honoring it.
+		metadata["scopes_supported"] = []string{"openid"}
+	}, func() map[string]any {
+		return map[string]any{
+			"access_token": "access-1",
+			"token_type":   "Bearer",
+			"id_token":     mcpEMATestJWT(t, map[string]any{"alg": "ES256"}, mcpEMATestClaims(server.URL, clientID, "")),
+		}
+	})
+	home := t.TempDir()
+	handle, err := StartEnterpriseOAuthLogin(ctx, &EnterpriseOAuthLoginOptions{
+		CodexHome:      home,
+		CredentialName: "enterprise",
+		Issuer:         server.URL,
+		ClientID:       clientID,
+		RedirectURL:    "http://127.0.0.1:1455/callback",
+	})
+	if err != nil {
+		t.Fatalf("start enterprise login: %v", err)
+	}
+	authURL, err := url.Parse(handle.AuthorizationURL())
+	if err != nil {
+		t.Fatalf("parse authorization URL: %v", err)
+	}
+	if got := strings.Fields(authURL.Query().Get("scope")); strings.Join(got, " ") != "openid offline_access" {
+		t.Fatalf("authorization scopes = %v, want openid offline_access", got)
+	}
+	credentials, err := handle.Complete(ctx, "/callback?code=code-1&state="+url.QueryEscape(handle.session.State))
+	if err != nil {
+		t.Fatalf("complete enterprise login: %v", err)
+	}
+	if credentials.Tokens == nil || strings.TrimSpace(credentials.Tokens.RefreshToken) != "" {
+		t.Fatalf("staged credentials = %#v, want no refresh token", credentials.Tokens)
+	}
+	if _, err := CommitEnterpriseOAuthCredentials(home, credentials.Tokens, credentials.CommitGeneration(), func() *string {
+		value := "account-1"
+		return &value
+	}, OAuthCredentialsStoreAuto); err != nil {
+		t.Fatalf("commit enterprise login: %v", err)
+	}
+	stored, err := NewOAuthStore(home).Load("enterprise", server.URL)
+	if err != nil || stored == nil {
+		t.Fatalf("stored grant = (%#v, %v)", stored, err)
+	}
+	subject, err := MCPEMAStoredSubject(stored)
+	if err != nil {
+		t.Fatalf("MCPEMAStoredSubject() error = %v", err)
+	}
+	if subject.Type != mcpEMASubjectTokenIDToken || subject.Token != stored.IDToken {
+		t.Fatalf("stored subject = %#v, want the ID token", subject)
+	}
+	if !MCPEMAStoredIdentityIsUsable(stored, server.URL, clientID) {
+		t.Fatal("an ID-token-only enterprise grant must authenticate the registration")
 	}
 }
 
@@ -401,8 +466,9 @@ func TestEnterpriseAuthorizationURLMatchesRust(t *testing.T) {
 }
 
 // TestValidateEnterpriseOAuthCredentialsMatchesRust covers the staged-login
-// checks: a refresh token and a valid OIDC identity assertion are required,
-// and the error text never carries credential data.
+// checks from #43844 and #62129: a valid OIDC identity assertion is required,
+// a refresh token is optional when the IdP does not issue one, and the error
+// text never carries credential data.
 func TestValidateEnterpriseOAuthCredentialsMatchesRust(t *testing.T) {
 	clientID := "client-1"
 	issuer := "https://idp.example.com"
@@ -418,11 +484,11 @@ func TestValidateEnterpriseOAuthCredentialsMatchesRust(t *testing.T) {
 	if err := validateEnterpriseOAuthCredentials(valid); err != nil {
 		t.Fatalf("valid credentials rejected: %v", err)
 	}
-	if err := validateEnterpriseOAuthCredentials(&OAuthTokenSet{ServerURL: issuer, ClientID: clientID, IDToken: assertion}); err == nil {
-		t.Fatal("missing refresh token must be rejected")
+	if err := validateEnterpriseOAuthCredentials(&OAuthTokenSet{ServerURL: issuer, ClientID: clientID, IDToken: assertion}); err != nil {
+		t.Fatalf("an ID-token-only grant must be staged: %v", err)
 	}
-	if err := validateEnterpriseOAuthCredentials(&OAuthTokenSet{ServerURL: issuer, ClientID: clientID, RefreshToken: " \t ", IDToken: assertion}); err == nil {
-		t.Fatal("a whitespace-only refresh token must be rejected")
+	if err := validateEnterpriseOAuthCredentials(&OAuthTokenSet{ServerURL: issuer, ClientID: clientID, RefreshToken: " \t ", IDToken: assertion}); err != nil {
+		t.Fatalf("a whitespace-only refresh token must not block an ID-token-only grant: %v", err)
 	}
 	if err := validateEnterpriseOAuthCredentials(&OAuthTokenSet{ServerURL: issuer, ClientID: clientID, RefreshToken: "refresh-1"}); err == nil {
 		t.Fatal("missing OIDC identity assertion must be rejected")
