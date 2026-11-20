@@ -1192,6 +1192,7 @@ const (
 	CommandKeymap           Command = "keymap"
 	CommandStatus           Command = "status"
 	CommandDaemon           Command = "daemon"
+	CommandRemoteControl    Command = "rc"
 	CommandDaybreak         Command = "daybreak"
 	CommandWarnings         Command = "warnings"
 	CommandUsage            Command = "usage"
@@ -1297,6 +1298,8 @@ func ParseCommand(input string) (*CommandInvocation, bool) {
 		return &CommandInvocation{Command: CommandStatus, Args: args, Name: name}, true
 	case "/daemon":
 		return &CommandInvocation{Command: CommandDaemon, Args: args, Name: name}, true
+	case "/rc", "/remote":
+		return &CommandInvocation{Command: CommandRemoteControl, Args: args, Name: name}, true
 	case "/daybreak":
 		return &CommandInvocation{Command: CommandDaybreak, Args: args, Name: name}, true
 	case "/warnings":

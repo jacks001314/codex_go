@@ -38,7 +38,8 @@ func (c Command) SupportsInlineArgs() bool {
 		CommandUsage,
 		CommandPets,
 		CommandSide,
-		CommandResume:
+		CommandResume,
+		CommandRemoteControl:
 		return true
 	default:
 		return false

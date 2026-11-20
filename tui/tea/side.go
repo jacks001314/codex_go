@@ -1378,6 +1378,7 @@ func sideSlashCommandAllowed(command codextui.Command) bool {
 		codextui.CommandMention,
 		codextui.CommandStatus,
 		codextui.CommandDaemon,
+		codextui.CommandRemoteControl,
 		codextui.CommandWarnings,
 		codextui.CommandUsage,
 		codextui.CommandIde:

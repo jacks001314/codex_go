@@ -408,6 +408,7 @@ var rustSlashCommandOrder = []string{
 	"mention",
 	"status",
 	"daemon",
+	"rc",
 	"warnings",
 	"cd",
 	"pwd",

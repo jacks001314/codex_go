@@ -1469,6 +1469,18 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 		}
 		return m.applySafetyBufferingModalOption(response.OptionID)
 	}
+	if modal.kind == ModalKindGeneric && modal.id == chatwidget.RemoteControlMenuViewID {
+		m.modal = nil
+		if cancelled {
+			return nil
+		}
+		return m.applyRemoteControlMenuOption(response.OptionID)
+	}
+	if modal.kind == ModalKindGeneric && modal.id == chatwidget.RemoteControlPairingViewID {
+		// The pairing view only acknowledges the code; there is nothing to run.
+		m.modal = nil
+		return nil
+	}
 	if modal.kind == ModalKindGeneric && modal.id == chatwidget.DaemonMenuViewID {
 		m.modal = nil
 		if cancelled {

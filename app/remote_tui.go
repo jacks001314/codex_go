@@ -621,23 +621,27 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		ServerVersion:                interactiveAppServerDisplayVersion(daemonVersion),
 		DaemonManaged:                interactiveManagedDaemonForEndpoint(endpoint),
 		RemoteAppServer:              interactiveRemoteEndpointIsExplicitRemote(root),
-		AnimationsEnabled:            settings.AnimationsEnabled,
-		Effects:                      settings.Effects,
-		StatusLineUseColors:          settings.StatusLineUseColors,
-		StatusLineProvider:           settings.StatusLineProvider.Clone(),
-		StatusLineItems:              optionalTUISettingList(settings.StatusLineItems),
-		TerminalTitleItems:           optionalTUISettingList(settings.TerminalTitleItems),
-		QuestionEscBack:              settings.QuestionEscBack,
-		AutoRecap:                    settings.AutoRecap,
-		PromptSuggestions:            settings.PromptSuggestions,
-		MouseScrollSpeed:             settings.MouseScrollSpeed,
-		RightClickPaste:              interactiveRightClickPasteValue(settings.RightClickPaste),
-		CopyOnSelect:                 interactiveCopyOnSelectValue(settings.CopyOnSelect),
-		CopyOnSelectClearSelection:   settings.CopyOnSelectClearSelection != nil && *settings.CopyOnSelectClearSelection,
-		StartInVimMode:               settings.StartInVimMode != nil && *settings.StartInVimMode,
-		ResumeCWD:                    interactiveResumeCWDValue(settings.ResumeCWD),
-		RemoteCWDOverride:            strings.TrimSpace(root.Shared.CWD),
-		ShowRawReasoning:             showRawReasoning,
+		// `/rc` manages the verified local background server; any other target
+		// leaves it nil so the menu reports that remote control needs that
+		// server (Rust remote_control::local_daemon).
+		RemoteControlRun:           interactiveRemoteControlRunner(endpoint, daemonVersion),
+		AnimationsEnabled:          settings.AnimationsEnabled,
+		Effects:                    settings.Effects,
+		StatusLineUseColors:        settings.StatusLineUseColors,
+		StatusLineProvider:         settings.StatusLineProvider.Clone(),
+		StatusLineItems:            optionalTUISettingList(settings.StatusLineItems),
+		TerminalTitleItems:         optionalTUISettingList(settings.TerminalTitleItems),
+		QuestionEscBack:            settings.QuestionEscBack,
+		AutoRecap:                  settings.AutoRecap,
+		PromptSuggestions:          settings.PromptSuggestions,
+		MouseScrollSpeed:           settings.MouseScrollSpeed,
+		RightClickPaste:            interactiveRightClickPasteValue(settings.RightClickPaste),
+		CopyOnSelect:               interactiveCopyOnSelectValue(settings.CopyOnSelect),
+		CopyOnSelectClearSelection: settings.CopyOnSelectClearSelection != nil && *settings.CopyOnSelectClearSelection,
+		StartInVimMode:             settings.StartInVimMode != nil && *settings.StartInVimMode,
+		ResumeCWD:                  interactiveResumeCWDValue(settings.ResumeCWD),
+		RemoteCWDOverride:          strings.TrimSpace(root.Shared.CWD),
+		ShowRawReasoning:           showRawReasoning,
 		// Managed worktree operations stay local, so a remote session never
 		// enables them (Rust #43120/#43286, #54175).
 		WorktreesEnabled: false,
@@ -976,6 +980,16 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		return runInteractiveRemoteTUI(ctx, root, endpoint, stdin, stdout, stderr)
 	}
 	return runPendingDaemonUpdate(ctx, tuiTelemetry, model, stdout, stderr)
+}
+
+// interactiveRemoteControlRunner builds the `/rc` runner for a verified local
+// background server and returns nil for every other target.
+func interactiveRemoteControlRunner(endpoint *appserverdaemon.RemoteAppServerEndpoint, daemonVersion string) codextea.RemoteControlRunFunc {
+	socketPath, verified := verifiedLocalDaemonEndpoint(endpoint)
+	if !verified {
+		return nil
+	}
+	return remoteControlTUIRunner(socketPath, daemonVersion)
 }
 
 func interactiveRemoteStatusAccount(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) (string, bool, *bool, string) {

@@ -111,7 +111,7 @@ func TestCommandPopupFlagsMatchRustVisibility(t *testing.T) {
 	// filtered to the frames that exist in Go, in rustSlashCommandOrder order.
 	// D-1 closed the last gap: the Agents slot now has the upstream "agents" frame,
 	// so this is the complete upstream set.
-	want := []string{"ide", "agents", "copy", "export", "raw", "diff", "mention", "status", "daemon", "warnings", "pwd", "usage"}
+	want := []string{"ide", "agents", "copy", "export", "raw", "diff", "mention", "status", "daemon", "rc", "warnings", "pwd", "usage"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("side commands = %#v, want %#v", got, want)
 	}

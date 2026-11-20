@@ -311,6 +311,29 @@ func DisableRemoteControlOnSocket(socketPath string, connectTimeout time.Duratio
 	return client.disableRemoteControl()
 }
 
+// ReadRemoteControlStatusOnSocket reads a running daemon's remote control status
+// over its control socket, which is what the TUI's `/rc` menu renders (Rust
+// remote_control::run's RemoteControlStatusRead). A daemon refusal such as a
+// managed-requirements block comes back as an error carrying the server message.
+func ReadRemoteControlStatusOnSocket(socketPath string, timeout time.Duration) (remotecontrol.StatusReadResponse, error) {
+	socketPath = strings.TrimSpace(socketPath)
+	if socketPath == "" {
+		return remotecontrol.StatusReadResponse{}, fmt.Errorf("%w: socket path is empty", ErrDaemonPathsRequired)
+	}
+	timeout = defaultDuration(timeout, RemoteControlReadyTimeout)
+	conn, err := connectUnixSocketWithRetry(socketPath, timeout, 25*time.Millisecond)
+	if err != nil {
+		return remotecontrol.StatusReadResponse{}, err
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	client := newLocalSocketRemoteControlClient(conn)
+	client.setDeadline(time.Now().Add(timeout))
+	if _, err := client.initialize(); err != nil {
+		return remotecontrol.StatusReadResponse{}, err
+	}
+	return client.requestStatusRead()
+}
+
 // StartRemoteControlPairingOnSocket asks an already-running managed daemon for
 // a manual pairing code over its control socket (Rust app-server-daemon
 // client::start_pairing, #57228). The whole exchange shares one deadline and
@@ -670,6 +693,23 @@ func (c *localSocketRemoteControlClient) requestEnable(params any) (RemoteContro
 		return RemoteControlReadyStatus{}, fmt.Errorf("failed to parse remoteControl/enable response: %w", err)
 	}
 	return ReadyStatusFromEnable(&response), nil
+}
+
+// requestStatusRead asks the daemon for its current remote control status.
+func (c *localSocketRemoteControlClient) requestStatusRead() (remotecontrol.StatusReadResponse, error) {
+	method := "remoteControl/status/read"
+	if err := c.sendMessage(BuildRemoteControlRequest(method, nil)); err != nil {
+		return remotecontrol.StatusReadResponse{}, fmt.Errorf("failed to send %s request: %w", method, err)
+	}
+	result, err := c.readRemoteControlResponse(method)
+	if err != nil {
+		return remotecontrol.StatusReadResponse{}, err
+	}
+	var response remotecontrol.StatusReadResponse
+	if err := json.Unmarshal(result, &response); err != nil {
+		return remotecontrol.StatusReadResponse{}, fmt.Errorf("failed to parse %s response: %w", method, err)
+	}
+	return response, nil
 }
 
 // requestPairing sends the manual pairing request Rust's start_pairing_inner

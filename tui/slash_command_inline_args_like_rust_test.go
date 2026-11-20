@@ -10,13 +10,13 @@ import "testing"
 // both delegate to Command.SupportsInlineArgs, and this test pins the list
 // against Rust's names so the two Go copies cannot drift again.
 func TestCommandSupportsInlineArgsMatchesRustSlashCommandList(t *testing.T) {
-	// Codex-rs/tui/src/slash_command.rs:173-199, in Rust's order. Rust spells
-	// `/btw` as its own variant; Go folds it onto CommandSide
-	// (slash_command.go:49-50).
+	// Codex-rs/tui/src/slash_command.rs supports_inline_args, in Rust's order.
+	// Rust spells `/btw` as its own variant; Go folds it onto CommandSide
+	// (slash_command.go:49-50). `/rc` joined the list with #62121.
 	rustInline := []string{
 		"review", "model", "permissions", "title", "statusline", "rename", "new",
 		"clear", "fork", "plan", "goal", "voice", "ide", "keymap", "mcp", "export",
-		"raw", "cd", "pwd", "usage", "pets", "side", "btw", "resume",
+		"raw", "cd", "pwd", "usage", "pets", "side", "btw", "resume", "rc",
 	}
 	inline := make(map[string]bool, len(rustInline))
 	for _, name := range rustInline {

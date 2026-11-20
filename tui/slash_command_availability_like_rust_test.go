@@ -15,13 +15,13 @@ var rustCommandsBlockedDuringTask = []Command{
 	CommandConfig,
 }
 
-// Rust SlashCommand::available_in_side_conversation
-// (codex-rs/tui/src/slash_command.rs:203-219): Copy, Agents, Export, Raw, Diff,
-// Mention, Status, Daemon, Warnings, Pwd, Usage, Ide.
+// Rust SlashCommand::available_in_side_conversation: Copy, Agents, Export, Raw,
+// Diff, Mention, Status, Daemon, Rc, Warnings, Pwd, Usage, Ide. `/rc` joined the
+// list with #62121.
 var rustCommandsAllowedInSideConversation = []Command{
 	CommandCopy, CommandAgents, CommandExport, CommandRaw, CommandDiff,
-	CommandMention, CommandStatus, CommandDaemon, CommandWarnings, CommandPwd,
-	CommandUsage, CommandIde,
+	CommandMention, CommandStatus, CommandDaemon, CommandRemoteControl,
+	CommandWarnings, CommandPwd, CommandUsage, CommandIde,
 }
 
 func TestCommandAvailabilityMatchesRustSlashCommandLists(t *testing.T) {
@@ -44,7 +44,7 @@ func TestCommandAvailabilityMatchesRustSlashCommandLists(t *testing.T) {
 			t.Fatalf("/%s AvailableDuringTask() = %v, want %v (slash_command.rs:249-313)", frame.Name, got, want)
 		}
 		if got, want := frame.Command.AvailableInSideConversation(), allowed[frame.Command]; got != want {
-			t.Fatalf("/%s AvailableInSideConversation() = %v, want %v (slash_command.rs:203-219)", frame.Name, got, want)
+			t.Fatalf("/%s AvailableInSideConversation() = %v, want %v (slash_command.rs available_in_side_conversation)", frame.Name, got, want)
 		}
 	}
 

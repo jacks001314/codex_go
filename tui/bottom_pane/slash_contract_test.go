@@ -18,7 +18,7 @@ func TestRustSlashCommandOrderBaseline20260728(t *testing.T) {
 		"import", "hooks", "review", "rename", "new", "archive", "delete", "resume",
 		"fork", "worktree", "app", "init", "compact", "config", "recap", "plan",
 		"voice", "goal", "agents", "side", "btw", "copy", "export", "raw", "tui",
-		"diff", "mention", "status", "daemon", "warnings", "cd", "pwd", "usage",
+		"diff", "mention", "status", "daemon", "rc", "warnings", "cd", "pwd", "usage",
 		"debug-config", "title", "statusline", "theme", "pets", "mcp", "apps",
 		"plugins", "logout", "quit", "exit", "feedback", "rollout", "ps", "stop",
 		"clear", "test-approval", "subagents", "debug-m-drop", "debug-m-update",
@@ -104,6 +104,8 @@ func TestRustSlashInlineArgContractIsExhaustive(t *testing.T) {
 		codextui.CommandExport: true,
 		codextui.CommandFork:   true,
 		codextui.CommandCd:     true,
+		// /rc takes inline arguments since #62121.
+		codextui.CommandRemoteControl: true,
 	}
 	flags := BuiltinCommandFlags{
 		CollaborationModesEnabled:   true,

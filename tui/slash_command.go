@@ -22,6 +22,7 @@ func SlashCommandFrames() []SlashCommandFrame {
 		{Name: "presets", Command: CommandPresets, Description: "run or save reusable prompts and slash commands"},
 		{Name: "status", Command: CommandStatus, Description: "show current session configuration and token usage"},
 		{Name: "daemon", Command: CommandDaemon, Description: "Manage the local background server"},
+		{Name: "rc", Command: CommandRemoteControl, Aliases: []string{"remote"}, Description: "manage remote control for the local background server"},
 		{Name: "daybreak", Command: CommandDaybreak, Description: "turn Daybreak on or off"},
 		{Name: "warnings", Command: CommandWarnings, Description: "view retained warnings and diagnostic details"},
 		{Name: "usage", Command: CommandUsage, Description: "view account usage or use a usage limit reset"},

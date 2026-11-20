@@ -1656,6 +1656,11 @@ type Options struct {
 	DaemonManaged bool
 	// DaemonVersion is the running local daemon's app-server version, when known.
 	DaemonVersion string
+	// RemoteControlRun performs `/rc` operations against the verified local
+	// background server. A nil runner leaves the menu unavailable, which is
+	// what Rust shows when it cannot verify that daemon (Rust
+	// remote_control::verified_daemon_session).
+	RemoteControlRun RemoteControlRunFunc
 	// ServerAddress and ServerVersion feed the /status "Server" row
 	// (Rust #46905). ServerAddress is already sanitized for display; for a
 	// local daemon the row says "Local background server" instead.
@@ -2764,6 +2769,8 @@ type Model struct {
 	daemonVersion         string
 	daemonManaged         bool
 	pendingDaemonRestart  bool
+	remoteControlRun      RemoteControlRunFunc
+	remoteControlPending  bool
 	remoteAppServer       bool
 	// pendingUpdateAction records the update the TUI wants the CLI to run after
 	// it exits (Rust App::pending_update_action).
@@ -3759,6 +3766,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		daemonCLIPackage:                 options.DaemonCLIPackage,
 		daemonVersion:                    strings.TrimSpace(options.DaemonVersion),
 		daemonManaged:                    options.DaemonManaged,
+		remoteControlRun:                 options.RemoteControlRun,
 		remoteAppServer:                  options.RemoteAppServer,
 		localSession:                     options.LocalSession,
 		animationsEnabled:                options.AnimationsEnabled == nil || *options.AnimationsEnabled,
@@ -5057,6 +5065,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, m.applyAgentsOverviewNewWorktree(msg)
 	case agentsOverviewPinMsg:
 		return m, m.applyAgentsOverviewPin(msg)
+	case remoteControlFinishedMsg:
+		return m, m.handleRemoteControlFinished(msg)
 	case agentsOverviewStopMsg:
 		if msg.err != nil {
 			m.agentsOverviewNotice = "Failed to stop background task: " + strings.TrimSpace(msg.err.Error())
@@ -11963,6 +11973,8 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandDaemon:
 		m.openDaemonMenu()
 		return nil
+	case codextui.CommandRemoteControl:
+		return m.openRemoteControlMenu()
 	case codextui.CommandDaybreak:
 		return m.applyDaybreakCommand()
 	case codextui.CommandUsage:

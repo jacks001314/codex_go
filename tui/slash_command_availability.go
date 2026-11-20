@@ -80,6 +80,7 @@ func (c Command) AvailableInSideConversation() bool {
 		CommandMention,
 		CommandStatus,
 		CommandDaemon,
+		CommandRemoteControl,
 		CommandWarnings,
 		CommandPwd,
 		CommandUsage,

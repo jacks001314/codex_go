@@ -471,14 +471,17 @@
    "kind": "terminal-ui",
    "rustPaths": [
     "tui/src/app/startup.rs",
-    "tui/src/chatwidget/windows_sandbox_prompts.rs"
+    "tui/src/chatwidget/windows_sandbox_prompts.rs",
+    "tui/src/app/remote_control.rs"
    ],
    "goPaths": [
-    "tui/tea"
+    "tui/tea",
+    "tui/chatwidget/remote_control.go",
+    "app/remote_control_tui.go"
    ],
    "phase": "P2",
    "status": "complete",
-   "verifier": "TestSystemCodexSlashParityWithConPTY"
+   "verifier": "TestSystemCodexSlashParityWithConPTY;TestRemoteControlSlashOpensMenuLikeRust;TestRemoteControlWithoutDaemonShowsUnavailableLikeRust;TestRemoteControlMenuRunsActionsLikeRust;TestRemoteControlRunnerFailureShowsUnavailableLikeRust;TestRemoteControlDisableReportsInfoLikeRust;TestRemoteControlPendingGuardLikeRust;TestRemoteControlMenuStatesLikeRust;TestRemoteControlPairingViewLikeRust;TestRemoteControlOutcomesAreRedactedLikeRust;TestRemoteControlOutcomeMappingLikeRust;TestRemoteControlTimeoutsLikeRust;TestRemoteControlSavedPreferenceLikeRust;TestRemoteControlRequestsLikeRust;TestRemoteControlItemActionsLikeRust;TestRemoteControlSettingsFileLikeRust;TestRemoteControlSavedPreferenceLikeRust;TestRemoteControlDaemonSupportedLikeRust;TestRemoteControlServerRefusalLikeRust;TestInteractiveRemoteControlRunnerNeedsVerifiedDaemonLikeRust"
   },
   {
    "id": "tui-edit-queued-message-vim-history-up",
