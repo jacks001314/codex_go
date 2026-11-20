@@ -4,11 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
 	"codex_go/utils"
 )
+
+// guardianEvidenceText is the stored body of one routed original: the source
+// ordinal plus the exact model-visible item (Rust RoutedOriginal).
+func guardianEvidenceText(ordinal uint64, output string) string {
+	return fmt.Sprintf(
+		`{"id":{"ordinal":%d},"original":{"type":"response_item","payload":{"type":"function_call_output","output":%q}}}`,
+		ordinal, output,
+	)
+}
 
 func guardianInboxFixture(t *testing.T) (context.Context, *LocalAgentMessageBoard, *GuardianLiveDelivery, string, string) {
 	t.Helper()

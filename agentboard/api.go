@@ -80,8 +80,6 @@ type AgentMessageBoard interface {
 	// JSON literals at the pointer, leaving other handles unchanged (Rust
 	// AgentMessageBoard::with_json_search, #62133).
 	WithJSONSearch(pointer string) (AgentMessageBoard, error)
-	// CaptureReadView freezes the channel catalog and the post cutoff.
-	CaptureReadView(ctx context.Context) (*BoardReadView, error)
 	// SubscribedChannels lists the caller's live channel memberships.
 	SubscribedChannels(ctx context.Context, caller string, page PageRequest) (*Page[string], error)
 }

@@ -1637,22 +1637,6 @@
    "verifier": "TestSuspendAgentTreePersistsQueuedTerminalResultsLikeRust;TestSuspendAgentTreeStopsTurnsAndPreservesStateLikeRust;TestLoadSuspendedAgentRestoresIdentityWithoutStartingLikeRust"
   },
   {
-   "id": "message-board-fixed-read-view",
-   "kind": "source-surface",
-   "rustPaths": [
-    "message-board/src/local/queries.rs",
-    "message-board/src/local.rs",
-    "message-board/src/local/connection.rs",
-    "message-board/src/local/paging.rs"
-   ],
-   "goPaths": [
-    "agentboard"
-   ],
-   "phase": "P1",
-   "status": "complete",
-   "verifier": "TestLocalBoardPersistsPagesAndReadsLikeRust;TestLocalBoardAppendPersistsEvidenceWithoutSideEffectsLikeRust;TestLocalBoardFixedReadViewFreezesCatalogAndCutoffLikeRust;TestLocalBoardReadViewServesListSearchAndReadThreadLikeRust;TestLocalBoardReadViewSearchHonorsCutoffAfterBackdatingLikeRust"
-  },
-  {
    "id": "cloud-image-messages",
    "kind": "source-surface",
    "rustPaths": [
@@ -2342,7 +2326,7 @@
    ],
    "phase": "P1",
    "status": "complete",
-   "verifier": "TestGuardianRetrievalSearchesLiveUnsubscribedPostsLikeRust;TestGuardianSubscriptionToolsChangeOnlyCallerLikeRust;TestLocalBoardFixedReadViewFreezesCatalogAndCutoffLikeRust;TestGuardianBoardRetrievalGuidanceLikeRust;TestGuardianRetrievalGuidanceSelectsInstalledToolsLikeRust;TestLocalBoardAppendWithSubscribersUsesInsertionStateLikeRust;TestLocalBoardReadPostTextsByIDLikeRust;TestGuardianInboxDeliversQueuedEvidenceInSourceOrderLikeRust;TestGuardianInboxRetainsEvidenceAcrossSubscriptionChangesLikeRust;TestGuardianInboxRejectsWrongBoardOrCallerLikeRust"
+   "verifier": "TestGuardianRetrievalSearchesLiveUnsubscribedPostsLikeRust;TestGuardianSubscriptionToolsChangeOnlyCallerLikeRust;TestGuardianBoardRetrievalGuidanceLikeRust;TestGuardianRetrievalGuidanceSelectsInstalledToolsLikeRust;TestLocalBoardAppendWithSubscribersUsesInsertionStateLikeRust;TestLocalBoardReadPostTextsByIDLikeRust;TestGuardianInboxDeliversQueuedEvidenceInSourceOrderLikeRust;TestGuardianInboxRetainsEvidenceAcrossSubscriptionChangesLikeRust;TestGuardianInboxRejectsWrongBoardOrCallerLikeRust"
   },
   {
    "id": "world-state-skill-catalog-delta-grants",

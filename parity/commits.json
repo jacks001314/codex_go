@@ -44120,11 +44120,8 @@
     "codex_go"
    ],
    "evidence": [
-    "缺 message board 固定读视图（LocalBoardReadView / post_cutoff 快照）；Go 只有 ReadOnly() 实时连接",
-    "Go 锚点：agentboard/（local board 读取）",
-    "plan: update/plan_2026_11_08_thread_storage.md（#59993），契约 message-board-fixed-read-view",
-    "Reconciled to complete by the 2026-11-10 ledger round: contract message-board-fixed-read-view.",
-    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
+    "Superseded: this commit added fixed read views for local message boards, and upstream #62137 removed them again because live retrieval replaced every caller. Go removed BoardReadView and the boardReadScope threading with the same cleanup, so there is no surviving Go carrier to verify.",
+    "The live board behaviour that remains is covered by agentboard TestLocalBoardPersistsPagesAndReadsLikeRust and TestLocalBoardAppendPersistsEvidenceWithoutSideEffectsLikeRust, plus the Guardian inbox tests."
    ],
    "kind": "persistence",
    "sha": "632eee03e9707fbd2424b4a44f5d068605f857e6",
@@ -44193,10 +44190,8 @@
     "codex_go"
    ],
    "evidence": [
-    "agentboard/guardian_delivery.go ports Guardian DeliveryState::plan: originals are deduplicated across selected channels by source ordinal, read by insertion sequence from the captured board view (AppendedRequestIDs paging), ordered by ordinal, limited to selected channels and captured posts, and rejected when evidence is at or beyond the review's source-history cutoff (GuardianEvidenceCutoff.EndOrdinalExclusive) or when the cutoff predates delivered evidence. Evidence request IDs use the shared [ordinal, channel] encoding.",
-    "Tests: TestGuardianDeliveryKeepsOrderedOriginalsOnceLikeRust (dedup across channels, source ordering across storage pages, unselected and later posts excluded, cutoff older than delivered evidence), TestGuardianDeliveryRejectsEvidenceBeyondCutoffLikeRust, TestGuardianEvidenceRequestIDMatchesRustShape.",
-    "Go anchor: agentboard/guardian_delivery.go, agentboard/guardian_retrieval.go",
-    "plan: update/plan_2026_11_16.md batch 21 (#60000)."
+    "Planned delivery in source order over a captured view; #62136 replaced that plan with per-actor inboxes, so Go's ordering guarantee now lives in agentboard.GuardianLiveDelivery (rejects evidence that is not newer than the queue head) and GuardianActorInbox.Deliver (whole-original batches in source order).",
+    "Tests: go test ./agentboard -run 'GuardianInbox' -count=1"
    ],
    "kind": "runtime",
    "sha": "5f82dc9e59b47783b79ad51567c8ddc516f5c204",
@@ -44208,10 +44203,8 @@
     "codex_go"
    ],
    "evidence": [
-    "agentboard/guardian_delivery.go ports DeliveryPlan::deliver: whole posts are read one board page at a time through GuardianEvidenceView.ReadPostTexts, admitted in source order under the tool-output byte budget, oversized originals are rejected intact and retried with a larger budget, delivered ordinals and channel positions advance only after the admission callback succeeds, and successful admissions survive partial plans so retries and overlapping channel selections never duplicate evidence. ReadPostTexts enforces the captured board boundary.",
-    "Tests: TestGuardianDeliveryKeepsOrderedOriginalsOnceLikeRust (failed admission leaves state untouched, one paged read for repeated deliveries, oversized retry, captured-view boundary, cross-selection dedup).",
-    "Go anchor: agentboard/guardian_delivery.go, agentboard/read_view.go",
-    "plan: update/plan_2026_11_16.md batch 21 (#60001)."
+    "Bounded original-evidence delivery now runs through GuardianActorInbox.Deliver: it admits whole originals in source order within the reviewer's model budget and refuses a single original that cannot fit, instead of truncating it.",
+    "Tests: go test ./agentboard -run 'GuardianInbox' -count=1"
    ],
    "kind": "runtime",
    "sha": "ecef7e09366ef08490de7daa0c48739871394ec6",
@@ -44223,9 +44216,8 @@
     "codex_go"
    ],
    "evidence": [
-    "AgentMessageBoard in agentboard/api.go is the trait-equivalent surface Guardian takes: Board plus StorageNamespace, CaptureReadView, SubscribedChannels and SetSubscriptions. NewGuardianRetrievalBinding and CaptureReviewerSubscriptions accept the interface, not LocalAgentMessageBoard, and both reject ordinary boards before any read or write.",
-    "BoardReadView.WithJSONSearchPointer returns an independent capture handle sharing only the frozen catalog and cutoff, mirroring Rust board.with_json_search cloning the local handle without opening storage.",
-    "Tests: go test ./agentboard -run 'TestGuardianRetrievalSearchesUnsubscribedPostsThroughCutoffLikeRust|TestGuardianSubscriptionToolsUseCapturedCatalogLikeRust' -count=1 and go test ./agentboard -count=1."
+    "Superseded: this commit decoupled Guardian retrieval from local message-board handles by binding a fixed view. #62133 binds a live Guardian board again (agentboard.WithJSONSearch + GuardianRetrievalBinding), and #62137 removed the view, so the decoupling no longer exists.",
+    "Covered by agentboard TestGuardianRetrievalSearchesLiveUnsubscribedPostsLikeRust and appserver TestGuardianBoardRetrievalGuidanceLikeRust."
    ],
    "kind": "persistence",
    "sha": "09bd19a0deb54cce82439c23373b07b84d3e5d04",
@@ -51159,13 +51151,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Landed: the captured-view reviewer selection module is removed, and so are bulk channel subscriptions: SetSubscriptions, BulkSubscriptionsRequest/BulkSubscriptionsState, their local-board transaction helpers and the read-view refusal are gone, leaving individual SetSubscription changes as the only way to change membership (Rust #62137).",
-    "Pending: removing BoardReadView, its snapshot-specific tool bindings and the captured catalog/post cutoff from local queries (Go still carries agentboard/read_view.go, the boardReadScope threading in local.go queries, and guardian_delivery.go's captured-view planning).",
-    "Tests: go test ./agentboard -count=1"
+    "Landed: the captured-view reviewer selection module and bulk channel subscriptions are gone (30710765, 4fc70d27), and so are BoardReadView, its boardReadScope threading through the local queries, the channel catalog/cutoff conditions and the captured-view delivery planning (this commit). Local reads and searches run on the live board, where the only search narrowing left is the handle's own decoded-JSON pointer.",
+    "Tests: go test ./agentboard -count=1; go test ./appserver -run 'Guardian|MessageBoard|Board' -count=1; go build ./..."
    ],
    "kind": "runtime",
    "sha": "44de9d99ef5a9ea3a04c00e09bec8ebd67707868",
-   "status": "partial",
+   "status": "complete",
    "subject": "Remove fixed message-board views and bulk subscriptions (#62137)"
   },
   {

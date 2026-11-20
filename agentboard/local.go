@@ -788,10 +788,6 @@ func (b *LocalAgentMessageBoard) SetSubscription(ctx context.Context, caller str
 }
 
 // ReadPost reads a bounded slice of one post; offsets count Unicode characters.
-func (b *LocalAgentMessageBoard) ReadPost(ctx context.Context, caller string, request ReadPostRequest) (*PostContent, error) {
-	return b.readPostAt(ctx, caller, request, nil)
-}
-
 // ReadPostTextsByID reads whole post bodies for the given IDs in the caller's
 // order. It is the batch read a host consumer uses to admit queued evidence, so
 // it accepts at most one board page and fails rather than dropping an unknown
@@ -844,13 +840,13 @@ func (b *LocalAgentMessageBoard) ReadPostTextsByID(ctx context.Context, caller s
 	return ordered, nil
 }
 
-// readPostAt is ReadPost bounded by a captured view. Membership, not content,
-// is decided by the cutoff: a post appended after the capture is not found.
-func (b *LocalAgentMessageBoard) readPostAt(ctx context.Context, caller string, request ReadPostRequest, scope *boardReadScope) (*PostContent, error) {
+// ReadPost reads one post's body. A reviewer reads the live board, so a post
+// that arrives during a review is visible (Rust #62133/#62137).
+func (b *LocalAgentMessageBoard) ReadPost(ctx context.Context, caller string, request ReadPostRequest) (*PostContent, error) {
 	if _, err := b.host.AgentPath(ctx, caller); err != nil {
 		return nil, err
 	}
-	post, err := b.loadPostAt(ctx, b.db, request.MessageID, scope)
+	post, err := b.loadPost(ctx, b.db, request.MessageID)
 	if err != nil {
 		return nil, err
 	}
@@ -968,14 +964,9 @@ func (b *LocalAgentMessageBoard) SubscribedChannels(ctx context.Context, caller 
 	return finishBoardPage(offset, limit, names)
 }
 
+// ListThreads lists a channel's threads on the live board
+// (Rust local/queries.rs list_threads).
 func (b *LocalAgentMessageBoard) ListThreads(ctx context.Context, caller string, query ThreadQuery) (*Page[ThreadSummary], error) {
-	return b.listThreadsAt(ctx, caller, query, nil)
-}
-
-// listThreadsAt is ListThreads bounded by a captured view: roots, reply counts
-// and the latest-reply probe all read at or below the cutoff, and the channel
-// must be part of the frozen catalog (Rust local/queries.rs list_threads).
-func (b *LocalAgentMessageBoard) listThreadsAt(ctx context.Context, caller string, query ThreadQuery, scope *boardReadScope) (*Page[ThreadSummary], error) {
 	if _, err := b.host.AgentPath(ctx, caller); err != nil {
 		return nil, err
 	}
@@ -983,7 +974,7 @@ func (b *LocalAgentMessageBoard) listThreadsAt(ctx context.Context, caller strin
 	if err != nil {
 		return nil, err
 	}
-	if !exists || !scope.hasChannel(query.ChannelName) {
+	if !exists {
 		return nil, invalid("channel not found in this board")
 	}
 	offset, limit, err := boardWindow(query.Page)
@@ -993,32 +984,15 @@ func (b *LocalAgentMessageBoard) listThreadsAt(ctx context.Context, caller strin
 	order := boardOrder(query.Direction)
 	sortExpression := "p.timestamp"
 	if query.Sort == ThreadSortActivity {
-		if scope == nil {
-			sortExpression = "(SELECT MAX(r.timestamp) FROM posts r WHERE r.board=p.board AND r.root=p.id)"
-		} else {
-			sortExpression = "(SELECT MAX(r.timestamp) FROM visible_by_time r WHERE r.board=p.board AND r.root=p.id)"
-		}
+		sortExpression = "(SELECT MAX(r.timestamp) FROM posts r WHERE r.board=p.board AND r.root=p.id)"
 	}
-	// A sequence cutoff makes SQLite scan and sort a whole channel or thread, so
-	// keep the ordered root and activity indexes and let only the reply count use
-	// the plain sequence range (Rust's visible_roots/visible_by_time/visible_posts).
-	cte := "WITH "
-	roots, byTime, forCount := "posts", "posts", "posts"
-	args := []any{}
-	if scope != nil {
-		roots, byTime, forCount = "visible_roots", "visible_by_time", "visible_posts"
-		cte += "visible_roots AS NOT MATERIALIZED (SELECT * FROM posts INDEXED BY posts_roots_created WHERE id=root AND seq<=?), " +
-			"visible_by_time AS NOT MATERIALIZED (SELECT * FROM posts INDEXED BY posts_board_root_timestamp WHERE seq<=?), " +
-			"visible_posts AS NOT MATERIALIZED (SELECT * FROM posts WHERE seq<=?), "
-		args = append(args, scope.cutoff, scope.cutoff, scope.cutoff)
-	}
-	sqlText := cte + "page AS MATERIALIZED (SELECT p.board,p.id,p.payload,p.seq," + sortExpression + " AS sort_timestamp " +
-		"FROM " + roots + " p WHERE p.board=? AND p.channel=? AND p.id=p.root ORDER BY sort_timestamp " + order + ",p.seq " + order +
+	sqlText := "WITH page AS MATERIALIZED (SELECT p.board,p.id,p.payload,p.seq," + sortExpression + " AS sort_timestamp " +
+		"FROM posts p WHERE p.board=? AND p.channel=? AND p.id=p.root ORDER BY sort_timestamp " + order + ",p.seq " + order +
 		" LIMIT ? OFFSET ?) " +
-		"SELECT p.payload, (SELECT COUNT(*) FROM " + forCount + " r WHERE r.board=p.board AND r.root=p.id AND r.id<>r.root), " +
-		"(SELECT r.payload FROM " + byTime + " r WHERE r.board=p.board AND r.root=p.id AND r.id<>r.root ORDER BY r.timestamp DESC,r.seq DESC LIMIT 1) " +
+		"SELECT p.payload, (SELECT COUNT(*) FROM posts r WHERE r.board=p.board AND r.root=p.id AND r.id<>r.root), " +
+		"(SELECT r.payload FROM posts r WHERE r.board=p.board AND r.root=p.id AND r.id<>r.root ORDER BY r.timestamp DESC,r.seq DESC LIMIT 1) " +
 		"FROM page p ORDER BY p.sort_timestamp " + order + ",p.seq " + order
-	args = append(args, b.identity, query.ChannelName, int64(limit+1), int64(offset))
+	args := []any{b.identity, query.ChannelName, int64(limit + 1), int64(offset)}
 	rows, err := b.db.QueryContext(ctx, sqlText, args...)
 	if err != nil {
 		return nil, err
@@ -1081,14 +1055,9 @@ func (b *LocalAgentMessageBoard) listThreadsAt(ctx context.Context, caller strin
 	return finishBoardPage(offset, limit, threads)
 }
 
+// SearchPosts searches the live board, including text inside the JSON-encoded
+// arguments this handle was opened to match.
 func (b *LocalAgentMessageBoard) SearchPosts(ctx context.Context, caller string, query PostQuery) (*Page[PostPreview], error) {
-	return b.searchPostsAt(ctx, caller, query, nil)
-}
-
-// searchPostsAt is SearchPosts bounded by a captured view's post cutoff. The
-// cutoff also bounds the `after` cursor lookup, so a post appended after the
-// capture cannot restart paging inside the frozen window.
-func (b *LocalAgentMessageBoard) searchPostsAt(ctx context.Context, caller string, query PostQuery, scope *boardReadScope) (*Page[PostPreview], error) {
 	if _, err := b.host.AgentPath(ctx, caller); err != nil {
 		return nil, err
 	}
@@ -1100,12 +1069,7 @@ func (b *LocalAgentMessageBoard) searchPostsAt(ctx context.Context, caller strin
 	if query.AfterMessageID != nil {
 		var timestamp int64
 		var sequence int64
-		var row *sql.Row
-		if scope == nil {
-			row = b.db.QueryRowContext(ctx, "SELECT timestamp,seq FROM posts WHERE board=? AND id=?", b.identity, *query.AfterMessageID)
-		} else {
-			row = b.db.QueryRowContext(ctx, "SELECT timestamp,seq FROM posts WHERE seq<=? AND board=? AND id=?", scope.cutoff, b.identity, *query.AfterMessageID)
-		}
+		row := b.db.QueryRowContext(ctx, "SELECT timestamp,seq FROM posts WHERE board=? AND id=?", b.identity, *query.AfterMessageID)
 		if err := row.Scan(&timestamp, &sequence); err != nil {
 			if err == sql.ErrNoRows {
 				return nil, invalid("post not found in this board")
@@ -1114,18 +1078,8 @@ func (b *LocalAgentMessageBoard) searchPostsAt(ctx context.Context, caller strin
 		}
 		after = &[2]int64{timestamp, sequence}
 	}
-	// A frozen channel page scans in result order so SQLite keeps the timestamp
-	// index instead of sorting the whole channel for the cutoff.
-	statement := "SELECT payload FROM posts"
-	if scope != nil && query.ChannelName != nil {
-		statement += " INDEXED BY posts_board_channel_timestamp"
-	}
-	statement += " WHERE board=?"
+	statement := "SELECT payload FROM posts WHERE board=?"
 	args := []any{b.identity}
-	if scope != nil {
-		statement += " AND seq<=?"
-		args = append(args, scope.cutoff)
-	}
 	if query.ChannelName != nil {
 		statement += " AND channel=?"
 		args = append(args, *query.ChannelName)
@@ -1139,13 +1093,10 @@ func (b *LocalAgentMessageBoard) searchPostsAt(ctx context.Context, caller strin
 		needle = foldCase(*query.Query)
 	}
 	jsonPointer := b.nestedJSONPointer
-	if scope != nil {
-		jsonPointer = scope.jsonSearchPointer
-	}
-	// A JSON-enabled capture also matches decoded JSON literals, which the
-	// folded body_search column cannot express (Rust local/json_search.rs). The
-	// rows are filtered in Go, so the offset and the one-item lookahead move
-	// into jsonSearchPostPage.
+	// A JSON-search handle also matches decoded JSON literals, which the folded
+	// body_search column cannot express (Rust local/json_search.rs). The rows are
+	// filtered in Go, so the offset and the one-item lookahead move into
+	// jsonSearchPostPage.
 	jsonSearch := jsonPointer != "" && needle != ""
 	if query.Query != nil && !jsonSearch {
 		statement += " AND instr(body_search, ?)>0"
@@ -1179,17 +1130,12 @@ func (b *LocalAgentMessageBoard) searchPostsAt(ctx context.Context, caller strin
 	return finishBoardPage(offset, limit, previews)
 }
 
+// ReadThread reads one thread on the live board.
 func (b *LocalAgentMessageBoard) ReadThread(ctx context.Context, caller string, request ReadThreadRequest) (*ThreadPage, error) {
-	return b.readThreadAt(ctx, caller, request, nil)
-}
-
-// readThreadAt is ReadThread bounded by a captured view: the root lookup and
-// the reply page both read at or below the cutoff.
-func (b *LocalAgentMessageBoard) readThreadAt(ctx context.Context, caller string, request ReadThreadRequest, scope *boardReadScope) (*ThreadPage, error) {
 	if _, err := b.host.AgentPath(ctx, caller); err != nil {
 		return nil, err
 	}
-	root, err := b.loadPostAt(ctx, b.db, request.ThreadID, scope)
+	root, err := b.loadPost(ctx, b.db, request.ThreadID)
 	if err != nil {
 		return nil, err
 	}
@@ -1202,11 +1148,6 @@ func (b *LocalAgentMessageBoard) readThreadAt(ctx context.Context, caller string
 	}
 	repliesSQL := "SELECT payload FROM posts WHERE board=? AND root=? AND id<>root ORDER BY timestamp DESC,seq DESC LIMIT ? OFFSET ?"
 	repliesArgs := []any{b.identity, request.ThreadID, int64(limit + 1), int64(offset)}
-	if scope != nil {
-		repliesSQL = "SELECT payload FROM posts INDEXED BY posts_board_root_timestamp " +
-			"WHERE seq<=? AND board=? AND root=? AND id<>root ORDER BY timestamp DESC,seq DESC LIMIT ? OFFSET ?"
-		repliesArgs = []any{scope.cutoff, b.identity, request.ThreadID, int64(limit + 1), int64(offset)}
-	}
 	rows, err := b.db.QueryContext(ctx, repliesSQL, repliesArgs...)
 	if err != nil {
 		return nil, err
@@ -1343,18 +1284,8 @@ func (b *LocalAgentMessageBoard) subscribedRecipients(ctx context.Context, tx *l
 }
 
 func (b *LocalAgentMessageBoard) loadPost(ctx context.Context, querier queryRower, id string) (storedPost, error) {
-	return b.loadPostAt(ctx, querier, id, nil)
-}
-
-// loadPostAt is loadPost bounded by a captured view's post cutoff.
-func (b *LocalAgentMessageBoard) loadPostAt(ctx context.Context, querier queryRower, id string, scope *boardReadScope) (storedPost, error) {
 	var payload string
-	var err error
-	if scope == nil {
-		err = querier.QueryRowContext(ctx, "SELECT payload FROM posts WHERE board=? AND id=?", b.identity, id).Scan(&payload)
-	} else {
-		err = querier.QueryRowContext(ctx, "SELECT payload FROM posts WHERE seq<=? AND board=? AND id=?", scope.cutoff, b.identity, id).Scan(&payload)
-	}
+	err := querier.QueryRowContext(ctx, "SELECT payload FROM posts WHERE board=? AND id=?", b.identity, id).Scan(&payload)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return storedPost{}, invalid("post not found in this board")
