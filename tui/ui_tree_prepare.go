@@ -69,7 +69,11 @@ type preparedUIRow struct {
 	gap      uint64
 	wrap     UIRowWrap
 	justify  UIRowJustify
-	paint    uiPaint
+	// paint styles the configured gaps. leading styles only the alignment
+	// padding, which keeps the row background and never inherits a link
+	// (Rust prepare::RowPaint).
+	paint   uiPaint
+	leading uiPaint
 }
 
 type preparedUIText struct {
@@ -237,8 +241,9 @@ func prepareUIRow(children []*preparedUINode, gap uint64, wrap UIRowWrap, justif
 	for _, child := range kept {
 		widths.preferred += child.widths.preferred
 	}
+	leading := uiPaint{background: paint.background, hasBackground: paint.hasBackground}
 	return &preparedUINode{
-		row:    &preparedUIRow{children: kept, gap: gap, wrap: wrap, justify: justify, paint: paint},
+		row:    &preparedUIRow{children: kept, gap: gap, wrap: wrap, justify: justify, paint: paint, leading: leading},
 		widths: widths,
 	}
 }

@@ -17,17 +17,20 @@ type uiFragment struct {
 	gapWidth  int
 	gapPaint  uiPaint
 	isGap     bool
+	// isPadding marks the alignment padding in front of a centered or
+	// end-aligned line. It paints the row background but never a link.
+	isPadding bool
 }
 
 func (f uiFragment) width() int {
-	if f.isGap {
+	if f.isGap || f.isPadding {
 		return f.gapWidth
 	}
 	return f.textWidth
 }
 
 func (f uiFragment) visit(limit int, draw func(offset int, text string, cells int, paint uiPaint)) int {
-	if f.isGap {
+	if f.isGap || f.isPadding {
 		end := f.gapWidth
 		if end > limit {
 			end = limit
@@ -113,8 +116,8 @@ func (t *preparedUIText) layout(width int, limit int, visit func(y int, fragment
 	return y
 }
 
-func layoutUINode(node *preparedUINode, width int, limit int, visit func(y int, fragment uiFragment)) int {
-	if node == nil || width <= 0 || limit <= 0 {
+func layoutUINode(node *preparedUINode, width int, limit int, alignContentOnly bool, visit func(y int, fragment uiFragment)) int {
+	if node == nil || node.empty || width <= 0 || limit <= 0 {
 		return 0
 	}
 	if node.text != nil {
@@ -124,18 +127,21 @@ func layoutUINode(node *preparedUINode, width int, limit int, visit func(y int, 
 	if row == nil {
 		return 0
 	}
+	// A centered or end-aligned group leaves wholly blank lines unpainted, even
+	// inside a nested row (Rust AvailableWidth::align_content_only).
+	alignContentOnly = alignContentOnly || row.justify == UIRowJustifyCenter || row.justify == UIRowJustifyEnd
 	gap := width + 1
 	if row.gap < uint64(gap) {
 		gap = int(row.gap)
 	}
-	// A between row hands each band the columns it did not fill, so its items
-	// reach both edges at every width.
+	// Each band hands the columns it did not fill to its own justification, so
+	// alignment follows the items that actually landed on that line.
 	placeBand := func(children []*preparedUINode, used int, y int) int {
 		spare := 0
-		if row.justify == UIRowJustifyBetween && used < width {
+		if used < width {
 			spare = width - used
 		}
-		return layoutUIBand(children, width, limit-y, gap, spare, row.paint, func(rowOffset int, fragment uiFragment) {
+		return layoutUIBand(children, width, limit-y, gap, spare, row, alignContentOnly, func(rowOffset int, fragment uiFragment) {
 			visit(y+rowOffset, fragment)
 		})
 	}
@@ -164,7 +170,7 @@ func layoutUINode(node *preparedUINode, width int, limit int, visit func(y int, 
 	return y
 }
 
-func layoutUIBand(children []*preparedUINode, width int, limit int, gap int, spare int, paint uiPaint, visit func(y int, fragment uiFragment)) int {
+func layoutUIBand(children []*preparedUINode, width int, limit int, gap int, spare int, row *preparedUIRow, alignContentOnly bool, visit func(y int, fragment uiFragment)) int {
 	if limit <= 0 {
 		return 0
 	}
@@ -174,21 +180,31 @@ func layoutUIBand(children []*preparedUINode, width int, limit int, gap int, spa
 		}
 		return int(cells)
 	}
+	leading := 0
+	between := 0
+	switch row.justify {
+	case UIRowJustifyCenter:
+		leading = spare / 2
+	case UIRowJustifyEnd:
+		leading = spare
+	case UIRowJustifyBetween:
+		between = spare
+	}
 	gaps := max(len(children)-1, 0)
-	// Round each item's cumulative share of the spare columns to the nearest
-	// cell, which keeps both edges fixed as the width changes.
+	// Round each item's cumulative share of the distributed columns to the
+	// nearest cell, which keeps both edges fixed as the width changes.
 	share := func(index int) int {
 		if gaps == 0 {
 			return 0
 		}
-		return (index*spare + gaps/2) / gaps
+		return (index*between + gaps/2) / gaps
 	}
 	reserved := gap * gaps
 	for _, child := range children {
 		reserved += bounded(child.widths.minimum)
 	}
 	reserved += share(gaps)
-	offset := 0
+	offset := leading
 	ends := make([]int, 0, 4)
 	for index, child := range children {
 		minimum := bounded(child.widths.minimum)
@@ -214,19 +230,26 @@ func layoutUIBand(children []*preparedUINode, width int, limit int, gap int, spa
 		if childWidth > width {
 			childWidth = width
 		}
-		layoutUINode(child, childWidth, limit, func(y int, part uiFragment) {
+		layoutUINode(child, childWidth, limit, alignContentOnly, func(y int, part uiFragment) {
 			for len(ends) <= y {
 				ends = append(ends, 0)
+			}
+			// The padding is only painted once the line carries visible content,
+			// so an authored blank line stays blank.
+			if part.width() > 0 && ends[y] == 0 && leading > 0 {
+				visit(y, uiFragment{gapWidth: leading, gapPaint: row.leading, isPadding: true})
+				ends[y] = leading
 			}
 			start := offset
 			if start > width+1 {
 				start = width + 1
 			}
-			if start > ends[y] {
-				visit(y, uiFragment{gapWidth: start - ends[y], gapPaint: paint, isGap: true})
+			if start > ends[y] && (!alignContentOnly || ends[y] > 0 || part.width() > 0) {
+				visit(y, uiFragment{gapWidth: start - ends[y], gapPaint: row.paint, isGap: true})
 				ends[y] = start
 			}
-			if offset <= width {
+			// Forward blank lines so ancestors count them toward the height limit.
+			if offset <= width || part.width() == 0 {
 				visit(y, part)
 				ends[y] += part.width()
 			}
@@ -264,10 +287,7 @@ func layoutUITree(root *preparedUINode, width int, height int, draw func(row int
 		return 0, 0
 	}
 	rows := make([]*uiRowState, 0, 4)
-	total := layoutUINode(root, width, height+1, func(y int, fragment uiFragment) {
-		if y >= height {
-			return
-		}
+	appendFragment := func(y int, fragment uiFragment) {
 		for len(rows) <= y {
 			rows = append(rows, nil)
 		}
@@ -276,14 +296,19 @@ func layoutUITree(root *preparedUINode, width int, height int, draw func(row int
 		}
 		row := rows[y]
 		start := row.width
+		crossed := start < width && start+fragment.width() >= width
+		// Keep accounting for cells past the edge so the overflow marker and a
+		// line that exactly fills the width stay distinguishable.
 		row.width += fragment.width()
 		if start >= width {
 			return
 		}
-		if row.width >= width {
-			row.hasEdge = true
-			row.edgeStart = start
-			row.edge = fragment
+		if crossed {
+			if !row.hasEdge {
+				row.hasEdge = true
+				row.edgeStart = start
+				row.edge = fragment
+			}
 			return
 		}
 		if draw == nil {
@@ -294,7 +319,35 @@ func layoutUITree(root *preparedUINode, width int, height int, draw func(row int
 			copied := paint
 			row.lastPaint = &copied
 		})
+	}
+	// Alignment padding on the last visible line can give up one cell to the
+	// vertical overflow marker, so hold that line's suffix back until the total
+	// height is known (Rust layout_visible).
+	var tail []uiFragment
+	paddingIndex := -1
+	lastWidth := 0
+	total := layoutUINode(root, width, height+1, false, func(y int, fragment uiFragment) {
+		if y >= height {
+			return
+		}
+		if y+1 == height {
+			lastWidth += fragment.width()
+			if fragment.isPadding && paddingIndex < 0 {
+				paddingIndex = len(tail)
+			}
+			if paddingIndex >= 0 {
+				tail = append(tail, fragment)
+				return
+			}
+		}
+		appendFragment(y, fragment)
 	})
+	if total > height && lastWidth == width && paddingIndex >= 0 && tail[paddingIndex].isPadding && tail[paddingIndex].gapWidth > 0 {
+		tail[paddingIndex].gapWidth--
+	}
+	for _, fragment := range tail {
+		appendFragment(height-1, fragment)
+	}
 	measuredWidth := 0
 	measuredHeight := total
 	if measuredHeight > height {

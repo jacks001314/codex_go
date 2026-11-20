@@ -171,13 +171,17 @@ type UIRowJustify string
 const (
 	// UIRowJustifyStart packs items at the leading edge with the configured gap.
 	UIRowJustifyStart UIRowJustify = "start"
+	// UIRowJustifyCenter centers each line's items in the available width.
+	UIRowJustifyCenter UIRowJustify = "center"
+	// UIRowJustifyEnd aligns each line's items with the trailing edge.
+	UIRowJustifyEnd UIRowJustify = "end"
 	// UIRowJustifyBetween distributes spare columns between items on each line.
 	UIRowJustifyBetween UIRowJustify = "between"
 )
 
 func ParseUIRowJustify(raw string) (UIRowJustify, error) {
 	switch justify := UIRowJustify(raw); justify {
-	case UIRowJustifyStart, UIRowJustifyBetween:
+	case UIRowJustifyStart, UIRowJustifyCenter, UIRowJustifyEnd, UIRowJustifyBetween:
 		return justify, nil
 	default:
 		return "", fmt.Errorf("ui row justify %q is not supported", raw)

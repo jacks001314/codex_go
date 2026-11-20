@@ -81,7 +81,7 @@ func TestUITreeReadsRowJustifyLikeRust(t *testing.T) {
 		t.Fatalf("positional row props = %d/%v/%q", positional.Gap, positional.Background, positional.Wrap)
 	}
 
-	for _, invalid := range []any{"center", "space-between", nil} {
+	for _, invalid := range []any{"right", "space-between", nil} {
 		if _, err := parse(map[string]any{"gap": 0, "justify": invalid}); err == nil {
 			t.Fatalf("justify %#v decoded without an error", invalid)
 		}
