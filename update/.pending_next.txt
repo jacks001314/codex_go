@@ -96,7 +96,6 @@ ead489ac4d06b13a69909173469a17be126348a4	2026-11-19	Retry Guardian model discove
 583ec348cf9007361d09513c716549c41d4d8128	2026-11-19	Centralize thread context ID allocation (#62633)
 30607648d995f17baa93f23b6bc385f52158bbd4	2026-11-19	Centralize request and prefix ID handling in `ThreadContextIds` (#62635)
 f16c998db5285b34d65e764c91721fa16ee8a9e6	2026-11-20	Reduce rollout scanning overhead when listing threads (#62636)
-78f6b113039b6cd6119bc857081d726c8924df9d	2026-11-20	Add center and end alignment to status line rows (#62637)
 9224da4ce189c14d9423af2ac573f2ab3abb7969	2026-11-20	Defer queue-only mail after a retained final answer (#62639)
 e720e6c80bbddb4e30611d1f501dbff82933eaff	2026-11-20	Reuse executor Discovery V2 inventories across turns (#62640)
 7642e80723386d113ee5c95647164f72e3d68d6d	2026-11-20	Release persisted MCP tool results from active-turn memory (#62641)

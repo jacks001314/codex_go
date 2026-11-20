@@ -53168,11 +53168,15 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "tui/ui_tree_style.go accepts justify center and end next to start and between; tui/ui_tree_prepare.go splits the row paint so the leading alignment padding inherits only the row background while the configured gaps keep the full paint.",
+    "tui/ui_tree_render.go turns the unused columns of each band into leading padding for center (half, rounded down) and end (all), paints that padding only once the line carries visible content, suppresses the gap in front of blank lines inside an aligned group, forwards blank lines so parents count them toward the height, and reclaims one padding cell on the last visible line when the tree overflows, which the row accounting now detects because it keeps counting cells past the edge.",
+    "systemskills/assets/samples/create-statusline/references/statusline.d.ts exports RowJustify with start, center, end and between and documents the justified lines.",
+    "tests: tui TestUITreeCenterAndEndAlignEachWrappedLineLikeRust, TestUITreeEndAlignmentUsesSparePaddingForOverflowLikeRust, TestUITreeCenterAndEndPlaceStringsAsOneItemLikeRust, TestUITreeAlignedRowsPadContentAndKeepLinksOnTextLikeRust, TestUITreeOffscreenBlankLinesCountTowardNestedHeightLikeRust, TestUITreeNestedAlignedRowsLeaveBlankLinesUnpaintedLikeRust, TestUITreeStartAndBetweenKeepGapsBeforeBlankChildrenLikeRust, TestUITreeLinkAroundAlignedRowKeepsPaddingUnlinkedLikeRust, TestUITreeReadsRowJustifyLikeRust; go test ./tui/... -count=1; go test ./systemskills -count=1",
+    "plan: update/plan_2026_11_20.md batch 14"
    ],
    "kind": "runtime",
    "sha": "78f6b113039b6cd6119bc857081d726c8924df9d",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Add center and end alignment to status line rows (#62637)"
   },
   {
