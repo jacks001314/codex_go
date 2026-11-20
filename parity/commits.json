@@ -51111,11 +51111,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Precondition: Rust's reusable per-agent reviewer conversations are ActorReviewer slots holding one isolated verdict Conversation per acting agent, started through ThreadManager with a board-only extension registry, a ToolPolicy allowlist of the live retrieval tools plus exec/wait, Guardian review provenance and reviewer headers, then reused only when the prepared context still matches and the disposition is Reusable.",
+    "Go has no Guardian v3 reviewer runtime to hang this on: approval review runs one synchronous reviewer per turn in appserver/guardian_reviewer.go, there is no per-actor reviewer slot, no ThreadManager-started isolated reviewer thread, and no housekeeper that would reserve one. The board-level pieces it would bind (agentboard.GuardianRetrievalBinding) are ready.",
+    "Blocked on the Guardian v3 host runtime that #62135's housekeeper also needs; re-audit once that host exists."
    ],
    "kind": "runtime",
    "sha": "18d82cf7eb77d4047d79909e1ecae0b5ee22f0af",
-   "status": "audit_pending",
+   "status": "blocked_precondition",
    "subject": "Add reusable per-agent reviewer conversations to Guardian v3 (#62134)"
   },
   {
