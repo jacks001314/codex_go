@@ -10,16 +10,17 @@ import (
 )
 
 // retainedItemsForFreshChild mirrors Rust `retained_items_for_fresh_child`
-// (core/src/agent/history.rs, #61344): a child that starts with New history
-// inherits its parent's explicitly retained items under the shared retention
-// budget, so a fresh spawn still carries instructions the client asked to keep
-// across context windows. Checkpoints stay with the parent, while the retention
-// and replay evidence the child needs survive in the rewritten metadata.
+// (core/src/agent/history.rs, #61344/#62654): a child that starts with New
+// history inherits its parent's items the client kept for children under the
+// shared retention budget, so a fresh spawn still carries instructions the client
+// asked to hand down. Thread-only retention stays with the parent, checkpoints
+// stay with the parent, and the retention and replay evidence the child needs
+// survives in the rewritten metadata.
 func retainedItemsForFreshChild(parent *session.Record, now time.Time) []session.Item {
 	if parent == nil || len(parent.Items) == 0 {
 		return nil
 	}
-	positions := compact.SelectAlwaysRetainedPositions(
+	positions := compact.SelectChildRetainedPositions(
 		compactItemsFromSessionItems(parent.Items),
 		compact.RemoteRetainedMessageTokenBudget,
 		nil,
@@ -47,6 +48,7 @@ func retainedItemsForFreshChild(parent *session.Record, now time.Time) []session
 		rewritten := map[string]any{"inherited_user_message": true}
 		for _, key := range []string{
 			compact.RetainAcrossWindowsMetadataKey,
+			compact.RetainInChildrenMetadataKey,
 			"retained_source",
 			"fallback_token_limit_override",
 			"image_replay_sources",
@@ -70,6 +72,22 @@ func retainedItemsForFreshChild(parent *session.Record, now time.Time) []session
 		items = append(items, item)
 	}
 	return items
+}
+
+// excludeChildExcludedItems drops the items a client kept for this thread only.
+// A full-history fork copies the parent's items, but `alwaysInThread` must not
+// reach the spawned agent, so the fork scrubs the explicit exclusion while every
+// other item keeps its ordinary inheritance rule (Rust #62654
+// `keep_forked_rollout_item` / `sanitize_forked_rollout_item`).
+func excludeChildExcludedItems(items []session.Item) []session.Item {
+	kept := items[:0]
+	for index := range items {
+		if inherit, explicit := sessionItemChildRetention(&items[index]); explicit && !inherit {
+			continue
+		}
+		kept = append(kept, items[index])
+	}
+	return kept
 }
 
 // applySelectedRetainedItem copies the model-visible payload the retention

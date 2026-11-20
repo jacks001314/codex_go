@@ -452,7 +452,7 @@ func CompactLocally(request *Request, maxSummaryChars int, initialContext []Item
 			budget = 0
 		}
 	}
-	selected := selectRetainedItems(history, IsAlwaysRetained, RemoteRetainedMessageTokenBudget, false, nil)
+	selected := selectRetainedItems(history, IsAlwaysRetained, IsAlwaysRetained, RemoteRetainedMessageTokenBudget, false, nil)
 	selected = selectLocalUserMessages(history, budget, selected)
 	retained := itemsFromPositions(history, selected)
 	if hasPending {
@@ -706,7 +706,7 @@ func TrimFunctionCallHistoryToFitContextWindow(items []Item, contextWindow int, 
 	}
 	rewrittenItems := make([]Item, 0, len(trimmed))
 	retainedLen := len(trimmed)
-	for _, group := range newestHistoryItemGroups(trimmed) {
+	for _, group := range newestHistoryItemGroups(trimmed, IsAlwaysRetained) {
 		if estimated <= contextWindow {
 			break
 		}
@@ -851,6 +851,7 @@ func retainedMessagesForRemoteCompactionWithAudio(items []Item, maxTokens int, p
 				item.Role == "user" && ShouldKeepCompactedHistoryItem(item)
 			return keep || pending
 		},
+		IsAlwaysRetained,
 		maxTokens,
 		policy.imageBudget,
 		durations,
@@ -884,7 +885,7 @@ func (g retainedHistoryGroup) estimatedTokenCount(durations FileAudioDurations) 
 // newestHistoryItemGroups mirrors Rust `newest_history_item_groups`: an
 // attached image-resize notice folds into the item it describes, and an
 // explicitly retained tool exchange folds its call into the output's group.
-func newestHistoryItemGroups(items []Item) []retainedHistoryGroup {
+func newestHistoryItemGroups(items []Item, isPinned func(Item) bool) []retainedHistoryGroup {
 	groups := make([]retainedHistoryGroup, 0, len(items))
 	end := len(items)
 	for end > 0 {
@@ -901,7 +902,7 @@ func newestHistoryItemGroups(items []Item) []retainedHistoryGroup {
 		next := sourceIndex
 		if sourceIndex > 0 {
 			call := items[sourceIndex-1]
-			if IsAlwaysRetained(source) && IsAlwaysRetained(call) && isMatchingRetainedToolOutput(call, source) {
+			if isPinned(source) && isPinned(call) && isMatchingRetainedToolOutput(call, source) {
 				copied := call
 				group.toolCall = &copied
 				next = sourceIndex - 1
@@ -1008,21 +1009,21 @@ func retainedOutputCallID(item Item) string {
 // selectRetainedItems mirrors Rust `select_retained_items`: it walks groups
 // newest first under one shared budget and returns the selected items keyed by
 // their original history position.
-func selectRetainedItems(items []Item, shouldRetain func(Item) bool, maxTokens int, imageBudget bool, durations FileAudioDurations) map[int]Item {
+func selectRetainedItems(items []Item, shouldRetain func(Item) bool, isPinned func(Item) bool, maxTokens int, imageBudget bool, durations FileAudioDurations) map[int]Item {
 	selected := map[int]Item{}
 	if maxTokens <= 0 {
 		return selected
 	}
 	remaining := maxTokens
 groupLoop:
-	for _, group := range newestHistoryItemGroups(items) {
+	for _, group := range newestHistoryItemGroups(items, isPinned) {
 		if remaining <= 0 {
 			break
 		}
 		if !shouldRetain(group.source) {
 			continue
 		}
-		chargeWhole := IsAlwaysRetained(group.source) || IsClientAuthoredDeveloperMessage(group.source)
+		chargeWhole := isPinned(group.source) || IsClientAuthoredDeveloperMessage(group.source)
 		chargeImages := imageBudget && !chargeWhole
 		needsMediaBoundary := requiresMediaBoundaryTruncation(group.source, chargeImages)
 		noticeTokens := 0
@@ -1045,7 +1046,7 @@ groupLoop:
 		case tokenCount <= remaining:
 			remaining -= tokenCount
 			kept = group.source
-		case IsRetainedToolOutput(group.source) || (IsAlwaysRetained(group.source) && !isMessageItemType(group.source.Type)):
+		case IsRetainedToolOutput(group.source) || (isPinned(group.source) && !isMessageItemType(group.source.Type)):
 			// Structured items such as tool results must stay whole.
 			break groupLoop
 		case remaining > noticeTokens:
@@ -1454,6 +1455,41 @@ func RetentionOverride(item Item) (bool, bool) {
 func IsAlwaysRetained(item Item) bool {
 	retain, ok := RetentionOverride(item)
 	return ok && retain
+}
+
+// RetainInChildrenMetadataKey overrides inheritance by spawned agents, including
+// full-history forks (Rust #62654 `CodexHarnessMetadata::retain_in_children`).
+const RetainInChildrenMetadataKey = "retain_in_children"
+
+// ChildRetention resolves whether a spawned agent inherits the item, and whether
+// the item states that decision at all. An explicit retain_in_children wins;
+// otherwise an older rollout that pinned the item across windows inherits it too,
+// which is how `always` behaved before #62654 split the two scopes.
+func ChildRetention(item Item) (bool, bool) {
+	metadata := itemHarnessMetadata(item)
+	if metadata == nil {
+		return false, false
+	}
+	if inherit, ok := metadata[RetainInChildrenMetadataKey].(bool); ok {
+		return inherit, true
+	}
+	if retain, ok := metadata[RetainAcrossWindowsMetadataKey].(bool); ok && retain {
+		return true, true
+	}
+	return false, false
+}
+
+// IsRetainedInChildren reports whether a spawned agent inherits the item.
+func IsRetainedInChildren(item Item) bool {
+	inherit, ok := ChildRetention(item)
+	return ok && inherit
+}
+
+// IsExcludedFromChildren reports whether the client kept the item in this
+// thread only, so a spawned agent must not inherit it.
+func IsExcludedFromChildren(item Item) bool {
+	inherit, ok := ChildRetention(item)
+	return ok && !inherit
 }
 
 // shouldRetainClientItem mirrors Rust `should_retain_client_item`: an explicit
@@ -2828,5 +2864,14 @@ func SelectAlwaysRetainedItems(items []Item, maxTokens int, durations FileAudioD
 // SelectAlwaysRetainedPositions returns the explicitly retained items keyed by
 // their original history position (Rust `retained_client_items`).
 func SelectAlwaysRetainedPositions(items []Item, maxTokens int, durations FileAudioDurations) map[int]Item {
-	return selectRetainedItems(items, IsAlwaysRetained, maxTokens, false, durations)
+	return selectRetainedItems(items, IsAlwaysRetained, IsAlwaysRetained, maxTokens, false, durations)
+}
+
+// SelectChildRetainedPositions returns the items a spawned agent inherits, keyed
+// by their original history position. Both the selection and the tool-exchange
+// pairing follow child retention, so an `alwaysInChildren` exchange is admitted
+// whole even when the parent keeps it out of later context windows (Rust #62654
+// `retained_client_items` with `child_retention` as the pin).
+func SelectChildRetainedPositions(items []Item, maxTokens int, durations FileAudioDurations) map[int]Item {
+	return selectRetainedItems(items, IsRetainedInChildren, IsRetainedInChildren, maxTokens, false, durations)
 }

@@ -15,6 +15,13 @@ import (
 const (
 	injectedRetentionDefault = "default"
 	injectedRetentionAlways  = "always"
+	// injectedRetentionAlwaysInThread keeps the item in this thread's later
+	// context windows and excludes it from spawned agents (Rust #62654).
+	injectedRetentionAlwaysInThread = "alwaysInThread"
+	// injectedRetentionAlwaysInChildren passes the item to spawned agents while
+	// it is in the parent's context; each thread then applies its ordinary
+	// context-window rules.
+	injectedRetentionAlwaysInChildren = "alwaysInChildren"
 )
 
 // injectedResponseItem is one history injection input: a raw Responses item
@@ -47,10 +54,11 @@ func parseInjectedResponseItems(rawItems []json.RawMessage) ([]injectedResponseI
 			return nil, jsonRPCInvalidRequest(fmt.Sprintf("items[%d] is not a valid response item: missing field `retention`", index))
 		}
 		switch retention {
-		case injectedRetentionDefault, injectedRetentionAlways:
+		case injectedRetentionDefault, injectedRetentionAlways,
+			injectedRetentionAlwaysInThread, injectedRetentionAlwaysInChildren:
 		default:
 			return nil, jsonRPCInvalidRequest(fmt.Sprintf(
-				"items[%d] is not a valid response item: unknown variant `%s`, expected `default` or `always`", index, retention,
+				"items[%d] is not a valid response item: unknown variant `%s`, expected `default`, `always`, `alwaysInThread` or `alwaysInChildren`", index, retention,
 			))
 		}
 		if _, ok := inner["type"]; !ok {
@@ -79,26 +87,26 @@ func validateInjectedResponseItems(items []injectedResponseItem) error {
 	return nil
 }
 
-// validateRetainedToolAdjacency mirrors Rust `record_injected_items`: an
-// explicitly retained tool call must be immediately followed by its matching
-// output, and both must be marked always. A retained output without that pair
-// is rejected too.
+// validateRetainedToolAdjacency mirrors Rust `record_injected_items`: a retained
+// tool call must be immediately followed by its matching output, and both must
+// carry the same retention policy. A retained output without that pair is
+// rejected too.
 func validateRetainedToolAdjacency(items []injectedResponseItem) error {
 	for index := 0; index < len(items); index++ {
 		item := items[index]
-		if item.Retention != injectedRetentionAlways {
+		if item.Retention == "" || item.Retention == injectedRetentionDefault {
 			continue
 		}
 		needsCall := injectedOutputCallID(item.Payload) != "" && !isServerToolSearchOutput(item.Payload)
 		if injectedInputCallID(item.Payload) == "" && !needsCall {
 			continue
 		}
-		mismatch := fmt.Errorf("items[%d]: retained tool calls and outputs must be adjacent in the same request, call first, with both marked always", index)
+		mismatch := fmt.Errorf("items[%d]: retained tool calls and outputs must be adjacent in the same request, call first, with the same retention policy", index)
 		if index+1 >= len(items) {
 			return jsonRPCInvalidRequest(mismatch.Error())
 		}
 		output := items[index+1]
-		if output.Retention != injectedRetentionAlways || !injectedToolOutputMatches(item.Payload, output.Payload) {
+		if output.Retention != item.Retention || !injectedToolOutputMatches(item.Payload, output.Payload) {
 			return jsonRPCInvalidRequest(mismatch.Error())
 		}
 		index++
@@ -122,9 +130,15 @@ func injectedSessionItems(items []injectedResponseItem, now time.Time, retainCli
 		applyInjectedToolShape(&item, injected.Payload)
 		switch injected.Retention {
 		case injectedRetentionAlways:
-			setItemRetainAcrossWindows(&item, true)
+			setItemRetention(&item, true, nil)
+		case injectedRetentionAlwaysInThread:
+			keptInThreadOnly := false
+			setItemRetention(&item, true, &keptInThreadOnly)
+		case injectedRetentionAlwaysInChildren:
+			inheritedByChildren := true
+			setItemRetention(&item, false, &inheritedByChildren)
 		case injectedRetentionDefault:
-			setItemRetainAcrossWindows(&item, false)
+			setItemRetention(&item, false, nil)
 		default:
 			annotateInjectedItemRetention(&item, retainClientDeveloperMessages)
 		}
@@ -187,10 +201,28 @@ func sessionItemRetentionOverride(item *session.Item) (bool, bool) {
 }
 
 // sessionItemIsAlwaysRetained reports whether the client explicitly asked the
-// persisted item to survive context-window changes and forks.
+// persisted item to survive context-window changes.
 func sessionItemIsAlwaysRetained(item *session.Item) bool {
 	retain, ok := sessionItemRetentionOverride(item)
 	return ok && retain
+}
+
+// sessionItemChildRetention resolves whether a spawned agent inherits the
+// persisted item, and whether the item states that decision (Rust #62654
+// `ResponseItemEnvelope::child_retention`). An explicit retain_in_children wins;
+// otherwise an older rollout that pinned the item across windows inherits it too.
+func sessionItemChildRetention(item *session.Item) (bool, bool) {
+	var metadata map[string]any
+	if raw := harnessMetadataRawFromItem(item); len(raw) > 0 {
+		_ = json.Unmarshal(raw, &metadata)
+	}
+	if inherit, ok := metadata[compact.RetainInChildrenMetadataKey].(bool); ok {
+		return inherit, true
+	}
+	if retain, ok := metadata[compact.RetainAcrossWindowsMetadataKey].(bool); ok && retain {
+		return true, true
+	}
+	return false, false
 }
 
 // applyInjectedToolShape fills the persisted fields history replay needs for
@@ -260,9 +292,17 @@ func applyInjectedToolShape(item *session.Item, payload map[string]any) {
 	}
 }
 
-// setItemRetainAcrossWindows records the explicit per-item retention decision
-// in harness metadata, next to (not inside) legacy client-authored provenance.
+// setItemRetainAcrossWindows records only the context-window decision.
 func setItemRetainAcrossWindows(item *session.Item, retain bool) {
+	setItemRetention(item, retain, nil)
+}
+
+// setItemRetention records the explicit per-item policy in harness metadata, next
+// to (not inside) legacy client-authored provenance: whether the item survives
+// this thread's later context windows and whether spawned agents inherit it. A
+// nil inheritInChildren omits the child override, which is what `default` and
+// `always` persist so a rollout written before #62654 keeps its meaning.
+func setItemRetention(item *session.Item, retainAcrossWindows bool, inheritInChildren *bool) {
 	if item == nil {
 		return
 	}
@@ -283,7 +323,12 @@ func setItemRetainAcrossWindows(item *session.Item, retain bool) {
 	if metadata == nil {
 		metadata = map[string]any{}
 	}
-	metadata[compact.RetainAcrossWindowsMetadataKey] = retain
+	metadata[compact.RetainAcrossWindowsMetadataKey] = retainAcrossWindows
+	if inheritInChildren == nil {
+		delete(metadata, compact.RetainInChildrenMetadataKey)
+	} else {
+		metadata[compact.RetainInChildrenMetadataKey] = *inheritInChildren
+	}
 	if encoded, err := json.Marshal(metadata); err == nil {
 		item.Data["harness_metadata"] = json.RawMessage(encoded)
 	}

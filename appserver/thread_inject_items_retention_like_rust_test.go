@@ -162,7 +162,7 @@ func TestThreadInjectItemsRejectsInvalidWrappedRetentionLikeRust(t *testing.T) {
 		ThreadID: string(threadID),
 		Items:    []json.RawMessage{json.RawMessage(`{"item":{"type":"message","role":"user","content":[]},"retention":"sometimes"}`)},
 	}))
-	if unknown.Error == nil || !strings.Contains(unknown.Error.Message, "expected `default` or `always`") {
+	if unknown.Error == nil || !strings.Contains(unknown.Error.Message, "expected `default`, `always`, `alwaysInThread` or `alwaysInChildren`") {
 		t.Fatalf("unknown retention error = %+v", unknown.Error)
 	}
 

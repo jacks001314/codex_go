@@ -350,13 +350,18 @@ func TestRuntimeRouterFSGetMetadataReturnsOnlyUsedFieldsLikeRust(t *testing.T) {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	wantKeys := []string{"createdAtMs", "isDirectory", "isFile", "isSymlink", "modifiedAtMs"}
+	// Rust #62653 returns sizeBytes for a regular file, so the payload keeps its
+	// exact field set rather than a metadata block's block size.
+	wantKeys := []string{"createdAtMs", "isDirectory", "isFile", "isSymlink", "modifiedAtMs", "sizeBytes"}
 	if !reflect.DeepEqual(keys, wantKeys) {
 		t.Fatalf("metadata keys = %+v, want %+v; json=%s", keys, wantKeys, data)
 	}
 	stat := response.Result.(*GetMetadataResponse)
 	if stat.IsDirectory || !stat.IsFile || stat.IsSymlink || stat.ModifiedAtMS <= 0 {
 		t.Fatalf("metadata = %+v, want regular file with modifiedAtMs", stat)
+	}
+	if stat.SizeBytes == nil || *stat.SizeBytes != 5 {
+		t.Fatalf("metadata sizeBytes = %v, want the file's 5 bytes", stat.SizeBytes)
 	}
 }
 

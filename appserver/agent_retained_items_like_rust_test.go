@@ -176,3 +176,97 @@ func TestRuntimeAgentFreshSpawnTruncatesRetainedItemsLikeRust(t *testing.T) {
 		t.Fatalf("inherited retention = %#v", metadata.RetainAcrossWindows)
 	}
 }
+
+// retentionScopedItem builds a developer message with one #62654 policy.
+func retentionScopedItem(id string, text string, now time.Time, retainAcrossWindows bool, retainInChildren *bool) session.Item {
+	metadata := map[string]any{"retain_across_windows": retainAcrossWindows}
+	if retainInChildren != nil {
+		metadata["retain_in_children"] = *retainInChildren
+	}
+	return session.Item{
+		ID: id, Type: "message", Role: "developer", Text: text, CreatedAt: now,
+		Data: map[string]any{"harness_metadata": metadata},
+	}
+}
+
+// spawnChildWithRetentionPolicies spawns one worker from a parent holding every
+// retention policy and returns the child's persisted items.
+func spawnChildWithRetentionPolicies(t *testing.T, parentID string, forkTurns string) []session.Item {
+	t.Helper()
+	now := time.Now().UTC()
+	threadOnly := false
+	childrenOnly := true
+	parent := &session.Record{ID: session.ThreadID(parentID), SessionID: parentID, CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{CWD: t.TempDir(), Model: "gpt-5.4", ModelProvider: "openai"},
+		Items: []session.Item{
+			{ID: "user-1", Type: "message", Role: "user", Text: "run the tests", CreatedAt: now},
+			retentionScopedItem("thread-only", "Send progress updates.", now, true, &threadOnly),
+			retentionScopedItem("children-only", "Read the worker log.", now, false, &childrenOnly),
+			retentionScopedItem("shared", "Keep the release branch green.", now, true, nil),
+		}}
+	store := session.NewStore(t.TempDir())
+	if err := store.Create(parent); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), Config: config.NewConfigService(t.TempDir())})
+	controller := newRuntimeAgentControllerForTurn(router, parentID, "parent-turn", "root-turn", "", "", parent.Metadata.CWD, 4, agent.VersionV2, nil).(*runtimeAgentController)
+	if err := router.threads.RegisterTurn(parentID, "parent-turn", func() {}, now.UnixMilli(), &turn.TurnStartParams{ThreadID: parentID}); err != nil {
+		t.Fatal(err)
+	}
+	fork := forkTurns
+	child, err := controller.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{ResolvedRole: "worker", ForkTurns: &fork})
+	if err != nil {
+		t.Fatalf("SpawnAgent() error = %v", err)
+	}
+	record, err := store.Read(session.ThreadID(child.AgentID), false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return record.Items
+}
+
+func retainedItemTexts(items []session.Item) []string {
+	texts := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.Type == "message" && item.Role == "developer" {
+			texts = append(texts, item.Text)
+		}
+	}
+	return texts
+}
+
+// Rust #62654 inherits by child scope, not window scope: a fresh child receives
+// the `alwaysInChildren` and legacy `always` instructions and never the one the
+// client kept for the parent thread only.
+func TestRuntimeAgentFreshChildFollowsChildRetentionLikeRust(t *testing.T) {
+	got := retainedItemTexts(spawnChildWithRetentionPolicies(t, "parent-child-scope", "none"))
+	want := []string{"Read the worker log.", "Keep the release branch green."}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("fresh child instructions = %v, want %v", got, want)
+	}
+}
+
+// A full-history fork keeps its ordinary inheritance rules but must drop an item
+// the client excluded from children, so `alwaysInThread` never outlives the parent
+// thread even when every turn is forked.
+func TestRuntimeAgentFullForkDropsThreadOnlyRetentionLikeRust(t *testing.T) {
+	items := spawnChildWithRetentionPolicies(t, "parent-fork-scope", "all")
+	for _, item := range items {
+		if item.ID == "thread-only" || item.Text == "Send progress updates." {
+			t.Fatalf("fork inherited a thread-only instruction: %#v", item)
+		}
+	}
+	got := retainedItemTexts(items)
+	for _, want := range []string{"Read the worker log."} {
+		found := false
+		for _, text := range got {
+			if text == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("fork instructions = %v, want %q", got, want)
+		}
+	}
+}

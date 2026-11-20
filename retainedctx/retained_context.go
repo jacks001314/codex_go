@@ -165,6 +165,10 @@ type HarnessMetadata struct {
 	// RetainAcrossWindows is the per-item override of the thread's context-window
 	// retention policy (Rust `CodexHarnessMetadata::retain_across_windows`).
 	RetainAcrossWindows *bool `json:"retain_across_windows,omitempty"`
+	// RetainInChildren overrides inheritance by spawned agents, including
+	// full-history forks (Rust `CodexHarnessMetadata::retain_in_children`). An
+	// older rollout that only pinned retain_across_windows inherits too.
+	RetainInChildren *bool `json:"retain_in_children,omitempty"`
 	// HistoryTruncationTokenLimit is the originating history budget in tokens,
 	// reused when replaying persisted history. Rust renames it on the wire.
 	HistoryTruncationTokenLimit *uint64 `json:"fallback_token_limit_override,omitempty"`

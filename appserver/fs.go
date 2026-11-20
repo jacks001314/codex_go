@@ -133,11 +133,16 @@ func (p *GetMetadataParams) UnmarshalJSON(data []byte) error {
 }
 
 type GetMetadataResponse struct {
-	IsDirectory  bool  `json:"isDirectory"`
-	IsFile       bool  `json:"isFile"`
-	IsSymlink    bool  `json:"isSymlink"`
+	IsDirectory bool `json:"isDirectory"`
+	IsFile      bool `json:"isFile"`
+	IsSymlink   bool `json:"isSymlink"`
+	// CreatedAtMS and ModifiedAtMS are Unix milliseconds, or 0 when unavailable.
 	CreatedAtMS  int64 `json:"createdAtMs"`
 	ModifiedAtMS int64 `json:"modifiedAtMs"`
+	// SizeBytes is the target's size when it resolves to a regular file. It is
+	// null for directories and other non-regular targets, and an older server
+	// omits it, which decodes as nil (Rust #62653).
+	SizeBytes *uint64 `json:"sizeBytes"`
 }
 
 type ReadDirectoryParams struct {
@@ -414,13 +419,20 @@ func (s *FSService) GetMetadata(params *GetMetadataParams) (*GetMetadataResponse
 	if statErr != nil {
 		info = linkInfo
 	}
-	return &GetMetadataResponse{
+	response := &GetMetadataResponse{
 		IsDirectory:  info.IsDir(),
 		IsFile:       info.Mode().IsRegular(),
 		IsSymlink:    linkInfo.Mode()&os.ModeSymlink != 0,
 		CreatedAtMS:  createdAtMillis(info),
 		ModifiedAtMS: unixMillis(info.ModTime()),
-	}, nil
+	}
+	// A symlink reports the target's size; anything that is not a regular file
+	// answers an explicit null instead of a metadata block size.
+	if info.Mode().IsRegular() {
+		size := uint64(info.Size())
+		response.SizeBytes = &size
+	}
+	return response, nil
 }
 
 func (s *FSService) ReadDirectory(params *ReadDirectoryParams) (*ReadDirectoryResponse, error) {

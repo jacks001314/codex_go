@@ -291,7 +291,7 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 		}
 		record = forked
 		forkedHistory = true
-		record.Items = filterInheritedCurrentTimeReminders(record.Items)
+		record.Items = excludeChildExcludedItems(filterInheritedCurrentTimeReminders(record.Items))
 		// Rust spawn.rs's forked-item provenance: persist the scope of every copied
 		// conversational message, so a resume cannot recapture the parent's
 		// authorization as the child's own.

@@ -305,3 +305,102 @@ func TestRemoteRetentionSurvivesRepeatedCompactionAndRestartLikeRust(t *testing.
 		t.Fatalf("second compaction ids = %s, want %s: %#v", got, want, second)
 	}
 }
+
+// retentionScopes builds harness metadata for the #62654 policies. A nil value
+// omits that scope, which is how `always` and `default` are persisted.
+func retentionScopes(retainAcrossWindows any, retainInChildren any) map[string]any {
+	metadata := map[string]any{}
+	if retainAcrossWindows != nil {
+		metadata[RetainAcrossWindowsMetadataKey] = retainAcrossWindows
+	}
+	if retainInChildren != nil {
+		metadata[RetainInChildrenMetadataKey] = retainInChildren
+	}
+	return map[string]any{"harness_metadata": metadata}
+}
+
+// Rust #62654 `ResponseItemEnvelope::child_retention`: an explicit
+// retain_in_children wins, and an older rollout that only pinned the item across
+// windows inherits it too, so `always` keeps meaning both scopes.
+func TestChildRetentionResolvesBothScopesLikeRust(t *testing.T) {
+	cases := []struct {
+		name       string
+		data       map[string]any
+		want       bool
+		wantStated bool
+	}{
+		{name: "no metadata", data: nil, want: false, wantStated: false},
+		{name: "default", data: retentionScopes(false, nil), want: false, wantStated: false},
+		{name: "legacy always", data: retentionScopes(true, nil), want: true, wantStated: true},
+		{name: "alwaysInThread", data: retentionScopes(true, false), want: false, wantStated: true},
+		{name: "alwaysInChildren", data: retentionScopes(false, true), want: true, wantStated: true},
+		{name: "explicit child exclusion alone", data: retentionScopes(nil, false), want: false, wantStated: true},
+		{name: "explicit child inclusion alone", data: retentionScopes(nil, true), want: true, wantStated: true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			item := Item{Type: "message", Role: "developer", Text: "policy", Data: testCase.data}
+			inherit, stated := ChildRetention(item)
+			if inherit != testCase.want || stated != testCase.wantStated {
+				t.Fatalf("ChildRetention() = %v, %v; want %v, %v", inherit, stated, testCase.want, testCase.wantStated)
+			}
+			if got := IsRetainedInChildren(item); got != (testCase.want && testCase.wantStated) {
+				t.Fatalf("IsRetainedInChildren() = %v", got)
+			}
+			if got := IsExcludedFromChildren(item); got != (testCase.wantStated && !testCase.want) {
+				t.Fatalf("IsExcludedFromChildren() = %v", got)
+			}
+		})
+	}
+}
+
+// Rust #62654 keeps the two scopes independent: `alwaysInThread` stays in this
+// thread's later windows but never reaches a spawned agent, while
+// `alwaysInChildren` reaches a spawned agent and leaves window retention to the
+// ordinary rules.
+func TestRetentionScopesSelectIndependentlyLikeRust(t *testing.T) {
+	items := []Item{
+		{ID: "thread-only", Type: "message", Role: "developer", Text: "thread only", Data: retentionScopes(true, false)},
+		{ID: "children-only", Type: "message", Role: "developer", Text: "children only", Data: retentionScopes(false, true)},
+		{ID: "shared", Type: "message", Role: "developer", Text: "shared", Data: retentionScopes(true, nil)},
+		{ID: "ordinary", Type: "message", Role: "assistant", Text: "ordinary"},
+	}
+	positions := func(selected map[int]Item) string {
+		ids := make([]string, 0, len(selected))
+		for position := 0; position < len(items); position++ {
+			item, ok := selected[position]
+			if !ok {
+				continue
+			}
+			ids = append(ids, item.ID)
+		}
+		return strings.Join(ids, ",")
+	}
+
+	if got := positions(SelectAlwaysRetainedPositions(items, RemoteRetainedMessageTokenBudget, nil)); got != "thread-only,shared" {
+		t.Fatalf("window-retained items = %q, want thread-only,shared", got)
+	}
+	if got := positions(SelectChildRetainedPositions(items, RemoteRetainedMessageTokenBudget, nil)); got != "children-only,shared" {
+		t.Fatalf("child-retained items = %q, want children-only,shared", got)
+	}
+}
+
+// A child-retained tool exchange is admitted whole even though the parent keeps
+// it out of later context windows: pairing follows the same scope as selection.
+func TestChildRetentionPairsToolExchangeLikeRust(t *testing.T) {
+	data := retentionScopes(false, true)
+	items := []Item{
+		{ID: "call", Type: "function_call", Name: "shell", CallID: "call-1", Text: "{}", Data: data},
+		{ID: "output", Type: "function_call_output", Name: "shell", CallID: "call-1", Text: "result", Data: data},
+	}
+	if got := SelectAlwaysRetainedPositions(items, RemoteRetainedMessageTokenBudget, nil); len(got) != 0 {
+		t.Fatalf("window-retained exchange = %#v, want none", got)
+	}
+	selected := SelectChildRetainedPositions(items, RemoteRetainedMessageTokenBudget, nil)
+	if len(selected) != 2 {
+		t.Fatalf("child-retained exchange = %#v, want the call and its output", selected)
+	}
+	if selected[0].ID != "call" || selected[1].ID != "output" {
+		t.Fatalf("child-retained exchange = %#v, want call first", selected)
+	}
+}
