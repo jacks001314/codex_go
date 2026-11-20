@@ -52554,11 +52554,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Rust #62476 removes the legacy framed stdio protocol: every process-owned code-mode host connection uses gRPC over stdio and features.code_mode_host_grpc is deprecated and ignored. features/features.go registers the key as StageRemoved with DefaultEnabled false, appserver.newRuntimeCodeModeProcessProvider and the agent runner both build codemode.NewGrpcProcessProvider unconditionally (only code_mode_host_output_truncation still wraps it), and the code-mode contract verifier now points at TestCodeModeHostGrpcFeatureIsIgnoredLikeRust, which asserts both values of the deprecated setting select the gRPC provider.",
+    "Tests: go test ./appserver -run 'CodeModeHost|Feature' -count=1; go test ./features ./exec ./codemode -count=1; go test ./parity -run 'TestFeaturesRegistryMatchesRust|TestContractVerifier|TestRustFeatureKeySurfaceAgainstGo' -count=1",
+    "Residual: the legacy codemode.ProcessProvider implementation is still in the tree (nothing selects it); deleting it belongs with the code-mode package cleanup that follows the always-gRPC switch."
    ],
    "kind": "runtime",
    "sha": "336dc645fbaf00b3f0b56f598aa872b244f687b5",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Use gRPC for all code-mode host connections (#62476)"
   },
   {
@@ -53298,9 +53300,141 @@
    "sha": "a0a30c40e8dbcc44af52e2df64dcce64368d4422",
    "status": "complete",
    "subject": "Add thread and child retention policies for injected items (#62654)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-20 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "ffa05c8bfb7572f1b4139e775324bfd284f1cbe5",
+   "status": "audit_pending",
+   "subject": "Prewarm executor capability discovery during remote startup (#62674)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-20 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "15c5444e87e334d40262d07adb8e383c1e5172fc",
+   "status": "audit_pending",
+   "subject": "Force executor capability rescans after V2 cache invalidation (#62675)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-20 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "ea8ccc1d20ff65398e02490ac34f8c1012848625",
+   "status": "audit_pending",
+   "subject": "Keep explicitly pinned history outside the carryover token budget (#62677)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-20 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "2fb728da7d0b3e4273f19c3b4eb798a13cacb37c",
+   "status": "audit_pending",
+   "subject": "Retry executor discovery V2 failures with backoff (#62679)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-20 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "b059ce11f971c0543a20e02755fb9bd69f87e2fb",
+   "status": "audit_pending",
+   "subject": "Allow hosts to route selected analytics events (#62684)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-20 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "45ace810b3d394f177fb6b1c8a10db9c698e6e05",
+   "status": "audit_pending",
+   "subject": "Copy pasted image files into temporary TUI attachments (#62687)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-20 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "0f3a4756f9af47fb9ac6b4b9e1da55f354e4cad7",
+   "status": "audit_pending",
+   "subject": "Let administrators disable Codex daemon updates (#62690)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-20 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "0e8c7683c4a85f00667bd762265358a407124f2e",
+   "status": "audit_pending",
+   "subject": "Match TUI task mentions by displayed title (#62691)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-20 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "076ac7856b1235947f271930bd7437bae54a0dfc",
+   "status": "audit_pending",
+   "subject": "Link agent tool calls to delivered messages in rollout traces (#62709)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-20 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "1c297f89974e35f6e326c3acad9bb83e472b60cb",
+   "status": "audit_pending",
+   "subject": "Flush idle Responses WebSocket pongs under backpressure (#62742)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-20 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "9f2b87495bf979f6c1953cf00c98143981664914",
+   "status": "audit_pending",
+   "subject": "Recover server replies after Responses WebSocket write failures (#62749)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "a0a30c40e8dbcc44af52e2df64dcce64368d4422",
+ "rustToInclusive": "9f2b87495bf979f6c1953cf00c98143981664914",
  "schemaVersion": 1
 }

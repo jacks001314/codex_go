@@ -61,7 +61,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// fixtures plus their support modules.
 			// Re-anchored to upstream 68b67f0ff4: `codex doctor --network-only`
 			// added the human success and config-failure snapshots (#57606).
-			Files: 50,
+			Files: 52,
 			Owner: "cli, app",
 			Focus: "CLI help, hidden commands, feature flags, MCP/plugin/login flows",
 			Required: []string{
@@ -112,7 +112,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// intervening sync windows.
 			// Re-anchored to upstream 9018f3a3: #60620 added the compacted-parent
 			// pending-tool-call thread/sample snapshot.
-			Files: 190,
+			Files: 192,
 			Owner: "appserver",
 			Focus: "JSON-RPC v2 protocol and runtime fixtures",
 			Required: []string{
@@ -173,7 +173,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// suites and snapshots.
 			// Re-anchored to upstream 59ac39addb: five fixtures joined
 			// core/tests/suite across the Guardian and subagent windows.
-			Files: 489,
+			Files: 501,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{

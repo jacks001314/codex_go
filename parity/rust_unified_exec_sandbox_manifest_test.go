@@ -109,7 +109,7 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 			// test on unified_exec.rs also dropped its `hides_and_` prefix.
 			// Re-anchored to upstream 4d3ed3f3b4: credential masking added the
 			// custom-provider fallback row to the process-event table.
-			TestCases: 27,
+			TestCases: 28,
 			Tests: []string{
 				"exec_command_consumes_pushed_remote_process_events",
 			},

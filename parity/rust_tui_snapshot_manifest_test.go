@@ -58,8 +58,8 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	// Re-anchored to upstream 59ac39addb: the sidebar files/preview work
 	// (#61920/#61922) and the composer edit history (#61951) added seven
 	// goldens (1537 -> 1544).
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1544 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1544", got)
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1568 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1568", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -137,7 +137,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// Re-anchored to upstream a394ff9cf6: one more app-level golden.
 			// Re-anchored to upstream 59ac39addb: three app-level goldens joined
 			// the sidebar/document preview work (#61920/#61922).
-			Files:    111,
+			Files:    119,
 			Owner:    "tui/app, tui/chatwidget",
 			Focus:    "desktop history UI, cancelled-turn composer restore, and thread goal action rendering",
 			Priority: []string{"app", "composer", "history"},
@@ -212,7 +212,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// layouts, a net gain of four.
 			// Re-anchored to upstream 59ac39addb: the shared composer edit
 			// history (#61951) added one golden.
-			Files:    37,
+			Files:    39,
 			Owner:    "tui/bottom_pane/chat_composer",
 			Focus:    "draft and voice composer layout snapshots",
 			Priority: []string{"composer"},
@@ -245,7 +245,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// Re-anchored to upstream a394ff9cf6: the prepared footer viewport
 			// golden moved here from bottom_pane/footer (263).
 			// Re-anchored to upstream 59ac39addb: one more bottom-pane golden.
-			Files:    264,
+			Files:    268,
 			Owner:    "tui/bottom_pane",
 			Focus:    "composer, footer, slash popup, approval overlays, MCP elicitation, queued input, and bottom pane layout",
 			Priority: []string{"composer", "approval", "status", "mcp", "slash"},
@@ -343,7 +343,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// pets-unavailable notice; #48015 added the declined-tool-suggestion
 			// snapshot; #48116 added the two Max-reasoning footer snapshots.
 			// Re-anchored to a7a9d82f: the rate-limit recovery notice (#60435) and one more golden landed.
-			Files:    340,
+			Files:    344,
 			Owner:    "tui/chatwidget, tui/tea",
 			Focus:    "main chat widget terminal snapshots for status lines, approvals, plugins, hooks, review, usage, and unified exec",
 			Priority: []string{"approval", "status", "history", "unified-exec", "review"},
@@ -441,7 +441,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// #48101 added the truncated multiline `/ps` command preview.
 			// #48562 removed the halfwidth sound-marks header snapshot with the
 			// boxed card.
-			Files:    94,
+			Files:    95,
 			Owner:    "tui/history_cell",
 			Focus:    "history cell rendering for exec, MCP, plan updates, errors, sessions, user messages, and web search",
 			Priority: []string{"history-cell", "mcp", "status"},
@@ -459,7 +459,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/markdown_render/snapshots",
-			Files:    27,
+			Files:    28,
 			Owner:    "tui/markdown_render, tui/mermaid",
 			Focus:    "markdown render web-link labels, Unicode math (inline/display/accents), and Mermaid text rendering",
 			Priority: []string{"markdown"},
@@ -552,7 +552,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// text helpers, follow control, prompt header, search,
 			// selection hints, composer gap, and the compact/detailed copy
 			// presentations.
-			Files:    50,
+			Files:    51,
 			Owner:    "tui/transcript_view",
 			Focus:    "interactive transcript viewport: layout cache, text/tab rendering, prompt header, search, selection hints, and copy feedback",
 			Priority: []string{"history", "app", "composer"},
@@ -564,7 +564,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/status/snapshots",
-			Files:    24,
+			Files:    27,
 			Owner:    "tui/status, tui/chatwidget",
 			Focus:    "status command snapshots for account, limits, reasoning, profiles, fork metadata, stale data, and narrow layouts",
 			Priority: []string{"status"},
