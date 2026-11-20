@@ -274,9 +274,13 @@ type Server struct {
 	// trusted executor startup state and only grants the helper executable
 	// itself; it never expands the workspace or network policy.
 	codexLinuxSandboxExe string
-	v2Discovery          *v2DiscoveryManager
-	shellSnapshots       *shellSnapshotManager
-	credentialBrokers    network.RemoteCredentialBrokerCache
+	// linuxSandboxPIDNamespace is the trusted startup-only Linux PID namespace
+	// policy (Rust #47989 ExecServerRuntimeOptions). Repository config, command
+	// environments and request payloads never select it.
+	linuxSandboxPIDNamespace string
+	v2Discovery              *v2DiscoveryManager
+	shellSnapshots           *shellSnapshotManager
+	credentialBrokers        network.RemoteCredentialBrokerCache
 	// missingWatch holds the newest missing-path observation for this
 	// connection (Rust #57598 missing_watch.rs).
 	missingWatch missingWatchState
@@ -446,12 +450,33 @@ func (s *Server) codexLinuxSandboxExeValue() string {
 	return s.codexLinuxSandboxExe
 }
 
+// SetLinuxSandboxPIDNamespace records the trusted startup-only Linux PID
+// namespace policy (Rust #47989): "isolate" (default) or "inherit".
+func (s *Server) SetLinuxSandboxPIDNamespace(mode string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.linuxSandboxPIDNamespace = strings.TrimSpace(mode)
+}
+
+func (s *Server) linuxSandboxPIDNamespaceValue() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.linuxSandboxPIDNamespace
+}
+
 func (s *Server) applyFSSandboxRuntimeOptions(sandboxContext *FileSystemSandboxContext) {
 	if sandboxContext == nil {
 		return
 	}
 	sandboxContext.allowedSymlinkedCodexHome = s.allowedSymlinkedCodexHomeValue()
 	sandboxContext.codexLinuxSandboxExe = s.codexLinuxSandboxExeValue()
+	sandboxContext.linuxSandboxPIDNamespace = s.linuxSandboxPIDNamespaceValue()
 }
 
 // SetAllowedSymlinkedCodexHome attaches the trusted host-resolved macOS
@@ -472,6 +497,15 @@ func (c *FileSystemSandboxContext) SetCodexLinuxSandboxExe(path string) {
 		return
 	}
 	c.codexLinuxSandboxExe = strings.TrimSpace(path)
+}
+
+// SetLinuxSandboxPIDNamespace attaches the trusted startup-only Linux PID
+// namespace policy to an in-process filesystem sandbox context (Rust #47989).
+func (c *FileSystemSandboxContext) SetLinuxSandboxPIDNamespace(mode string) {
+	if c == nil {
+		return
+	}
+	c.linuxSandboxPIDNamespace = strings.TrimSpace(mode)
 }
 
 type fileHandleEntry struct {
@@ -804,6 +838,9 @@ type FileSystemSandboxContext struct {
 	// codexLinuxSandboxExe is trusted executor startup state, never a request
 	// field (Rust #61138 ExecServerRuntimeOptions).
 	codexLinuxSandboxExe string
+	// linuxSandboxPIDNamespace is trusted executor startup state, never a
+	// request field (Rust #47989 ExecServerRuntimeOptions).
+	linuxSandboxPIDNamespace string
 }
 
 type WindowsSandboxProxySettingsMode string
@@ -1257,6 +1294,7 @@ func newSessionServerWithRuntimeOptions(httpClient *http.Client, parent *Server)
 		server.SetTcpUpstreamProxy(parent.tcpUpstreamProxyValue())
 		server.SetEnvironmentConfigReader(parent.environmentConfigReaderForRead())
 		server.SetAllowedSymlinkedCodexHome(parent.allowedSymlinkedCodexHomeValue())
+		server.SetLinuxSandboxPIDNamespace(parent.linuxSandboxPIDNamespaceValue())
 		if identity := parent.executorRegistrationIdentityValue(); identity != nil {
 			server.SetExecutorRegistrationIdentity(identity.environmentID, identity.registrationID)
 		}
@@ -1276,7 +1314,7 @@ func (s *Server) prepareShellSnapshotCaptureCommand(params *ExecParams, command 
 	captureParams := *params
 	captureParams.Argv = append([]string(nil), command...)
 	captureParams.TTY = false
-	prepared, cwd, _, err := prepareExecProcessWithTransparentTCP(&captureParams, s.allowedSymlinkedCodexHomeValue(), s.linuxSandboxTransparentTCPValue())
+	prepared, cwd, _, err := prepareExecProcessWithRuntimeOptions(&captureParams, s.execProcessRuntimeOptions())
 	return prepared, cwd, err
 }
 
@@ -2211,7 +2249,7 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		execServerPrepareSandboxSpan,
 		execServerProcessSpanAttributes(params.ProcessID, nil),
 	)
-	command, cwd, sandboxType, err := prepareExecProcessWithTransparentTCP(params, s.allowedSymlinkedCodexHomeValue(), s.linuxSandboxTransparentTCPValue())
+	command, cwd, sandboxType, err := prepareExecProcessWithRuntimeOptions(params, s.execProcessRuntimeOptions())
 	if prepareSpan != nil {
 		prepareSpan.End()
 	}
@@ -2860,9 +2898,40 @@ func prepareExecProcess(params *ExecParams, allowedSymlinkedCodexHome string) ([
 	return prepareExecProcessWithTransparentTCP(params, allowedSymlinkedCodexHome, false)
 }
 
+// execProcessRuntimeOptions carries the trusted executor startup state that
+// shapes sandbox launches (Rust exec-server ExecServerRuntimeOptions). None of
+// it can be set by repository config, a command environment or a request.
+type execProcessRuntimeOptions struct {
+	AllowedSymlinkedCodexHome string
+	TransparentTCP            bool
+	LinuxSandboxPIDNamespace  string
+}
+
+func (s *Server) execProcessRuntimeOptions() execProcessRuntimeOptions {
+	if s == nil {
+		return execProcessRuntimeOptions{}
+	}
+	return execProcessRuntimeOptions{
+		AllowedSymlinkedCodexHome: s.allowedSymlinkedCodexHomeValue(),
+		TransparentTCP:            s.linuxSandboxTransparentTCPValue(),
+		LinuxSandboxPIDNamespace:  s.linuxSandboxPIDNamespaceValue(),
+	}
+}
+
 // prepareExecProcessWithTransparentTCP adds the executor's trusted transparent
 // TCP switch (Rust #61372 ExecServerRuntimeOptions::linux_sandbox_transparent_tcp).
 func prepareExecProcessWithTransparentTCP(params *ExecParams, allowedSymlinkedCodexHome string, transparentTCP bool) ([]string, string, sandbox.SandboxType, error) {
+	return prepareExecProcessWithRuntimeOptions(params, execProcessRuntimeOptions{
+		AllowedSymlinkedCodexHome: allowedSymlinkedCodexHome,
+		TransparentTCP:            transparentTCP,
+	})
+}
+
+// prepareExecProcessWithRuntimeOptions applies the trusted executor startup
+// options, including the startup-only Linux PID namespace policy (Rust #47989).
+func prepareExecProcessWithRuntimeOptions(params *ExecParams, opts execProcessRuntimeOptions) ([]string, string, sandbox.SandboxType, error) {
+	allowedSymlinkedCodexHome := opts.AllowedSymlinkedCodexHome
+	transparentTCP := opts.TransparentTCP
 	command := append([]string(nil), params.Argv...)
 	// Rust #61851: a network policy can request capture without the executor
 	// startup switch, and capture only exists for managed Linux sandboxes.
@@ -2940,6 +3009,7 @@ func prepareExecProcessWithTransparentTCP(params *ExecParams, allowedSymlinkedCo
 		AllowNetworkForProxy:      enforceManagedNetwork,
 		ManagedNetworkJSON:        managedNetworkJSON,
 		TransparentTCP:            transparentTCP,
+		LinuxSandboxPIDNamespace:  sandbox.LinuxSandboxPIDNamespace(opts.LinuxSandboxPIDNamespace),
 		AllowedSymlinkedCodexHome: allowedSymlinkedCodexHome,
 		Command:                   command,
 	})
@@ -2956,17 +3026,17 @@ func prepareExecProcessWithTransparentTCP(params *ExecParams, allowedSymlinkedCo
 	plan.CWD = cwd
 	_ = sandboxCWD
 	if runtime.GOOS == "linux" && sandboxCWD != cwd {
-		wrapped, wrapErr := sandbox.CreateLinuxSandboxCommandArgsForPermissionProfileJSONWithSandboxExeManagedNetworkAndTransparentTCP(
-			"",
-			command,
-			cwd,
-			profileJSON,
-			sandboxCWD,
-			sandboxContext.UseLegacyLandlock,
-			enforceManagedNetwork,
-			managedNetworkJSON,
-			transparentTCP,
-		)
+		wrapped, wrapErr := sandbox.CreateLinuxSandboxCommandArgsForLinuxSandboxOptions(sandbox.LinuxSandboxCommandArgsOptions{
+			Command:              command,
+			CommandCWD:           cwd,
+			ProfileJSON:          profileJSON,
+			SandboxPolicyCWD:     sandboxCWD,
+			UseLegacyLandlock:    sandboxContext.UseLegacyLandlock,
+			AllowNetworkForProxy: enforceManagedNetwork,
+			ManagedNetworkJSON:   managedNetworkJSON,
+			TransparentTCP:       transparentTCP,
+			PIDNamespace:         sandbox.LinuxSandboxPIDNamespace(sandboxContext.linuxSandboxPIDNamespace),
+		})
 		if wrapErr != nil {
 			return nil, "", sandbox.SandboxTypeNone, processSandboxPreparationFailure(wrapErr)
 		}

@@ -21,6 +21,20 @@ var (
 	ErrPlatformSandboxUnsupported = errors.New("platform sandbox unsupported")
 )
 
+// LinuxSandboxPIDNamespace is the trusted startup-only PID namespace policy
+// re-exported so callers outside this package never import the helper directly.
+type LinuxSandboxPIDNamespace = linuxsandbox.LinuxSandboxPIDNamespace
+
+// LinuxSandboxCommandArgsOptions is the resolved Linux helper argv surface.
+type LinuxSandboxCommandArgsOptions = linuxsandbox.LinuxSandboxCommandArgsOptions
+
+const (
+	// LinuxSandboxPIDNamespaceIsolate is the default PID isolation mode.
+	LinuxSandboxPIDNamespaceIsolate = linuxsandbox.LinuxSandboxPIDNamespaceIsolate
+	// LinuxSandboxPIDNamespaceInherit reuses the caller's PID namespace.
+	LinuxSandboxPIDNamespaceInherit = linuxsandbox.LinuxSandboxPIDNamespaceInherit
+)
+
 type CommandRunRequest struct {
 	PermissionProfile             string
 	ResolvedPermissionProfile     *PermissionProfile
@@ -52,28 +66,33 @@ type CommandRunRequest struct {
 	// TransparentTCP mirrors the executor's trusted
 	// `--linux-sandbox-transparent-tcp` startup option (Rust #61372). It is
 	// applied only when the launch also has a managed network.
-	TransparentTCP       bool
-	CodexLinuxSandboxExe string
-	ConfigOverrides      []string
-	Command              []string
+	TransparentTCP bool
+	// LinuxSandboxPIDNamespace mirrors the executor's trusted startup-only
+	// `--linux-sandbox-pid-namespace` option (Rust #47989). It is never derived
+	// from repository config, a command environment or a sandbox state payload.
+	LinuxSandboxPIDNamespace linuxsandbox.LinuxSandboxPIDNamespace
+	CodexLinuxSandboxExe     string
+	ConfigOverrides          []string
+	Command                  []string
 }
 
 type CommandRunPlan struct {
-	Command                 []string
-	CWD                     string
-	CommandCWD              string
-	WorkspaceRoots          []string
-	SandboxType             SandboxType
-	PermissionProfileID     string
-	PermissionProfile       *PermissionProfile
-	PermissionProfileJSON   string
-	CodexLinuxSandboxExe    string
-	UseLegacyLandlock       bool
-	AllowNetworkForProxy    bool
-	ManagedNetworkJSON      string
-	TransparentTCP          bool
-	RequiresPlatformSandbox bool
-	UnsupportedReason       string
+	Command                  []string
+	CWD                      string
+	CommandCWD               string
+	WorkspaceRoots           []string
+	SandboxType              SandboxType
+	PermissionProfileID      string
+	PermissionProfile        *PermissionProfile
+	PermissionProfileJSON    string
+	CodexLinuxSandboxExe     string
+	UseLegacyLandlock        bool
+	AllowNetworkForProxy     bool
+	ManagedNetworkJSON       string
+	TransparentTCP           bool
+	LinuxSandboxPIDNamespace linuxsandbox.LinuxSandboxPIDNamespace
+	RequiresPlatformSandbox  bool
+	UnsupportedReason        string
 }
 
 // SandboxState is the opaque sandbox policy an MCP host forwards from tool-call
@@ -185,6 +204,11 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 		TransparentTCP:       req.TransparentTCP,
 		CodexLinuxSandboxExe: cleanRunPath(req.CodexLinuxSandboxExe),
 	}
+	normalizedPIDNamespace, err := linuxsandbox.ParseLinuxSandboxPIDNamespace(string(req.LinuxSandboxPIDNamespace))
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidSandboxRunRequest, err)
+	}
+	plan.LinuxSandboxPIDNamespace = normalizedPIDNamespace
 	var unsupported []string
 	var sandboxState *SandboxState
 	permissionUnsupportedAdded := false
@@ -290,19 +314,20 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 		if err != nil {
 			return nil, err
 		}
-		wrapped, err := CreateLinuxSandboxCommandArgsForPermissionProfileJSONWithSandboxExeManagedNetworkAndTransparentTCP(
-			plan.CodexLinuxSandboxExe,
-			plan.Command,
-			planCommandCWD(plan),
-			profileJSON,
-			plan.CWD,
-			plan.UseLegacyLandlock,
-			plan.AllowNetworkForProxy,
-			plan.ManagedNetworkJSON,
-			plan.TransparentTCP,
-		)
+		wrapped, err := linuxsandbox.CreateCommandArgsForLinuxSandbox(linuxsandbox.LinuxSandboxCommandArgsOptions{
+			SandboxExe:           plan.CodexLinuxSandboxExe,
+			Command:              plan.Command,
+			CommandCWD:           planCommandCWD(plan),
+			ProfileJSON:          profileJSON,
+			SandboxPolicyCWD:     plan.CWD,
+			UseLegacyLandlock:    plan.UseLegacyLandlock,
+			AllowNetworkForProxy: plan.AllowNetworkForProxy,
+			ManagedNetworkJSON:   plan.ManagedNetworkJSON,
+			TransparentTCP:       plan.TransparentTCP,
+			PIDNamespace:         plan.LinuxSandboxPIDNamespace,
+		})
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: %v", ErrInvalidSandboxRunRequest, err)
 		}
 		plan.Command = wrapped
 		plan.SandboxType = SandboxTypeLinuxSeccomp
@@ -1361,6 +1386,17 @@ func CreateLinuxSandboxCommandArgsForPermissionProfileJSONWithSandboxExeManagedN
 	transparentTCP bool,
 ) ([]string, error) {
 	args, err := linuxsandbox.CreateCommandArgsWithSandboxExeAndManagedNetworkAndTransparentTCP(sandboxExe, command, commandCWD, profileJSON, sandboxPolicyCWD, useLegacyLandlock, allowNetworkForProxy, managedNetworkJSON, transparentTCP)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidSandboxRunRequest, err)
+	}
+	return args, nil
+}
+
+// CreateLinuxSandboxCommandArgsForLinuxSandboxOptions builds the helper argv
+// from resolved launch options, including the trusted startup-only PID
+// namespace policy (Rust #47989).
+func CreateLinuxSandboxCommandArgsForLinuxSandboxOptions(opts linuxsandbox.LinuxSandboxCommandArgsOptions) ([]string, error) {
+	args, err := linuxsandbox.CreateCommandArgsForLinuxSandbox(opts)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidSandboxRunRequest, err)
 	}

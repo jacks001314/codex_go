@@ -10,6 +10,51 @@ import (
 
 var ErrInvalidCommandArgs = fmt.Errorf("invalid linux sandbox command args")
 
+// LinuxSandboxPIDNamespace selects the helper's PID namespace policy.
+//
+// Inheritance is a trusted executor startup choice (Rust #47989): it is never
+// derived from repository config, a command environment or a tool-call payload.
+// It reuses the caller's PID namespace and `/proc` together, so sandboxed
+// commands can signal other same-UID processes, including the executor.
+type LinuxSandboxPIDNamespace string
+
+const (
+	// LinuxSandboxPIDNamespaceIsolate creates a PID namespace, keeping the
+	// legacy `/proc` mount fallback.
+	LinuxSandboxPIDNamespaceIsolate LinuxSandboxPIDNamespace = "isolate"
+	// LinuxSandboxPIDNamespaceInherit reuses the caller's PID namespace and
+	// `/proc` and omits `--unshare-pid` and `--as-pid-1`.
+	LinuxSandboxPIDNamespaceInherit LinuxSandboxPIDNamespace = "inherit"
+)
+
+// ParseLinuxSandboxPIDNamespace applies the helper's value parser. An empty
+// value keeps the isolate default, so callers that never set the startup flag
+// behave exactly as before.
+func ParseLinuxSandboxPIDNamespace(value string) (LinuxSandboxPIDNamespace, error) {
+	switch strings.TrimSpace(value) {
+	case "", string(LinuxSandboxPIDNamespaceIsolate):
+		return LinuxSandboxPIDNamespaceIsolate, nil
+	case string(LinuxSandboxPIDNamespaceInherit):
+		return LinuxSandboxPIDNamespaceInherit, nil
+	}
+	return "", fmt.Errorf("%w: expected 'isolate' or 'inherit'", ErrInvalidCommandArgs)
+}
+
+// LinuxSandboxCommandArgsOptions is the complete helper argv surface.
+type LinuxSandboxCommandArgsOptions struct {
+	SandboxExe           string
+	Command              []string
+	CommandCWD           string
+	ProfileJSON          string
+	SandboxPolicyCWD     string
+	UseLegacyLandlock    bool
+	AllowNetworkForProxy bool
+	ManagedNetworkJSON   string
+	TransparentTCP       bool
+	// PIDNamespace is empty for the isolate default.
+	PIDNamespace LinuxSandboxPIDNamespace
+}
+
 func CreateCommandArgs(command []string, commandCWD string, profileJSON string, sandboxPolicyCWD string, useLegacyLandlock bool, allowNetworkForProxy bool) ([]string, error) {
 	return CreateCommandArgsWithSandboxExe("", command, commandCWD, profileJSON, sandboxPolicyCWD, useLegacyLandlock, allowNetworkForProxy)
 }
@@ -42,6 +87,38 @@ func CreateCommandArgsWithSandboxExeAndManagedNetwork(sandboxExe string, command
 // networking, so the flag is only emitted with a managed-network launch
 // (Rust #61372 SandboxManager::with_linux_sandbox_transparent_tcp).
 func CreateCommandArgsWithSandboxExeAndManagedNetworkAndTransparentTCP(sandboxExe string, command []string, commandCWD string, profileJSON string, sandboxPolicyCWD string, useLegacyLandlock bool, allowNetworkForProxy bool, managedNetworkJSON string, transparentTCP bool) ([]string, error) {
+	return CreateCommandArgsForLinuxSandbox(LinuxSandboxCommandArgsOptions{
+		SandboxExe:           sandboxExe,
+		Command:              command,
+		CommandCWD:           commandCWD,
+		ProfileJSON:          profileJSON,
+		SandboxPolicyCWD:     sandboxPolicyCWD,
+		UseLegacyLandlock:    useLegacyLandlock,
+		AllowNetworkForProxy: allowNetworkForProxy,
+		ManagedNetworkJSON:   managedNetworkJSON,
+		TransparentTCP:       transparentTCP,
+	})
+}
+
+// CreateCommandArgsForLinuxSandbox builds the helper argv for one command.
+//
+// `--inherit-pid-namespace` is emitted first, matching Rust
+// `SandboxManager::with_linux_sandbox_pid_namespace` (#47989): default
+// invocations stay byte-identical so they remain compatible with older helpers.
+func CreateCommandArgsForLinuxSandbox(opts LinuxSandboxCommandArgsOptions) ([]string, error) {
+	sandboxExe := opts.SandboxExe
+	command := opts.Command
+	commandCWD := opts.CommandCWD
+	profileJSON := opts.ProfileJSON
+	sandboxPolicyCWD := opts.SandboxPolicyCWD
+	useLegacyLandlock := opts.UseLegacyLandlock
+	allowNetworkForProxy := opts.AllowNetworkForProxy
+	managedNetworkJSON := opts.ManagedNetworkJSON
+	transparentTCP := opts.TransparentTCP
+	pidNamespace, err := ParseLinuxSandboxPIDNamespace(string(opts.PIDNamespace))
+	if err != nil {
+		return nil, err
+	}
 	if len(command) == 0 {
 		return nil, fmt.Errorf("%w: command is required", ErrInvalidCommandArgs)
 	}
@@ -68,10 +145,15 @@ func CreateCommandArgsWithSandboxExeAndManagedNetworkAndTransparentTCP(sandboxEx
 	sandboxPolicyCWD = filepath.Clean(sandboxPolicyCWD)
 	args := []string{
 		sandboxExe,
+	}
+	if pidNamespace == LinuxSandboxPIDNamespaceInherit {
+		args = append(args, "--inherit-pid-namespace")
+	}
+	args = append(args,
 		"--sandbox-policy-cwd", sandboxPolicyCWD,
 		"--command-cwd", commandCWD,
 		"--permission-profile", profileJSON,
-	}
+	)
 	managedNetworkJSON = strings.TrimSpace(managedNetworkJSON)
 	managedNetwork := allowNetworkForProxy || managedNetworkJSON != ""
 	if useLegacyLandlock && !managedNetwork {

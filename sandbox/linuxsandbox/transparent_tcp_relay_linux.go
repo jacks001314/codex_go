@@ -47,6 +47,12 @@ type transparentTCPRelay struct {
 
 	probeMu    sync.Mutex
 	probeConns []*gonet.TCPConn
+
+	// stopped closes when the relay data path stops serving. With an inherited
+	// PID namespace there is no namespace reaper, so losing the data path must
+	// end the workload (Rust #62100).
+	stopped  chan struct{}
+	stopOnce sync.Once
 }
 
 // acceptTransparentTCPDescriptors takes ownership of the three descriptors the
@@ -117,13 +123,14 @@ func prepareTransparentTCPRelay(raw []int, proxy net.Addr) (*transparentTCPRelay
 		return nil, fmt.Errorf("duplicate transparent TCP TUN: %w", err)
 	}
 	return &transparentTCPRelay{
-		proxy: proxy,
-		names: newTransparentTCPDNSNames(),
-		slots: make(chan struct{}, transparentTCPMaxFlows),
-		probe: make(chan netip.AddrPort, 1),
-		tunFD: fd,
-		udp:   udp,
-		tcp:   tcpConn,
+		proxy:   proxy,
+		names:   newTransparentTCPDNSNames(),
+		slots:   make(chan struct{}, transparentTCPMaxFlows),
+		probe:   make(chan netip.AddrPort, 1),
+		stopped: make(chan struct{}),
+		tunFD:   fd,
+		udp:     udp,
+		tcp:     tcpConn,
 	}, nil
 }
 
@@ -207,6 +214,7 @@ func (r *transparentTCPRelay) close() {
 	if r.tcp != nil {
 		r.tcp.Close()
 	}
+	r.stopOnce.Do(func() { close(r.stopped) })
 }
 
 func (r *transparentTCPRelay) handleForwarderRequest(request *tcp.ForwarderRequest) {

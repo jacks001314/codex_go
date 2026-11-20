@@ -108,7 +108,11 @@ type linuxSandboxCommand struct {
 	TransparentTCP        bool
 	TransparentTCPFDs     []int
 	NoProc                bool
-	Command               []string
+	// InheritPIDNamespace reuses the caller's PID namespace and `/proc`
+	// together (Rust #47989). Only trusted executor startup may select it; it
+	// omits `--unshare-pid` and `--as-pid-1`.
+	InheritPIDNamespace bool
+	Command             []string
 }
 
 // managedNetworkEnabled reports whether the helper runs in managed-proxy mode.
@@ -174,6 +178,8 @@ func parseLinuxSandboxCommand(args []string, stderr io.Writer) (*linuxSandboxCom
 	flags.BoolVar(&cmd.TransparentTCP, "transparent-tcp", false, "")
 	flags.IntSliceVar(&cmd.TransparentTCPFDs, "transparent-tcp-fd", nil, "")
 	flags.BoolVar(&cmd.NoProc, "no-proc", false, "")
+	flags.BoolVar(&cmd.InheritPIDNamespace, "inherit-pid-namespace", false, "")
+	_ = flags.MarkHidden("inherit-pid-namespace")
 	if err := flags.Parse(args); err != nil {
 		return nil, err
 	}
@@ -213,11 +219,30 @@ func parseLinuxManagedNetworkContext(raw string) (*linuxManagedNetworkContext, e
 	return &context, nil
 }
 
-func runLinuxSandboxCommand(cmd *linuxSandboxCommand) error {
+// validateLinuxSandboxCommand applies the helper's startup cross-checks before
+// any sandbox stage runs.
+//
+// Transparent TCP is allowed with an inherited PID namespace (Rust #62100): it
+// then reuses the policy's procfs view and relies on relay readiness to prove
+// socket identities are visible before the command starts.
+func validateLinuxSandboxCommand(cmd *linuxSandboxCommand) error {
 	if cmd.ApplySeccompThenExec && cmd.UseLegacyLandlock {
 		return errors.New("--apply-seccomp-then-exec is incompatible with --use-legacy-landlock")
 	}
 	if err := ensureLegacyLandlockSupportsPolicy(cmd); err != nil {
+		return err
+	}
+	if cmd.TransparentTCP && (!cmd.managedNetworkEnabled() || cmd.UseLegacyLandlock || cmd.NoProc) {
+		return errors.New("transparent TCP requires managed networking, bubblewrap, and procfs")
+	}
+	if (len(cmd.TransparentTCPFDs) == 0) == (cmd.TransparentTCP && cmd.ApplySeccompThenExec) {
+		return errors.New("invalid transparent TCP namespace handoff")
+	}
+	return nil
+}
+
+func runLinuxSandboxCommand(cmd *linuxSandboxCommand) error {
+	if err := validateLinuxSandboxCommand(cmd); err != nil {
 		return err
 	}
 	managedNetwork := cmd.managedNetworkEnabled()
@@ -227,12 +252,6 @@ func runLinuxSandboxCommand(cmd *linuxSandboxCommand) error {
 		if cmd.TransparentTCP {
 			routing = linuxProxyRoutingTransparentTCP
 		}
-	}
-	if cmd.TransparentTCP && (!managedNetwork || cmd.UseLegacyLandlock || cmd.NoProc) {
-		return errors.New("transparent TCP requires managed networking and private bubblewrap namespaces")
-	}
-	if (len(cmd.TransparentTCPFDs) == 0) == (cmd.TransparentTCP && cmd.ApplySeccompThenExec) {
-		return errors.New("invalid transparent TCP namespace handoff")
 	}
 	if cmd.ApplySeccompThenExec {
 		var socksBridge *net.TCPAddr
@@ -909,6 +928,11 @@ func buildInnerLinuxSandboxCommand(cmd *linuxSandboxCommand) ([]string, error) {
 		"--permission-profile", cmd.PermissionProfileJSON,
 		"--apply-seccomp-then-exec",
 	}
+	if cmd.InheritPIDNamespace {
+		// The inner stage runs inside the inherited namespace, so it must not
+		// recreate the procfs or the PID namespace (Rust #47989).
+		inner = append([]string{inner[0], "--inherit-pid-namespace"}, inner[1:]...)
+	}
 	if cmd.managedNetworkEnabled() {
 		inner = append(inner, "--allow-network-for-proxy")
 		if strings.TrimSpace(cmd.ProxyRouteSpec) == "" {
@@ -943,8 +967,14 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 			_ = unix.Close(fd)
 		}
 	}()
-	args := []string{"bwrap", "--die-with-parent", "--unshare-pid"}
-	if !cmd.NoProc {
+	// PID inheritance reuses the caller's PID namespace, so neither the
+	// namespace nor a fresh procfs may be requested (Rust #47989).
+	args := []string{"bwrap", "--die-with-parent"}
+	if !cmd.InheritPIDNamespace {
+		args = append(args, "--unshare-pid")
+	}
+	mountProc := !cmd.NoProc && !cmd.InheritPIDNamespace
+	if mountProc {
 		args = append(args, "--proc", "/proc")
 	}
 	if !cmd.PermissionProfile.NetworkEnabled || (cmd.managedNetworkEnabled() && !cmd.TransparentTCP) {
@@ -993,8 +1023,14 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 		// The empty root hides every mount made before it, including the
 		// caller's `--proc /proc`, so re-issue that mount here; upstream mounts
 		// the fresh procfs after the filesystem arguments (`bwrap.rs:377-381`).
-		if !cmd.NoProc {
+		if mountProc {
 			args = append(args, "--proc", "/proc")
+		}
+		if cmd.InheritPIDNamespace && fs != nil && fs.includePlatformDefaults() && !containsPath(readRoots, "/proc") {
+			// Reuse the caller's procfs including its submount masks. Binding it
+			// with the other read roots keeps explicit deny rules winning.
+			readRoots = append(readRoots, "/proc")
+			sort.Strings(readRoots)
 		}
 		for _, root := range readRoots {
 			if _, err := os.Stat(root); err != nil {
@@ -1054,7 +1090,7 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 		}
 	}
 	if wslgMask {
-		args = append(args, wslgMaskArgs(wslgMaskedByAncestor, cmd.NoProc, pathIsDirectory(wslInteropDir))...)
+		args = append(args, wslgMaskArgs(wslgMaskedByAncestor, !mountProc, pathIsDirectory(wslInteropDir))...)
 	}
 	// Rust #45984: filesystem-restricted sandboxes must not reach the
 	// privileged app-server control sockets. Mask the fixed user-owned
@@ -1089,7 +1125,7 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 			args = append(args, "--tmpfs", filepath.Join("/mnt/wslg/distro", strings.TrimPrefix(daemonDirectory, "/")))
 		}
 	}
-	args = appendWSLInteropMaskArgs(args, cmd.NoProc, !fs.hasFullDiskWriteAccess(), wslInteropDir)
+	args = appendWSLInteropMaskArgs(args, !mountProc, !fs.hasFullDiskWriteAccess(), wslInteropDir)
 	args = append(args, "--chdir", cmd.CommandCWD, "--")
 	args = append(args, inner...)
 	// Bubblewrap semantics: unsharing the pid namespace makes the sandboxed

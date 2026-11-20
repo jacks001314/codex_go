@@ -30,10 +30,10 @@ func runTransparentTCPWorkload(cmd *linuxSandboxCommand, routing linuxProxyRouti
 	if err := applyLinuxPermissionProfile(cmd.PermissionProfile, cmd.SandboxPolicyCWD, false, true, routing, cmd.ManagedNetwork); err != nil {
 		return fmt.Errorf("error applying Linux sandbox restrictions: %w", err)
 	}
-	return runTransparentTCPCommand(cmd)
+	return runTransparentTCPCommand(cmd, relay)
 }
 
-func runTransparentTCPCommand(cmd *linuxSandboxCommand) error {
+func runTransparentTCPCommand(cmd *linuxSandboxCommand, relay *transparentTCPRelay) error {
 	if len(cmd.Command) == 0 {
 		return errors.New("no command specified to execute")
 	}
@@ -50,6 +50,12 @@ func runTransparentTCPCommand(cmd *linuxSandboxCommand) error {
 	child.Stdin = os.Stdin
 	child.Stdout = os.Stdout
 	child.Stderr = os.Stderr
+	if cmd.InheritPIDNamespace {
+		// The relay lives in this process, so the workload must not outlive it,
+		// and it needs its own process group so relay loss can end the group
+		// while this supervisor stays alive to reap it (Rust #62100).
+		child.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL, Setpgid: true}
+	}
 	if err := child.Start(); err != nil {
 		return err
 	}
@@ -63,7 +69,7 @@ func runTransparentTCPCommand(cmd *linuxSandboxCommand) error {
 			}
 		}
 	}()
-	err := child.Wait()
+	err := waitForTransparentTCPCommand(cmd, child, relay)
 	if err == nil {
 		return &transparentTCPChildExitError{}
 	}
@@ -78,6 +84,35 @@ func runTransparentTCPCommand(cmd *linuxSandboxCommand) error {
 		return &transparentTCPChildExitError{code: code}
 	}
 	return fmt.Errorf("failed to wait for sandboxed command: %w", err)
+}
+
+// waitForTransparentTCPCommand waits for the workload. With an inherited PID
+// namespace the relay is the only data path, so relay loss kills the workload's
+// process group and the supervisor reports the failure instead of hanging on a
+// command that can no longer reach the network.
+func waitForTransparentTCPCommand(cmd *linuxSandboxCommand, child *exec.Cmd, relay *transparentTCPRelay) error {
+	if !cmd.InheritPIDNamespace || relay == nil {
+		return child.Wait()
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- child.Wait() }()
+	select {
+	case err := <-waited:
+		return err
+	case <-relay.stopped:
+		killTransparentTCPProcessGroup(child.Process.Pid)
+		<-waited
+		return errors.New("transparent TCP relay exited before the command")
+	}
+}
+
+// killTransparentTCPProcessGroup ends every task of the workload's process
+// group. Inherited namespaces have no bwrap namespace reaper to do it.
+func killTransparentTCPProcessGroup(pid int) {
+	if pid <= 0 {
+		return
+	}
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
 }
 
 // prepareTransparentTCPResolverMount validates the command-local resolver and

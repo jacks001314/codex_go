@@ -1076,6 +1076,7 @@ func runExecServer(ctx context.Context, opts *cli.ExecServerOptions, root *cli.R
 	// managed network proxy launch (exec-server/src/process_sandbox.rs).
 	server.SetProxyPrivateIPsViaUpstream(opts.ProxyPrivateIPsViaUpstream)
 	server.SetLinuxSandboxTransparentTCP(opts.LinuxSandboxTransparentTCP)
+	server.SetLinuxSandboxPIDNamespace(opts.LinuxSandboxPIDNamespace)
 	server.SetTcpUpstreamProxy(opts.TcpUpstreamProxy)
 	server.SetEnvironmentConfigReader(environmentConfigReader)
 	// Rust #47601: listener authentication gates WebSocket upgrades; the flag
@@ -1224,6 +1225,7 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 			PreferMXC:                  preferMXC,
 			ProxyPrivateIPsViaUpstream: opts.ProxyPrivateIPsViaUpstream,
 			LinuxSandboxTransparentTCP: opts.LinuxSandboxTransparentTCP,
+			LinuxSandboxPIDNamespace:   opts.LinuxSandboxPIDNamespace,
 			TcpUpstreamProxy:           opts.TcpUpstreamProxy,
 			EnvironmentConfigReader:    environmentConfigReader,
 			AllowedSymlinkedCodexHome:  loadedConfig.AllowedSymlinkedCodexHome(),
@@ -1249,6 +1251,7 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 			PreferMXC:                  preferMXC,
 			ProxyPrivateIPsViaUpstream: opts.ProxyPrivateIPsViaUpstream,
 			LinuxSandboxTransparentTCP: opts.LinuxSandboxTransparentTCP,
+			LinuxSandboxPIDNamespace:   opts.LinuxSandboxPIDNamespace,
 			TcpUpstreamProxy:           opts.TcpUpstreamProxy,
 			EnvironmentConfigReader:    environmentConfigReader,
 			AllowedSymlinkedCodexHome:  loadedConfig.AllowedSymlinkedCodexHome(),
@@ -1291,6 +1294,7 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 			PreferMXC:                  preferMXC,
 			ProxyPrivateIPsViaUpstream: opts.ProxyPrivateIPsViaUpstream,
 			LinuxSandboxTransparentTCP: opts.LinuxSandboxTransparentTCP,
+			LinuxSandboxPIDNamespace:   opts.LinuxSandboxPIDNamespace,
 			TcpUpstreamProxy:           opts.TcpUpstreamProxy,
 			EnvironmentConfigReader:    environmentConfigReader,
 			AllowedSymlinkedCodexHome:  loadedConfig.AllowedSymlinkedCodexHome(),
@@ -1351,6 +1355,7 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		PreferMXC:                  preferMXC,
 		ProxyPrivateIPsViaUpstream: opts.ProxyPrivateIPsViaUpstream,
 		LinuxSandboxTransparentTCP: opts.LinuxSandboxTransparentTCP,
+		LinuxSandboxPIDNamespace:   opts.LinuxSandboxPIDNamespace,
 		TcpUpstreamProxy:           opts.TcpUpstreamProxy,
 		EnvironmentConfigReader:    environmentConfigReader,
 		AllowedSymlinkedCodexHome:  loadedConfig.AllowedSymlinkedCodexHome(),
@@ -1385,6 +1390,7 @@ func runExecServerRemoteWithDirectTransport(
 		PreferMXC:                  preferMXC,
 		ProxyPrivateIPsViaUpstream: opts.ProxyPrivateIPsViaUpstream,
 		LinuxSandboxTransparentTCP: opts.LinuxSandboxTransparentTCP,
+		LinuxSandboxPIDNamespace:   opts.LinuxSandboxPIDNamespace,
 		TcpUpstreamProxy:           opts.TcpUpstreamProxy,
 		EnvironmentConfigReader:    environmentConfigReader,
 		AllowedSymlinkedCodexHome:  loadedConfig.AllowedSymlinkedCodexHome(),
@@ -1475,6 +1481,7 @@ func runExecServerRemoteWithExecutorCredential(
 		PreferMXC:                  preferMXC,
 		ProxyPrivateIPsViaUpstream: opts.ProxyPrivateIPsViaUpstream,
 		LinuxSandboxTransparentTCP: opts.LinuxSandboxTransparentTCP,
+		LinuxSandboxPIDNamespace:   opts.LinuxSandboxPIDNamespace,
 		TcpUpstreamProxy:           opts.TcpUpstreamProxy,
 		EnvironmentConfigReader:    environmentConfigReader,
 		AllowedSymlinkedCodexHome:  loadedConfig.AllowedSymlinkedCodexHome(),

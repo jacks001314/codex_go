@@ -44,9 +44,10 @@ func (c *integrityMetricCapture) snapshot() (counters, durations []string) {
 	return slices.Clone(c.counters), slices.Clone(c.durations)
 }
 
-// Mirrors Rust #51843: exec-server preparation observes sandbox integrity for
-// eligible restricted profiles without returning an error or changing the plan.
-func TestRunSandboxIntegrityChecksObservesPreparationLikeRust(t *testing.T) {
+// Mirrors Rust #51843 + #62389: the runtime entry point stays paused, so
+// exec-server preparation neither observes sandbox integrity nor changes the
+// plan. The isolated runner keeps its own coverage in sandbox/integrity.
+func TestRunSandboxIntegrityChecksStaysPausedLikeRust(t *testing.T) {
 	capture := &integrityMetricCapture{}
 	previous := metrics.InstallGlobal(capture)
 	t.Cleanup(func() { metrics.InstallGlobal(previous) })
@@ -61,8 +62,11 @@ func TestRunSandboxIntegrityChecksObservesPreparationLikeRust(t *testing.T) {
 	}
 	runSandboxIntegrityChecks(plan, "", cwd, plan.Command, nil)
 	counters, durations := capture.snapshot()
-	if len(durations) == 0 && len(counters) == 0 {
-		t.Fatalf("integrity runner emitted no metrics; counters=%v durations=%v", counters, durations)
+	if len(counters) != 0 || len(durations) != 0 {
+		t.Fatalf("paused integrity runner emitted metrics; counters=%v durations=%v", counters, durations)
+	}
+	if len(plan.Command) != 2 || plan.Command[0] != "echo" {
+		t.Fatalf("preparation changed the plan command: %#v", plan.Command)
 	}
 }
 

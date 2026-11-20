@@ -71,6 +71,10 @@ type RemoteEnvironmentConfig struct {
 	// ExecServerRuntimeOptions::linux_sandbox_transparent_tcp for this remote
 	// executor's managed Linux command launches.
 	LinuxSandboxTransparentTCP bool
+	// LinuxSandboxPIDNamespace mirrors Rust #47989
+	// ExecServerRuntimeOptions::linux_sandbox_pid_namespace: the startup-only
+	// PID namespace policy for this remote executor's Linux sandbox launches.
+	LinuxSandboxPIDNamespace string
 	// TcpUpstreamProxy mirrors Rust #61372
 	// ExecServerRuntimeOptions::tcp_upstream_proxy: the trusted mandatory HTTP
 	// CONNECT next hop for opaque SOCKS TCP.
@@ -280,6 +284,7 @@ func RunRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig) erro
 	server.SetPreferMXC(cfg.PreferMXC)
 	server.SetProxyPrivateIPsViaUpstream(cfg.ProxyPrivateIPsViaUpstream)
 	server.SetLinuxSandboxTransparentTCP(cfg.LinuxSandboxTransparentTCP)
+	server.SetLinuxSandboxPIDNamespace(cfg.LinuxSandboxPIDNamespace)
 	server.SetTcpUpstreamProxy(cfg.TcpUpstreamProxy)
 	server.SetEnvironmentConfigReader(cfg.EnvironmentConfigReader)
 	server.SetAllowedSymlinkedCodexHome(cfg.AllowedSymlinkedCodexHome)

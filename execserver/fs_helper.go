@@ -531,6 +531,7 @@ func fsSandboxRunPlan(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 		SandboxDisableNetwork:     true,
 		UseLegacyLandlock:         ctx.UseLegacyLandlock,
 		AllowedSymlinkedCodexHome: allowedSymlinkedCodexHome,
+		LinuxSandboxPIDNamespace:  sandbox.LinuxSandboxPIDNamespace(ctx.linuxSandboxPIDNamespace),
 		Command:                   helperCommand,
 	})
 	if err != nil {
