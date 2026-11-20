@@ -51102,11 +51102,15 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Reviewer retrieval binds a live Guardian board: agentboard.WithJSONSearch clones a handle whose post searches also match decoded JSON literals at /original/payload/arguments, and GuardianRetrievalBinding searches every Guardian channel regardless of subscription (landed 30710765).",
+    "subscribed_channels joins the parallel-safe read tools with Rust's limit/cursor schema, NewGuardianSubscriptionTools changes only the acting reviewer's channel membership and returns the board's own state, responses are budgeted with a nil message id before the write, and the fixed-catalog selection module is gone.",
+    "Reviewer instructions now select guidance for the installed tools: appserver.GuardianReviewRetrieval replaces the feature-gated conversation-history section with Rust's BOARD_RETRIEVAL text for a live board reviewer.",
+    "Reviewer headers need no Go carrier: Go scopes x-codex-guardian: reviewer to the provider-selected review model when it builds the reviewer request (model/responses_agent.go).",
+    "Tests: go test ./agentboard -run 'Guardian' -count=1; go test ./appserver -run 'Guardian' -count=1; go test ./agentboard ./appserver -count=1"
    ],
    "kind": "runtime",
    "sha": "c2595ad3438311ce3070b1a7eef05cd0da8ad631",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Add live evidence retrieval for Guardian v3 reviewers (#62133)"
   },
   {
@@ -51126,11 +51130,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Landed: live retrieval and caller-scoped subscription tools (see #62133), plus LocalAgentMessageBoard.AppendWithSubscribers, which reports the subscribers present inside the post's write transaction and none on an idempotent retry (landed 7e854776); the in-memory and remote boards reject it like Rust's trait default.",
+    "Pending: the Guardian v3 housekeeper and per-actor inbox that consume this call, the catch-up acknowledgement that waits for a requested history position, and the cutoff/housekeeper rewrites (Rust cutoff.rs, housekeeper.rs, inbox.rs, sampling.rs).",
+    "Tests: go test ./agentboard -run 'AppendWithSubscribers' -count=1"
    ],
    "kind": "runtime",
    "sha": "5916098d02247b6c9a91a0c89af5259b0ddc4112",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Use live evidence retrieval and subscriber inboxes in Guardian (#62135)"
   },
   {
@@ -51138,11 +51144,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Landed: LocalAgentMessageBoard.ReadPostTextsByID reads whole bodies in caller order for at most one board page, fails on an unknown post, and the captured view answers it through its own cutoff (landed 7e854776).",
+    "Pending: the per-conversation delivery bookkeeping that drains an actor's inbox when its reviewer is idle, injects whole originals within the reviewer's model budget without starting a turn, delivers each queued original once, and replays the inbox in a replacement conversation (Rust actor.rs, conversation.rs, inbox.rs, delivery.rs).",
+    "Tests: go test ./agentboard -run 'ReadPostTextsByID' -count=1"
    ],
    "kind": "runtime",
    "sha": "9e3681977bee58e7b423def05bfcdb38db0c25e1",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Deliver subscribed evidence to idle Guardian reviewers (#62136)"
   },
   {
@@ -51150,11 +51158,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Landed: the captured-view reviewer selection module is removed, so reviewer subscriptions no longer read a fixed catalog (landed 30710765).",
+    "Pending: removing BoardReadView, its snapshot-specific tool bindings and the captured catalog/post cutoff from local queries, and dropping set_subscriptions while keeping individual subscription changes. Go still carries agentboard/read_view.go, BulkSubscriptionsRequest/SetSubscriptions and the read-view tests, and guardian_delivery.go still plans against a captured view."
    ],
    "kind": "runtime",
    "sha": "44de9d99ef5a9ea3a04c00e09bec8ebd67707868",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Remove fixed message-board views and bulk subscriptions (#62137)"
   },
   {

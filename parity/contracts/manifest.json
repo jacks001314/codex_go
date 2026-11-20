@@ -2347,11 +2347,14 @@
     "message-board/src/read_view.rs"
    ],
    "goPaths": [
-    "agentboard"
+    "agentboard",
+    "agentboard/guardian_retrieval.go",
+    "agentboard/guardian_subscriptions.go",
+    "appserver/guardian_review_retrieval.go"
    ],
    "phase": "P1",
    "status": "complete",
-   "verifier": "TestGuardianRetrievalSearchesUnsubscribedPostsThroughCutoffLikeRust;TestGuardianSubscriptionToolsUseCapturedCatalogLikeRust;TestLocalBoardFixedReadViewFreezesCatalogAndCutoffLikeRust;TestGuardianChannelSelectionReplacesCatalogMembershipLikeRust;TestGuardianChannelSelectionPreservesLaterChannelsLikeRust;TestGuardianSubscriptionsReplacePreservesOutsideChannelsLikeRust"
+   "verifier": "TestGuardianRetrievalSearchesLiveUnsubscribedPostsLikeRust;TestGuardianSubscriptionToolsChangeOnlyCallerLikeRust;TestLocalBoardFixedReadViewFreezesCatalogAndCutoffLikeRust;TestGuardianBoardRetrievalGuidanceLikeRust;TestGuardianRetrievalGuidanceSelectsInstalledToolsLikeRust;TestLocalBoardAppendWithSubscribersUsesInsertionStateLikeRust;TestLocalBoardReadPostTextsByIDLikeRust"
   },
   {
    "id": "world-state-skill-catalog-delta-grants",
@@ -2431,21 +2434,6 @@
    "phase": "P2",
    "status": "partial",
    "verifier": "TestUsageEventParamsCarryTurnTriggerLikeRust;TestUsageEventParamsOmitAbsentTurnTriggerLikeRust;TestAnalyticsTurnTriggerRetainedForUsageEventsLikeRust"
-  },
-  {
-   "id": "guardian-channel-selection",
-   "kind": "source-surface",
-   "rustPaths": [
-    "ext/guardian-v3/src/selection.rs",
-    "ext/guardian-v3/src/sampling.rs"
-   ],
-   "goPaths": [
-    "agentboard/guardian_selection.go",
-    "agentboard/guardian_subscriptions.go"
-   ],
-   "phase": "P1",
-   "status": "partial",
-   "verifier": "TestGuardianChannelSelectionReplacesCatalogMembershipLikeRust;TestGuardianChannelSelectionPreservesLaterChannelsLikeRust;TestGuardianChannelSelectionEmptySetUnsubscribesCatalogLikeRust;TestGuardianChannelSelectionRejectsCatalogEscapeLikeRust;TestGuardianChannelSelectionRejectsDuplicateChannelsLikeRust;TestGuardianChannelSelectionRejectsUnknownFieldsLikeRust;TestGuardianChannelSelectionHonorsCancellationLikeRust;TestGuardianChannelSelectionHonorsDeadlineLikeRust;TestGuardianChannelSelectionEnforcesInputBudgetLikeRust;TestGuardianChannelSelectionFailedSamplingRollsBackLikeRust;TestGuardianChannelSelectionKeepsOtherCallersLikeRust"
   },
   {
    "id": "world-state-environment-roster-lazy",
