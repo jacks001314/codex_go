@@ -51687,11 +51687,15 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "MCP tool and elicitation approvals resolve reviewer inputs from the issuing turn captured configuration (appserver RuntimeRouter.approvalsReviewerConfigForTurn, used by mcpToolApprovalReviewer and approvalsReviewerForTurn), so a live Guardian policy change cannot waive review the turn already required; a turn without a captured configuration keeps the live MCP view.",
+    "A Guardian policy update leaves the published MCP runtime fingerprint untouched: mcpRuntimeConfigFingerprint covers MCP servers, plugins and MCP requirement inputs but no Guardian requirement, so a policy publication neither revalidates nor restarts MCP servers.",
+    "tests: appserver TestMCPToolApprovalReviewerUsesCapturedTurnPolicyLikeRust, TestGuardianPolicyUpdateDoesNotRotateMCPRuntimeLikeRust",
+    "Residual: Rust session-level publication (revision ordering, suspended bindings, carry-forward across an MCP rebuild) has no Go counterpart because Go keeps no per-session configuration snapshot and resolves guardian policy from the current configuration on every read (appserver/mcp_config_refresh.go documents the same divergence for MCP refresh outcomes).",
+    "plan: update/plan_2026_11_20.md batch 10"
    ],
    "kind": "runtime",
    "sha": "a05444bbeb6bb07f2875fff0143f2e4cba994463",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Refresh managed Guardian policy independently of MCP (#62276)"
   },
   {
