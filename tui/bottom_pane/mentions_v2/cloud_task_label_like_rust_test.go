@@ -18,12 +18,12 @@ func TestTaskMentionCloudLabelLikeRust(t *testing.T) {
 		t.Fatalf("selection = %#v", candidate.Selection)
 	}
 	for _, term := range candidate.SearchTerms {
-		if strings.Contains(term, "☁︎") {
+		if strings.Contains(term, "☁️") {
 			t.Fatalf("search term gained the marker: %q", term)
 		}
 	}
 	line := BuildLine(candidate.ToResult(nil, 0), false, 50, 20)
-	if !strings.Contains(line, "☁︎") || !strings.Contains(line, "Fix cache") {
+	if !strings.Contains(line, "☁️") || !strings.Contains(line, "Fix cache") {
 		t.Fatalf("cloud task candidate line = %q", line)
 	}
 	if width := codextui.DisplayWidth(line); width > 50 {
@@ -31,7 +31,7 @@ func TestTaskMentionCloudLabelLikeRust(t *testing.T) {
 	}
 
 	local := TaskCandidate(codextui.TaskMention{ThreadID: "thread-local", Title: "Fix cache"})
-	if line := BuildLine(local.ToResult(nil, 0), false, 50, 20); strings.Contains(line, "☁︎") {
+	if line := BuildLine(local.ToResult(nil, 0), false, 50, 20); strings.Contains(line, "☁️") {
 		t.Fatalf("local task candidate gained a marker: %q", line)
 	}
 }

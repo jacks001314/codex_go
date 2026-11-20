@@ -51,13 +51,20 @@ func SanitizeTerminalTitleForEncoding(title string, encoding TitleEncoding) stri
 	var out strings.Builder
 	wrote := 0
 	pendingSpace := false
+	lastWritten := rune(0)
 	for _, r := range title {
 		if isTitleWhitespace(r) {
 			pendingSpace = out.Len() > 0
 			continue
 		}
+		// Rust #62573 keeps the emoji presentation selector that follows the
+		// cloud marker in Unicode titles so terminals render the emoji glyph;
+		// every other variation selector stays stripped, and Screen titles stay
+		// ASCII.
 		if isDisallowedTerminalTitleRune(r) {
-			continue
+			if !(encoding == TitleEncodingUnicode && r == 0xFE0F && !pendingSpace && lastWritten == 0x2601) {
+				continue
+			}
 		}
 		r = screenTitleRune(encoding, r)
 		if pendingSpace && wrote < MaxTerminalTitleChars-1 {
@@ -69,6 +76,7 @@ func SanitizeTerminalTitleForEncoding(title string, encoding TitleEncoding) stri
 			break
 		}
 		out.WriteRune(r)
+		lastWritten = r
 		wrote++
 	}
 	return out.String()

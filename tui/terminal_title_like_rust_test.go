@@ -33,6 +33,37 @@ func TestTerminalTitleUsesAsciiUnderScreenLikeRust(t *testing.T) {
 	}
 }
 
+// Rust #62573: the emoji presentation selector right after the cloud marker
+// survives Unicode titles, while Screen titles stay printable ASCII and a stray
+// selector on any other rune is still stripped.
+func TestTerminalTitleKeepsCloudEmojiSelectorLikeRust(t *testing.T) {
+	title := " \u2601\uFE0F \u25CF \u2807 | thread "
+	if got, want := SanitizeTerminalTitleForEncoding(title, TitleEncodingUnicode), "\u2601\uFE0F \u25CF \u2807 | thread"; got != want {
+		t.Fatalf("Unicode title = %q, want %q", got, want)
+	}
+	screen := SanitizeTerminalTitleForEncoding(title, TitleEncodingScreen)
+	for _, r := range screen {
+		if r > 0x7f {
+			t.Fatalf("Screen title kept a non-ASCII rune %q in %q", r, screen)
+		}
+	}
+	if got := SanitizeTerminalTitleForEncoding("\uFE0F ab", TitleEncodingUnicode); got != "ab" {
+		t.Fatalf("leading emoji selector = %q, want it stripped", got)
+	}
+	if got := SanitizeTerminalTitleForEncoding("a\uFE0F b", TitleEncodingUnicode); got != "a b" {
+		t.Fatalf("selector after another rune = %q, want it stripped", got)
+	}
+}
+
+// Rust #61742/#62573: a decorated cloud label keeps its emoji selector when it
+// reaches a Unicode terminal title.
+func TestCloudThreadLabelSurvivesTerminalTitleLikeRust(t *testing.T) {
+	label := DecorateThreadLabel("Fix cache", true)
+	if got, want := SanitizeTerminalTitle(label), "\u2601\uFE0F Fix cache"; got != want {
+		t.Fatalf("decorated title = %q, want %q", got, want)
+	}
+}
+
 // Rust #50375, `terminal_title.rs::sanitizes_terminal_title`: the encoding only
 // changes non-ASCII content, while control characters and bidi formatting are
 // still removed.

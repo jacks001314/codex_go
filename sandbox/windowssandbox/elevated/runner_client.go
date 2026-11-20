@@ -31,6 +31,11 @@ const (
 	// using the unchanged credentials: no runner - and therefore no user command -
 	// has started, so the retry cannot replay anything.
 	errorServiceAlreadyRunning uint32 = 1056
+	// errorLogonTypeNotGranted is ERROR_LOGON_TYPE_NOT_GRANTED: Windows security
+	// policy refused the sandbox account's interactive logon, so the runner
+	// explains the policy denial instead of reporting a bare code (Rust #62593).
+	// Refreshing the stored credentials cannot change a policy decision.
+	errorLogonTypeNotGranted uint32 = 1385
 )
 
 type RunnerLogonError struct {
@@ -41,7 +46,13 @@ func (e *RunnerLogonError) Error() string {
 	if e == nil {
 		return "CreateProcessWithLogonW failed"
 	}
-	return fmt.Sprintf("CreateProcessWithLogonW failed: %d", e.Code)
+	message := fmt.Sprintf("CreateProcessWithLogonW failed: %d", e.Code)
+	if e.Code == errorLogonTypeNotGranted {
+		message += ". Windows security policy blocked the sandbox account from signing in. " +
+			`Check the "Allow log on locally" and "Deny log on locally" permissions. ` +
+			"Contact your administrator if this PC is managed."
+	}
+	return message
 }
 
 // SandboxAccountCredentialMismatch reports that Windows rejected the stored

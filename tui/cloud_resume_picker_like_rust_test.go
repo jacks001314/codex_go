@@ -22,7 +22,7 @@ func TestSessionPickerMarksCloudRowsLikeRust(t *testing.T) {
 
 	state.Density = SessionDensityDense
 	dense := state.renderDenseSessionRow(item, false, 30, now)
-	if !strings.Contains(dense, "☁︎ Fix resume") || !strings.Contains(dense, "…") {
+	if !strings.Contains(dense, "☁️ Fix resume") || !strings.Contains(dense, "…") {
 		t.Fatalf("dense cloud row = %q", dense)
 	}
 	if width := DisplayWidth(stripSGRForTest(dense)); width > 30 {
@@ -30,7 +30,7 @@ func TestSessionPickerMarksCloudRowsLikeRust(t *testing.T) {
 	}
 
 	comfortable := state.renderComfortableSessionRow(item, false, 30, now)
-	if len(comfortable) == 0 || !strings.Contains(comfortable[0], "☁︎ Fix resume picker") {
+	if len(comfortable) == 0 || !strings.Contains(comfortable[0], "☁️ Fix resume picker") {
 		t.Fatalf("comfortable cloud rows = %#v", comfortable)
 	}
 }
@@ -45,13 +45,13 @@ func TestSessionPickerExpandedCloudSessionLikeRust(t *testing.T) {
 		UpdatedAt: now,
 	}
 	rows := renderExpandedSessionRows(item, state.itemCloud(item), 53, now)
-	if len(rows) == 0 || !strings.HasPrefix(strings.TrimSpace(rows[0]), "│ Session:    ☁︎ feat(tui): add raw scrollback mode…") {
+	if len(rows) == 0 || !strings.HasPrefix(strings.TrimSpace(rows[0]), "│ Session:    ☁️ feat(tui): add raw scrollback mode…") {
 		t.Fatalf("expanded cloud session row = %q", rows)
 	}
 
 	local := NewSessionPickerStateForBackend(backendID, SessionPickerResume, nil, "")
 	rows = renderExpandedSessionRows(item, local.itemCloud(item), 53, now)
-	if strings.Contains(rows[0], "☁︎") {
+	if strings.Contains(rows[0], "☁️") {
 		t.Fatalf("local expanded session row gained a marker: %q", rows[0])
 	}
 }

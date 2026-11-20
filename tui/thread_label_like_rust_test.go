@@ -14,7 +14,7 @@ func TestCloudThreadLabelPrefixLikeRust(t *testing.T) {
 	if got := ThreadLabelPrefixWidth(true); got != 2 {
 		t.Fatalf("cloud prefix width = %d, want 2", got)
 	}
-	if got := DecorateThreadLabel("Fix cache", true); got != "☁︎ Fix cache" {
+	if got := DecorateThreadLabel("Fix cache", true); got != "☁️ Fix cache" {
 		t.Fatalf("decorated label = %q", got)
 	}
 	if got := DecorateThreadLabel("Fix cache", false); got != "Fix cache" {

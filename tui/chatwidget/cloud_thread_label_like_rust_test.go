@@ -18,21 +18,21 @@ func TestStatusSurfaceCloudThreadLabelsLikeRust(t *testing.T) {
 		ThreadTitle: "Fix cache",
 		ThreadCloud: true,
 	})
-	if value, ok := state.StatusLineValueForItem(bottompane.StatusLineThreadName); !ok || value != "☁︎ Fix cache" {
+	if value, ok := state.StatusLineValueForItem(bottompane.StatusLineThreadName); !ok || value != "☁️ Fix cache" {
 		t.Fatalf("cloud thread name = %q ok=%v", value, ok)
 	}
-	if value, ok := state.StatusLineValueForItem(bottompane.StatusLineThreadTitle); !ok || value != "☁︎ Fix cache" {
+	if value, ok := state.StatusLineValueForItem(bottompane.StatusLineThreadTitle); !ok || value != "☁️ Fix cache" {
 		t.Fatalf("cloud thread title = %q ok=%v", value, ok)
 	}
-	if value, ok := state.TerminalTitleValueForItem(TerminalTitleThread); !ok || value != "☁︎ Fix cache" {
+	if value, ok := state.TerminalTitleValueForItem(TerminalTitleThread); !ok || value != "☁️ Fix cache" {
 		t.Fatalf("cloud terminal thread = %q ok=%v", value, ok)
 	}
-	if value, ok := state.TerminalTitleValueForItem(TerminalTitleThreadName); !ok || value != "☁︎ Fix cache" {
+	if value, ok := state.TerminalTitleValueForItem(TerminalTitleThreadName); !ok || value != "☁️ Fix cache" {
 		t.Fatalf("cloud terminal thread name = %q ok=%v", value, ok)
 	}
 
 	unnamed := NewStatusControlsState(StatusControlsRuntime{ThreadID: "thread-cloud", ThreadCloud: true})
-	if value, ok := unnamed.StatusLineValueForItem(bottompane.StatusLineThreadTitle); !ok || value != "☁︎ thread-cloud" {
+	if value, ok := unnamed.StatusLineValueForItem(bottompane.StatusLineThreadTitle); !ok || value != "☁️ thread-cloud" {
 		t.Fatalf("cloud thread-title fallback = %q ok=%v", value, ok)
 	}
 	if _, ok := unnamed.StatusLineValueForItem(bottompane.StatusLineThreadName); ok {
@@ -46,7 +46,7 @@ func TestStatusSurfaceCloudThreadLabelsLikeRust(t *testing.T) {
 		ThreadCloud: true,
 	})
 	value, ok := long.TerminalTitleValueForItem(TerminalTitleThread)
-	if !ok || !strings.HasPrefix(value, "☁︎ ") || !strings.HasSuffix(value, "...") {
+	if !ok || !strings.HasPrefix(value, "☁️ ") || !strings.HasSuffix(value, "...") {
 		t.Fatalf("truncated cloud title = %q ok=%v", value, ok)
 	}
 	if graphemes := uniseg.GraphemeClusterCount(value); graphemes > 48 {
