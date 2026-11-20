@@ -2211,11 +2211,12 @@
     "tui/ui_tree.go",
     "tui/ui_tree_prepare.go",
     "tui/ui_tree_render.go",
-    "tui/ui_tree_style.go"
+    "tui/ui_tree_style.go",
+    "tui/ui_tree_justify_like_rust_test.go"
    ],
    "phase": "P1",
    "status": "complete",
-   "verifier": "TestUITreePreparedMeasuresViewportLikeRust;TestUITreePreparedCollapsesWhitespaceLikeRust;TestUITreePreparedSanitizesTerminalCommandsLikeRust;TestUITreePreparedWrapsNonBreakingLabelLikeRust;TestUITreePreparedWrappedLinkOffsetsLikeRust;TestUITreePreparedSplitsGraphemesLikeRust;TestUITreePreparedRendersInheritedStylesLikeRust;TestUITreeThemeColorResolutionLikeRust"
+   "verifier": "TestUITreePreparedMeasuresViewportLikeRust;TestUITreePreparedCollapsesWhitespaceLikeRust;TestUITreePreparedSanitizesTerminalCommandsLikeRust;TestUITreePreparedWrapsNonBreakingLabelLikeRust;TestUITreePreparedWrappedLinkOffsetsLikeRust;TestUITreePreparedSplitsGraphemesLikeRust;TestUITreePreparedRendersInheritedStylesLikeRust;TestUITreeThemeColorResolutionLikeRust;TestUITreeReadsRowJustifyLikeRust;TestUITreeBetweenKeepsGroupsAtOppositeEdgesLikeRust;TestUITreeBetweenDistributesIndivisibleCellsLikeRust;TestUITreeStartGroupsBareStringsLikeRust;TestUITreeBetweenRootAndNestedRowsLikeRust;TestUITreeBetweenRoundsFractionalPositionsLikeRust;TestUITreeBetweenShrinksHyphenatedWordLikeRust"
   },
   {
    "id": "model-visible-history-and-compaction-baseline",

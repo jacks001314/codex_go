@@ -75,7 +75,6 @@ ac784eb10e6d02486b00d383b64822b69473c0e8	2026-11-19	Enable MCP connection sharin
 308ab1b895229dbd258167cdbc97f450fca3d741	2026-11-19	Document how to render TUI shortcut labels (#62560)
 65454c7b994e01cfe594b4c3b0f9971bf70aafdb	2026-11-19	Add OpenTelemetry for subagent lifecycles (#62567)
 0762dfa710e76125173ceceeb12bb8a24b82e598	2026-11-19	Box the managed credential loading future (#62568)
-99870c4f4921ee03f820e8e322ef97ed671ea6ef	2026-11-19	Add justification to custom statusline rows (#62569)
 3869f396aa6d748015b3636e8f97ed9d353371b9	2026-11-19	Keep async Guardian scoring active for serving probes (#62571)
 40a848caf4b540e0d12d00c3e7c1b4de7dd7b4dc	2026-11-19	Allow macOS installer cleanup despite unrelated mount warnings (#62582)
 81ef12b6174a0a04cb8f6ee337fcde61686a6ab8	2026-11-19	Refresh open sidebar file previews when files change (#62583)

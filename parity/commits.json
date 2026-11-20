@@ -52841,11 +52841,16 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "tui/ui_tree_style.go carries the RowJustify token (start, between) and UINode.Justify holds the decoded value; tui/ui_tree.go rejects unknown or non-string values, keeps the nil default, includes justify in the encoder, and accepts the positional props form serde allows for RowProps so [gap, background, wrap, justify] decodes to the same node.",
+    "tui/ui_tree_prepare.go mirrors Rust prepare: an explicit justify groups adjacent bare strings into one flex item, an element that prepares to nothing becomes an empty item that still separates gaps, only text with no authored break is dropped, and the row keeps justify for layout.",
+    "tui/ui_tree_render.go gives a between band the columns it did not fill, rounds each item's cumulative share to the nearest cell so both edges stay fixed, spreads a wrapped line's own spare columns, and clamps only the child layout width so an empty item advances the band by its assigned columns.",
+    "systemskills/assets/samples/create-statusline/references/statusline.d.ts exports RowJustify and the documented justify prop.",
+    "tests: tui TestUITreeReadsRowJustifyLikeRust, TestUITreeBetweenKeepsGroupsAtOppositeEdgesLikeRust, TestUITreeBetweenDistributesIndivisibleCellsLikeRust, TestUITreeStartGroupsBareStringsLikeRust, TestUITreeBetweenRootAndNestedRowsLikeRust, TestUITreeBetweenRoundsFractionalPositionsLikeRust, TestUITreeBetweenShrinksHyphenatedWordLikeRust; go test ./tui/... -count=1; go test ./systemskills -count=1",
+    "plan: update/plan_2026_11_20.md batch 13"
    ],
    "kind": "runtime",
    "sha": "99870c4f4921ee03f820e8e322ef97ed671ea6ef",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Add justification to custom statusline rows (#62569)"
   },
   {
