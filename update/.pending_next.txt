@@ -32,7 +32,6 @@ bd00a8a42ece6ea9d22d406b2e6923218c02e282	2026-11-18	Preserve pending realtime sp
 081f205f423eb2a4db54318e7ded3b074aeb5532	2026-11-18	Use Guardian V3 board evidence for synchronous approvals (#62310)
 daa59ebd298ed6d7ee7dc92af09e5b25c5d63029	2026-11-18	Keep authorization evidence local to agent forks (#62314)
 6257fbc4bd5339144e6ffb3398a011917d883a2e	2026-11-18	Move sandbox preparation into platform backends (#62317)
-f2d3086682a848e9121c5f688cf1d77ad5d2a114	2026-11-18	Trace MCP binding capture and tool catalog refresh (#62320)
 c1ed51ca2cd71cbbd4e6734f21cc3c9a9136d5d2	2026-11-18	Accept inbound Noise connections in remote exec-server (#62325)
 c39f047d24e66521d0c538d153a857ed5c03910b	2026-11-18	Migrate the Windows MXC sandbox to the public V1 SDK (#62331)
 0a82fdf49d98feb33638cd38f79451ac966da572	2026-11-18	Open Codex thread links inside the TUI (#62332)

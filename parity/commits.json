@@ -51843,12 +51843,16 @@
     "codex_go"
    ],
    "evidence": [
-    "Gap: Rust #62320 instruments client tool catalog snapshot reads, refresh lock waits, fetch, active-call waits, publication, and binding capture with tracing spans (cache_hit attribute included).",
-    "Go's catalog equivalent, mcp/client_tool_catalog.go refresh, has no spans, and package mcp has no tracer value plumbed in; the repo's span helpers live in appserver (telemetry tracer injected per router), so landing these spans needs a tracer seam inside mcp plus the span names mcp.catalog.read_snapshot, mcp.catalog.refresh_lock_wait, mcp.catalog.fetch, mcp.catalog.active_calls_wait, mcp.catalog.publication_lock_wait, mcp.catalog.publish, and mcp.tools.prepare_for_model."
+    "mcp/catalog_tracing.go adds the tracer seam (CatalogTracer plus SetCatalogTracer) because package mcp cannot import the telemetry client, and appserver/mcp_catalog_tracer.go adapts the request tracer the app server already installs, so installOtelProvider also clears or installs the catalog tracer on reload.",
+    "mcp/client_tool_catalog.go records mcp.catalog.refresh_lock_wait around the refresh mutex, mcp.catalog.fetch around the fetch, mcp.catalog.active_calls_wait and mcp.catalog.publication_lock_wait around the single write lock Go uses for both waits, mcp.catalog.publish around the revision advance, and mcp.catalog.read_snapshot around every consistent snapshot read.",
+    "mcp/tool_runtime.go records mcp.tools.prepare_for_model for the per-server projection of raw client tools into model tools and mcp.binding.normalize_tools for the sanitized, prefixed, deduplicated model names; mcp/codex_apps_catalog.go records mcp.apps.client_ready_wait while waiting for the Apps catalog to become idle.",
+    "tests: mcp TestClientToolCatalogRefreshRecordsSpansLikeRust, TestClientToolCatalogFailedFetchStopsBeforePublicationLikeRust, TestClientToolCatalogSpansAreNoOpsWithoutTracerLikeRust, TestMCPToolPreparationRecordsSpansLikeRust; go test ./mcp -run 'ClientToolCatalog|MCPToolPreparation|Apps' -count=1; go build ./...",
+    "Residual: the mcp.binding.startup_wait, mcp.binding.catalog_capture, mcp.binding.catalog_revision_wait and mcp.binding.cache_lock_wait spans with the cache_hit attribute instrument Rust's published-runtime binding cache, which Go does not have (docs in appserver/mcp_config_refresh.go describe the same divergence): Go resolves model tools per request from the live server statuses instead of a cached binding, so there is no cache lock, capture, or revision wait to time.",
+    "plan: update/plan_2026_11_20.md batch 15"
    ],
    "kind": "runtime",
    "sha": "f2d3086682a848e9121c5f688cf1d77ad5d2a114",
-   "status": "implementation_pending",
+   "status": "complete",
    "subject": "Trace MCP binding capture and tool catalog refresh (#62320)"
   },
   {
