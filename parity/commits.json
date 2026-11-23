@@ -55222,9 +55222,21 @@
    "sha": "964fdd565e29d9e1ab6a5caabb70765d0b49e7ad",
    "status": "not_applicable",
    "subject": "Remove the empty-preview rollout summary test (#63414)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 147: not_applicable - Rust #63415 gives the deferred-network-approval monitor a weak reference so startup cleanup can terminate a process launched but not yet registered in the terminal registry. Go has no Arc/Weak lifetime to weaken and no blocking attribution step between launch and registration: tool/unified_exec.go's local Exec and execRemote both build the process and store it in m.processes immediately after the command/process/start succeeds, and the network policy controller is a callback attached to the exec-server client session (execserver/client.go RegisterNetworkPolicyController) rather than a task holding the process. Startup interruption during network approval is already covered from #63365 (appserver/network_approval_startup_interrupt_like_rust_test.go), so there is no Go state this fix maps onto."
+   ],
+   "kind": "runtime",
+   "sha": "490e213e17f6bdf614de2fab5a4f1259951f3dae",
+   "status": "not_applicable",
+   "subject": "Terminate unregistered exec processes on startup interruption (#63415)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "964fdd565e29d9e1ab6a5caabb70765d0b49e7ad",
+ "rustToInclusive": "490e213e17f6bdf614de2fab5a4f1259951f3dae",
  "schemaVersion": 1
 }

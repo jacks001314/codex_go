@@ -7,7 +7,7 @@
     "parityManifest": "parity.json"
   },
   "target": {
-    "rustCommit": "964fdd565e29d9e1ab6a5caabb70765d0b49e7ad",
+    "rustCommit": "490e213e17f6bdf614de2fab5a4f1259951f3dae",
     "rustBranch": "main",
     "goStartCommit": "5e25b91daebea89b54db643b2d70ee4c930f9cd7"
   },
@@ -37,7 +37,7 @@
     ]
   },
   "certificationBlockers": [
-    "Per-commit certification of the 4460 upstream commits in bd19459358f534ed1cae464ec13d56600aeb45f2..964fdd565e29d9e1ab6a5caabb70765d0b49e7ad is in progress; parity/commits.json records every commit with its audit status (3575 complete, 809 not applicable, 0 implementation_pending, 0 audit_pending, 0 regression_pending, 55 partial, 21 blocked_precondition)",
+    "Per-commit certification of the 4461 upstream commits in bd19459358f534ed1cae464ec13d56600aeb45f2..490e213e17f6bdf614de2fab5a4f1259951f3dae is in progress; parity/commits.json records every commit with its audit status (3575 complete, 810 not applicable, 0 implementation_pending, 0 audit_pending, 0 regression_pending, 55 partial, 21 blocked_precondition)",
     "21 commits are blocked on architecture: #40625 (Ignore closed agents when changing directories), #42841 (Add a native Windows MXC sandbox adapter), #43624 (Add macOS user verification with Secure Enclave signing), #55378 (Migrate the Windows MXC sandbox to `mxc-sdk`), #61795 (Add lifecycle-managed Guardian housekeeping), #61797 (Wire Guardian V3 housekeeping into the app server), #61798 (Add a dedicated Guardian v3 housekeeper inference client), #61799 (Route Guardian housekeeping through its dedicated sampler), #61880 (Preserve local Markdown document targets in transcript rendering), #61889 (Add search, selection, and link navigation to document previews), #61890 (Open source file links at line and column targets in the TUI), #61896 (Bound rollout trace capture with configurable storage limits), #61898 (Tie Linux sandbox proxy bridges to the launcher lifetime), #61900 (Fix proc mount fallback detection for Bubblewrap 0.12), #61909 (Add opt-in item-boundary interrupts for subagents), #61916 (Preserve remote compaction summaries when interrupting child agents), #61919 (Add sidebar image previews and present generated images after answers), #61922 (Add conversation files to the TUI sidebar chooser), #61945 (Allow host-started forks to inherit the root session ID), #61946 (Include enclosing tool context in nested Guardian approvals), #62134 (Add reusable per-agent reviewer conversations to Guardian v3)",
     "24 commits are partial and keep the candidate open: #54776, #57267, #58720, #59003, #59739, #59767, #59944, #59987, #59999, #60046, #60075, #60172, #60905, #60929, #61138, #61206, #61256, #61276, #61385, #61887, #61888, #61920, #62135, #62136; each entry's evidence records the residual it was judged against",
     "4 domains remain open in parity/domains.json: alignment-control, sqlite-runtime-version, sdk-cancellation, cross-platform-release",
