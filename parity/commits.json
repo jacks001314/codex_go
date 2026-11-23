@@ -53833,11 +53833,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Rust #62888 introduces the `codex-tool-call-id::ToolCallId` newtype for dispatched invocations, model-visible Responses calls and Code Mode runtime calls; it wraps a String and keeps serializing as a string. Go already carries that one dispatch identity as a string everywhere: tool.Registry builds tool.Invocation.CallID from the wire item's call_id, tool outputs and lifecycle events reuse invocation.CallID, and codemode nested calls carry ToolCallID/RuntimeToolCallID. No behavior or wire change follows, so the Go surfaces need no refactor."
    ],
    "kind": "runtime",
    "sha": "8a1a476659ba82105ec945d4b790f299cff25f42",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Use a shared `ToolCallId` for dispatched tool invocations (#62888)"
   },
   {
@@ -53893,11 +53893,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "not_applicable: Rust #62898 types the rollout-trace reducer's ConversationItemId (transcript ordinals such as conversation_item:9) and keeps serializing it as a string; Go has no rollout-trace recorder/reducer (rollout/trace_reduce.go only summarises an existing trace.jsonl), so the newtype has no Go surface and the trace bundle wire format is unchanged."
    ],
    "kind": "runtime",
    "sha": "db72403243ee3ba63ab7d258e6b3c80545fc423d",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Distinguish conversation item IDs from Responses IDs in traces (#62898)"
   },
   {
