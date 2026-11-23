@@ -3240,6 +3240,11 @@ type Model struct {
 	// sidebarChooserHover is the chooser row index the pointer is over, or -1
 	// (Rust sidebar_chooser.rs `SidebarStyle::hovered_choice`).
 	sidebarChooserHover int
+	// sidebarAgentTrees tracks each primary conversation's spawn tree so the
+	// chooser can list subagents and their statuses (Rust #62149
+	// sidebar_subagents::Overview).
+	sidebarAgentTrees   map[string]*sidebarAgentTree
+	sidebarAgentRequest uint64
 	// pendingSideTabCloseThreadID holds the tab waiting on the close
 	// confirmation, so a replaced dialog cannot close a different chat.
 	pendingSideTabCloseThreadID string
@@ -5092,6 +5097,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case AppListResultMsg:
 		m.applyAppListResult(msg)
 		return m, nil
+	case SidebarAgentsLoadedMsg:
+		return m, m.applySidebarAgentsLoaded(msg)
 	case AgentListResultMsg:
 		return m, m.applyAgentListResult(msg)
 	case AgentThreadVisibilityMsg:
@@ -9047,6 +9054,10 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 			cmd = bubbletea.Batch(cmd, m.prepareGoalSet(objective))
 		}
 	case "turn.started":
+		// Rust sidebar_agent_status::observe marks the acting thread Running; the
+		// app server's turn notifications omit the thread id, so the displayed
+		// thread supplies it.
+		m.observeSidebarAgentTurn(firstNonEmpty(event.ThreadID, m.currentThreadID()), sidebarAgentRunning, false)
 		// Rust #57363: a new turn clears any recourse left by the previous one.
 		m.clearSafetyRecourse()
 		// Rust #45255: the first turn materializes the thread's rollout, so it no
@@ -9114,6 +9125,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		if event.StartedAtMS != nil {
 			startedAtMS = *event.StartedAtMS
 		}
+		m.observeSidebarAgentItem(event.ThreadID, event.Item)
 		m.applyItemStarted(event.Item, startedAtMS)
 	case "item.completed":
 		if event.Item != nil && strings.EqualFold(strings.TrimSpace(event.Item.Phase), messagePhaseFinalAnswer) &&
@@ -9122,6 +9134,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 			// pairs the flag with the turn that completes.
 			m.turnFinalAnswerSeen = true
 		}
+		m.observeSidebarAgentItem(event.ThreadID, event.Item)
 		cmd = m.applyItemCompleted(event.Item)
 	case "item.delta":
 		// Rust drops the streamed agent text of a delegated turn's private
@@ -9138,6 +9151,13 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 	case "item.plan.delta":
 		m.applyProposedPlanDelta(event.Delta)
 	case "turn.completed":
+		// Rust sidebar_agent_status::observe keeps explicit outcomes visible in
+		// the chooser when a watched subagent's turn finishes.
+		completedPhase := sidebarAgentCompleted
+		if event.TurnFailed {
+			completedPhase = sidebarAgentFailed
+		}
+		m.observeSidebarAgentTurn(firstNonEmpty(event.ThreadID, m.currentThreadID()), completedPhase, false)
 		questionDrafts = m.takeQuestionDrafts()
 		m.clearSafetyBuffering()
 		// Rust #57363: the completion notification is where a deferred policy

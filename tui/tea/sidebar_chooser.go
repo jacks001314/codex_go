@@ -71,6 +71,7 @@ const (
 	sidebarRetryingChatsTitle       = "Retrying…"
 	sidebarRetryChatsTitle          = "Retry loading side chats"
 	sidebarSideChatsGroupTitle      = "Side chats"
+	sidebarSubagentsGroupTitle      = "Subagents"
 	// Rust sidebar_chooser.rs WIDE_WIDTH: the new-chat subtitle shares the row
 	// with its title only when the body is this wide.
 	sidebarChooserWideWidth = 58
@@ -324,7 +325,7 @@ func (m *Model) openSidebarChooser() bubbletea.Cmd {
 	if discovery == nil {
 		discovery = m.refreshStatusControlsCmd()
 	}
-	return batchSideCommands(cmd, discovery, m.requestSidebarFiles())
+	return batchSideCommands(cmd, discovery, m.requestSidebarFiles(), m.refreshSidebarAgentsCmd())
 }
 
 func (m *Model) closeSidebarChooser() bubbletea.Cmd {
@@ -498,7 +499,7 @@ func (m *Model) updateSidebarChooserKey(msg keymsg.KeyMsg) (bool, bubbletea.Cmd)
 		}
 		return true, nil
 	}
-	if !m.sidebarChatCreationAvailable() && action != "cancel" && len(m.sidebarFiles) == 0 {
+	if !m.sidebarChatCreationAvailable() && action != "cancel" && len(m.sidebarFiles) == 0 && len(m.sidebarAgentRows()) == 0 {
 		// Rust #60319: before the first main-chat turn the chooser explains the
 		// wait and consumes every list action except Cancel. Files already in
 		// the inventory stay reachable.
@@ -939,6 +940,11 @@ func (m *Model) acceptSidebarChooser() bubbletea.Cmd {
 		return batchSideCommands(cmd, m.startSideConversation("/side", ""))
 	case m.sidebarChooserIsRetryRow(m.sidebarChoice, choices):
 		return m.requestSideChatDiscovery(true)
+	case m.sidebarChooserAgentSelected():
+		agent, _ := m.sidebarChooserAgent(m.sidebarChoice)
+		// Rust side_focus opens the agent's conversation through the shared
+		// thread switch, leaving the pane on the row it came from.
+		return batchSideCommands(m.closeSidebarChooser(), m.switchToSidebarAgent(agent.ThreadID))
 	default:
 		if file, ok := m.sidebarChooserFile(m.sidebarChoice); ok {
 			if m.sidebarFilePreviewUnavailable != "" {
@@ -1283,7 +1289,7 @@ func (m *Model) sidebarChooserRows(width int, height int) []string {
 		return finish()
 	}
 	choiceRows := m.sidebarChoiceRowsFor(width, height)
-	waiting := !m.sidebarChatCreationAvailable() && len(m.sidebarFiles) == 0
+	waiting := !m.sidebarChatCreationAvailable() && len(m.sidebarFiles) == 0 && len(m.sidebarAgentRows()) == 0
 	top := 0
 	if !waiting {
 		top = choiceRows.top(m.sidebarChooserScroll, m.sidebarChooserClampedChoice())
@@ -1376,6 +1382,9 @@ func (m *Model) paintSidebarChooserBody(width int, height int, rows sidebarChoic
 	if rows.chatsHeader >= 0 {
 		paintAt(rows.chatsHeader, "\x1b[2m"+sidebarSideChatsGroupTitle+"  "+strconv.Itoa(len(choices))+"\x1b[22m")
 	}
+	if rows.agentsHeader >= 0 {
+		paintAt(rows.agentsHeader, "\x1b[2m"+sidebarSubagentsGroupTitle+"  "+strconv.Itoa(len(m.sidebarAgentRows()))+"\x1b[22m")
+	}
 	if rows.filesHeader >= 0 {
 		group := "Files"
 		markdownOnly := len(m.sidebarFiles) > 0
@@ -1393,6 +1402,10 @@ func (m *Model) paintSidebarChooserBody(width int, height int, rows sidebarChoic
 	for _, visible := range rows.visible(m.sidebarChooserScroll, choice) {
 		index := visible.index
 		marker, fill, subtitle := m.sidebarChooserRowStyle(index, level)
+		if agent, ok := m.sidebarChooserAgent(index); ok {
+			m.paintSidebarAgentRow(agent, marker, rows.wide, bodyWidth, visible.rows, paintFilledAt, fill, subtitle, level)
+			continue
+		}
 		if m.sidebarChooserIsRetryRow(index, choices) {
 			label := sidebarRetryChatsTitle
 			if m.sidebarDiscovery == SideChatDiscoveryLoading {
@@ -1466,6 +1479,25 @@ func paintSidebarChooserRow(text string, width int, spec codextui.StyleSpec, lev
 	}
 	padding := max(width-codextui.DisplayWidth(text), 0)
 	return prefix + text + strings.Repeat(" ", padding) + "\x1b[0m"
+}
+
+// paintSidebarAgentRow is Rust paint's Subagents arm: the status sits inline
+// on a wide pane and on its own indented row when the pane is narrow.
+func (m *Model) paintSidebarAgentRow(agent sidebarAgentRow, marker string, wide bool, bodyWidth int, lines sidebarChooserSpan, paintAt func(int, string, codextui.StyleSpec), fill codextui.StyleSpec, subtitle codextui.StyleSpec, level codextui.StdoutColorLevel) {
+	name := marker + " " + agent.Symbol + " " + agent.Name
+	status := agent.Status
+	if prefix := codextui.SGRForStyleQuiet(subtitle, level); prefix != "" {
+		status = prefix + status + "\x1b[0m"
+	}
+	if !wide {
+		paintAt(lines.start, truncateSidebarChooserRow(name, bodyWidth), fill)
+		paintAt(lines.start+1, truncateSidebarChooserRow("    "+status, bodyWidth), subtitle)
+		return
+	}
+	titleWidth := max(bodyWidth-codextui.DisplayWidth(agent.Status)-2, 0)
+	title := truncateSidebarChooserRow(name, titleWidth)
+	gap := max(titleWidth-codextui.DisplayWidth(title)+2, 0)
+	paintAt(lines.start, truncateSidebarChooserRow(title+strings.Repeat(" ", gap)+status, bodyWidth), fill)
 }
 
 // paintSidebarFileRow is Rust paint's file arm: the relative path split into
@@ -1642,7 +1674,8 @@ func (m *Model) sidebarChooserFooterHints() []sidebarChooserFooterHint {
 	fileSelected := m.sidebarChooserSelectedFile()
 	visible := m.sidebarChooserSelectionVisible()
 	hints := make([]sidebarChooserFooterHint, 0, 4)
-	if visible && (available || fileSelected) && (!fileSelected || m.sidebarFilePreviewUnavailable == "") {
+	_, agentSelected := m.sidebarChooserSelectedAgent()
+	if visible && (available || fileSelected || agentSelected) && (!fileSelected || m.sidebarFilePreviewUnavailable == "") {
 		if key := m.sidebarChooserListHint("accept"); key != "" {
 			hints = append(hints, sidebarChooserFooterHint{
 				text:   key + " " + m.sidebarChooserAcceptLabel(),
@@ -1659,7 +1692,7 @@ func (m *Model) sidebarChooserFooterHints() []sidebarChooserFooterHint {
 	if fileSelected && visible && m.sidebarChooserFilePathKeyAvailable() {
 		hints = append(hints, sidebarChooserFooterHint{text: "p path", action: "path"})
 	}
-	if available || len(m.sidebarFiles) > 0 {
+	if available || len(m.sidebarFiles) > 0 || len(m.sidebarAgentRows()) > 0 {
 		up := m.sidebarChooserListHint("move_up")
 		down := m.sidebarChooserListHint("move_down")
 		if up != "" && down != "" {
@@ -2311,14 +2344,76 @@ func (m *Model) sidebarChooserChoiceCount() int {
 	return m.sidebarChooserChoiceCountFor(m.sidebarChooserChoices())
 }
 
-// sidebarChooserFileStartFor is Rust ChatTabs::file_start: the new-chat row,
-// every saved chat, the optional retry row, and then the files.
-func (m *Model) sidebarChooserFileStartFor(choices []SideChatChoice) int {
+// sidebarChooserAgentStartFor is Rust ChatTabs::first_agent: the new-chat row,
+// every saved chat and the optional retry row come first.
+func (m *Model) sidebarChooserAgentStartFor(choices []SideChatChoice) int {
 	start := len(choices) + 1
 	if m.sidebarChooserRetryVisible(choices) {
 		start++
 	}
 	return start
+}
+
+// sidebarChooserFileStartFor is Rust ChatTabs::file_start: the new-chat row,
+// every saved chat, the optional retry row, the Subagents section, and then
+// the files.
+func (m *Model) sidebarChooserFileStartFor(choices []SideChatChoice) int {
+	return m.sidebarChooserAgentStartFor(choices) + len(m.sidebarAgentRows())
+}
+
+// sidebarChooserAgentOffset maps a chooser index onto the Subagents section
+// (Rust ChatTabs::agent).
+func (m *Model) sidebarChooserAgentOffset(index int) (int, bool) {
+	if m == nil {
+		return 0, false
+	}
+	offset := index - m.sidebarChooserAgentStartFor(m.sidebarChooserChoices())
+	agents := m.sidebarAgentRows()
+	if offset < 0 || offset >= len(agents) {
+		return 0, false
+	}
+	return offset, true
+}
+
+func (m *Model) sidebarChooserAgent(index int) (sidebarAgentRow, bool) {
+	offset, ok := m.sidebarChooserAgentOffset(index)
+	if !ok {
+		return sidebarAgentRow{}, false
+	}
+	return m.sidebarAgentRows()[offset], true
+}
+
+// sidebarChooserAgentIndex is Rust ChatTabs::agent_index: the chooser row that
+// lists a spawn-tree member.
+func (m *Model) sidebarChooserAgentIndex(threadID string) int {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return 0
+	}
+	for offset, agent := range m.sidebarAgentRows() {
+		if agent.ThreadID == threadID {
+			return m.sidebarChooserAgentStartFor(m.sidebarChooserChoices()) + offset
+		}
+	}
+	return 0
+}
+
+// sidebarChooserSelectedAgent reports the Subagents row the selection is on.
+func (m *Model) sidebarChooserSelectedAgent() (sidebarAgentRow, bool) {
+	if m == nil {
+		return sidebarAgentRow{}, false
+	}
+	return m.sidebarChooserAgent(m.sidebarChooserClampedChoice())
+}
+
+// sidebarChooserAgentSelected reports whether the raw selection is a Subagents
+// row, so accept opens the agent instead of the new-chat entry.
+func (m *Model) sidebarChooserAgentSelected() bool {
+	if m == nil {
+		return false
+	}
+	_, ok := m.sidebarChooserAgent(m.sidebarChoice)
+	return ok
 }
 
 func (m *Model) sidebarChooserFileStart() int {

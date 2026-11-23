@@ -18,13 +18,15 @@ type sidebarChooserScroll struct {
 }
 
 // sidebarChoiceRows mirrors Rust ChoiceRows: the painted row range of every
-// chooser index (new chat, chats, retry row, files), plus the header rows.
+// chooser index (new chat, chats, retry row, subagents, files), plus the
+// header rows.
 type sidebarChoiceRows struct {
-	wide        bool
-	height      int
-	chatsHeader int
-	filesHeader int
-	choices     []sidebarChooserSpan
+	wide         bool
+	height       int
+	chatsHeader  int
+	agentsHeader int
+	filesHeader  int
+	choices      []sidebarChooserSpan
 }
 
 // sidebarChooserBodyStart is Rust CHOOSER_BODY_START: the first body row below
@@ -32,7 +34,7 @@ type sidebarChoiceRows struct {
 const sidebarChooserBodyStart = 1
 
 func (m *Model) sidebarChoiceRowsFor(width int, height int) sidebarChoiceRows {
-	rows := sidebarChoiceRows{chatsHeader: -1, filesHeader: -1}
+	rows := sidebarChoiceRows{chatsHeader: -1, agentsHeader: -1, filesHeader: -1}
 	if m == nil {
 		return rows
 	}
@@ -41,6 +43,7 @@ func (m *Model) sidebarChoiceRowsFor(width int, height int) sidebarChoiceRows {
 	rows.wide = sidebarChooserBodyWidth(width) >= sidebarChooserWideWidth
 	rows.height = max(height-3, 0)
 	fileStart := m.sidebarChooserFileStartFor(choices)
+	agentStart := m.sidebarChooserAgentStartFor(choices)
 	retryVisible := m.sidebarChooserRetryVisible(choices)
 	count := fileStart + len(files)
 	row := sidebarChooserFirstChoiceRow
@@ -53,13 +56,18 @@ func (m *Model) sidebarChoiceRowsFor(width int, height int) sidebarChoiceRows {
 			row += 2
 		}
 		file := index >= fileStart
+		agent := index >= agentStart && !file
+		if agent && index == agentStart {
+			rows.agentsHeader = row + 1
+			row += 3
+		}
 		if index == fileStart {
 			rows.filesHeader = row + 1
 			row += 3
 		}
 		start := row
 		subtitle := false
-		if index == 0 || file {
+		if index == 0 || file || agent {
 			subtitle = !rows.wide
 		} else if index-1 < len(choices) {
 			subtitle = m.sidebarChooserPrompt(choices[index-1]) != ""

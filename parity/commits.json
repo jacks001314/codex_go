@@ -51309,11 +51309,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1270: partial - Rust adds subagents and their status to the sidebar chooser next to side chats and files. Go's chooser builds its rows from SideChatChoice entries plus the tracked side-conversation tabs and then files (tui/tea/sidebar_chooser.go sidebarChooserChoices/sidebarChooserFileStartFor); subagents never appear as chooser rows and rows carry no status or dot."
+    "Batch 121: complete - Rust adds a Subagents section to the sidebar chooser for the primary conversation's spawn tree, with per-agent name and status, outcome retention, and switching to the agent's conversation. Go now tracks each primary thread's spawn tree in tui/tea/sidebar_subagents.go (registration through collab_agent_tool_call and sub_agent_activity items plus the agent reader requested when the chooser opens), keeps Rust's nine states and State::supersedes semantics, and orders rows by the stable (!active, done) key. The chooser inserts the section between the retry row and Files with the Subagents header, wide inline status, narrow status row, click targets, accept through OnSwitchAgent, footer movement/accept hints and the waiting-state gate; files start after the agents, matching Rust's ChatTabs::first_agent/file_start.",
+    "Tests: tui/tea/sidebar_subagents_like_rust_test.go covers the phase labels, outcome supersede rules, spawn-tree rows and ordering, the painted wide and narrow rows, live spawn/completion items, parent-first discovery with unrelated threads dropped, accept switching threads, and reachability before the parent's first turn.",
+    "Gap: Rust replays saved turn history to restore explicit outcomes before discovery (restore_sidebar_agent_outcomes); the tea model has no persisted per-child turn replay, so outcomes come from live items, watched turns and the reader's liveness."
    ],
    "kind": "runtime",
    "sha": "18352dc4e8757d652e4102a17abc76601847b8da",
-   "status": "partial",
+   "status": "complete",
    "subject": "Show subagents and their status in the TUI sidebar chooser (#62149)"
   },
   {
