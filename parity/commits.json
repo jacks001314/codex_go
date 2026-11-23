@@ -51633,11 +51633,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "linuxsandbox.ResolveLinuxSandboxMode mirrors Rust's LinuxSandboxMode::resolve: a managed proxy route forces bubblewrap, and the retained legacy Landlock backend is selected only when requested without a route. The helper argv builder uses that resolved mode for --use-legacy-landlock, --allow-network-for-proxy and --transparent-tcp. Tests: go test ./sandbox/linuxsandbox -run 'CreateCommandArgs' -count=1",
+    "EnsureLinuxSandboxModeSupportedOnWSL1 mirrors LinuxSandboxMode::ensure_supported_on_wsl1 and runs in the Linux branch of BuildCommandRunPlan before the helper is launched, so WSL1 rejects a managed route or a bubblewrap-enforced restricted filesystem with the published bubblewrap warning while keeping full-disk bubblewrap and legacy Landlock launches. Tests: go test ./sandbox -run 'WSL1' -count=1",
+    "go test ./sandbox ./sandbox/linuxsandbox -count=1; go build ./...; go vet ./sandbox ./sandbox/linuxsandbox. Go names the backend LinuxSandboxCommand already, so the Rust rename parts had no separate carrier."
    ],
    "kind": "runtime",
    "sha": "bcff988bd12917283be7040768bfe928f63b5ff0",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Resolve Linux sandbox mode once before launching the helper (#62215)"
   },
   {

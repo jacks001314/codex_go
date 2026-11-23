@@ -100,6 +100,28 @@ func CreateCommandArgsWithSandboxExeAndManagedNetworkAndTransparentTCP(sandboxEx
 	})
 }
 
+// LinuxSandboxMode is the effective Linux sandbox backend for one launch
+// (Rust #62215 LinuxSandboxMode). Bubblewrap is the default; the legacy
+// Landlock path is a compatibility mode that cannot carry a managed proxy
+// route.
+type LinuxSandboxMode struct {
+	// LegacyLandlock selects the retained Landlock seccomp backend.
+	LegacyLandlock bool
+	// ManagedNetwork reports that a managed proxy route is attached, which
+	// requires bubblewrap's network namespace.
+	ManagedNetwork bool
+}
+
+// ResolveLinuxSandboxMode mirrors Rust's LinuxSandboxMode::resolve: a managed
+// proxy route takes precedence over a requested legacy Landlock mode, so the
+// WSL1 check and the helper argv always agree on the effective backend.
+func ResolveLinuxSandboxMode(useLegacyLandlock bool, managedNetwork bool) LinuxSandboxMode {
+	return LinuxSandboxMode{
+		LegacyLandlock: useLegacyLandlock && !managedNetwork,
+		ManagedNetwork: managedNetwork,
+	}
+}
+
 // CreateCommandArgsForLinuxSandbox builds the helper argv for one command.
 //
 // `--inherit-pid-namespace` is emitted first, matching Rust
@@ -155,11 +177,11 @@ func CreateCommandArgsForLinuxSandbox(opts LinuxSandboxCommandArgsOptions) ([]st
 		"--permission-profile", profileJSON,
 	)
 	managedNetworkJSON = strings.TrimSpace(managedNetworkJSON)
-	managedNetwork := allowNetworkForProxy || managedNetworkJSON != ""
-	if useLegacyLandlock && !managedNetwork {
+	mode := ResolveLinuxSandboxMode(useLegacyLandlock, allowNetworkForProxy || managedNetworkJSON != "")
+	if mode.LegacyLandlock {
 		args = append(args, "--use-legacy-landlock")
 	}
-	if managedNetwork {
+	if mode.ManagedNetwork {
 		args = append(args, "--allow-network-for-proxy")
 	}
 	if managedNetworkJSON != "" {
@@ -173,7 +195,7 @@ func CreateCommandArgsForLinuxSandbox(opts LinuxSandboxCommandArgsOptions) ([]st
 			transparentTCP = true
 		}
 	}
-	if transparentTCP && managedNetwork {
+	if transparentTCP && mode.ManagedNetwork {
 		args = append(args, "--transparent-tcp")
 	}
 	args = append(args, "--")

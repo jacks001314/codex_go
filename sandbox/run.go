@@ -310,6 +310,12 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 		plan.RequiresPlatformSandbox = true
 		plan.UnsupportedReason = strings.Join(unsupported, ", ")
 	} else if runtime.GOOS == "linux" && plan.PermissionProfile != nil && !plan.PermissionProfile.Disabled {
+		// Rust #62215: resolve the effective backend once so the WSL1 gate and
+		// the helper argv cannot disagree about bubblewrap versus legacy Landlock.
+		linuxMode := linuxsandbox.ResolveLinuxSandboxMode(plan.UseLegacyLandlock, plan.AllowNetworkForProxy || strings.TrimSpace(plan.ManagedNetworkJSON) != "")
+		if err := EnsureLinuxSandboxModeSupportedOnWSL1(linuxMode, plan.PermissionProfile, utils.IsWSL1()); err != nil {
+			return nil, err
+		}
 		profileJSON, err := linuxPermissionProfileJSONForPlan(plan)
 		if err != nil {
 			return nil, err

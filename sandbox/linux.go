@@ -1,9 +1,11 @@
 package sandbox
 
 import (
+	"errors"
 	"os"
 	"runtime"
 
+	"codex_go/sandbox/linuxsandbox"
 	"codex_go/sandbox/sandboxpath"
 	"codex_go/utils"
 )
@@ -79,4 +81,23 @@ func ShouldRequirePlatformSandbox(profile *PermissionProfile) bool {
 	// Restricted: a profile that already grants full disk write access does not
 	// need bubblewrap either.
 	return !policy.HasFullDiskWriteAccess()
+}
+
+// EnsureLinuxSandboxModeSupportedOnWSL1 mirrors Rust #62215's
+// LinuxSandboxMode::ensure_supported_on_wsl1: WSL1 cannot create the user
+// namespaces bubblewrap needs, so a launch that resolves to bubblewrap with a
+// managed proxy route or a restricted filesystem is rejected before the helper
+// runs. The legacy Landlock backend stays available on WSL1.
+func EnsureLinuxSandboxModeSupportedOnWSL1(mode linuxsandbox.LinuxSandboxMode, profile *PermissionProfile, isWSL1 bool) error {
+	if !isWSL1 {
+		return nil
+	}
+	fullDiskWrite := profile != nil && profile.Disabled
+	if !fullDiskWrite {
+		fullDiskWrite = PermissionProfileHasFullDiskWriteAccess(profile)
+	}
+	if mode.ManagedNetwork || (!mode.LegacyLandlock && !fullDiskWrite) {
+		return errors.New(wsl1BwrapWarning)
+	}
+	return nil
 }
