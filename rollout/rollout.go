@@ -2889,6 +2889,14 @@ func legacyRolloutItemWrapper(object map[string]any) bool {
 	return hasText && (itemType == "message" || itemType == "user_message" || itemType == "agent_message" || itemType == "assistant_message")
 }
 
+// Rollout listing only decodes records that can still change a thread summary.
+// Rust #62636 skips JSON parsing for lines without the event tag; the escape
+// marker keeps records whose tag is spelled with a Unicode escape parseable.
+var (
+	rolloutListingEventMessageMarker  = []byte(`"event_msg"`)
+	rolloutListingUnicodeEscapeMarker = []byte(`\u`)
+)
+
 type ThreadItem struct {
 	Path             string
 	ThreadID         string
@@ -3098,6 +3106,14 @@ func buildThreadItem(path string, archived bool, filters threadItemFilters) (Thr
 			continue
 		}
 		scanned++
+		// Rust #62636: after the first session header only an event message can
+		// change the summary. A Unicode escape can spell part of the event tag,
+		// so either marker still needs a full decode.
+		if sawSessionMeta &&
+			!bytes.Contains(raw, rolloutListingEventMessageMarker) &&
+			!bytes.Contains(raw, rolloutListingUnicodeEscapeMarker) {
+			continue
+		}
 		var line Line
 		if err := unmarshalLine(raw, &line); err != nil {
 			continue

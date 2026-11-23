@@ -53183,11 +53183,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "buildThreadItem now skips JSON decoding for records after the first session metadata unless the raw line contains the event tag marker or a Unicode escape; escaped event tags still decode, the extended user-event scan budget still counts skipped records, and the summary no longer carries a response id from unrelated records (matching Rust's HeadTailSummary).",
+    "Tests cover an escaped event tag beyond unrelated records, plain events after skipped records, the scan cap with escaped events, and archived listings filtered by provider with update-time sorting.",
+    "go test ./rollout -count=1; go test ./rollout -run 'ArchivedProviderFilter|ScanMarker|EscapedEvent|SkipsUnrelated' -count=1"
    ],
    "kind": "runtime",
    "sha": "f16c998db5285b34d65e764c91721fa16ee8a9e6",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Reduce rollout scanning overhead when listing threads (#62636)"
   },
   {
