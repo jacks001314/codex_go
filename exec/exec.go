@@ -562,7 +562,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		if current := model.UserMessageInputItem(runPrompt); current != nil {
 			webSearchInputItems = append(webSearchInputItems, current)
 		}
-		webSearchOptions, err = r.webSearchOptionsForRun(cfg, resolvedAuth, providerID, modelID, threadID, webSearchInputItems, req.Root.Shared.Search)
+		webSearchOptions, err = r.webSearchOptionsForRun(cfg, resolvedAuth, providerID, modelID, threadID, webSearchInputItems, req.Root.Shared.Search, permissionProfile)
 		if err != nil {
 			_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
 			_ = eventSink.Emit(protocol.TurnFailed(err.Error()))
@@ -574,7 +574,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 			_ = eventSink.Emit(protocol.TurnFailed(err.Error()))
 			return nil, err
 		}
-		hostedTools, err = r.hostedToolsForRun(cfg, resolvedAuth, providerID, modelID, req.Root.Shared.Search, webSearchOptions, imageGenerationOptions)
+		hostedTools, err = r.hostedToolsForRun(cfg, resolvedAuth, providerID, modelID, req.Root.Shared.Search, permissionProfile, webSearchOptions, imageGenerationOptions)
 		if err != nil {
 			_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
 			_ = eventSink.Emit(protocol.TurnFailed(err.Error()))
@@ -2049,7 +2049,7 @@ func (r *Runner) imageGenerationOptionsForRun(cfg *config.Config, resolvedAuth *
 	}, nil
 }
 
-func (r *Runner) hostedToolsForRun(cfg *config.Config, resolvedAuth *auth.ResolvedAuth, providerID string, modelID string, forceLiveWebSearch bool, standaloneWebSearch *turn.WebSearchOptions, standaloneImageGeneration *turn.ImageGenerationOptions) ([]any, error) {
+func (r *Runner) hostedToolsForRun(cfg *config.Config, resolvedAuth *auth.ResolvedAuth, providerID string, modelID string, forceLiveWebSearch bool, permissions *config.SandboxPermissionProfileResolution, standaloneWebSearch *turn.WebSearchOptions, standaloneImageGeneration *turn.ImageGenerationOptions) ([]any, error) {
 	if r == nil || !r.UseResponsesAPI {
 		return nil, nil
 	}
@@ -2066,8 +2066,9 @@ func (r *Runner) hostedToolsForRun(cfg *config.Config, resolvedAuth *auth.Resolv
 	capabilities := runtimeProvider.Capabilities()
 	tools := []any{}
 	if standaloneWebSearch == nil && !modelInfo.UseResponsesLite && capabilities.WebSearch {
-		// A provider that disallows external web access pins hosted search to cached.
-		mode := execWebSearchMode(cfg, forceLiveWebSearch).RestrictToProviderWebAccess(capabilities.ExternalWebAccess)
+		// The run's permission profile and the provider capabilities decide the
+		// effective hosted search mode (Rust #62894).
+		mode := execWebSearchModeForTurn(cfg, forceLiveWebSearch, permissions, capabilities.ExternalWebAccess)
 		if hosted := turn.HostedWebSearchTool(mode, codexapi.SearchSettingsForMode(mode, execWebSearchToolConfig(cfg)), modelInfo.WebSearchToolType); hosted != nil {
 			tools = append(tools, hosted)
 		}

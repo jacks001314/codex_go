@@ -51,6 +51,9 @@ type webSearchLaunchView struct {
 	searchFlag bool
 	cached     bool
 	live       bool
+	// indexedDefault is the requirement-merged
+	// `features.web_search_indexed_default` state (Rust #62894).
+	indexedDefault bool
 }
 
 // loadWebSearchLaunchView mirrors the loading half of Rust #50811's
@@ -69,12 +72,13 @@ func loadWebSearchLaunchView(root *cli.RootOptions) *webSearchLaunchView {
 	}
 	settings := loaded.FeatureSettings()
 	return &webSearchLaunchView{
-		values:     loaded.Values,
-		layers:     read.Layers,
-		cliKeys:    append(remoteCLIConfigOverrideKeys(root), featureToggleConfigPaths(root)...),
-		searchFlag: root != nil && root.Shared.Search,
-		cached:     features.Enabled(settings, "web_search_cached"),
-		live:       features.Enabled(settings, "web_search_request"),
+		values:         loaded.Values,
+		layers:         read.Layers,
+		cliKeys:        append(remoteCLIConfigOverrideKeys(root), featureToggleConfigPaths(root)...),
+		searchFlag:     root != nil && root.Shared.Search,
+		cached:         features.Enabled(settings, "web_search_cached"),
+		live:           features.Enabled(settings, "web_search_request"),
+		indexedDefault: features.Enabled(settings, "web_search_indexed_default"),
 	}
 }
 
@@ -175,6 +179,12 @@ func (v *webSearchLaunchView) resolveWebSearchLaunchChoice(mode webSearchParamsM
 		if mode == webSearchParamsEmbedded && (v.cached || v.live) {
 			return "", false
 		}
+		// Rust #62894: an enabled indexed default keeps the implicit default
+		// instead of pinning the legacy cached fallback, so full-access turns can
+		// still promote it to live.
+		if v.keepsImplicitIndexedDefault(mode, features, requestKey) {
+			return "", false
+		}
 		// Explicitly disabling every legacy search feature falls back to cached.
 		for _, candidate := range []string{"web_search_cached", requestKey} {
 			if !webSearchFeatureFlag(features[candidate], false) || !v.isLaunch("features."+candidate) {
@@ -192,6 +202,36 @@ func (v *webSearchLaunchView) resolveWebSearchLaunchChoice(mode webSearchParamsM
 		return choice, true
 	}
 	return "", false
+}
+
+// keepsImplicitIndexedDefault mirrors Rust #62894's indexed_default_enabled
+// check inside the legacy-disabled branch: a launch-origin legacy search flag is
+// explicitly false and the indexed default is active. Embedded sessions read the
+// requirement-merged feature state, while a remote server only honors a
+// launch-origin flag set to true.
+func (v *webSearchLaunchView) keepsImplicitIndexedDefault(mode webSearchParamsMode, features map[string]any, requestKey string) bool {
+	if v == nil || features == nil {
+		return false
+	}
+	disabledByLaunch := false
+	for _, candidate := range []string{"web_search_cached", requestKey} {
+		if webSearchFeatureFlag(features[candidate], false) && v.isLaunch("features."+candidate) {
+			disabledByLaunch = true
+			break
+		}
+	}
+	if !disabledByLaunch {
+		return false
+	}
+	if mode == webSearchParamsEmbedded {
+		return v.indexedDefault
+	}
+	enabled, ok := v.values["features"].(map[string]any)
+	if !ok {
+		return false
+	}
+	value, _ := enabled["web_search_indexed_default"].(bool)
+	return value && v.isLaunch("features.web_search_indexed_default")
 }
 
 // webSearchFeatureFlag reports whether a feature table entry is exactly the
@@ -239,9 +279,42 @@ func applyWebSearchLaunchOverride(root *cli.RootOptions, mode webSearchParamsMod
 	}
 	view := loadWebSearchLaunchView(root)
 	stripLegacyWebSearchFeatures(values)
+	// Rust #62894: forward a launch-origin indexed default so the destination can
+	// select the indexed implicit default.
+	if view.isLaunch("features.web_search_indexed_default") {
+		if effective, ok := view.values["features"].(map[string]any); ok {
+			if enabled, present := effective["web_search_indexed_default"]; present {
+				webSearchFeatures(values)["web_search_indexed_default"] = enabled
+			}
+		}
+	}
 	if choice, ok := view.resolveWebSearchLaunchChoice(mode); ok {
 		values["web_search"] = choice
+		return
 	}
+	if view != nil {
+		features, _ := view.values["features"].(map[string]any)
+		requestKey := "web_search"
+		if _, present := features["web_search_request"]; present {
+			requestKey = "web_search_request"
+		}
+		if view.keepsImplicitIndexedDefault(mode, features, requestKey) {
+			forwarded := webSearchFeatures(values)
+			forwarded["web_search_cached"] = false
+			forwarded["web_search_request"] = false
+		}
+	}
+}
+
+// webSearchFeatures returns the forwarded `features` table, creating it when the
+// request has not forwarded any feature yet.
+func webSearchFeatures(values map[string]any) map[string]any {
+	features, ok := values["features"].(map[string]any)
+	if !ok || features == nil {
+		features = map[string]any{}
+		values["features"] = features
+	}
+	return features
 }
 
 // interactiveLaunchWebSearchOverrides mirrors the embedded half of Rust #49799

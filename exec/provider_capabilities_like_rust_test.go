@@ -58,7 +58,7 @@ func TestCustomProviderCapabilityOverridesDriveRequestsLikeRust(t *testing.T) {
 	disabled := false
 	overridden := customProviderCapabilityConfig(&disabled, "v2")
 	runner := &Runner{UseResponsesAPI: true}
-	tools, err := runner.hostedToolsForRun(overridden, nil, "custom", "gpt-5", false, nil, nil)
+	tools, err := runner.hostedToolsForRun(overridden, nil, "custom", "gpt-5", false, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("hostedToolsForRun: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestCustomProviderCapabilityOverridesDriveRequestsLikeRust(t *testing.T) {
 	}
 
 	defaults := customProviderCapabilityConfig(nil, "")
-	tools, err = runner.hostedToolsForRun(defaults, nil, "custom", "gpt-5", false, nil, nil)
+	tools, err = runner.hostedToolsForRun(defaults, nil, "custom", "gpt-5", false, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("hostedToolsForRun(defaults): %v", err)
 	}

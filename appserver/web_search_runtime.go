@@ -18,8 +18,10 @@ func (r *RuntimeRouter) webSearchOptionsForTurn(cfg *config.Config, params *turn
 
 func (r *RuntimeRouter) webSearchOptionsForTurnWithMode(cfg *config.Config, params *turn.TurnStartParams, modeOverride *codexapi.WebSearchMode) (*turn.WebSearchOptions, error) {
 	mode := webSearchModeFromConfig(cfg)
+	wasExplicit := webSearchModeWasExplicit(cfg, params)
 	if modeOverride != nil {
 		mode = *modeOverride
+		wasExplicit = true
 	}
 	if cfg == nil || turnStartReviewRuntime(params) || mode == codexapi.WebSearchModeDisabled {
 		return nil, nil
@@ -47,8 +49,20 @@ func (r *RuntimeRouter) webSearchOptionsForTurnWithMode(cfg *config.Config, para
 		snapshot = &resolved.Auth
 	}
 	runtimeProvider := model.CreateRuntimeProviderForID(modelProviderConfig.ProviderID, *providerInfo, snapshot)
+	capabilities := runtimeProvider.Capabilities()
+	if modeOverride == nil {
+		// Rust #62894: the turn's permission profile and the provider
+		// capabilities decide the effective mode. A model-selected override is
+		// already a restriction and keeps its own precedence.
+		mode = webSearchModeForTurn(cfg, params, mode, wasExplicit, capabilities.ExternalWebAccess)
+	} else {
+		mode = mode.RestrictToProviderWebAccess(capabilities.ExternalWebAccess)
+	}
+	if mode == codexapi.WebSearchModeDisabled {
+		return nil, nil
+	}
 	modelInfo := r.modelInfoForRuntimeWithConfig(modelProviderConfig.Model, cfg)
-	if !appStandaloneWebSearchEnabled(runtimeProvider.Capabilities(), modelInfo, cfg.FeatureSettings()) {
+	if !appStandaloneWebSearchEnabled(capabilities, modelInfo, cfg.FeatureSettings()) {
 		return nil, nil
 	}
 	apiProvider, authHeaders, err := runtimeProvider.APIProviderAndAuth()
@@ -154,21 +168,61 @@ func webSearchSettingsFromConfig(cfg *config.Config, mode codexapi.WebSearchMode
 	return codexapi.SearchSettingsForMode(mode, webSearchToolConfig(cfg))
 }
 
+// webSearchModeFromConfig mirrors Rust resolve_web_search_mode (#62894): the
+// explicit setting wins, then the legacy feature flags, then the opt-in indexed
+// default, then the managed requirement default.
 func webSearchModeFromConfig(cfg *config.Config) codexapi.WebSearchMode {
-	if cfg == nil || cfg.Values == nil {
+	if cfg == nil {
 		return codexapi.WebSearchModeCached
 	}
-	if value, ok := cfg.Values["web_search"]; ok {
-		return codexapi.WebSearchModeFromValue(value)
+	return cfg.WebSearchModePreference()
+}
+
+// webSearchModeWasExplicit reports whether the turn selected the web search
+// mode explicitly (Rust Config::web_search_mode_was_explicit plus a
+// request-level `web_search` override).
+func webSearchModeWasExplicit(cfg *config.Config, params *turn.TurnStartParams) bool {
+	if params != nil {
+		for key, value := range params.Config {
+			if value != nil && config.CanonicalizeKey(strings.TrimSpace(key)) == "web_search" {
+				return true
+			}
+		}
 	}
-	featureSettings := cfg.FeatureSettings()
-	if features.Enabled(featureSettings, "web_search_cached") {
-		return codexapi.WebSearchModeCached
+	return cfg.WebSearchModeWasExplicit()
+}
+
+// webSearchModeForTurn mirrors Rust resolve_web_search_mode_for_turn: a
+// full-access turn promotes cached/live to live, an implicit indexed default
+// follows that promotion, and an explicit indexed selection keeps its
+// precedence. Modes the provider cannot use fall back to cached.
+func webSearchModeForTurn(cfg *config.Config, params *turn.TurnStartParams, preferred codexapi.WebSearchMode, wasExplicit, externalWebAccess bool) codexapi.WebSearchMode {
+	if cfg == nil {
+		return preferred
 	}
-	if features.Enabled(featureSettings, "web_search_request") {
-		return codexapi.WebSearchModeLive
+	cwd := ""
+	if params != nil {
+		cwd = strings.TrimSpace(params.CWD)
 	}
-	return codexapi.WebSearchModeCached
+	return config.ResolveWebSearchModeForTurn(
+		preferred,
+		wasExplicit,
+		turnUsesFullAccessPermissionProfile(cfg, cwd, params),
+		cfg.AllowedWebSearchModes(),
+		externalWebAccess,
+	)
+}
+
+// turnUsesFullAccessPermissionProfile mirrors Rust's
+// `matches!(permission_profile, PermissionProfile::Disabled)`: the search-mode
+// promotion follows the turn's permission profile, independent of the approval
+// policy.
+func turnUsesFullAccessPermissionProfile(cfg *config.Config, cwd string, params *turn.TurnStartParams) bool {
+	resolution, err := turnSandboxPermissionProfile(cfg, cwd, params)
+	if err != nil || resolution == nil || resolution.Profile == nil {
+		return false
+	}
+	return resolution.Profile.Disabled
 }
 
 func responsesMetadataFromTurnStart(params *turn.TurnStartParams) map[string]string {

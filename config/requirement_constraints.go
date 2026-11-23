@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"codex_go/codexapi"
-	featureflags "codex_go/features"
 	"codex_go/sandbox"
 )
 
@@ -57,7 +56,7 @@ func applyManagedConstrainedOverrides(values map[string]any, requirements *Confi
 	}
 	if requirements.AllowedWebSearchModes != nil {
 		effective, _, err := resolveRequirementConstrainedWebSearchMode(
-			webSearchModeForConfigValues(values),
+			webSearchModeForConfigValues(values, requirements.AllowedWebSearchModes),
 			requirements.AllowedWebSearchModes,
 		)
 		if err != nil {
@@ -104,21 +103,10 @@ func configuredApprovalsReviewerValue(raw any) string {
 
 // webSearchModeForConfigValues mirrors Rust resolve_web_search_mode: the
 // configured `web_search` value wins, then the web-search feature flags, then
-// the cached default.
-func webSearchModeForConfigValues(values map[string]any) codexapi.WebSearchMode {
-	if values != nil {
-		if raw, ok := values["web_search"]; ok && raw != nil {
-			return codexapi.WebSearchModeFromValue(raw)
-		}
-	}
+// an opt-in indexed default (Rust #62894), then the managed requirement default.
+func webSearchModeForConfigValues(values map[string]any, allowed []WebSearchMode) codexapi.WebSearchMode {
 	settings := (&Config{Values: values}).FeatureSettings()
-	if featureflags.Enabled(settings, "web_search_cached") {
-		return codexapi.WebSearchModeCached
-	}
-	if featureflags.Enabled(settings, "web_search_request") {
-		return codexapi.WebSearchModeLive
-	}
-	return codexapi.WebSearchModeCached
+	return WebSearchModePreference(values, settings, allowed)
 }
 
 // resolveRequirementConstrainedApprovalPolicy mirrors Rust's

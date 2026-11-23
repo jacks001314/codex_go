@@ -53882,11 +53882,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Implemented: config.WebSearchModePreference mirrors resolve_web_search_mode (explicit web_search, then web_search_cached/web_search_request, then features.web_search_indexed_default upgrading an implicit cached default when managed requirements allow indexed); Config.WebSearchModeWasExplicit mirrors web_search_mode_was_explicit through the loader.",
+    "Implemented: config.ResolveWebSearchModeForTurn mirrors resolve_web_search_mode_for_turn (full access promotes cached/live and the implicit indexed default to live, an explicit indexed selection keeps precedence, live/indexed require provider external web access, then cached/live/disabled fallback). App-server standalone and hosted web search, exec runs, requirement constraints and the TUI launch overrides consume it; a launch-origin indexed default is forwarded and disabling the legacy flags keeps the implicit default.",
+    "Verified: go test ./config ./exec -count=1; go test ./app -count=1; go test ./app -run 'TestWebSearchOverridesForwardIndexedDefaultLikeRust|TestWebSearchOverridesKeepImplicitIndexedDefaultEmbeddedLikeRust' -count=1; go test ./appserver -run 'WebSearch' -count=1 (full package: only the known pre-existing TestCompactThreadRejectsStaleCandidateAfterHistoryReplacementLikeRust and Windows keyring Gateway OAuth failures); go build ./...; go test ./parity -count=1."
    ],
    "kind": "runtime",
    "sha": "4739e94260dccd4ec050d457b437a5fc82e3493e",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Add an opt-in indexed web search default (#62894)"
   },
   {

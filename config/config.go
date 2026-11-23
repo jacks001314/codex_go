@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"codex_go/auth"
+	"codex_go/codexapi"
 	"codex_go/keymapschema"
 	"codex_go/network"
 
@@ -83,6 +84,14 @@ type Config struct {
 	// (Rust #56211); an explicit `memories.version` still wins. It is never
 	// serialized.
 	resolvedMemoryVersion MemoryVersion
+	// webSearchModeWasExplicit records that the raw configuration selected the
+	// web-search mode the managed constraint kept (Rust #62894
+	// Config::web_search_mode_was_explicit). A value managed requirements
+	// replaced counts as implicit. Never serialized.
+	webSearchModeWasExplicit bool
+	// webSearchModeExplicitKnown marks webSearchModeWasExplicit as resolved by the
+	// loader; configurations built elsewhere fall back to value presence.
+	webSearchModeExplicitKnown bool
 	// chatgptBaseURLExplicit records that a configuration layer above packaged
 	// defaults selected chatgpt_base_url (Rust #57178
 	// Config::chatgpt_base_url_is_explicit). An explicit commercial default must
@@ -662,8 +671,17 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 	applyManagedModelProviderOverride(values, requirements)
 	applyManagedExactOverrides(values, requirements)
 	applyManagedOtelOverrides(values, requirements)
+	rawWebSearch, rawWebSearchPresent := values["web_search"]
 	if err := applyManagedConstrainedOverrides(values, requirements); err != nil {
 		return nil, err
+	}
+	// Rust #62894: explicitness compares the raw ConfigToml value with the mode
+	// the managed constraint settled on, so a disallowed raw value is implicit.
+	webSearchModeWasExplicit := false
+	if rawWebSearchPresent && rawWebSearch != nil {
+		effective, ok := values["web_search"]
+		webSearchModeWasExplicit = ok && effective != nil &&
+			codexapi.WebSearchModeFromValue(rawWebSearch) == codexapi.WebSearchModeFromValue(effective)
 	}
 	if requirements != nil && requirements.ChatgptBaseURL != nil {
 		chatgptBaseURLExplicit = true
@@ -687,6 +705,8 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 		cloudConfigBinding:           cloudConfigBinding,
 		cloudConfigLoader:            cloudConfigLoader,
 		chatgptBaseURLExplicit:       chatgptBaseURLExplicit,
+		webSearchModeWasExplicit:     webSearchModeWasExplicit,
+		webSearchModeExplicitKnown:   true,
 		filesystemRequirementsSource: filesystemRequirementsSource,
 	}
 	if err := cfg.ValidateWindowsMXCRequirement(); err != nil {

@@ -153,12 +153,15 @@ func (r *RuntimeRouter) hostedToolsForTurn(params *turn.TurnStartParams, turnRun
 		standaloneWebSearchRegistered = turnRuntimes[0].StandaloneWebSearchRegistered()
 	}
 	if nativeSearchAllowed && !standaloneWebSearchRegistered && modelInfo != nil && !modelInfo.UseResponsesLite && capabilities.WebSearch {
-		// A provider that disallows external web access pins hosted search to cached.
+		// A model-selected search mode is already a restriction; the configured
+		// mode instead follows the turn's permission profile (Rust #62894), and a
+		// provider that disallows external web access pins hosted search to cached.
 		mode := webSearchModeFromConfig(cfg)
 		if activeSearchMode != "" {
-			mode = activeSearchMode
+			mode = activeSearchMode.RestrictToProviderWebAccess(capabilities.ExternalWebAccess)
+		} else {
+			mode = webSearchModeForTurn(cfg, params, mode, webSearchModeWasExplicit(cfg, params), capabilities.ExternalWebAccess)
 		}
-		mode = mode.RestrictToProviderWebAccess(capabilities.ExternalWebAccess)
 		if hosted := turn.HostedWebSearchTool(mode, webSearchSettingsFromConfig(cfg, mode), modelInfo.WebSearchToolType); hosted != nil {
 			tools = append(tools, hosted)
 		}

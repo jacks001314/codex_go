@@ -19,6 +19,7 @@ func (r *Runner) webSearchOptionsForRun(
 	threadID string,
 	inputItems []any,
 	forceLive bool,
+	permissions *config.SandboxPermissionProfileResolution,
 ) (*turn.WebSearchOptions, error) {
 	if r == nil || cfg == nil || !r.UseResponsesAPI {
 		return nil, nil
@@ -44,6 +45,12 @@ func (r *Runner) webSearchOptionsForRun(
 	runtimeProvider := model.CreateRuntimeProviderForID(providerID, *providerInfo, snapshot)
 	modelInfo := execModelInfo(modelID, cfg)
 	capabilities := runtimeProvider.Capabilities()
+	// Rust #62894: the effective mode follows the run's permission profile and
+	// the provider capabilities.
+	mode = execWebSearchModeForTurn(cfg, forceLive, permissions, capabilities.ExternalWebAccess)
+	if mode == codexapi.WebSearchModeDisabled {
+		return nil, nil
+	}
 	standaloneEnabled := capabilities.WebSearch &&
 		(modelInfo.UseResponsesLite || features.Enabled(cfg.FeatureSettings(), "standalone_web_search"))
 	if !standaloneEnabled {
@@ -79,20 +86,27 @@ func execWebSearchMode(cfg *config.Config, forceLive bool) codexapi.WebSearchMod
 	if forceLive {
 		return codexapi.WebSearchModeLive
 	}
-	if cfg == nil || cfg.Values == nil {
+	if cfg == nil {
 		return codexapi.WebSearchModeCached
 	}
-	if value, ok := cfg.Values["web_search"]; ok {
-		return codexapi.WebSearchModeFromValue(value)
+	return cfg.WebSearchModePreference()
+}
+
+// execWebSearchModeForTurn mirrors Rust resolve_web_search_mode_for_turn for the
+// exec run's resolved permission profile (Rust #62894).
+func execWebSearchModeForTurn(cfg *config.Config, forceLive bool, permissions *config.SandboxPermissionProfileResolution, externalWebAccess bool) codexapi.WebSearchMode {
+	if cfg == nil {
+		return execWebSearchMode(cfg, forceLive)
 	}
-	featureSettings := cfg.FeatureSettings()
-	if features.Enabled(featureSettings, "web_search_cached") {
-		return codexapi.WebSearchModeCached
-	}
-	if features.Enabled(featureSettings, "web_search_request") {
-		return codexapi.WebSearchModeLive
-	}
-	return codexapi.WebSearchModeCached
+	fullAccess := permissions != nil && permissions.Profile != nil && permissions.Profile.Disabled
+	wasExplicit := forceLive || cfg.WebSearchModeWasExplicit()
+	return config.ResolveWebSearchModeForTurn(
+		execWebSearchMode(cfg, forceLive),
+		wasExplicit,
+		fullAccess,
+		cfg.AllowedWebSearchModes(),
+		externalWebAccess,
+	)
 }
 
 func execWebSearchToolConfig(cfg *config.Config) map[string]any {

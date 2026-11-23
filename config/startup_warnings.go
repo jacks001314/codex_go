@@ -219,7 +219,7 @@ func requirementStartupWarnings(values map[string]any, requirements *ConfigRequi
 	if warning := (&Config{Values: values, Requirements: requirements}).PermissionProfileRequirementWarning(); warning != "" {
 		warnings = append(warnings, warning)
 	}
-	if _, warning, err := resolveRequirementConstrainedWebSearchMode(webSearchModeForConfigValues(values), requirements.AllowedWebSearchModes); err == nil && warning != "" {
+	if _, warning, err := resolveRequirementConstrainedWebSearchMode(webSearchModeForConfigValues(values, requirements.AllowedWebSearchModes), requirements.AllowedWebSearchModes); err == nil && warning != "" {
 		warnings = append(warnings, warning)
 	}
 	return warnings
