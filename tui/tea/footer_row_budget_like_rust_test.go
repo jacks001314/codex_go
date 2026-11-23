@@ -59,16 +59,22 @@ func TestFooterHintsFitWholeHintsLikeRust(t *testing.T) {
 	}
 }
 
-// TestEmptyFooterHintRowYieldsToStatusLikeRust covers Rust #60681: a status
-// line already occupies the footer, so no extra blank hint row is reserved.
+// TestEmptyFooterHintRowYieldsToStatusLikeRust covers Rust #60681 and #62174: an
+// inline session without owned-screen room keeps no blank hint row beside the
+// status line, while the owned screen reserves one so the caret stays put.
 func TestEmptyFooterHintRowYieldsToStatusLikeRust(t *testing.T) {
-	if shouldRenderFooterHintRow("gpt-5", "") {
-		t.Fatal("empty hint row rendered beside status content")
+	inline := NewModel(codextui.NewState(nil), Options{Width: 80, Height: 24, NoAltScreen: true})
+	if inline.shouldRenderFooterHintRow("gpt-5", "") {
+		t.Fatal("inline session reserved an empty hint row beside status content")
 	}
-	if !shouldRenderFooterHintRow("", "") {
+	if !inline.shouldRenderFooterHintRow("", "") {
 		t.Fatal("empty hint row must remain when no status line is enabled")
 	}
-	if !shouldRenderFooterHintRow("gpt-5", "? for shortcuts") {
+	if !inline.shouldRenderFooterHintRow("gpt-5", "? for shortcuts") {
 		t.Fatal("non-empty hint row was dropped")
+	}
+	owned := NewModel(codextui.NewState(nil), Options{Width: 80, Height: 24})
+	if !owned.shouldRenderFooterHintRow("gpt-5", "") {
+		t.Fatal("owned screen must reserve the passive hint row beside the status line")
 	}
 }

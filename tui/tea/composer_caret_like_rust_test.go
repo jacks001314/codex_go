@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func composerCursor(t *testing.T, model *Model) *bubbletea.Cursor {
@@ -94,5 +95,34 @@ func TestComposerCaretStaysInScrolledWindowLikeRust(t *testing.T) {
 	}
 	if got, want := view.Cursor.X, codextui.DisplayWidth(model.composer.Prompt)+len("draft-row-last"); got != want {
 		t.Fatalf("caret column = %d, want %d", got, want)
+	}
+}
+
+// Rust #62174: the composer reserves its passive-footer rows, so typing the
+// first character or deleting the last one cannot move the caret vertically.
+func TestComposerCaretStaysAnchoredWhileTypingLikeRust(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{
+		Width:               80,
+		Height:              24,
+		AlternateScreenMode: "always",
+	})
+	model.View()
+	emptyRow := composerCursor(t, model).Y
+
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune("x")})
+	if typedRow := composerCursor(t, model).Y; typedRow != emptyRow {
+		t.Fatalf("caret row after typing = %d, want the empty-draft row %d", typedRow, emptyRow)
+	}
+
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyBackspace})
+	if backRow := composerCursor(t, model).Y; backRow != emptyRow {
+		t.Fatalf("caret row after backspace = %d, want the empty-draft row %d", backRow, emptyRow)
+	}
+
+	// A slash-command suggestion and a short status line fit together without
+	// moving the caret either.
+	model.composer.SetValue("/")
+	if slashRow := composerCursor(t, model).Y; slashRow != emptyRow {
+		t.Fatalf("caret row with slash suggestions = %d, want %d", slashRow, emptyRow)
 	}
 }

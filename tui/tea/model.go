@@ -6081,7 +6081,7 @@ func (m *Model) viewString() string {
 	footerVisible := false
 	if !m.composerSurfaceSuppressed() {
 		footerLine, footerAlreadyStyled = m.footerHelpLine()
-		footerVisible = shouldRenderFooterHintRow(statusLine, footerLine)
+		footerVisible = m.shouldRenderFooterHintRow(statusLine, footerLine)
 	}
 	// Rust paints the side conversation context label on the passive hint row,
 	// so a steady-state label does not claim a row of its own.
@@ -6356,13 +6356,23 @@ func (m *Model) renderSideFooterHintRow(hints []string, label string, width int)
 	return "  " + m.footerStyle.Render(plain+" \u00b7 ") + styledLabel
 }
 
-// shouldRenderFooterHintRow mirrors Rust #60681: an enabled status line already
-// occupies the footer's last row, so an empty hint row is not reserved.
-func shouldRenderFooterHintRow(statusLine string, footerLine string) bool {
+// shouldRenderFooterHintRow mirrors Rust #60681 and #62174: a non-empty footer
+// always renders, no footer row is needed without a status line, and a visible
+// status line still reserves one blank row when the composer block leaves room,
+// so typing the first character (which drops the shortcut hint) cannot move the
+// caret vertically.
+func (m *Model) shouldRenderFooterHintRow(statusLine string, footerLine string) bool {
 	if strings.TrimSpace(footerLine) != "" {
 		return true
 	}
-	return strings.TrimSpace(statusLine) == ""
+	if strings.TrimSpace(statusLine) == "" {
+		return true
+	}
+	if m == nil || !m.ownedScreen {
+		return false
+	}
+	reserved := m.composerSectionRowsExceptVoice() + m.statusLineSectionRows() + 1
+	return m.height > reserved
 }
 
 // statusLineRowBudget mirrors Rust #60680/#60681: status content may use up to
@@ -12902,7 +12912,7 @@ func (m *Model) trailingBottomRowsExceptVoice() int {
 	footerVisible := false
 	if !m.composerSurfaceSuppressed() {
 		footerLine, footerAlreadyStyled = m.footerHelpLine()
-		footerVisible = shouldRenderFooterHintRow(m.statusLineContent(), footerLine)
+		footerVisible = m.shouldRenderFooterHintRow(m.statusLineContent(), footerLine)
 	}
 	sideOnFooter := footerVisible && m.footerRowCarriesSideLabel(footerLine, footerAlreadyStyled)
 	sideLabel := strings.TrimSpace(m.sideContextLabel())

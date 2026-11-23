@@ -51296,11 +51296,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Audit: tui/tea already scrolls wheel bursts through cached geometry. handleComposerWheel reads effectiveComposerScroll before applying a tick, so composer scrolling starts from the caret-adjusted viewport after an edit (the Rust textarea change), and scrollTranscriptRows only moves the viewport of the revision-keyed transcript layout cache instead of rebuilding it per tick.",
+    "New corroborating tests: TestOwnedComposerWheelStartsFromCaretWindowLikeRust and TestOwnedTranscriptWheelBurstKeepsLayoutKeyLikeRust in tui/tea/fullscreen_composer_scroll_like_rust_test.go assert the caret-window baseline and that a five-tick burst leaves State.MessagesRevision untouched; go test ./tui/tea passes."
    ],
    "kind": "runtime",
    "sha": "2f5c413e19776bc684ac781b57dc069e4ab9fa21",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Batch mouse wheel scrolling in the TUI (#62146)"
   },
   {
@@ -51462,11 +51463,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "tui/tea/model.go shouldRenderFooterHintRow is now a Model method that reserves one blank passive-hint row beside a visible status line on the owned screen when the composer block leaves room, mirroring Rust #62174. renderFooterHelpSection already painted that row blank, so typing the first character no longer shifts the composer block down.",
+    "Tests: tui/tea/composer_caret_like_rust_test.go TestComposerCaretStaysAnchoredWhileTypingLikeRust asserts the caret row before typing, after one character, after Backspace and with slash suggestions; tui/tea/footer_row_budget_like_rust_test.go keeps the inline no-reservation rule and the owned reservation. go test ./tui/tea passes (49.3s)."
    ],
    "kind": "runtime",
    "sha": "3dbc6f86570ec10aaf1df2b1011912d47274622b",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Keep the TUI composer caret anchored while typing (#62174)"
   },
   {

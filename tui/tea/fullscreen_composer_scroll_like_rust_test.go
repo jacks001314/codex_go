@@ -126,6 +126,43 @@ func TestOwnedComposerWheelBrowsesWithoutMovingCaretOrTranscriptLikeRust(t *test
 	}
 }
 
+// Rust #62146: a composer wheel tick starts from the caret-adjusted viewport
+// after an edit, so the first tick lands above the caret window instead
+// of a stale manual offset.
+func TestOwnedComposerWheelStartsFromCaretWindowLikeRust(t *testing.T) {
+	model := newOwnedComposerModel(t, 30)
+	baseline := model.composerScroll
+	if baseline == 0 {
+		t.Fatalf("caret-following baseline = %d, want the caret window", baseline)
+	}
+	model.Update(composerWheel(mousemsg.MouseButtonWheelUp, model.composerTopRow+1))
+	model.viewString()
+	if got, want := model.composerScroll, baseline-composerWheelRows; got != want {
+		t.Fatalf("composer scroll after one wheel tick = %d, want %d", got, want)
+	}
+	if !model.composerManual {
+		t.Fatal("a wheel tick must detach caret following")
+	}
+}
+
+// Rust #62146: a wheel burst scrolls the viewport without touching the message
+// revision that keys the cached transcript layout, so the burst reuses the
+// painted layout instead of rebuilding it per tick.
+func TestOwnedTranscriptWheelBurstKeepsLayoutKeyLikeRust(t *testing.T) {
+	model := newOwnedComposerModel(t, 30)
+	revision := model.State.MessagesRevision
+	start := model.TranscriptYOffset()
+	for i := 0; i < 5; i++ {
+		model.Update(composerWheel(mousemsg.MouseButtonWheelUp, 1))
+	}
+	if got, want := model.TranscriptYOffset(), start-5; got != want {
+		t.Fatalf("transcript offset after a burst = %d, want %d", got, want)
+	}
+	if model.State.MessagesRevision != revision {
+		t.Fatalf("wheel burst bumped the message revision: %d -> %d", revision, model.State.MessagesRevision)
+	}
+}
+
 // TestOwnedComposerWheelDownAtBottomIsConsumedLikeRust keeps the transcript
 // still when the pointer is over the prompt even if the prompt cannot move.
 func TestOwnedComposerWheelDownAtBottomIsConsumedLikeRust(t *testing.T) {
