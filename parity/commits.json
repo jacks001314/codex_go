@@ -51735,15 +51735,11 @@
     "codex_go"
    ],
    "evidence": [
-    "MCP tool and elicitation approvals resolve reviewer inputs from the issuing turn captured configuration (appserver RuntimeRouter.approvalsReviewerConfigForTurn, used by mcpToolApprovalReviewer and approvalsReviewerForTurn), so a live Guardian policy change cannot waive review the turn already required; a turn without a captured configuration keeps the live MCP view.",
-    "A Guardian policy update leaves the published MCP runtime fingerprint untouched: mcpRuntimeConfigFingerprint covers MCP servers, plugins and MCP requirement inputs but no Guardian requirement, so a policy publication neither revalidates nor restarts MCP servers.",
-    "tests: appserver TestMCPToolApprovalReviewerUsesCapturedTurnPolicyLikeRust, TestGuardianPolicyUpdateDoesNotRotateMCPRuntimeLikeRust",
-    "Residual: Rust session-level publication (revision ordering, suspended bindings, carry-forward across an MCP rebuild) has no Go counterpart because Go keeps no per-session configuration snapshot and resolves guardian policy from the current configuration on every read (appserver/mcp_config_refresh.go documents the same divergence for MCP refresh outcomes).",
-    "plan: update/plan_2026_11_20.md batch 10"
+    "Batch 146: complete - Rust #62276 keeps the active Guardian policy across MCP refreshes and resolves MCP reviewers against the issuing turn. MCP tool and elicitation approvals already resolve reviewer inputs from the turn's captured configuration (RuntimeRouter.approvalsReviewerConfigForTurn), so a live policy change cannot waive review the turn required. This batch closes the other half: config.ConfigService now remembers the Guardian-owned requirements published by a policy refresh (guardianRequirements/guardianRequirementsPublished) and ReloadRequirementsFromHome, which the MCP strict/best-effort reload runs, re-merges them onto the freshly read requirements.toml instead of replacing them, while non-Guardian constraints still come from the file. Tests: config/guardian_policy_requirements_reload_like_rust_test.go and appserver/mcp_guardian_policy_refresh_like_rust_test.go (a strict MCP reload keeps the published reviewer and policy and still picks up the file's approval policies); go test ./config -count=1; go test ./appserver -run 'Guardian|MCPConfig|Requirements' -count=1"
    ],
    "kind": "runtime",
    "sha": "a05444bbeb6bb07f2875fff0143f2e4cba994463",
-   "status": "partial",
+   "status": "complete",
    "subject": "Refresh managed Guardian policy independently of MCP (#62276)"
   },
   {

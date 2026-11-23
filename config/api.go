@@ -1934,6 +1934,12 @@ type ConfigService struct {
 	// and login traffic under the local policy while the effective one - which
 	// may depend on a cloud fetch - is still unknown.
 	localRequirements *ConfigRequirements
+	// guardianRequirements is the Guardian-owned subset published by the last
+	// policy refresh, remembered so an MCP-scoped reload of requirements.toml
+	// keeps that policy (Rust #62276 retain_guardian_policy_from). Guardian
+	// requirements only participate once a publication happened.
+	guardianRequirements          *ConfigRequirements
+	guardianRequirementsPublished bool
 	// loginPolicyRequirements is the requirements snapshot the running login
 	// policy was built from. Rust's AuthManager keeps that policy for the life of
 	// the process, so configRequirements/read reports it even after requirement
@@ -2077,7 +2083,13 @@ func (s *ConfigService) ReloadRequirementsFromHome() error {
 	}
 	s.mu.Lock()
 	s.localRequirements = cloneRequirements(requirements)
-	s.requirements = cloneRequirements(requirements)
+	if s.guardianRequirementsPublished {
+		// Rust #62276: an MCP-scoped refresh reloads the managed files without
+		// discarding a Guardian policy published while it was loading.
+		s.requirements = MergeGuardianRequirements(requirements, s.guardianRequirements)
+	} else {
+		s.requirements = cloneRequirements(requirements)
+	}
 	s.mu.Unlock()
 	return nil
 }
@@ -2250,6 +2262,8 @@ func (s *ConfigService) PublishGuardianPolicyRequirements(requirements *ConfigRe
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.requirements = MergeGuardianRequirements(s.requirements, requirements)
+	s.guardianRequirements = cloneRequirements(requirements)
+	s.guardianRequirementsPublished = true
 }
 
 // refreshManagedConfigFromFiles re-reads requirements.toml and the app-server
