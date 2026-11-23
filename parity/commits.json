@@ -54513,11 +54513,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Go has no buffered-paste flush tick: bracketed paste is handled synchronously inside Model.Update (model.go paste branch) and the resulting model renders in that same frame, so no frame is skipped and no follow-up redraw is required.",
+    "There is also no startup-recovery refresh tied to a paste flush (no startupRecovery equivalent in tui/tea), so the Rust interaction.rs branch being removed has no Go carrier."
    ],
    "kind": "runtime",
    "sha": "1b0b42bfcaa6bdac5ab0acafd0d99fda87de2c47",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Render flushed TUI input in the same frame (#63233)"
   },
   {
