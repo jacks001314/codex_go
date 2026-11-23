@@ -54292,11 +54292,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "N/A by architecture: the commit raises Rust's cpal/ALSA capture and playback periods on Linux at 48 kHz (LINUX_48K_PERIOD = 3840, 80 ms) to keep a two-period ring ahead of 4096/4800-frame PipeWire cycles. Go's voice host opens devices through miniaudio (voicehost/miniaudio.go, github.com/gen2brain/malgo) and never configures cpal periods or an ALSA ring, so there is no period-size constant or device-range clamp to change."
    ],
    "kind": "runtime",
    "sha": "2ef0f669011616a921d11702e7abc9b2b1172dfa",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Increase Linux voice callback periods at 48 kHz (#63169)"
   },
   {
@@ -54329,11 +54329,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Runtime-authenticated Responses WebSockets now reuse the pooled socket: websocketSession no longer closes a cached connection when RuntimeAuthActive is set (the #60055 fresh-handshake rule the upstream commit removes), so reuse hinges on the resolved responses headers and the credential comparison in websocketReauth. TestRuntimeWebsocketConnectionReusesUntilAuthChangeLikeRust expects one handshake for two runtime requests, and websocket_connect_metrics_test still pins the reconnect on a changed credential/account. go test ./model -count=1 passes."
    ],
    "kind": "runtime",
    "sha": "7085656b5e86f2bae8e393eaaac83577432c2595",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Reuse runtime-authenticated Responses WebSockets (#63175)"
   },
   {

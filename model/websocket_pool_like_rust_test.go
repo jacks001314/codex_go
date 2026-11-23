@@ -102,12 +102,11 @@ func TestWebsocketPoolReusesConnectionWhenActorUnchangedLikeRust(t *testing.T) {
 	}
 }
 
-// TestRuntimeWebsocketConnectionNeverJoinsIdlePoolLikeRust mirrors
-// `connection_pool.rs` (`runtime_id.is_some()` -> `fresh_connection`,
-// `ConnectionLease::reuse` keeps only non-runtime connections) and
-// `client_websockets_runtime_auth.rs` (two requests on one runtime credential
-// still produce two handshakes).
-func TestRuntimeWebsocketConnectionNeverJoinsIdlePoolLikeRust(t *testing.T) {
+// TestRuntimeWebsocketConnectionReusesUntilAuthChangeLikeRust mirrors Rust
+// #63175: a runtime-authenticated request keeps the pooled socket while the
+// resolved responses headers (the credential) are unchanged, so two requests
+// share one handshake instead of reconnecting per turn.
+func TestRuntimeWebsocketConnectionReusesUntilAuthChangeLikeRust(t *testing.T) {
 	pool := &websocketPoolServer{t: t}
 	server := httptest.NewServer(pool)
 	defer server.Close()
@@ -127,8 +126,8 @@ func TestRuntimeWebsocketConnectionNeverJoinsIdlePoolLikeRust(t *testing.T) {
 		}
 	}
 	handshakes, requests := pool.snapshot()
-	if handshakes != 2 {
-		t.Fatalf("handshakes = %d, want 2: a runtime connection must not join the idle pool", handshakes)
+	if handshakes != 1 {
+		t.Fatalf("handshakes = %d, want 1: an unchanged runtime credential must reuse the socket", handshakes)
 	}
 	if requests != 2 {
 		t.Fatalf("requests = %d, want 2", requests)

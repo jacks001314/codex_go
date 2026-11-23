@@ -866,16 +866,10 @@ func (r *ResponsesAgentRunner) websocketSession(request *AgentRequest) *response
 		session = &responsesWebsocketSession{}
 		r.websocketSessions.sessions[key] = session
 	}
-	// Rust #60055: a runtime-authenticated request revalidates access on a fresh
-	// handshake, so a cached socket never carries it. connection_pool.rs opens a
-	// fresh connection whenever `runtime_id.is_some()`, and ConnectionLease::reuse
-	// keeps only non-runtime connections. Closing here keeps exactly one reuse
-	// point and leaves `connectionReused` false for every runtime request.
-	if r != nil && r.RuntimeAuthActive && session.conn != nil {
-		session.mu.Lock()
-		closeResponsesWebsocketSession(session, "runtime auth requires a fresh handshake")
-		session.mu.Unlock()
-	}
+	// Rust #63175 supersedes the runtime-fresh-handshake rule from #60055: a
+	// runtime-authenticated request reuses the pooled socket for as long as the
+	// resolved responses headers (and therefore the credentials below) stay the
+	// same, instead of paying a handshake and resending the full input per turn.
 	// Rust #60436: credentials can change while a request is prepared (an
 	// account switch or a refreshed managed token), so a socket opened with the
 	// previous owner must not send the next request. Comparing the handshake
