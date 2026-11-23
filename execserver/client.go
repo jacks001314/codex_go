@@ -164,6 +164,10 @@ var (
 	clientRecoveryTimeout       = 50 * time.Second
 	clientRecoveryReplayReserve = 5 * time.Second
 	clientRecoveryRetry         = 100 * time.Millisecond
+	// startupTransportRetryTimeout bounds admission of new startup, reconnect
+	// and refresh transport attempts after a retryable failure (Rust #62601).
+	// An attempt that is already underway may finish after the window.
+	startupTransportRetryTimeout = 5 * time.Second
 	// environmentInfoTimeout bounds the live metadata probe and covers sending
 	// as well as waiting: Rust #49407 notes a stuck transport can fill the
 	// outbound queue, so bounding only the response wait is not enough. It is a
@@ -394,6 +398,66 @@ func IsRetryablePreparationError(err error) bool {
 	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.ErrClosedPipe)
 }
 
+// environmentRegistryRequestError marks a failure inside the environment
+// registry request. Registry failures keep their own bounded retry policy and
+// must not trigger the startup transport retry (Rust #62601).
+type environmentRegistryRequestError struct{ err error }
+
+func (e *environmentRegistryRequestError) Error() string {
+	if e == nil || e.err == nil {
+		return "environment registry request failed"
+	}
+	return e.err.Error()
+}
+
+func (e *environmentRegistryRequestError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+// shouldRetryStartupTransport reports whether a setup failure admits another
+// physical connection attempt. Registry failures are excluded because they
+// use their own bounded retry policy; transient transport, handshake and
+// initialization failures are retried.
+func shouldRetryStartupTransport(err error) bool {
+	if err == nil {
+		return false
+	}
+	var statusErr *remoteRegistryHTTPError
+	if errors.As(err, &statusErr) {
+		return false
+	}
+	var requestErr *environmentRegistryRequestError
+	if errors.As(err, &requestErr) {
+		return false
+	}
+	return IsRetryablePreparationError(err)
+}
+
+// waitStartupTransportRetry sleeps the next backoff delay inside the shared
+// startup window. It reports false when no further attempt may start.
+func waitStartupTransportRetry(ctx context.Context, deadline time.Time, retry int) (time.Time, bool) {
+	if deadline.IsZero() {
+		deadline = time.Now().Add(startupTransportRetryTimeout)
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return deadline, false
+	}
+	delay := registryRecoveryRetryDelay(retry)
+	if delay > remaining {
+		delay = remaining
+	}
+	select {
+	case <-ctx.Done():
+		return deadline, false
+	case <-time.After(delay):
+	}
+	return deadline, time.Now().Before(deadline)
+}
+
 func preparationReadError(err error) error {
 	if err == nil || !IsRetryablePreparationError(err) {
 		return err
@@ -505,6 +569,14 @@ func DialClientWithOptions(ctx context.Context, url string, options DialClientOp
 		return conn, initialized, clientConnectMetadata{}, err
 	}
 	conn, initialized, _, err := client.open(ctx, options.ResumeSessionID, client.handleNotification)
+	var retryDeadline time.Time
+	for retry := 0; err != nil && shouldRetryStartupTransport(err); retry++ {
+		var retryAllowed bool
+		if retryDeadline, retryAllowed = waitStartupTransportRetry(ctx, retryDeadline, retry); !retryAllowed {
+			break
+		}
+		conn, initialized, _, err = client.open(ctx, options.ResumeSessionID, client.handleNotification)
+	}
 	if err != nil {
 		return nil, err
 	}

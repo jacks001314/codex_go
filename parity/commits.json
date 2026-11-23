@@ -53032,11 +53032,14 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "DialClientWithOptions and the stdio transport now retry a retryable transport, handshake or initialization failure with the shared registry backoff inside a five-second admission window; an attempt already underway may finish after the window, and permanent authentication failures keep their terminal policy.",
+    "The Noise rendezvous opener wraps each complete registry-plus-open attempt in the same transport retry window, reuses the provisioning deadline across physical attempts, and marks registry-request failures so they never enter the transport retry.",
+    "The reconnect path already retried transient failures; its registry policy and the four-attempt provisioning behaviour are unchanged.",
+    "go test ./execserver -count=1; go test ./appserver -run 'Environment|Executor|CapabilityDiscovery' -count=1; go build ./...; go vet ./execserver ./appserver"
    ],
    "kind": "runtime",
    "sha": "93000976e8f7f38a1a840fc1f973779b2d044b16",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Retry transient exec-server connection failures (#62601)"
   },
   {

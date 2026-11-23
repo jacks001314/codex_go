@@ -299,6 +299,14 @@ func dialStdioCommandClient(ctx context.Context, clientName string, options Dial
 	// A stdio connect never resumes a session (Rust passes
 	// `resume_session_id: None` for stdio transports).
 	conn, initialized, _, err := client.open(ctx, "", client.handleNotification)
+	var retryDeadline time.Time
+	for retry := 0; err != nil && shouldRetryStartupTransport(err); retry++ {
+		var retryAllowed bool
+		if retryDeadline, retryAllowed = waitStartupTransportRetry(ctx, retryDeadline, retry); !retryAllowed {
+			break
+		}
+		conn, initialized, _, err = client.open(ctx, "", client.handleNotification)
+	}
 	if err != nil {
 		return nil, err
 	}

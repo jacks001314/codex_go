@@ -25,6 +25,10 @@ func (p *initializeTimeoutNoiseProvider) ConnectBundle(context.Context, RemotePu
 // Mirrors Rust #42623: a Noise handshake that never becomes ready is bounded by
 // the configured initialization timeout, and the timed-out transport is closed.
 func TestNoiseHandshakeUsesInitializeTimeoutLikeRust(t *testing.T) {
+	// Rust #62601 retries a timed-out initialization for five seconds. Keep
+	// the retry window short here so the assertion measures one attempt's
+	// timeout diagnostic rather than the whole transport window.
+	compressStartupTransportRetry(t, 100*time.Millisecond)
 	executorIdentity, err := generateRemoteNoiseIdentity()
 	if err != nil {
 		t.Fatalf("generate executor identity: %v", err)
@@ -50,7 +54,10 @@ func TestNoiseHandshakeUsesInitializeTimeoutLikeRust(t *testing.T) {
 				return
 			}
 		}
-		handshakeFramesRead <- struct{}{}
+		select {
+		case handshakeFramesRead <- struct{}{}:
+		default:
+		}
 		// Stall the responder until the client's initialization deadline closes
 		// the websocket.
 		_, _, _ = conn.Read(r.Context())

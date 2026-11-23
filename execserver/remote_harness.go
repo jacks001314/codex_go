@@ -292,15 +292,18 @@ func DialNoiseRendezvousClient(
 					}
 				}
 				if timeout <= 0 {
-					return nil, fmt.Errorf("environment registry request failed: %w", context.DeadlineExceeded)
+					return nil, &environmentRegistryRequestError{err: fmt.Errorf("environment registry request failed: %w", context.DeadlineExceeded)}
 				}
 				connectCtx, cancel := context.WithTimeout(ctx, timeout)
 				defer cancel()
 				bundle, err := provider.ConnectBundle(connectCtx, identity.PublicKey())
 				if err != nil && connectCtx.Err() == context.DeadlineExceeded {
-					return nil, fmt.Errorf("environment registry request failed: %w", context.DeadlineExceeded)
+					return nil, &environmentRegistryRequestError{err: fmt.Errorf("environment registry request failed: %w", context.DeadlineExceeded)}
 				}
-				return bundle, err
+				if err != nil {
+					return nil, &environmentRegistryRequestError{err: err}
+				}
+				return bundle, nil
 			}
 			openWithBundle := func(bundle *NoiseRendezvousConnectBundle) (clientConnection, *InitializeResponse, clientConnectMetadata, error) {
 				var wire clientConnection
@@ -326,65 +329,80 @@ func DialNoiseRendezvousClient(
 					executorPublicKey:      &executorPublicKey,
 				}, nil
 			}
-			// Rust #39777: retry transient registry failures (timeouts,
-			// interrupted bodies, retryable HTTP statuses, temporarily offline
-			// environments) with a per-request timeout, exponential backoff, and
-			// an overall deadline; permanent registry errors return immediately.
-			retries := 0
-			deadline := time.Now().Add(initialRegistryOperationTimeout)
-			refreshedUnauthorizedBundle := false
-			var requestBound time.Time
-			for {
-				bundle, err := connectBundle(requestBound)
-				if err != nil {
-					// Rust #48575: a provisioned executor may be resuming after an
-					// earlier ready report, so an `environment_offline` response on
-					// the initial connection waits out the fixed provisioning
-					// deadline instead of the ordinary retry window. Every other
-					// transient error keeps the four-attempt / fourteen-second
-					// limits, and permanent errors return immediately.
-					retryDeadline := time.Time{}
-					switch {
-					case !provisioningDeadline.IsZero() && isEnvironmentOfflineError(err):
-						retryDeadline = provisioningDeadline
-					case isRetryableRegistryError(err) && retries < initialRegistryMaxRetries:
-						retryDeadline = deadline
-					default:
-						return nil, nil, clientConnectMetadata{}, err
+			// Rust #39777: retry transient registry failures with a per-request
+			// timeout, exponential backoff, and an overall deadline. Rust #62601:
+			// a transient transport or initialization failure then admits another
+			// physical attempt for up to five seconds, reusing the provisioning
+			// deadline and excluding registry failures (which keep the policy
+			// below).
+			openOnce := func() (clientConnection, *InitializeResponse, clientConnectMetadata, error) {
+				retries := 0
+				deadline := time.Now().Add(initialRegistryOperationTimeout)
+				refreshedUnauthorizedBundle := false
+				var requestBound time.Time
+				for {
+					bundle, err := connectBundle(requestBound)
+					if err != nil {
+						// Rust #48575: a provisioned executor may be resuming after an
+						// earlier ready report, so an `environment_offline` response on
+						// the initial connection waits out the fixed provisioning
+						// deadline instead of the ordinary retry window. Every other
+						// transient error keeps the four-attempt / fourteen-second
+						// limits, and permanent errors return immediately.
+						retryDeadline := time.Time{}
+						switch {
+						case !provisioningDeadline.IsZero() && isEnvironmentOfflineError(err):
+							retryDeadline = provisioningDeadline
+						case isRetryableRegistryError(err) && retries < initialRegistryMaxRetries:
+							retryDeadline = deadline
+						default:
+							return nil, nil, clientConnectMetadata{}, err
+						}
+						if !time.Now().Before(retryDeadline) {
+							return nil, nil, clientConnectMetadata{}, err
+						}
+						// Rust computes the delay from the pre-increment attempt so
+						// the first retry sleeps the base interval, and bounds the
+						// sleep plus the next registry request by the retry deadline
+						// (`timeout_at`), so a sleep that reaches the deadline stops
+						// the loop without another request.
+						delay := registryRecoveryRetryDelay(retries)
+						retries++
+						requestBound = retryDeadline
+						if remaining := time.Until(retryDeadline); remaining < delay {
+							delay = remaining
+						}
+						select {
+						case <-ctx.Done():
+							return nil, nil, clientConnectMetadata{}, err
+						case <-time.After(delay):
+						}
+						if !time.Now().Before(retryDeadline) {
+							return nil, nil, clientConnectMetadata{}, err
+						}
+						continue
 					}
-					if !time.Now().Before(retryDeadline) {
-						return nil, nil, clientConnectMetadata{}, err
+					conn, initialized, metadata, err := openWithBundle(bundle)
+					if isUnauthorizedNoiseWebSocketError(err) && !refreshedUnauthorizedBundle {
+						refreshedUnauthorizedBundle = true
+						deadline = time.Now().Add(initialRegistryOperationTimeout)
+						retries = 0
+						requestBound = time.Time{}
+						continue
 					}
-					// Rust computes the delay from the pre-increment attempt so
-					// the first retry sleeps the base interval, and bounds the
-					// sleep plus the next registry request by the retry deadline
-					// (`timeout_at`), so a sleep that reaches the deadline stops
-					// the loop without another request.
-					delay := registryRecoveryRetryDelay(retries)
-					retries++
-					requestBound = retryDeadline
-					if remaining := time.Until(retryDeadline); remaining < delay {
-						delay = remaining
-					}
-					select {
-					case <-ctx.Done():
-						return nil, nil, clientConnectMetadata{}, err
-					case <-time.After(delay):
-					}
-					if !time.Now().Before(retryDeadline) {
-						return nil, nil, clientConnectMetadata{}, err
-					}
-					continue
+					return conn, initialized, metadata, err
 				}
-				conn, initialized, metadata, err := openWithBundle(bundle)
-				if isUnauthorizedNoiseWebSocketError(err) && !refreshedUnauthorizedBundle {
-					refreshedUnauthorizedBundle = true
-					deadline = time.Now().Add(initialRegistryOperationTimeout)
-					retries = 0
-					requestBound = time.Time{}
-					continue
+			}
+			var transportDeadline time.Time
+			for retry := 0; ; retry++ {
+				conn, initialized, metadata, err := openOnce()
+				if err == nil || !shouldRetryStartupTransport(err) {
+					return conn, initialized, metadata, err
 				}
-				return conn, initialized, metadata, err
+				var retryAllowed bool
+				if transportDeadline, retryAllowed = waitStartupTransportRetry(ctx, transportDeadline, retry); !retryAllowed {
+					return nil, nil, clientConnectMetadata{}, err
+				}
 			}
 		}
 	}
