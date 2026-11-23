@@ -52650,11 +52650,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1266: partial - Rust lets hosts supply a GuardianPolicyLoader to ThreadManager, pauses thread registration while a refresh loads and publishes policy, reloads before registering a thread whose startup configuration a publication overtook, and applies the published policy to live threads concurrently. Go has the configuration half (config/guardian_policy.go: GuardianPolicySnapshot with a pre-allocated revision, LoadGuardianPolicySnapshot, ApplyGuardianPolicy retaining published fallbacks) and pins it in config/guardian_policy_like_rust_test.go, but nothing in appserver loads or publishes a snapshot: there is no loader hook on the router/thread manager, no registration pause, and no live-thread application."
+    "Round 1266: appserver/guardian_policy_refresh.go adds the Go host half of Rust #62496. ThreadManager gains GuardianPolicyLoader, a monotonic observation revision (reserved before loading), a registration pause that holds turn startup between reservation and publication and releases waiters even when the load fails, startup preparation that prefers a publication which overtook the thread's own load and rejects a stale binding with 'Guardian policy source changed', and a refresh that publishes under the registry lock and then applies the observation to every live turn concurrently. RuntimeRouter.effectiveConfigForTurn wraps the configuration load in the registration boundary and applies the published policy before the turn registers. Tests: go test ./appserver -run 'GuardianPolicy' -count=1 (registration pause, published-policy startup, publication-overtakes-load)."
    ],
    "kind": "runtime",
    "sha": "b0ecad9cf9c08318d79e9d7f91520e609d1c4d1a",
-   "status": "partial",
+   "status": "complete",
    "subject": "Refresh managed Guardian policy across Codex threads (#62496)"
   },
   {
@@ -52998,7 +52998,7 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1266: partial - Rust enforces a refreshed policy on running threads: the app server loads the policy from current local and managed configuration, fails when the source changes before publication or a live thread rejects the update, applies reviewer and model restrictions even when they block the current model, keeps automatic work queued while blocked and wakes it on a later permitting refresh. Go reads the policy at review time (appserver/agent_runtime.go GuardianPolicyConfig/GuardianPolicyTemplate rendering) so new reviews see current config, but no published refresh reaches a running thread, no model restriction blocks/wakes queued work, and no publication error is reported."
+    "Round 1266: partial - implemented the app-server load, publication and live enforcement half of Rust #62585: configServiceGuardianPolicyLoader reads policy from the configuration service's managed loader, a source that changes before publication keeps the previous policy, live turns receive the new Guardian requirements and reviewer under the turn lock (appserver/guardian_policy_refresh.go applyGuardianPolicyToThread), restrictions are published even when they rule out the current model, the turn is marked blocked and a per-step guard (guardianPolicyStepCheck, wired into CheckWorkBudget) refuses the next sampling step, and the refresh returns an error naming the rejecting thread. Remaining gap: Rust keeps automatic work queued while the model is blocked and wakes it with a later permitting refresh; Go's turn loop has no pending-work wake, so a blocked turn reports the restriction instead of parking and resuming. Tests: go test ./appserver -run 'GuardianPolicy' -count=1."
    ],
    "kind": "runtime",
    "sha": "90dd6cf9df1d3236a7f8085f65eb76c75277646f",
@@ -53154,11 +53154,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1266: partial - Rust refreshes Guardian policy after publishing local config layers (even when unrelated user configuration fails), after login while the account owner is current, and on account changes. Go's config reload path rebuilds configuration and would surface a new guardian_policy_config on the next review, but there is no explicit Guardian policy refresh call on reload, login or logout, and no revision-based publication to compare against (config.GuardianPolicyRevision is only set by ApplyGuardianPolicy, which no appserver path calls)."
+    "Round 1266: config reload, login and logout now refresh Guardian policy (Rust #62614). reloadUserConfigForLoadedThreads publishes the local layers and then refreshes in both the success and the failed-reload branch; handleLoginAccount refreshes after an immediate login and after an auth snapshot is applied, awaitAccountLoginRuntime refreshes when a completed login's owner is current, and handleLogoutAccount refreshes after the logout has republished auth. config.ConfigService.PublishGuardianPolicyRequirements merges only the Guardian-owned requirements so configRequirements/read reports the refreshed policy. Tests: go test ./appserver -run 'GuardianPolicy|ConfigMutation|MCPConfigRefresh' -count=1 (TestReloadUserConfigRefreshesGuardianPolicyLikeRust asserts the reload publishes a revision and configRequirements/read carries the policy)."
    ],
    "kind": "runtime",
    "sha": "db263d4f5471f4fd2e91ae0955556ace66aeb1c5",
-   "status": "partial",
+   "status": "complete",
    "subject": "Refresh Guardian policy on config reload and account changes (#62614)"
   },
   {

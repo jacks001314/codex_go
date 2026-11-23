@@ -111,6 +111,18 @@ type activeRuntimeTurn struct {
 	// (Rust TurnMetadataState::responsesapi_client_metadata, #62072). The turn
 	// lock guards it; a spawn reads it through ActiveTurn.
 	TurnClientMetadata map[string]string
+	// GuardianPolicyRevision is the published Guardian policy revision this
+	// turn's captured configuration carries (Rust #62496
+	// Config::guardian_policy_revision). Zero means the turn never observed a
+	// published policy.
+	GuardianPolicyRevision int64
+	// GuardianPolicyBlocked records that a live policy refresh ruled out the
+	// turn's model (Rust #62585 ConfigRefreshOutcome::Rejected). The next
+	// sampling step reports the restriction instead of sampling under a
+	// disallowed model.
+	GuardianPolicyBlocked bool
+	// GuardianPolicyBlockedReason explains a blocked turn for the step error.
+	GuardianPolicyBlockedReason string
 	// GitEnrichment is this turn's Git snapshot and background collection
 	// (Rust #62437). It is nil for a turn that reports no local workspace.
 	GitEnrichment *turnGitEnrichment
@@ -2126,7 +2138,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		SamplingSettlement:       r.rolloutBudgetSettlement(threadID, turnID),
 		SamplingCompaction:       samplingCompaction,
 		SettleBeforeToolDispatch: responseProcessMode == config.ResponseProcessModeAfterCompleteResponse,
-		CheckWorkBudget:          r.rolloutBudgetCheck(threadID),
+		CheckWorkBudget:          r.guardianPolicyStepCheck(threadID, r.rolloutBudgetCheck(threadID)),
 		SamplingCheckpoint: func() (uint64, bool) {
 			return r.runtimeSamplingCheckpoint(session.ThreadID(threadID))
 		},
@@ -11658,7 +11670,29 @@ func sortedBoolKeys(values map[string]bool) []string {
 	return keys
 }
 
+// effectiveConfigForTurn builds the configuration a turn registers with. The
+// registration boundary stays closed while a Guardian policy refresh loads and
+// publishes, and the published policy is applied before the turn starts so it
+// never registers with policy a refresh has already superseded (Rust #62496).
 func (r *RuntimeRouter) effectiveConfigForTurn(params *turn.TurnStartParams) (*config.Config, error) {
+	release := func() {}
+	if r != nil && r.threads != nil {
+		release = r.threads.BeginGuardianPolicyRegistration()
+	}
+	cfg, err := r.loadEffectiveConfigForTurn(params)
+	release()
+	if err != nil {
+		return nil, err
+	}
+	if r != nil && r.threads != nil {
+		if err := r.threads.PrepareGuardianPolicyForStartup(cfg, r.guardianPolicyLoader()); err != nil {
+			return nil, err
+		}
+	}
+	return cfg, nil
+}
+
+func (r *RuntimeRouter) loadEffectiveConfigForTurn(params *turn.TurnStartParams) (*config.Config, error) {
 	cfg := &config.Config{Values: map[string]any{}}
 	if r == nil || r.services.Config == nil {
 		applyRuntimeConfigOverrides(cfg, turnConfigOverrides(params))

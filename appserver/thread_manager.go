@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"codex_go/attachmentstore"
+	"codex_go/config"
 	"codex_go/rollout"
 	"codex_go/runtimeutil"
 	"codex_go/session"
@@ -63,6 +64,18 @@ type ThreadManager struct {
 	// keeps the thread's resolved Config for the same purpose).
 	providerRoutesMu sync.Mutex
 	providerRoutes   map[session.ThreadID]threadModelProviderRoute
+
+	// guardianMu guards the managed Guardian policy observation shared by
+	// every thread (Rust #62496 ThreadRegistryState). A refresh pauses
+	// registration between reserving its revision and publishing, and the
+	// published revision orders startup loads and live updates.
+	guardianMu                sync.Mutex
+	guardianLoader            GuardianPolicyLoader
+	guardianLastRevision      int64
+	guardianPublished         *config.GuardianPolicySnapshot
+	guardianPublishedRevision int64
+	guardianRefreshActive     bool
+	guardianRefreshDone       chan struct{}
 
 	terminalMu sync.Mutex
 	terminals  map[string]struct{}

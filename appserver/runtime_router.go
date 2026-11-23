@@ -15606,8 +15606,13 @@ func (r *RuntimeRouter) handleLoginAccount(request *Request) (*auth.LoginAccount
 		r.maybeStartCuratedRepoSync(false)
 		r.refreshPluginCachesAndMCPRuntimes()
 		r.noteAuthChanged()
+		// Rust #62614 refreshes Guardian policy after login while the account
+		// owner is still the one that started it.
+		r.refreshGuardianPolicyBestEffort()
 	}
 	if response != nil && response.LoginID == "" {
+		// Rust #62614 also refreshes the policy for an immediate login.
+		r.refreshGuardianPolicyBestEffort()
 		r.notify(NotificationAccountLoginCompleted, &auth.AccountLoginCompletedNotification{Success: true})
 		r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
 	}
@@ -15882,6 +15887,8 @@ func (r *RuntimeRouter) awaitAccountLoginRuntime(loginID string, done <-chan err
 	r.requireAccount().CompleteLogin(loginID, auth.AccountFromAuth(&resolved.Auth), "")
 	r.noteAuthChanged()
 	r.refreshPluginCachesAndMCPRuntimes()
+	// Rust #62614 refreshes Guardian policy after the completed login.
+	r.refreshGuardianPolicyBestEffort()
 	r.notify(NotificationAccountLoginCompleted, &auth.AccountLoginCompletedNotification{LoginID: &loginID, Success: true})
 	r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
 }
@@ -16021,6 +16028,9 @@ func (r *RuntimeRouter) handleLogoutAccount(request *Request) (*auth.LogoutAccou
 	r.maybeStartCuratedRepoSync(false)
 	r.refreshPluginCachesAndMCPRuntimes()
 	r.noteAuthChanged()
+	// Rust #62614 refreshes Guardian policy after logout so running threads
+	// pick up the unauthenticated managed requirements.
+	r.refreshGuardianPolicyBestEffort()
 	r.retireRemoteControlForAuthChange(context.Background())
 	r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
 	return response, nil

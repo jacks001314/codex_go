@@ -2227,6 +2227,31 @@ func (s *ConfigService) SetCloudConfigLoader(loader *CloudConfigLoader) {
 	s.cloudConfigLoader = loader
 }
 
+// CloudConfigLoader reports the managed-configuration loader installed by the
+// host, so a runtime refresh can load Guardian policy from the same source the
+// configuration reads use (Rust ConfigManager::current_managed_config_loader).
+func (s *ConfigService) CloudConfigLoader() *CloudConfigLoader {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cloudConfigLoader
+}
+
+// PublishGuardianPolicyRequirements replaces the Guardian-owned requirements
+// with a published snapshot's and keeps every other managed constraint, so the
+// next config read and configRequirements/read report the refreshed policy
+// (Rust #62496 publishes policy onto the live configuration).
+func (s *ConfigService) PublishGuardianPolicyRequirements(requirements *ConfigRequirements) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.requirements = MergeGuardianRequirements(s.requirements, requirements)
+}
+
 // refreshManagedConfigFromFiles re-reads requirements.toml and the app-server
 // managed configuration path before a read (Rust
 // ConfigManager::load_latest_config). Host-installed overrides win.

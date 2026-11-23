@@ -83,10 +83,17 @@ func (r *RuntimeRouter) reloadUserConfigForLoadedThreads() {
 		// disabled rather than silently keeping its enterprise authority.
 		slog.Warn("failed to rebuild user config for runtime refresh", "error", err)
 		r.disableMCPEnterpriseAuthForLoadedThreads()
+		// Rust #62614 still refreshes Guardian policy when unrelated user
+		// configuration could not load, so the published local fallbacks and
+		// requirements reach the running threads.
+		r.refreshGuardianPolicyBestEffort()
 		return
 	}
 	r.configureMCPFromConfig()
 	r.mcpRuntimes.invalidateAll()
+	// Rust #62614 publishes the local layers first, then refreshes Guardian
+	// policy so the reload picks up the new policy fallbacks.
+	r.refreshGuardianPolicyBestEffort()
 }
 
 // refreshPluginCachesAndMCPRuntimes mirrors Rust's

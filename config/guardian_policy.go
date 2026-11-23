@@ -118,6 +118,44 @@ func (c *Config) ApplyGuardianPolicy(snapshot *GuardianPolicySnapshot) error {
 	return err
 }
 
+// CloneForGuardianPolicy returns a shallow copy of the configuration with a
+// private copy of its requirements, so a refresh can publish a snapshot onto a
+// live turn's captured configuration without mutating the one an in-flight
+// step is still reading (Rust Config::clone + apply_guardian_policy, #62585).
+func (c *Config) CloneForGuardianPolicy() *Config {
+	if c == nil {
+		return nil
+	}
+	clone := *c
+	clone.Requirements = CloneConfigRequirements(c.Requirements)
+	return &clone
+}
+
+// MergeGuardianRequirements returns target with only the Guardian-owned
+// requirements replaced by source, so publishing a policy never rewrites an
+// unrelated managed constraint (Rust ConfigLayerStack::apply_guardian_policy).
+// A nil source clears the Guardian-owned requirements.
+func MergeGuardianRequirements(target, source *ConfigRequirements) *ConfigRequirements {
+	merged := CloneConfigRequirements(target)
+	if source == nil {
+		if merged != nil {
+			merged.AllowedApprovalsReviewers = nil
+			merged.AutoReview = nil
+			merged.GuardianPolicyConfig = nil
+			merged.GuardianExtraPolicy = nil
+		}
+		return merged
+	}
+	if merged == nil {
+		merged = &ConfigRequirements{}
+	}
+	merged.AllowedApprovalsReviewers = cloneSlice(source.AllowedApprovalsReviewers)
+	merged.AutoReview = cloneAutoReview(source.AutoReview)
+	merged.GuardianPolicyConfig = cloneStringPtr(source.GuardianPolicyConfig)
+	merged.GuardianExtraPolicy = cloneStringPtr(source.GuardianExtraPolicy)
+	return merged
+}
+
 // RetainGuardianPolicyFrom keeps a published policy when a separate runtime
 // refresh rebuilds the configuration stack (Rust
 // ConfigLayerStack::retain_guardian_policy_from).
