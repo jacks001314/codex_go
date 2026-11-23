@@ -55234,9 +55234,21 @@
    "sha": "490e213e17f6bdf614de2fab5a4f1259951f3dae",
    "status": "not_applicable",
    "subject": "Terminate unregistered exec processes on startup interruption (#63415)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 149: complete - Rust #63419 keeps the slash command selection across a TUI connection change. Go's slashCommandPopup.Selected may now be empty (-1): tui/tea/slash_popup.go's refreshSlashPopup keeps the exact selection when the filter is unchanged (including none) and only a new filter selects the first match, restoreSlashPopupSelection keeps the highlighted command across a catalog change and clears it when the command disappears, and moveSlashPopupSelection resumes from an empty selection at the edge the gesture moves from (Down first row, Up last row). tui/tea/disconnected.go's setAppServerDisconnected rebuilds the catalog and restores that selection, so a pending Enter cannot retarget the first row (the `/ex` + `/export` to `/exit` hazard); a blocked row or empty selection consumes Enter through restrictedPopupCommandAllowed and leaves the draft alone. Tab in a restricted composer completes without queueing (completeSelectedSlashCommand), and an offline /feedback calls jumpTranscriptToLatest and shows the single \"Thread ID <id> Reconnect and retry /feedback.\" guidance. Rust's DisconnectedCommandState also survives composer replacement on reconnect; Go keeps the same model and composer across a reconnect, so the draft, cursor and popup dismissal have no separate carrier to restore. Tests: go test ./tui/tea -run 'SlashSelection|SlashPopupRefresh|RestrictedTab|OfflineFeedback' -count=1; go test ./tui/tea -count=1; go build ./...; go vet ./tui/tea"
+   ],
+   "kind": "runtime",
+   "sha": "00696090d65a747848e0a40661e1da8badb1f146",
+   "status": "complete",
+   "subject": "Preserve slash command selection across TUI connection changes (#63419)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "490e213e17f6bdf614de2fab5a4f1259951f3dae",
+ "rustToInclusive": "00696090d65a747848e0a40661e1da8badb1f146",
  "schemaVersion": 1
 }

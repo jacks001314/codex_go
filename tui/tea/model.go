@@ -8828,6 +8828,17 @@ func (m *Model) addTurnErrorHistoryMessage(message string) {
 	m.Transcript.addTurnErrorHistoryMessage(m.State, message, m.width)
 }
 
+// jumpTranscriptToLatest returns the transcript to follow mode so freshly
+// appended guidance is visible (Rust #63419 transcript_view.jump_to_latest).
+func (m *Model) jumpTranscriptToLatest() {
+	if m == nil {
+		return
+	}
+	m.activityFollow = true
+	m.transcriptUnseenActivity = false
+	m.transcript.GotoBottom()
+}
+
 func (m *Model) addInfoHistoryMessage(message string) {
 	if m == nil || m.State == nil {
 		return
@@ -12237,8 +12248,10 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandFeedback:
 		if m.appServerDisconnected {
 			thread, guidance := m.offlineFeedbackMessage()
-			m.addInfoHistoryMessage(thread)
-			m.addInfoHistoryMessage(guidance)
+			// Rust #63419: reveal the thread id from older history before
+			// explaining how to reconnect and retry.
+			m.jumpTranscriptToLatest()
+			m.addInfoHistoryMessage(thread + " " + guidance)
 			break
 		}
 		m.openFeedbackFlow()

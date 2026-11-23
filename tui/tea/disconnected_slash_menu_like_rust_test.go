@@ -151,7 +151,7 @@ func TestDisconnectedFeedbackReportsThreadAndReconnectLikeRust(t *testing.T) {
 	if !strings.Contains(view, "Thread ID thread-offline") {
 		t.Fatalf("offline /feedback omitted the thread id:\n%s", view)
 	}
-	if !strings.Contains(view, "Reconnect to send feedback or save a ZIP.") {
+	if !strings.Contains(view, "Reconnect and retry /feedback.") {
 		t.Fatalf("offline /feedback omitted the reconnect guidance:\n%s", view)
 	}
 }

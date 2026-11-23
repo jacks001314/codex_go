@@ -84,16 +84,21 @@ func (m *Model) refreshSlashPopup() {
 		m.slashPopup = slashCommandPopup{}
 		return
 	}
-	previousQuery := m.slashPopup.Query
+	sameQuery := m.slashPopup.Active && m.slashPopup.Query == query
 	previous := m.selectedSlashPopupName()
 	scrollTop := 0
-	if previousQuery == query {
+	if sameQuery {
 		scrollTop = m.slashPopup.ScrollTop
 	}
 	items := filterSlashPopupItems(m.slashPopupCatalog(), query)
 	// Rust #50756: default to the first selectable (non-disabled) row.
 	selected := firstSelectableSlashPopupIndex(items)
-	if previous != "" && previousQuery == query {
+	if sameQuery {
+		// Rust #63419: a redraw with the same filter keeps the exact selection,
+		// including an empty one. A connection change can reorder or hide rows,
+		// and retargeting a pending Enter to the first row would submit a
+		// different command than the user highlighted.
+		selected = -1
 		for i, item := range items {
 			if item.Name == previous {
 				selected = i
@@ -386,6 +391,27 @@ func (m *Model) restrictedPopupCommandAllowed() bool {
 	return strings.EqualFold(name, "config") || unavailableThreadCommand("/"+name)
 }
 
+// restoreSlashPopupSelection keeps the highlighted command across a catalog
+// change and clears the selection when it disappears, so a pending Enter cannot
+// retarget another row (Rust #63419 restore_selection).
+func (m *Model) restoreSlashPopupSelection(name string) {
+	if m == nil || !m.slashPopup.Active {
+		return
+	}
+	m.slashPopup.Selected = -1
+	if name == "" {
+		return
+	}
+	for index, item := range m.slashPopup.Items {
+		if item.Name != name {
+			continue
+		}
+		m.slashPopup.Selected = index
+		m.slashPopup.ScrollTop = popupVisibleRange(len(m.slashPopup.Items), index, m.slashPopup.ScrollTop, slashPopupMaxRows).start
+		return
+	}
+}
+
 func (m *Model) moveSlashPopupSelection(delta int) {
 	if m == nil || delta == 0 || len(m.slashPopup.Items) == 0 {
 		return
@@ -394,12 +420,22 @@ func (m *Model) moveSlashPopupSelection(delta int) {
 	index := m.slashPopup.Selected
 	// Rust #50756: keyboard navigation walks past disabled rows.
 	for range len(items) {
-		index += delta
 		if index < 0 {
-			index = len(items) - 1
-		}
-		if index >= len(items) {
-			index = 0
+			// Rust #63419: an empty selection resumes at the edge the gesture
+			// moves from (Down selects the first row, Up the last).
+			if delta > 0 {
+				index = 0
+			} else {
+				index = len(items) - 1
+			}
+		} else {
+			index += delta
+			if index < 0 {
+				index = len(items) - 1
+			}
+			if index >= len(items) {
+				index = 0
+			}
 		}
 		if !items[index].Unavailable {
 			m.slashPopup.Selected = index
@@ -431,7 +467,9 @@ func (m *Model) completeSelectedSlashCommand() bubbletea.Cmd {
 	// composer keeps the text as-is.
 	if strings.HasPrefix(strings.TrimLeft(firstLine, " \t"), selected) {
 		m.slashPopup = slashCommandPopup{}
-		if m.isUserTurnPendingOrRunning() {
+		// Rust #63419: a restricted composer completes without queuing, so Tab
+		// cannot smuggle the draft into the next turn while offline.
+		if m.isUserTurnPendingOrRunning() && !m.threadUnavailable && !m.appServerDisconnected {
 			return m.queueComposer(true)
 		}
 		return nil

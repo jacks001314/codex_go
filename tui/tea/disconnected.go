@@ -25,11 +25,20 @@ func (m *Model) setAppServerDisconnected(disconnected bool) {
 		return
 	}
 	// The command popup caches its catalog, so a connection change rebuilds it
-	// while keeping the draft.
+	// while keeping the draft. Rust #63419 keeps the highlighted command when it
+	// survives the new catalog and clears the selection when it disappears, so a
+	// pending Enter cannot submit a different row than the user chose.
+	active := m.slashPopup.Active
+	previous := m.selectedSlashPopupName()
 	m.slashPopup = slashCommandPopup{}
-	if disconnected {
-		m.refreshSlashPopup()
+	if !active {
+		if disconnected {
+			m.refreshSlashPopup()
+		}
+		return
 	}
+	m.refreshSlashPopup()
+	m.restoreSlashPopupSelection(previous)
 }
 
 // firstLineOfText returns everything before the first newline.
@@ -65,7 +74,7 @@ func (m *Model) offlineFeedbackMessage() (string, string) {
 			thread = "Thread ID " + id
 		}
 	}
-	return thread, "Reconnect to send feedback or save a ZIP."
+	return thread, "Reconnect and retry /feedback."
 }
 
 // noteOfflineConnectionRequirement explains a command the offline TUI cannot run
