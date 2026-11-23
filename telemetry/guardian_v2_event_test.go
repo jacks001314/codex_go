@@ -74,3 +74,34 @@ func stringContains(text, fragment string) bool {
 	}
 	return false
 }
+
+// Mirrors Rust #62588: an event produced through a host-selected Guardian
+// provider names that provider; the field is absent otherwise.
+func TestGuardianV2EventReportsGuardianModelProviderLikeRust(t *testing.T) {
+	providerID := "guardian-provider"
+	event := NewGuardianV2ClassificationEvent(GuardianV2EventParams{
+		GuardianV2Event: GuardianV2Event{
+			ThreadID:                "thread-1",
+			TurnID:                  "turn-1",
+			GuardianModelProviderID: &providerID,
+		},
+	})
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if !jsonContainsString(data, `"guardian_model_provider_id":"guardian-provider"`) {
+		t.Fatalf("classification event = %s, want the Guardian provider id", data)
+	}
+
+	withoutProvider := NewGuardianV2FastDecisionEvent(GuardianV2EventParams{
+		GuardianV2Event: GuardianV2Event{ThreadID: "thread-1", TurnID: "turn-1"},
+	})
+	data, err = json.Marshal(withoutProvider)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if jsonContainsString(data, "guardian_model_provider_id") {
+		t.Fatalf("fast-decision event = %s, want no provider id", data)
+	}
+}

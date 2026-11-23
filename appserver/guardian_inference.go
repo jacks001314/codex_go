@@ -212,6 +212,16 @@ func (r *RuntimeRouter) guardianCatalogRecoveryDue(cfg *config.Config, params *t
 	return !turnIsFullAccess(cfg, firstNonEmpty(turnCWD(params), r.services.DefaultCWD), params)
 }
 
+// guardianModelProviderIDPtr reports the host-selected Guardian provider id for
+// analytics attribution (Rust #62588 guardian_model_provider_id).
+func (r *RuntimeRouter) guardianModelProviderIDPtr() *string {
+	if provider, ok := r.guardianInferenceProvider(); ok {
+		value := provider.ID
+		return &value
+	}
+	return nil
+}
+
 // managedGuardianPolicyRequirement reports the managed `guardian_policy_config`
 // requirement alone (Rust Config::managed_guardian_policy). A host-selected
 // Guardian provider ignores policy text that came from the actor's

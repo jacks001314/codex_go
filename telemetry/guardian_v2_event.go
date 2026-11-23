@@ -55,6 +55,10 @@ type GuardianV2Event struct {
 	// classification, shared across its request retries (Rust #62125). It is
 	// present on classification events once request preparation succeeded.
 	ClassifierTurnID *string `json:"classifier_turn_id,omitempty"`
+	// GuardianModelProviderID names the host-selected Guardian provider the
+	// event was produced through (Rust #62588). It is absent when Guardian
+	// runs on the actor's provider.
+	GuardianModelProviderID *string `json:"guardian_model_provider_id,omitempty"`
 }
 
 // NewGuardianV2ClassificationEvent builds a classification event request.

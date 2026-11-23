@@ -3902,7 +3902,7 @@ func (r *RuntimeRouter) resetGuardianAfterParentCompaction(threadID string, comp
 	// unconditional; the guardianv2.thread_context flag was promoted, then
 	// retired as a removed compatibility no-op, so the Go gate is fixed on.
 	threadContext := true
-	reuseParentCompaction := features.Enabled(cfg.FeatureSettings(), "guardian_reuse_parent_compaction")
+	reuseParentCompaction := r.guardianReusesParentCompaction(cfg)
 	if !threadContext && !reuseParentCompaction {
 		return
 	}

@@ -53022,11 +53022,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1268: partial - the host-selected Guardian provider now also owns a shared model catalog (Rust #62588): the router builds one catalog from the provider's base URL, model_catalog_url and API-key discovery setting, caches it apart from the actor's catalog, uses it for reviewer selection and catalog metadata (so instructions, auto-review messages and thresholds come from the Guardian provider), keeps the separate reviewer runner and preferred reviewer, and retries initialization in the background (#62627). Remaining: reviewer isolation resets when the host provider is selected (service tier, context window/compaction overrides, transcript mode and history prompt), the actor checkpoint/history reuse rule, and the guardian_model_provider_id analytics field."
+    "Round 1268: a host can select Guardian's inference provider, and Guardian resolves its whole route from it (Rust #62588). RuntimeServices.GuardianModelProvider carries the provider id and resolved provider info; Guardian derives its preferred reviewer (Luna for API-key providers), builds a dedicated reviewer runner and one shared catalog from the provider's base URL, model_catalog_url and API-key discovery setting (kept apart from the actor's cache, with background initialization retry per #62627), reports the provider id on the review plan, prepared options and Guardian V2 analytics events, reads reviewer policy text only from the managed guardian_policy_config requirement, resets the reviewer's actor-owned tier/catalog/context/compaction/transcript settings, and keeps Guardian history independent of actor compaction checkpoints. Tests: go test ./appserver -run 'Guardian' -count=1; go test ./telemetry -run 'GuardianV2EventReportsGuardian' -count=1; go test ./model -run 'NeedsInitialization' -count=1."
    ],
    "kind": "runtime",
    "sha": "5f8c36e8368cb97720bd9c21b2dafacccbdc9679",
-   "status": "partial",
+   "status": "complete",
    "subject": "Support a host-selected inference provider for Guardian (#62588)"
   },
   {

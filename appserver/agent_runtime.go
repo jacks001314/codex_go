@@ -903,6 +903,7 @@ func (r *RuntimeRouter) guardianReviewPlanForTurnContext(ctx context.Context, th
 		Ephemeral:                       active.RunConfig.Ephemeral,
 		ProviderID:                      guardianProviderID,
 		SessionID:                       active.RunConfig.SessionID,
+		HostProvider:                    guardianProviderSelected,
 	}
 	plan.PrepareInput = prepareInput
 	prepared, prepareErr := guardianPrepareReviewerOptions(prepareInput)
@@ -929,7 +930,32 @@ func (r *RuntimeRouter) guardianContextModeForTurn(threadID, turnID string) stat
 	if err != nil || cfg == nil {
 		return ""
 	}
-	return guardianContextModeForConfig(cfg)
+	return r.guardianContextModeForConfig(cfg)
+}
+
+// guardianReusesParentCompaction mirrors Rust #62588
+// Config::guardian_reuses_parent_compaction: a host-selected Guardian provider
+// keeps Guardian's history independent of the actor's opaque checkpoints.
+func (r *RuntimeRouter) guardianReusesParentCompaction(cfg *config.Config) bool {
+	if r == nil || cfg == nil {
+		return false
+	}
+	if _, ok := r.guardianInferenceProvider(); ok {
+		return false
+	}
+	return features.Enabled(cfg.FeatureSettings(), "guardian_reuse_parent_compaction")
+}
+
+// guardianContextModeForConfig applies the host-provider rule on top of the
+// feature-only resolution.
+func (r *RuntimeRouter) guardianContextModeForConfig(cfg *config.Config) state.GuardianContextMode {
+	if cfg == nil {
+		return ""
+	}
+	if r.guardianReusesParentCompaction(cfg) {
+		return state.GuardianContextModeThreadOwned
+	}
+	return state.GuardianContextModeIndependent
 }
 
 func guardianContextModeForConfig(cfg *config.Config) state.GuardianContextMode {

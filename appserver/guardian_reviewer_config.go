@@ -58,6 +58,9 @@ type guardianReviewerPrepareInput struct {
 	Ephemeral                       bool
 	ProviderID                      string
 	SessionID                       string
+	// HostProvider marks a reviewer configured for the host-selected Guardian
+	// provider (Rust #62588 GuardianInferenceContext::configure_reviewer).
+	HostProvider bool
 }
 
 // guardianPrepareReviewerOptions mirrors Rust
@@ -146,6 +149,29 @@ func guardianReviewerIsolatedConfig(input guardianReviewerPrepareInput) *config.
 	if reviewerModel != strings.TrimSpace(input.ParentModel) {
 		delete(values, "model_context_window")
 		delete(values, "model_auto_compact_token_limit")
+	}
+	if input.HostProvider {
+		// Rust #62588 configure_reviewer: the reviewer runs on a different
+		// provider, so the actor's tier, catalog, context and compaction
+		// settings do not apply to it.
+		delete(values, "service_tier")
+		delete(values, "model_catalog_json")
+		delete(values, "model_catalog")
+		delete(values, "model_context_window")
+		delete(values, "model_auto_compact_token_limit")
+		delete(values, "model_auto_compact_token_limit_scope")
+		delete(values, "tool_output_token_limit")
+		delete(values, "model_verbosity")
+		delete(values, "compact_prompt")
+		if asyncCompaction, ok := guardianReviewerSubTable(values, "features")["async_compaction"].(map[string]any); ok {
+			// The reviewer starts from the default interactive-compaction
+			// threshold instead of the actor's.
+			delete(asyncCompaction, "model_async_compact_threshold_percent")
+		}
+		if guardianV2, ok := guardianReviewerSubTable(values, "features")["guardianv2"].(map[string]any); ok {
+			// Rust resets the reviewer's transcript mode to the default.
+			delete(guardianV2, "transcript_mode")
+		}
 	}
 	return isolated
 }
