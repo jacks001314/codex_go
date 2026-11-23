@@ -51309,11 +51309,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1270: partial - Rust adds subagents and their status to the sidebar chooser next to side chats and files. Go's chooser builds its rows from SideChatChoice entries plus the tracked side-conversation tabs and then files (tui/tea/sidebar_chooser.go sidebarChooserChoices/sidebarChooserFileStartFor); subagents never appear as chooser rows and rows carry no status or dot."
    ],
    "kind": "runtime",
    "sha": "18352dc4e8757d652e4102a17abc76601847b8da",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Show subagents and their status in the TUI sidebar chooser (#62149)"
   },
   {
@@ -51361,11 +51361,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1270: partial - Rust opens a subagent's transcript in the sidebar while keeping the parent conversation visible. Go has the side-pane machinery (activeSideConversation tabs, startSideOpen, sidebarPaneSelectedChatID) used for side chats, but a subagent is only reachable through agent navigation (tui/app/agent_navigation.go OrderedPathBackedSubagentThreads), which switches the active conversation instead of opening a side pane."
    ],
    "kind": "runtime",
    "sha": "cc3757a99db9c129757ced74192eaf831f959d2e",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Open subagent transcripts in the TUI sidebar (#62157)"
   },
   {
@@ -51373,11 +51373,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1270: partial - Rust underlines subagent labels in transcript activity and opens that transcript when clicked. Go records subagent activity for the navigation picker (tui/app/agent_navigation.go RecordSubAgentActivity, SubAgentActivityDisplay) and supports keyboard switching, but agent_navigation.go has no link span or click handling, so activity labels are not clickable."
    ],
    "kind": "runtime",
    "sha": "bedafe7156ab73ac213cf960a2c2ef90033dd259",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Open subagent transcripts from activity links in the TUI (#62159)"
   },
   {
@@ -51575,11 +51575,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1270: Go already implements the task-group navigation this commit adds: the agents overview binds agents.next_group / agents.previous_group to shift+down|shift+j and their opposites, jumps to the first task of the next visible group, and clamps at the ends (tui/tea/agents_overview_section_keys_like_rust_test.go TestShiftDown... asserts the next group's first task and the clamping case). The docked-pane follow-ups are tracked separately."
    ],
    "kind": "runtime",
    "sha": "e58677f0cbff983a3438a773fdd7c96a88ab0359",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Add task group navigation to the agent command center (#62200)"
   },
   {
@@ -52359,11 +52359,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1270: partial - Rust recolours the foreground of hovered transcript and status-line links, transcript disclosure controls and the warning notice, using rendered link spans so wide characters stay aligned and recomputing on redraw. Go tracks hover only for chrome: sidebar tab index (sidebarTabHover), chooser row, the add button (sidebarAddHover), the pane divider and followControlHover; transcript link and control spans are not hit-tested or recoloured."
    ],
    "kind": "runtime",
    "sha": "b5e1f3ae9d810dec3fe005fcc55552766b577bdb",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Highlight clickable links and controls on hover in the fullscreen TUI (#62390)"
   },
   {
