@@ -399,6 +399,13 @@ func (t *remoteJSONLineTransport) read(ctx context.Context) ([]byte, error) {
 	} else {
 		_ = t.conn.SetReadDeadline(time.Time{})
 	}
+	// Rust #63351: stopping the client must release a read the socket would
+	// otherwise keep blocked, including a context cancelled without a deadline.
+	stopWatch, watchDone := watchContextAbort(ctx, func() { _ = t.conn.SetReadDeadline(time.Now()) })
+	defer func() {
+		close(stopWatch)
+		<-watchDone
+	}()
 	data, err := t.reader.ReadBytes('\n')
 	if len(data) > 0 {
 		return data, nil
@@ -423,11 +430,50 @@ func (t *remoteJSONLineTransport) write(ctx context.Context, data []byte) error 
 	}
 	t.writeMu.Lock()
 	defer t.writeMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Rust #63351 aborts a transport worker stalled on a socket write. Go's
+	// writer is the calling goroutine, so the same guarantee aborts the write:
+	// cancelling the request or closing the client releases it instead of
+	// leaving it blocked. The watcher stops while writeMu is still held, so it
+	// can never expire a later write.
+	stopWatch, watchDone := watchContextAbort(ctx, func() { _ = t.conn.SetWriteDeadline(time.Now()) })
+	defer func() {
+		close(stopWatch)
+		<-watchDone
+	}()
 	if len(data) == 0 || data[len(data)-1] != '\n' {
 		data = append(append([]byte(nil), data...), '\n')
 	}
 	_, err := t.conn.Write(data)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+	}
 	return asRemoteTransportError(err)
+}
+
+// watchContextAbort runs abort when ctx is cancelled. The returned channels stop
+// the watcher and report that it exited; callers stop it before releasing the
+// state the abort touches.
+func watchContextAbort(ctx context.Context, abort func()) (chan struct{}, chan struct{}) {
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	if ctx == nil || ctx.Done() == nil || abort == nil {
+		close(done)
+		return stop, done
+	}
+	go func() {
+		defer close(done)
+		select {
+		case <-ctx.Done():
+			abort()
+		case <-stop:
+		}
+	}()
+	return stop, done
 }
 
 func (t *remoteJSONLineTransport) close() {

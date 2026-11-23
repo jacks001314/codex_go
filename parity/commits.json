@@ -54869,11 +54869,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Batch 122: partial - Rust wraps the remote transport worker in AbortOnDropHandle so dropping the client or cancelling shutdown aborts the worker. Go's remote TUI client owns no task handle: app/remote_tui.go closes the transport explicitly in close(), which is the drop equivalent for every use site, but an abandoned client that is never closed is not aborted automatically."
+    "Batch 125: complete - stopping a remote app-server client aborts transport IO that is stalled on the socket. Go has no owned task handle: the JSON-line and websocket transports run IO on the caller's goroutine. app/remote_tui.go now closes that gap in the JSON-line transport: a cancelled request aborts an in-flight read or write by expiring the socket deadline (watchContextAbort, stopped while writeMu is still held so it cannot affect a later write) and reports context.Canceled; closing the client closes the socket, which releases the blocked IO, and later writes fail instead of reaching a dead transport. The websocket transport already honours ctx and the cloud transport already selects on its closed channel.",
+    "Tests: app/remote_tui_transport_abort_like_rust_test.go stalls a net.Pipe write behind a signalling conn and checks that close releases it (and that a later write errors), that cancelling the request returns context.Canceled, and that cancellation also releases a stalled read."
    ],
    "kind": "runtime",
    "sha": "108730843ae4303ae79e9b6b936343f0b7c483bb",
-   "status": "partial",
+   "status": "complete",
    "subject": "Abort the remote app-server worker when its client is dropped (#63351)"
   },
   {
