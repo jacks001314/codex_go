@@ -52888,11 +52888,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1261: telemetry/subagent_lifecycle.go mirrors codex-rs/otel/src/subagent.rs for the three counters codex.multi_agent.spawned, codex.multi_agent.turn.lifecycle and codex.multi_agent.stop_accepted. Metric labels stay bounded (turn_kind/status/error_kind/abort_reason for turn attempts, caller/action/previous_status for accepted stops, plus product_sku); root thread id, parent turn id, child thread id and call id ride only the trace event. Tests: go test ./telemetry -run SubagentLifecycle -count=1",
+    "Round 1261: appserver/subagent_lifecycle.go tracks each spawned child attempt once - one start, at most one outcome. Turn kinds match Rust turn_metrics.rs (initial for the first observed attempt, follow_up afterwards, resumed_thread after an explicit resume), a failed outcome labels the turn's CodexErrorInfo variant as snake_case error_kind, and an interrupted outcome carries the abort reason that interruptRuntimeTurn validated (Go's terminal status has no reason field, so the interrupt path hands it to the tracker; Rust reads TurnAborted). Wired through runtime_router.go turn/start, the turn-completed notification and turn/interrupt, plus agent_controller.go spawn, resume, close and interrupt. Tests: go test ./appserver -run 'Subagent|MultiAgent' -count=1",
+    "Round 1261: go build ./..., go vet ./telemetry ./appserver, go test ./telemetry and go test ./appserver -run 'Subagent|MultiAgent' all pass; go test ./parity -count=1 passes. A full ./appserver run still fails pre-existing Windows/network cases (TestOtelReloaderStopsAtClose exporting to 127.0.0.1:1, gateway OAuth, absolute-path parity) unrelated to this commit. Rust's `suspended` outcome has no Go carrier because Go has no turn-suspension lifecycle; the at-most-one-outcome rule already mirrors Rust's suspend-then-shutdown dedupe."
    ],
    "kind": "runtime",
    "sha": "65454c7b994e01cfe594b4c3b0f9971bf70aafdb",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Add OpenTelemetry for subagent lifecycles (#62567)"
   },
   {

@@ -356,6 +356,9 @@ type RuntimeRouter struct {
 	// configured delay while keeping ephemeral children and running threads
 	// resident (Rust #52081/#52034).
 	idleLifecycle threadIdleLifecycle
+	// subagentTurns tracks child turn attempts so each one reports one start and
+	// at most one outcome (Rust #62567).
+	subagentTurns subagentTurnAttemptTracker
 	// agentTreeIDMu guards agentTreeIDs, the per-tree correlation id handed to
 	// shutdown reports. The id is generated when a tree is first seen and shared
 	// by every controller in it; it is never persisted, so a reload gets a new one
@@ -1430,6 +1433,8 @@ func (r *RuntimeRouter) notifyTurnCompletedOnce(notification *TurnCompletedNotif
 	// patch and cannot be overwritten by the next turn.
 	r.emitFinalTurnDiff(notification.ThreadID, notification.Turn.ID)
 	r.finishSkillTurnMetrics(notification.ThreadID, notification.Turn.ID, notification.Turn.Status)
+	// Rust #62567: each started child attempt reports at most one outcome.
+	r.recordSubagentTurnOutcome(context.Background(), notification.ThreadID, notification.Turn.ID, notification.Turn.Status, notification.Turn.Error)
 	// Rust #55591: turn stop exports the blocking sample as `completed`, turn
 	// abort as `aborted` (ext/guardian-v2/src/sync_reviewer/mod.rs). A failed
 	// turn ends through Rust's turn-stop lifecycle too, so only an interrupted
@@ -9245,6 +9250,8 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 		return nil, err
 	}
 	acceptedTurnID = response.Turn.ID
+	// Rust #62567: a child turn attempt reports its start before any outcome.
+	r.recordSubagentTurnStarted(context.Background(), params.ThreadID, response.Turn.ID)
 	_ = r.persistTurnStartRuntimeWorkspaceRoots(params)
 	_ = r.persistTurnEnvironmentSelections(params)
 	if hasSettingsUpdate {
@@ -10850,6 +10857,12 @@ func (r *RuntimeRouter) abortRuntimeTurnForManualCompaction(threadID string) {
 // compaction abort (`handlers::compact` -> `abort_all_tasks(Replaced)`) uses
 // `replaced`.
 func (r *RuntimeRouter) interruptRuntimeTurn(threadID string, turnID string, requestedAtMS *uint64, reason string) (*turn.TurnInterruptResponse, error) {
+	if r != nil {
+		// Rust reports the TurnAborted reason on the child's interrupted attempt;
+		// Go's terminal status carries no reason, so keep the validated one here.
+		// The tracker ignores threads that never recorded a child attempt.
+		r.subagentTurns.noteAbortReason(threadID, turnID, reason)
+	}
 	if r.hasRuntimeThreadStore() {
 		// Rust #46305: validate the id before cloning the turn. Only a matching
 		// id needs the full record's reservation and finishing state.

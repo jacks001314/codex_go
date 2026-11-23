@@ -171,6 +171,16 @@ const (
 	// #47984, otel/src/metrics/names.rs
 	// MULTI_AGENT_SPAWN_PHASE_DURATION_METRIC).
 	MultiAgentSpawnPhaseDurationMetric = "codex.multi_agent.spawn.phase.duration_ms"
+	// MultiAgentSpawnedMetric counts successful subagent spawns (Rust #62567,
+	// otel/src/metrics/names.rs MULTI_AGENT_SPAWNED_METRIC).
+	MultiAgentSpawnedMetric = "codex.multi_agent.spawned"
+	// MultiAgentTurnLifecycleMetric counts child turn attempt starts and their
+	// single outcome (Rust #62567 MULTI_AGENT_TURN_LIFECYCLE_METRIC).
+	MultiAgentTurnLifecycleMetric = "codex.multi_agent.turn.lifecycle"
+	// MultiAgentStopAcceptedMetric counts accepted close_agent/interrupt_agent
+	// calls, including stops of idle or unloaded targets (Rust #62567
+	// MULTI_AGENT_STOP_ACCEPTED_METRIC).
+	MultiAgentStopAcceptedMetric = "codex.multi_agent.stop_accepted"
 )
 
 // ConversationTurnCountMetric mirrors config.rs's local

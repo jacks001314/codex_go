@@ -490,6 +490,9 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 		HistoryMode:       c.router.agentSpawnHistoryMode(string(threadID)),
 		ProductSKU:        c.router.spawnFailureProductSKU(),
 	}, phases)
+	// Rust #62567: a successful spawn counts and links the parent turn to the
+	// child thread for later turn-attempt correlation.
+	c.router.recordSubagentSpawn(ctx, c.rootID, c.parentTurnID, string(threadID))
 	return &agent.SpawnAgentResult{
 		AgentID:         string(threadID),
 		TaskName:        agentPath,
@@ -854,6 +857,8 @@ func (c *runtimeAgentController) ResumeAgent(ctx context.Context, args *agent.Re
 		_ = c.router.services.SpawnGraph.UpsertThreadSpawnEdge(string(record.ParentThreadID), id, agent.ThreadSpawnEdgeOpen)
 	}
 	c.router.emitSubagentThreadInitializedAnalytics(ctx, record, threadInitializationModeResumed)
+	// Rust #62567: the child's next turn attempt is a resumed one.
+	c.router.noteSubagentResume(id)
 	return &agent.ResumeAgentResult{Status: c.status(id)}, nil
 }
 func (c *runtimeAgentController) CloseAgent(ctx context.Context, args *agent.CloseAgentArgs) (*agent.CloseAgentResult, error) {
@@ -886,6 +891,9 @@ func (c *runtimeAgentController) CloseAgent(ctx context.Context, args *agent.Clo
 	if report := state.Report(); !report.Empty() {
 		result.ShutdownReport = &report
 	}
+	// Rust #62567: an accepted stop counts even when the target was already
+	// idle or unloaded.
+	c.router.recordSubagentStopAccepted(ctx, c.rootID, c.parentID, target, telemetry.SubagentStopActionClose, previous)
 	return result, nil
 }
 
@@ -1245,6 +1253,7 @@ func (c *runtimeAgentController) InterruptAgent(ctx context.Context, args *agent
 		}
 	}
 	c.router.notifyRuntimeAgentActivity(c.rootID, "Wait completed.")
+	c.router.recordSubagentStopAccepted(ctx, c.rootID, c.parentID, threadID, telemetry.SubagentStopActionInterrupt, previous)
 	return &agent.InterruptAgentResult{PreviousStatus: agent.V2AgentStatusValue(previous)}, nil
 }
 
