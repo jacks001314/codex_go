@@ -133,14 +133,15 @@ func tuiStateWithScrollback() *codextui.State {
 	return state
 }
 
-// Rust's owned transcript enters the alternate screen, enables cell-motion mouse
-// reporting, and disables DEC 1007 before it accepts input. The wheel escape the
+// Rust's owned transcript enters the alternate screen, enables any-motion mouse
+// reporting (Rust #62390 needs motion without a held button to highlight the
+// link under the pointer), and disables DEC 1007 before it accepts input. The wheel escape the
 // terminal then sends must reach the transcript viewport instead of scrolling the
 // terminal scrollback.
 func TestOwnedProgramWheelReachesTranscriptLikeRust(t *testing.T) {
 	running := startRealProgram(t, Options{Width: 60, Height: 10})
 	waitForProgramOutput(t, running.output, "\x1b[?1049h")
-	waitForProgramOutput(t, running.output, "\x1b[?1002h")
+	waitForProgramOutput(t, running.output, "\x1b[?1003h")
 	waitForProgramOutput(t, running.output, "\x1b[?1007l")
 	// Let the first frame lay out the transcript rows before hit-testing them.
 	time.Sleep(100 * time.Millisecond)

@@ -2254,6 +2254,11 @@ type Model struct {
 	// inventory poll is scheduled, so a completed refresh does not start a
 	// second timer chain (Rust #62858 cloud_inventory_poll).
 	agentsOverviewPolling bool
+	// hoverPointerX/Y record the last pointer position so the next draw can
+	// recolour the link under it (Rust #62390 link_hover).
+	hoverPointerX   int
+	hoverPointerY   int
+	hoverPointerSet bool
 	// agentsOverviewInflightFor names the backend that owns the shared refresh
 	// slot, and agentsOverviewBackends keeps queued refreshes, Show more
 	// requests, refill counts, and failures per backend (Rust #61596).
@@ -5820,6 +5825,11 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			return m, m.insertComposerNewline()
 		}
 	case mousemsg.MouseMsg:
+		// Rust #62390: the painted link under the pointer is highlighted on the
+		// next draw, which this message already triggers.
+		if msg.Action == mousemsg.MouseActionMotion {
+			m.hoverPointerX, m.hoverPointerY, m.hoverPointerSet = msg.X, msg.Y, true
+		}
 		if m.pendingBackendSwitch != nil {
 			// The handoff accepts only the right-click paste trigger; other
 			// transcript and navigation gestures wait for adoption.
@@ -5958,6 +5968,11 @@ func (m *Model) View() bubbletea.View {
 	v.ReportFocus = true
 	if m.mouseCaptureActive {
 		v.MouseMode = bubbletea.MouseModeCellMotion
+		if m.linkHoverApplies() {
+			// Hover feedback needs motion reports even without a held button
+			// (Rust #62390).
+			v.MouseMode = bubbletea.MouseModeAllMotion
+		}
 	}
 	v.KeyboardEnhancements.ReportEventTypes = true
 	v.KeyboardEnhancements.ReportAlternateKeys = true
@@ -5975,7 +5990,7 @@ func (m *Model) frameOutput() string {
 	if m == nil {
 		return ""
 	}
-	return codextui.StripThreadLinkHyperlinks(m.viewString())
+	return m.applyLinkHover(codextui.StripThreadLinkHyperlinks(m.viewString()))
 }
 
 func (m *Model) viewString() string {

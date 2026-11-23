@@ -117,7 +117,7 @@ func TestOwnedScreenFooterSelectionPTY(t *testing.T) {
 		t.Fatalf("timed out draining ConPTY output")
 	}
 	rendered := output.String()
-	if !strings.Contains(rendered, "\x1b[?1002h") && !strings.Contains(rendered, "\x1b[?1000h") {
+	if !strings.Contains(rendered, "\x1b[?1003h") && !strings.Contains(rendered, "\x1b[?1002h") && !strings.Contains(rendered, "\x1b[?1000h") {
 		t.Fatalf("owned-screen mode did not enable mouse reporting: %q", rendered)
 	}
 	if !strings.Contains(rendered, "\x1b[7m") {
