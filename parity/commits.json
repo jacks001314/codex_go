@@ -50916,11 +50916,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Audit found the Go carrier already present: config.OtelRequirements carries headers_helper and headers_helper_refresh_interval_ms, managed requirements require an absolute executable path, cloud/fetched policy rejects helper settings, layer composition binds the helper only to same-layer OTLP HTTP exporters with nonempty endpoints and revokes the binding when either side is replaced, the requirements API projects both fields, and telemetry runs managed helpers from the executable's installation directory with per-signal authorization. Tests: go test ./config -run 'TestManagedOtelHeadersHelperRequiresAbsolutePathLikeRust|TestManagedOtelHeadersHelperTargetsFollowLayerLikeRust|TestCloudRequirementsRejectOtelHeadersHelperLikeRust|TestUserOtelHeadersHelperTargetsSkipManagedExportersLikeRust' -count=1; go test ./telemetry -run 'TestManagedOtelHeadersHelperRunsFromInstallDirectoryAndRecoversLikeRust|TestOtelProviderAuthorizesHelperPerExporterLikeRust' -count=1"
    ],
    "kind": "runtime",
    "sha": "8fca6ffb92a602875a0b97e3e535eb48375bdd8c",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Support OTel header helpers in local managed requirements (#62110)"
   },
   {
@@ -51227,11 +51227,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Audit found the Go carrier already present: disconnected Cloud conversations hold their reply stream until a replacement is installed (or the page is withheld when the sign-in changed), bound slow history, and drop streams lost before install. Tests: go test ./cloudbackend -run 'TestResumeDisconnectedThreadHoldsUntilInstallLikeRust|TestResumeDisconnectedThreadBoundsSlowHistoryLikeRust|TestResumeDisconnectedThreadDropsStreamLostBeforeInstallLikeRust' -count=1"
    ],
    "kind": "runtime",
    "sha": "f39fcc1bfbcb04afbe7df8793545bf4a00f5f266",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Hold Cloud reply streams until history can be refreshed (#62140)"
   },
   {
@@ -51651,11 +51651,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Audit found the Go carrier already present: guardian_review_metrics tags the codex.guardian.review counter with turn_origin (automation/unknown/other) from the turn trigger for allow and deny verdicts, with a later user turn counted separately from an automation turn. Tests: go test ./appserver -run 'TestGuardianTurnOriginTagLikeRust|TestGuardianReviewCountTagsTurnOriginLikeRust' -count=1"
    ],
    "kind": "runtime",
    "sha": "ca21fe65d18a9b6326759fb4263c65dfbb645aa5",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Tag Guardian review counts with turn origin (#62225)"
   },
   {
@@ -52482,11 +52482,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Audit found the Go carrier already present: config-server bundle and auth loaders discover authorization, token and optional device authorization endpoints from OAuth metadata when config_server.oauth is omitted, using the bootstrap HTTP/network policy with a five-second deadline; explicit OAuth settings skip discovery and the anonymous Git-credential loader refuses discovered OAuth. The opt-in/Disabled split from this commit was superseded by #62824, which enables discovery by default for config servers, and Go matches that final state. Tests: go test ./app -run 'TestConfigServerDiscoversOAuthLikeRust|TestConfigServerExplicitOAuthSkipsDiscoveryLikeRust|TestAnonymousConfigServerLoaderRefusesOAuthLikeRust|TestConfigServerLogoutDiscoveryHonorsNetworkPolicyLikeRust' -count=1"
    ],
    "kind": "runtime",
    "sha": "14302d5de9ec4183fd2b53ad2a0ae7bdf80340d5",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Add opt-in OAuth discovery to config server loaders (#62432)"
   },
   {
@@ -52518,11 +52518,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Audit found the Go carrier already present: turn Git enrichment publishes HEAD and remote URLs before admission, starts the worktree scan only after Admit, keeps serving model requests while status is blocked, and an interrupted wake skips the scan; model requests carry the latest Git metadata. Tests: go test ./appserver -run 'TestTurnGitEnrichment|TestActiveTurnClientMetadataCarriesGitWorkspacesLikeRust' -count=1"
    ],
    "kind": "runtime",
    "sha": "83f73a818cb319a19aab0b2d99ee3c1d562e6110",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Defer Git worktree status until the turn starts (#62437)"
   },
   {
@@ -52729,11 +52729,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Audit found the Go carrier already present: mcp_connection_sharing is stable and enabled by default, an empty server/discover result is treated as an unsupported method so the same pipe falls back to legacy initialize, legacy restarts get a fresh timeout, and connection sharing gates local stdio discovery. Tests: go test ./appserver -run 'TestMCPSharedReplCwdsRequiresBothFeaturesLikeRust|TestConfiguredMCPLaunchCwdRequiresMatchingExecutableLikeRust' -count=1; go test ./mcp -run 'TestMCPDiscoverLocalStdioHandshakeRecoveryLikeRust|TestMCPConnectionSharingGatesLocalStdioDiscoveryLikeRust' -count=1"
    ],
    "kind": "runtime",
    "sha": "ac784eb10e6d02486b00d383b64822b69473c0e8",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Enable MCP connection sharing by default (#62552)"
   },
   {
