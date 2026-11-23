@@ -51998,11 +51998,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1269: partial - Rust adds prefix-filtered argument completion to the TUI composer (for example `on`/`off` after `/raw`). Go's chat_composer has the slash input parser and command menu (slash_input.go, slash_input_test.go) but no argument completion: no completion source, filter, or rendering for a command's fixed arguments."
    ],
    "kind": "runtime",
    "sha": "42cf4edfcdc872cf2700a54ad0fef7cd25e5295c",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Add slash command argument completion to the TUI composer (#62343)"
   },
   {
@@ -52985,11 +52985,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1269: partial - Rust watches each previewed file's parent directory and refreshes the open sidebar preview when the file changes. Go's sidebar inventory (tui/markdown/sidebar_file_links.go) and tab hover state (tui/tea/model.go sidebarTabHover) exist, but nothing in tui/app or tui/markdown watches a previewed path or reloads an open preview on a filesystem change."
    ],
    "kind": "runtime",
    "sha": "81ef12b6174a0a04cb8f6ee337fcde61686a6ab8",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Refresh open sidebar file previews when files change (#62583)"
   },
   {
@@ -54166,11 +54166,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Round 1269: partial - Rust completes named settings (flags and their accepted values) for commands like `/model` in the TUI. Go's composer suggests command names only; there is no flag or value completion, and the slash input parser treats everything after the command text as plain input."
    ],
    "kind": "runtime",
    "sha": "59edd0d512a9fc1660f2ecf6562c803051b90faa",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Complete named settings for TUI slash commands (#63036)"
   },
   {
@@ -54447,11 +54447,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Round 1269: partial - Rust adds an `open_in_codex` MCP tool that takes a file path and optional one-based line, queues the request until the calling conversation is visible, and loads a sandboxed snapshot into the terminal sidebar without stealing keyboard focus. Go has the transcript side only: tui/markdown/sidebar_file_links.go inventories the local files a transcript mentions (with :line[:col] locations) for the sidebar, but no `open_in_codex` tool exists anywhere in the tree, so a model cannot ask the sidebar to open a file."
    ],
    "kind": "runtime",
    "sha": "5824b38693412e0787d45bbd0167be495b69660f",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Let Codex open workspace files in the terminal sidebar (#63184)"
   },
   {
