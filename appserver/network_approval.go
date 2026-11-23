@@ -78,6 +78,11 @@ type networkApprovalService struct {
 	// executions keeps the originating execution snapshot and cancellation
 	// token for processes that outlive their launching tool call (Rust #44575).
 	executions map[string]*activeNetworkApprovalCall
+	// finishedCalls caches the outcome of a registration that ended before its
+	// tool step reported completion, so every deferred observer reports the same
+	// denial (Rust #63365 finish_outcome). Retired calls never answer proxy
+	// attribution again.
+	finishedCalls map[string]*activeNetworkApprovalCall
 }
 
 // networkApprovalPromptQueue is a one-permit endpoint queue. refs counts the
@@ -157,6 +162,7 @@ func newNetworkApprovalService(router *RuntimeRouter) *networkApprovalService {
 		saved:            map[string][]networkRuleSavedFragment{},
 		calls:            map[string]*activeNetworkApprovalCall{},
 		executions:       map[string]*activeNetworkApprovalCall{},
+		finishedCalls:    map[string]*activeNetworkApprovalCall{},
 	}
 }
 
@@ -926,9 +932,17 @@ func (s *networkApprovalService) cancelExecutionIfNotPersistent(call *activeNetw
 	if s == nil || call == nil {
 		return
 	}
+	key := networkApprovalCallKey(call.threadID, call.turnID, call.callID)
 	s.callsMu.Lock()
 	persistent := call.persistent.Load()
 	cancel := call.executionCancel
+	if !persistent {
+		// Rust #63365: interrupting startup must retire the registration itself,
+		// not only cancel its execution token. A stale entry keeps answering the
+		// next command's untagged proxy request as an ended execution, so it is
+		// denied without an approval prompt.
+		s.retireActiveCallLocked(key, call)
+	}
 	s.callsMu.Unlock()
 	if persistent {
 		return
@@ -939,6 +953,25 @@ func (s *networkApprovalService) cancelExecutionIfNotPersistent(call *activeNetw
 		}
 		cancel(cause)
 	}
+}
+
+// retireActiveCallLocked removes one registration and its execution snapshot
+// while caching the call so a deferred completion observer still reports its
+// outcome. The caller holds callsMu.
+func (s *networkApprovalService) retireActiveCallLocked(key string, call *activeNetworkApprovalCall) {
+	if s == nil || call == nil {
+		return
+	}
+	if s.calls[key] == call {
+		delete(s.calls, key)
+	}
+	if !call.persistent.Load() {
+		delete(s.executions, networkApprovalExecutionKey(call.threadID, call.callID))
+	}
+	if s.finishedCalls == nil {
+		s.finishedCalls = map[string]*activeNetworkApprovalCall{}
+	}
+	s.finishedCalls[key] = call
 }
 
 func (s *networkApprovalService) guardianTriggerForInvocation(threadID string, invocation *tool.Invocation) (string, *guardianNetworkAccessTrigger) {
@@ -1079,6 +1112,12 @@ func (s *networkApprovalService) finishActiveCall(threadID string, turnID string
 	s.callsMu.Lock()
 	call := s.calls[key]
 	delete(s.calls, key)
+	if call == nil {
+		// The startup was interrupted, so the registration was already retired
+		// with its outcome cached for this deferred observer (Rust #63365).
+		call = s.finishedCalls[key]
+		delete(s.finishedCalls, key)
+	}
 	cancelExecution := call != nil && !call.persistent.Load()
 	if call != nil && !call.persistent.Load() {
 		delete(s.executions, networkApprovalExecutionKey(threadID, callID))
@@ -1100,6 +1139,11 @@ func (s *networkApprovalService) clearActiveCallsForTurn(threadID string, turnID
 	var cancels []context.CancelCauseFunc
 	s.callsMu.Lock()
 	defer s.callsMu.Unlock()
+	for key, call := range s.finishedCalls {
+		if call.threadID == threadID && (turnID == "" || call.turnID == turnID) {
+			delete(s.finishedCalls, key)
+		}
+	}
 	for key, call := range s.calls {
 		if call.threadID == threadID && (turnID == "" || call.turnID == turnID) {
 			delete(s.calls, key)

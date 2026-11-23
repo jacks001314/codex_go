@@ -54979,11 +54979,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Batch 122: partial - Rust ties network-approval registration to the command's approval handle and caches the outcome for deferred completion observers when startup is interrupted. Go removes call/execution registrations when the tool call ends and refuses to resurrect a cancelled process (appserver/network_approval.go delete(s.calls/executions), isCancelled), but it has no startup-handle registration with a shared cached outcome for deferred observers."
+    "Batch 126: complete - interrupting a command during startup retires its network approval registration. appserver/network_approval.go now removes the active call and its execution snapshot from the registries as soon as the launching tool context is cancelled (retireActiveCallLocked), so the next command's untagged proxy request is no longer attributed to an ended execution and prompts for approval; the retired call keeps its outcome cached (finishedCalls) so the deferred completion observer reports the same denial, consumed once, and turn/thread cleanup drops leftovers. Persistent executions stay registered until their process finishes.",
+    "Tests: appserver/network_approval_startup_interrupt_like_rust_test.go interrupts a pending startup, checks the registration is gone, asserts an untagged request prompts and is denied (HTTP-level denial path) and that finishActiveCall reports the cached denial once; the second test checks a persistent background execution keeps its registration after the tool call ends and is dropped when the process exits."
    ],
    "kind": "runtime",
    "sha": "22c1681aec46de3667e4b03786e9d2c9ae6e1066",
-   "status": "partial",
+   "status": "complete",
    "subject": "Clean up network approvals when command startup is interrupted (#63365)"
   },
   {
