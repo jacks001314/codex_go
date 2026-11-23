@@ -52854,11 +52854,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Audit: the change only returns a pinned boxed future from try_load_managed_auth to keep it out of Rust async state machines. Go uses ordinary functions and goroutines with no future boxing, so there is no analogous code to change."
    ],
    "kind": "runtime",
    "sha": "0762dfa710e76125173ceceeb12bb8a24b82e598",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Box the managed credential loading future (#62568)"
   },
   {
@@ -53497,11 +53497,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "chatgptapi.ChatgptTurnCost decodes native_usage_usd_micros with an omitted field defaulting to zero and an explicit null staying unavailable; VisibleTotalUSDMicros sums the converted and native components and suppresses the total when either is missing, negative, or overflowing (Rust #62810).",
+    "appserver.emitSettledTurnCost emits codex.turn.cost_microusd with the combined total, keeping the settled-response requirement and the legacy zero-native behavior.",
+    "Tests: TestVisibleTurnCostRequiresBothDollarComponentsLikeRust, TestTurnCostDistinguishesOmittedNativeUSDLikeRust, updated TestSettledTurnCostRequiresVisibleEstimateAndAllResponsesLikeRust; go test ./chatgptapi ./appserver -run TurnCost; go build ./..."
    ],
    "kind": "runtime",
    "sha": "51f4b8af01db1fb04e0cc6235444573ecceda716",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Include native USD in ChatGPT turn cost telemetry (#62810)"
   },
   {

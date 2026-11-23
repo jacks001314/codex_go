@@ -230,7 +230,10 @@ func (r *RuntimeRouter) emitSettledTurnCost(observation *turnCostObservation, co
 			if strings.TrimSpace(cost.TurnID) != observation.TurnID {
 				continue
 			}
-			if cost.EstimatedUsageUSDMicros == nil || *cost.EstimatedUsageUSDMicros < 0 || len(cost.SettledResponseIDs) == 0 {
+			// Rust #62810 sums the converted and native dollar components and
+			// suppresses the total when either is unavailable.
+			totalMicros, ok := cost.VisibleTotalUSDMicros()
+			if !ok || len(cost.SettledResponseIDs) == 0 {
 				return false
 			}
 			settled := make(map[string]struct{}, len(cost.SettledResponseIDs))
@@ -248,7 +251,7 @@ func (r *RuntimeRouter) emitSettledTurnCost(observation *turnCostObservation, co
 				"turn.interrupted": strconv.FormatBool(observation.Interrupted),
 				"auth_mode":        "Chatgpt",
 			}
-			r.services.TurnMetrics.Counter(telemetry.TurnCostMicroUSDMetric, int(*cost.EstimatedUsageUSDMicros), tags)
+			r.services.TurnMetrics.Counter(telemetry.TurnCostMicroUSDMetric, int(totalMicros), tags)
 			return true
 		}
 	}

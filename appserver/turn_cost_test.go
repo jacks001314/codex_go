@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"math"
 	"strconv"
 	"sync"
 	"testing"
@@ -67,12 +68,13 @@ func newTurnCostTestRouter(metrics *turnCostRecordingMetrics) *RuntimeRouter {
 }
 
 func TestSettledTurnCostRequiresVisibleEstimateAndAllResponsesLikeRust(t *testing.T) {
-	makeCost := func(micros *int64, settled []string) []chatgptapi.ChatgptThreadTurnCosts {
+	makeCost := func(micros *int64, native *int64, settled []string) []chatgptapi.ChatgptThreadTurnCosts {
 		return []chatgptapi.ChatgptThreadTurnCosts{{
 			ThreadID: "thread-1",
 			Turns: []chatgptapi.ChatgptTurnCost{{
 				TurnID:                  "turn-1",
 				EstimatedUsageUSDMicros: micros,
+				NativeUsageUSDMicros:    native,
 				SettledResponseIDs:      settled,
 			}},
 		}}
@@ -82,12 +84,17 @@ func TestSettledTurnCostRequiresVisibleEstimateAndAllResponsesLikeRust(t *testin
 		name        string
 		costs       []chatgptapi.ChatgptThreadTurnCosts
 		wantEmitted bool
+		wantMicros  int
 	}{
-		{name: "missing estimate", costs: makeCost(nil, []string{"resp-1"})},
-		{name: "negative estimate", costs: makeCost(value(-1), []string{"resp-1"})},
-		{name: "missing settled id", costs: makeCost(value(1200), []string{"resp-other"})},
-		{name: "empty settled ids", costs: makeCost(value(1200), []string{})},
-		{name: "settled", costs: makeCost(value(1250001), []string{"resp-1", "resp-extra"}), wantEmitted: true},
+		{name: "missing estimate", costs: makeCost(nil, value(0), []string{"resp-1"})},
+		{name: "negative estimate", costs: makeCost(value(-1), value(0), []string{"resp-1"})},
+		{name: "missing native USD", costs: makeCost(value(1200), nil, []string{"resp-1"})},
+		{name: "negative native USD", costs: makeCost(value(1200), value(-1), []string{"resp-1"})},
+		{name: "overflowing total", costs: makeCost(value(math.MaxInt64), value(1), []string{"resp-1"})},
+		{name: "missing settled id", costs: makeCost(value(1200), value(0), []string{"resp-other"})},
+		{name: "empty settled ids", costs: makeCost(value(1200), value(0), []string{})},
+		{name: "settled", costs: makeCost(value(250001), value(1000000), []string{"resp-1", "resp-extra"}), wantEmitted: true, wantMicros: 1250001},
+		{name: "zero costs", costs: makeCost(value(0), value(0), []string{"resp-1"}), wantEmitted: true, wantMicros: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			metrics := newTurnCostRecordingMetrics()
@@ -112,8 +119,8 @@ func TestSettledTurnCostRequiresVisibleEstimateAndAllResponsesLikeRust(t *testin
 				t.Fatalf("metric samples = %#v, want one", samples)
 			}
 			sample := samples[0]
-			if sample.name != telemetry.TurnCostMicroUSDMetric || sample.inc != 1250001 {
-				t.Fatalf("metric = %#v", sample)
+			if sample.name != telemetry.TurnCostMicroUSDMetric || sample.inc != tc.wantMicros {
+				t.Fatalf("metric = %#v, want %d", sample, tc.wantMicros)
 			}
 			if sample.tags["turn.id"] != "turn-1" || sample.tags["conversation.id"] != "thread-1" || sample.tags["turn.interrupted"] != "true" || sample.tags["auth_mode"] != "Chatgpt" {
 				t.Fatalf("metric tags = %#v", sample.tags)
