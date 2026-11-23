@@ -45,8 +45,10 @@ func stepWorldStateModel(slug string, window int64) model.ModelInfo {
 		ContextWindow:    window,
 		BaseInstructions: slug + " base instructions",
 		ModelMessages: &model.ModelMessages{
+			// Rust #62857 defers Default guidance until a thread has used Plan,
+			// so the captured-model check runs in Plan mode.
 			CollaborationModes: &model.CollaborationModeMessages{
-				Default: stringPtr(slug + " collaboration instructions"),
+				Plan: stringPtr(slug + " collaboration instructions"),
 			},
 			MultiAgent: &model.MultiAgentMessages{
 				Mode: &model.MultiAgentModeMessages{Explicit: stringPtr(slug + " explicit policy")},
@@ -86,7 +88,7 @@ func TestTurnStepWorldStateUsesCapturedModelLikeRust(t *testing.T) {
 		ThreadID: string(threadID),
 		Model:    "model-a",
 		CollaborationMode: map[string]any{
-			"mode":     "default",
+			"mode":     "plan",
 			"settings": map[string]any{"model": "model-a"},
 		},
 	}

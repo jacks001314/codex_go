@@ -20,7 +20,7 @@ func TestCollaborationModeSnapshotMatchesRustFragmentHashLikeRust(t *testing.T) 
 	defaultInfo := &model.ModelInfo{Slug: "test-model", ModelMessages: &model.ModelMessages{
 		CollaborationModes: &model.CollaborationModeMessages{Default: &defaultText},
 	}}
-	snapshot, ok := collaborationModeSnapshot(collaborationModeParamsForTest("default", "test-model", ""), defaultInfo, true)
+	snapshot, ok := collaborationModeSnapshot(collaborationModeParamsForTest("default", "test-model", ""), defaultInfo, true, true)
 	if !ok {
 		t.Fatal("collaborationModeSnapshot() reported invalid state")
 	}
@@ -32,7 +32,7 @@ func TestCollaborationModeSnapshotMatchesRustFragmentHashLikeRust(t *testing.T) 
 	planInfo := &model.ModelInfo{Slug: "test-model", ModelMessages: &model.ModelMessages{
 		CollaborationModes: &model.CollaborationModeMessages{Plan: &planText},
 	}}
-	snapshot, ok = collaborationModeSnapshot(collaborationModeParamsForTest("plan", "test-model", ""), planInfo, true)
+	snapshot, ok = collaborationModeSnapshot(collaborationModeParamsForTest("plan", "test-model", ""), planInfo, true, true)
 	if !ok {
 		t.Fatal("collaborationModeSnapshot() reported invalid plan state")
 	}

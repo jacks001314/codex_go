@@ -53692,11 +53692,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Default-mode collaboration guidance is deferred until the thread has used Plan (Rust #62857, 941e1dcade). A Default (or mode-less) turn whose recorded section is still the pre-Plan Default resolves like an unset mode: only catalog initial guidance or eligible caller text applies, so the bundled Default preset no longer reaches a thread that never left Default. Plan guidance applies on entry, a mode-less Plan turn keeps it, and a Default turn after Plan applies the catalog/Default text. The section snapshot records default_before_plan so compaction/resume keep the active mode. Tests: go test ./appserver -run 'Collaboration|WorldState|TurnStart|TurnStep|Instructions|Prompt|Mode' -count=1"
    ],
    "kind": "runtime",
    "sha": "941e1dcade1598f7d10ac06b7a0c77df6857a32e",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Defer built-in Default mode instructions until after Plan mode (#62857)"
   },
   {

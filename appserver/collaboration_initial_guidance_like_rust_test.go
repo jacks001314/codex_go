@@ -81,7 +81,7 @@ func TestInitialCollaborationGuidanceSurvivesResumeUntilPlanLikeRust(t *testing.
 	}
 	assertCollaborationModeItemText(t, item, collaborationModeOpenTag+defaultText+collaborationModeCloseTag)
 
-	snapshot, ok := collaborationModeSnapshot(collaborationModeParamsForTest("", "gpt-5.5", ""), info, true)
+	snapshot, ok := collaborationModeSnapshot(collaborationModeParamsForTest("", "gpt-5.5", ""), info, true, false)
 	if !ok || snapshot.Mode != string(ModeKindDefault) {
 		t.Fatalf("initial collaboration snapshot = %#v, ok = %v; want the Rust Default snapshot", snapshot, ok)
 	}
@@ -145,7 +145,7 @@ func TestInitialCollaborationGuidanceCallerPrecedenceLikeRust(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			info := &model.ModelInfo{Slug: "gpt-5.5", ModelMessages: &model.ModelMessages{CollaborationModes: tc.catalog}}
-			got, ok := collaborationModeInstructions(collaborationModeParamsForTest("", "gpt-5.5", tc.supplied), info, true)
+			got, ok := collaborationModeInstructions(collaborationModeParamsForTest("", "gpt-5.5", tc.supplied), info, true, false)
 			if ok != tc.wantHasSection {
 				t.Fatalf("has section = %v, want %v (got %q)", ok, tc.wantHasSection, got)
 			}

@@ -891,6 +891,11 @@ type collaborationModeWorldStateSnapshot struct {
 	Mode         string `json:"mode"`
 	Model        string `json:"model"`
 	Instructions string `json:"instructions,omitempty"`
+	// DefaultBeforePlan marks a Default snapshot whose guidance is not live yet
+	// (Rust #62857). Rust tracks this in the previous turn context's
+	// collaboration_mode; Go keeps it with the section snapshot. Snapshots
+	// written before this field existed are active Default modes.
+	DefaultBeforePlan bool `json:"default_before_plan,omitempty"`
 }
 
 // Rust protocol COLLABORATION_MODE_OPEN_TAG / COLLABORATION_MODE_CLOSE_TAG.
@@ -899,7 +904,7 @@ const (
 	collaborationModeCloseTag = "</collaboration_mode>"
 )
 
-func collaborationModeInstructions(params *turn.TurnStartParams, info *model.ModelInfo, updatePlanEnabled bool) (string, bool) {
+func collaborationModeInstructions(params *turn.TurnStartParams, info *model.ModelInfo, updatePlanEnabled bool, defaultActive bool) (string, bool) {
 	if params == nil || params.CollaborationMode == nil {
 		return "", false
 	}
@@ -908,6 +913,20 @@ func collaborationModeInstructions(params *turn.TurnStartParams, info *model.Mod
 		catalog = info.ModelMessages.CollaborationModes
 	}
 	mode := strings.ToLower(strings.TrimSpace(stringFromAny(params.CollaborationMode["mode"])))
+	// Rust #62857: Default guidance stays out of the prompt until the thread has
+	// used Plan mode. Before that the mode resolves like an unset mode, so only
+	// the catalog's initial guidance (Rust #62896) or eligible caller text
+	// applies; after Plan, Default resolves its catalog/caller instructions.
+	switch mode {
+	case "":
+		if defaultActive {
+			mode = string(ModeKindDefault)
+		}
+	case string(ModeKindDefault):
+		if !defaultActive {
+			mode = ""
+		}
+	}
 	var catalogValue *string
 	if catalog != nil {
 		switch mode {
@@ -956,7 +975,7 @@ func collaborationModeInstructions(params *turn.TurnStartParams, info *model.Mod
 	return "", false
 }
 
-func collaborationModeSnapshot(params *turn.TurnStartParams, info *model.ModelInfo, updatePlanEnabled bool) (collaborationModeWorldStateSnapshot, bool) {
+func collaborationModeSnapshot(params *turn.TurnStartParams, info *model.ModelInfo, updatePlanEnabled bool, defaultActive bool) (collaborationModeWorldStateSnapshot, bool) {
 	if params == nil || params.CollaborationMode == nil {
 		return collaborationModeWorldStateSnapshot{}, false
 	}
@@ -978,7 +997,7 @@ func collaborationModeSnapshot(params *turn.TurnStartParams, info *model.ModelIn
 	if modelID == "" {
 		modelID = strings.TrimSpace(stringFromAny(collaborationModeSettings(params.CollaborationMode)["model"]))
 	}
-	instructions, _ := collaborationModeInstructions(params, info, updatePlanEnabled)
+	instructions, _ := collaborationModeInstructions(params, info, updatePlanEnabled, defaultActive)
 	// Rust #39163: hash the rendered collaboration instructions so changed
 	// guidance (e.g. after a model catalog refresh) refreshes retained history
 	// even when the mode and model are unchanged. An empty-state hash makes
@@ -988,7 +1007,12 @@ func collaborationModeSnapshot(params *turn.TurnStartParams, info *model.ModelIn
 	// rendered fragment (markers included), so persisted snapshots stay
 	// readable across implementations.
 	value := session.TextWorldStateFragmentHash(contextfrag.RoleDeveloper, collaborationModeOpenTag+instructions+collaborationModeCloseTag)
-	return collaborationModeWorldStateSnapshot{Mode: mode, Model: modelID, Instructions: value}, true
+	return collaborationModeWorldStateSnapshot{
+		Mode:              mode,
+		Model:             modelID,
+		Instructions:      value,
+		DefaultBeforePlan: mode == string(ModeKindDefault) && !defaultActive,
+	}, true
 }
 
 func (s *responsesStreamNotificationState) planParserFor(itemID string) *proposedPlanStreamParser {
@@ -15848,9 +15872,6 @@ func (r *RuntimeRouter) collaborationModeWorldStateInputItem(threadID string, pa
 		return nil, err
 	}
 	updatePlanEnabled := cfg != nil && cfg.UpdatePlanEnabled()
-	current, currentValid := collaborationModeSnapshot(params, info, updatePlanEnabled)
-	instructions, hasInstructions := collaborationModeInstructions(params, info, updatePlanEnabled)
-
 	previousKind := "absent"
 	previous := collaborationModeWorldStateSnapshot{}
 	if len(state.CollaborationMode) > 0 {
@@ -15867,6 +15888,11 @@ func (r *RuntimeRouter) collaborationModeWorldStateInputItem(threadID string, pa
 			}
 		}
 	}
+	// Rust #62857: a Default mode is only live once the thread has recorded a
+	// collaboration mode that is not the pre-Plan Default.
+	defaultActive := collaborationModeDefaultActive(previousKind, previous)
+	current, currentValid := collaborationModeSnapshot(params, info, updatePlanEnabled, defaultActive)
+	instructions, hasInstructions := collaborationModeInstructions(params, info, updatePlanEnabled, defaultActive)
 
 	emit := false
 	switch previousKind {
@@ -15929,6 +15955,21 @@ func collaborationModeEmptyInstructionsUnchanged(previous collaborationModeWorld
 		return false
 	}
 	return previous.Instructions != "" && previous.Instructions == current.Instructions
+}
+
+// collaborationModeDefaultActive reports whether Default guidance is live for
+// this turn. Rust's StepSettings::active_collaboration_mode returns the mode
+// only when it is Plan or the previous turn context carried a mode; Go records
+// that through DefaultBeforePlan on the section snapshot.
+func collaborationModeDefaultActive(previousKind string, previous collaborationModeWorldStateSnapshot) bool {
+	switch previousKind {
+	case "current":
+		return !(previous.Mode == string(ModeKindDefault) && previous.DefaultBeforePlan)
+	case "legacy", "unknown":
+		return true
+	default:
+		return false
+	}
 }
 
 func recordHasRetainedCollaborationMode(record *session.Record) bool {

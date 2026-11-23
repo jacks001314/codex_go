@@ -51,6 +51,9 @@ func TestCollaborationModeWorldStateHonorsIncludeFlagLikeRust(t *testing.T) {
 		t.Fatalf("world state was persisted while disabled: %s", record.Metadata.WorldState)
 	}
 
+	// Rust #62857: Default guidance only becomes live once the thread has used
+	// Plan mode, so a thread that has never left Default carries no section.
+	seedCollaborationModePlanState(t, store, threadID, "catalog-model")
 	enabled := &config.Config{Values: map[string]any{}}
 	item, err = router.collaborationModeWorldStateInputItem(string(threadID), params, info, enabled)
 	if err != nil {
@@ -77,11 +80,20 @@ func TestCollaborationModeWorldStateMatchesCatalogAndModelChanges(t *testing.T) 
 	info := &model.ModelInfo{Slug: "catalog-model-a", ModelMessages: &model.ModelMessages{
 		CollaborationModes: &model.CollaborationModeMessages{Default: &defaultText, Plan: &planText},
 	}}
-	params := collaborationModeParamsForTest("default", "catalog-model-a", "legacy instructions")
-
+	// Rust #62857: the first Plan turn activates the collaboration mode.
+	params := collaborationModeParamsForTest("plan", "catalog-model-a", "legacy plan instructions")
 	item, err := router.collaborationModeWorldStateInputItem(string(threadID), params, info, nil)
 	if err != nil {
 		t.Fatalf("initial collaboration state error = %v", err)
+	}
+	assertCollaborationModeItemText(t, item, "<collaboration_mode>"+planText+"</collaboration_mode>")
+
+	// Leaving Plan applies the catalog Default text, which overrides legacy
+	// caller instructions.
+	params = collaborationModeParamsForTest("default", "catalog-model-a", "legacy instructions")
+	item, err = router.collaborationModeWorldStateInputItem(string(threadID), params, info, nil)
+	if err != nil {
+		t.Fatalf("default collaboration state error = %v", err)
 	}
 	assertCollaborationModeItemText(t, item, "<collaboration_mode>"+defaultText+"</collaboration_mode>")
 	if strings.Contains(collaborationModeItemText(item), "legacy") {
@@ -157,6 +169,9 @@ func TestCollaborationModeWorldStatePreservesExplicitEmptyAndClearsMissing(t *te
 	info := &model.ModelInfo{Slug: "catalog-model", ModelMessages: &model.ModelMessages{
 		CollaborationModes: &model.CollaborationModeMessages{Default: &empty},
 	}}
+	// Rust #62857: Default guidance is only live after the thread has used Plan,
+	// so start from a recorded Plan mode.
+	seedCollaborationModePlanState(t, store, threadID, "catalog-model")
 	item, err := router.collaborationModeWorldStateInputItem(string(threadID), collaborationModeParamsForTest("default", "catalog-model", "legacy"), info, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -218,6 +233,28 @@ func TestCollaborationModeWorldStatePreservesExplicitEmptyAndClearsMissing(t *te
 		t.Fatal(err)
 	}
 	assertCollaborationModeItemText(t, item, "<collaboration_mode>"+defaultText+"</collaboration_mode>")
+}
+
+// seedCollaborationModePlanState marks the thread as having used Plan mode, so
+// Go's collaboration section treats Default guidance as live (Rust #62857).
+func seedCollaborationModePlanState(t *testing.T, store *session.Store, threadID session.ThreadID, modelID string) {
+	t.Helper()
+	record, err := store.Load(threadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := session.DecodeWorldState(record.Metadata.WorldState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.CollaborationMode = json.RawMessage(`{"mode":"plan","model":"` + modelID + `"}`)
+	record.Metadata.WorldState, err = session.EncodeWorldState(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(record); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func collaborationModeParamsForTest(mode string, modelID string, legacy string) *turn.TurnStartParams {

@@ -11057,7 +11057,11 @@ func TestRuntimeRouterTurnStartEmitsNotificationsAndAcceptsModelOverrideLikeRust
 	}
 }
 
-func TestRuntimeRouterTurnStartAcceptsCollaborationModeOverrideLikeRust(t *testing.T) {
+// Rust #62857 (`941e1dcade`) moved this case to
+// turn_start_applies_default_mode_instructions_only_after_plan_v2: a thread
+// that never leaves Default carries no collaboration-mode prompt, Plan applies
+// its guidance, staying in Plan keeps it, and returning to Default replaces it.
+func TestRuntimeRouterTurnStartAppliesDefaultModeInstructionsOnlyAfterPlanLikeRust(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	sink := NewNotificationBuffer()
 	agent := newRecordingRuntimeAgent("Done")
@@ -11087,37 +11091,67 @@ func TestRuntimeRouterTurnStartAcceptsCollaborationModeOverrideLikeRust(t *testi
 		t.Fatalf("thread start error: %+v", threadStart.Error)
 	}
 	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
-	effort := "low"
-	summary := "auto"
-	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
-		ThreadID: threadID,
-		Input: []turn.TurnUserInput{{
-			Type: "text",
-			Text: "Hello",
-		}},
-		Model:   "mock-model-override",
-		Effort:  &effort,
-		Summary: &summary,
-		CollaborationMode: map[string]any{
-			"mode": "default",
-			"settings": map[string]any{
-				"model":                  "mock-model-collab",
-				"reasoning_effort":       "high",
-				"developer_instructions": nil,
-			},
-		},
-	}))
-	if turnStart.Error != nil {
-		t.Fatalf("turn start error: %+v", turnStart.Error)
+
+	collaborationMode := func(mode string, instructions string) map[string]any {
+		settings := map[string]any{"model": "mock-model-collab", "reasoning_effort": "high"}
+		if instructions != "" {
+			settings["developer_instructions"] = instructions
+		}
+		return map[string]any{"mode": mode, "settings": settings}
 	}
-	request := waitForRuntimeAgentRequest(t, agent)
-	if request.Model != "mock-model-collab" || request.ReasoningEffort != "high" || request.ReasoningSummary != "auto" {
-		t.Fatalf("agent request = %#v", request)
+	turnCount := 1
+	startTurn := func(text string, mode map[string]any) model.AgentRequest {
+		t.Helper()
+		turnCount++
+		params := turn.TurnStartParams{
+			ThreadID: threadID,
+			Input:    []turn.TurnUserInput{{Type: "text", Text: text}},
+		}
+		if mode != nil {
+			params.Model = "mock-model-override"
+			params.CollaborationMode = mode
+		}
+		started := router.Handle(requestWithParams(t, IntID(int64(10+turnCount)), MethodTurnStart, params))
+		if started.Error != nil {
+			t.Fatalf("turn start %q error: %+v", text, started.Error)
+		}
+		request := waitForRuntimeAgentRequest(t, agent)
+		waitForTurnCompletedStatus(t, sink, started.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+		return request
 	}
-	if !agentRequestInputItemsContain(request, "Use the `request_user_input` tool only when it is listed in the available tools") {
-		t.Fatalf("agent input items missing default collaboration instructions: %#v", request.InputItems)
+
+	first := startTurn("Start", nil)
+	if agentRequestInputItemsContain(first, "<collaboration_mode>") {
+		t.Fatalf("a new Default thread carried collaboration guidance: %#v", first.InputItems)
 	}
-	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+
+	// The bundled Default preset is client text the deferred section omits.
+	second := startTurn("Continue", collaborationMode("default", collaborationModeDefaultInstructions))
+	if agentRequestInputItemsContain(second, "<collaboration_mode>") {
+		t.Fatalf("Default guidance appeared before Plan mode: %#v", second.InputItems)
+	}
+
+	planText := "Prepare a plan before editing."
+	third := startTurn("Plan the changes", collaborationMode("plan", planText))
+	if !agentRequestInputItemsContain(third, "<collaboration_mode>"+planText+"</collaboration_mode>") {
+		t.Fatalf("Plan turn missing its collaboration guidance: %#v", third.InputItems)
+	}
+
+	fourth := startTurn("Refine the plan", nil)
+	if !agentRequestInputItemsContain(fourth, "<collaboration_mode>"+planText+"</collaboration_mode>") {
+		t.Fatalf("a mode-less Plan turn dropped the retained guidance: %#v", fourth.InputItems)
+	}
+
+	defaultText := "Resume implementation."
+	fifth := startTurn("Implement it", collaborationMode("default", defaultText))
+	if !agentRequestInputItemsContain(fifth, "<collaboration_mode>"+defaultText+"</collaboration_mode>") {
+		t.Fatalf("returning to Default did not apply its guidance: %#v", fifth.InputItems)
+	}
+
+	sixth := startTurn("Check the changes", nil)
+	if !agentRequestInputItemsContain(sixth, "<collaboration_mode>"+defaultText+"</collaboration_mode>") {
+		t.Fatalf("a mode-less Default turn dropped the retained guidance: %#v", sixth.InputItems)
+	}
 }
 
 func TestRuntimeRouterTurnStartUsesThreadFeatureOverridesForRequestUserInputToolDescriptionLikeRust(t *testing.T) {

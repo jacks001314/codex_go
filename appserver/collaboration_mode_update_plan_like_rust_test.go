@@ -22,16 +22,16 @@ func TestCollaborationModeUpdatePlanInstructionsLikeRust(t *testing.T) {
 		}}
 	}
 	bundledPlan := prompt.BuiltinPlanModeInstructions()
-	got, ok := collaborationModeInstructions(paramsWith(bundledPlan), nil, false)
+	got, ok := collaborationModeInstructions(paramsWith(bundledPlan), nil, false, true)
 	if !ok || strings.Contains(got, "## Plan Mode vs update_plan tool") {
 		t.Fatalf("disabled built-in plan preset = %q, ok=%v", got, ok)
 	}
-	got, ok = collaborationModeInstructions(paramsWith(bundledPlan), nil, true)
+	got, ok = collaborationModeInstructions(paramsWith(bundledPlan), nil, true, true)
 	if !ok || !strings.Contains(got, "## Plan Mode vs update_plan tool") {
 		t.Fatalf("enabled built-in plan preset = %q, ok=%v", got, ok)
 	}
 	custom := "## Plan tool\nKeep my custom plan guidance."
-	got, ok = collaborationModeInstructions(paramsWith(custom), nil, false)
+	got, ok = collaborationModeInstructions(paramsWith(custom), nil, false, true)
 	if !ok || got != custom {
 		t.Fatalf("custom plan text = %q, ok=%v", got, ok)
 	}
@@ -40,7 +40,7 @@ func TestCollaborationModeUpdatePlanInstructionsLikeRust(t *testing.T) {
 	bundledInfo := &model.ModelInfo{ModelMessages: &model.ModelMessages{
 		CollaborationModes: &model.CollaborationModeMessages{Plan: &catalogPlan},
 	}}
-	got, ok = collaborationModeInstructions(paramsWith("ignored"), bundledInfo, false)
+	got, ok = collaborationModeInstructions(paramsWith("ignored"), bundledInfo, false, true)
 	if !ok || strings.Contains(got, "## Plan Mode vs update_plan tool") {
 		t.Fatalf("bundled catalog plan instructions = %q, ok=%v", got, ok)
 	}
@@ -48,7 +48,7 @@ func TestCollaborationModeUpdatePlanInstructionsLikeRust(t *testing.T) {
 		InstructionsTemplate: "custom base",
 		CollaborationModes:   &model.CollaborationModeMessages{Plan: &catalogPlan},
 	}}
-	got, ok = collaborationModeInstructions(paramsWith("ignored"), customInfo, false)
+	got, ok = collaborationModeInstructions(paramsWith("ignored"), customInfo, false, true)
 	if !ok || got != catalogPlan {
 		t.Fatalf("custom catalog plan instructions = %q, ok=%v", got, ok)
 	}
