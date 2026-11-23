@@ -54071,11 +54071,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Text fallback policy aligned with PasteImageError::allows_text_fallback: PasteImageImageReadFailed is a new kind (\"could not read image: ...\"), the Linux helper now reports an advertised image MIME whose read fails or comes back empty as ImageReadFailed instead of lumping it into NoImage, and one shared imagePasteFallsBackToText lets only NoImage/ImageReadFailed fall through to clipboard text on every platform (the previous non-Linux policy accepted any failure, which would have swallowed encode and io errors). Shift+Insert paste was already wired, and the pending-paste guards are not applicable because Go's clipboard read is synchronous: the paste text lands in the composer before the next key is dispatched, so a submit cannot run ahead of it. Tests: TestPasteClipboardImageReadFailureIsImageReadFailed and TestImagePasteFallsBackToTextOnlyForMissingOrUnreadableImages (linux build) plus go vet with GOOS=linux; go test ./tui ./tui/tea and go build ./... pass."
    ],
    "kind": "runtime",
    "sha": "140815f19c05a24a70ebc273016bd54ff71ced7c",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Fix clipboard text fallback and guard pending pastes in the TUI (#63022)"
   },
   {

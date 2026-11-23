@@ -178,6 +178,7 @@ func ComposeWSLClipboardWrite(wslCopy ClipboardCopyFunc, nativeCopy ClipboardCop
 		return nil
 	}
 }
+
 // WriteTerminalClipboard sends text to the attached terminal's clipboard.
 //
 // In a tmux session it forwards through tmux's own clipboard integration so
@@ -352,8 +353,12 @@ type PasteImageErrorKind string
 const (
 	PasteImageClipboardUnavailable PasteImageErrorKind = "clipboard_unavailable"
 	PasteImageNoImage              PasteImageErrorKind = "no_image"
-	PasteImageEncodeFailed         PasteImageErrorKind = "encode_failed"
-	PasteImageIOError              PasteImageErrorKind = "io_error"
+	// PasteImageImageReadFailed is an advertised image representation that
+	// could not be read (Rust #63022 PasteImageError::ImageReadFailed). Like
+	// NoImage it allows the clipboard text fallback.
+	PasteImageImageReadFailed PasteImageErrorKind = "image_read_failed"
+	PasteImageEncodeFailed    PasteImageErrorKind = "encode_failed"
+	PasteImageIOError         PasteImageErrorKind = "io_error"
 )
 
 type PasteImageError struct {
@@ -367,6 +372,8 @@ func (e PasteImageError) Error() string {
 		return "clipboard unavailable: " + e.Message
 	case PasteImageNoImage:
 		return "no image on clipboard: " + e.Message
+	case PasteImageImageReadFailed:
+		return "could not read image: " + e.Message
 	case PasteImageEncodeFailed:
 		return "could not encode image: " + e.Message
 	case PasteImageIOError:
@@ -377,6 +384,13 @@ func (e PasteImageError) Error() string {
 		}
 		return e.Message
 	}
+}
+
+// PasteImageAllowsTextFallback mirrors Rust's
+// PasteImageError::allows_text_fallback (#63022): only a missing image or an
+// unreadable image representation may fall through to the clipboard text.
+func PasteImageAllowsTextFallback(kind PasteImageErrorKind) bool {
+	return kind == PasteImageNoImage || kind == PasteImageImageReadFailed
 }
 
 func NormalizePastedSearchQuery(pasted string) (string, bool) {

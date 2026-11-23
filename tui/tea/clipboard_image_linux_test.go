@@ -130,6 +130,31 @@ esac`)
 	}
 }
 
+// An advertised image representation whose read fails is ImageReadFailed rather
+// than "no image" (Rust #63022) and still allows the text fallback.
+func TestPasteClipboardImageReadFailureIsImageReadFailed(t *testing.T) {
+	script := writeHelperScript(t, `case "$1" in
+  targets) printf 'TARGETS\nimage/png\n'; exit 0;;
+  files) exit 1;;
+  read) exit 3;;
+  *) exit 1;;
+esac`)
+	tool := clipboardImageTool{
+		name:    script,
+		targets: []string{"targets"},
+		read:    func(mime string) []string { return []string{"read"} },
+		files:   []string{"files"},
+	}
+	_, err := pasteClipboardImage(context.Background(), []clipboardImageTool{tool})
+	var pasteErr codextui.PasteImageError
+	if !errors.As(err, &pasteErr) || pasteErr.Kind != codextui.PasteImageImageReadFailed {
+		t.Fatalf("err = %v, want PasteImageImageReadFailed", err)
+	}
+	if !imagePasteFallsBackToText(err) {
+		t.Fatal("an unreadable image must still fall back to clipboard text")
+	}
+}
+
 // End-to-end through the helper seam: TARGETS advertises image/png and the read
 // returns it verbatim.
 func TestPasteClipboardImageReadsPNGThroughHelper(t *testing.T) {
@@ -164,9 +189,14 @@ esac`)
 	}
 }
 
-func TestImagePasteFallsBackToTextOnlyForNoImage(t *testing.T) {
-	if !imagePasteFallsBackToText(codextui.PasteImageError{Kind: codextui.PasteImageNoImage}) {
-		t.Fatal("NoImage must fall back to text")
+func TestImagePasteFallsBackToTextOnlyForMissingOrUnreadableImages(t *testing.T) {
+	for _, kind := range []codextui.PasteImageErrorKind{
+		codextui.PasteImageNoImage,
+		codextui.PasteImageImageReadFailed,
+	} {
+		if !imagePasteFallsBackToText(codextui.PasteImageError{Kind: kind}) {
+			t.Fatalf("%s must fall back to text", kind)
+		}
 	}
 	for _, kind := range []codextui.PasteImageErrorKind{
 		codextui.PasteImageClipboardUnavailable,

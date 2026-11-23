@@ -102,6 +102,7 @@ func pasteClipboardImage(ctx context.Context, tools []clipboardImageTool) (strin
 	}
 	var unavailable []string
 	var noImage []string
+	var readFailed []string
 	for _, tool := range tools {
 		if _, err := exec.LookPath(tool.name); err != nil {
 			unavailable = append(unavailable, tool.name+": not found in PATH")
@@ -128,11 +129,14 @@ func pasteClipboardImage(ctx context.Context, tools []clipboardImageTool) (strin
 			if errors.Is(err, context.DeadlineExceeded) {
 				return "", clipboardImageTimeoutError()
 			}
-			noImage = append(noImage, tool.name+": "+err.Error())
+			// The owner advertised an image but the read failed, which Rust
+			// #63022 treats separately from "no image" while still allowing the
+			// clipboard text fallback.
+			readFailed = append(readFailed, tool.name+": "+err.Error())
 			continue
 		}
 		if len(data) == 0 {
-			noImage = append(noImage, tool.name+": empty "+mime+" payload")
+			readFailed = append(readFailed, tool.name+": empty "+mime+" payload")
 			continue
 		}
 		path, err := writeClipboardImagePNG(data, mime)
@@ -140,6 +144,12 @@ func pasteClipboardImage(ctx context.Context, tools []clipboardImageTool) (strin
 			return "", err
 		}
 		return path, nil
+	}
+	if len(readFailed) > 0 {
+		return "", codextui.PasteImageError{
+			Kind:    codextui.PasteImageImageReadFailed,
+			Message: strings.Join(readFailed, "; "),
+		}
 	}
 	if len(noImage) == 0 && len(unavailable) > 0 {
 		return "", codextui.PasteImageError{
