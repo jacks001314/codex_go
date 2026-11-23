@@ -21663,6 +21663,9 @@ func turnSandboxPolicyPermissionProfile(raw any) (string, *sandbox.PermissionPro
 	if policy == nil {
 		return "", nil, nil
 	}
+	if err := validateHostAbsoluteWritableRoots(policy); err != nil {
+		return "", nil, err
+	}
 	switch policy.Kind {
 	case sandbox.SandboxDangerFullAccess:
 		profile := sandbox.FullAccessPermissionProfile()
@@ -21678,6 +21681,23 @@ func turnSandboxPolicyPermissionProfile(raw any) (string, *sandbox.PermissionPro
 		profile := sandbox.PermissionProfile{SandboxPolicy: policy, NetworkEnabled: policy.HasFullNetworkAccess()}
 		return string(policy.Kind), &profile, nil
 	}
+}
+
+// validateHostAbsoluteWritableRoots mirrors Rust #62376: a policy supplied
+// over the wire keeps its writable roots as path strings, and the host checks
+// each one with its own path rules before enforcing the policy. A root from
+// another platform therefore fails here instead of being resolved relative to
+// the wrong working directory.
+func validateHostAbsoluteWritableRoots(policy *sandbox.SandboxPolicy) error {
+	if policy == nil {
+		return nil
+	}
+	for _, root := range policy.WritableRoots {
+		if !filepath.IsAbs(root) {
+			return fmt.Errorf("writable root is not absolute: %s", root)
+		}
+	}
+	return nil
 }
 
 func parseTurnSandboxPolicy(raw any) (*sandbox.SandboxPolicy, error) {

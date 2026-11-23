@@ -791,6 +791,11 @@ func resolveCommandExecSandbox(params *CommandExecParams, cwd string, resolver C
 	if params.SandboxPolicy == nil {
 		return &commandExecSandboxResolution{}, nil
 	}
+	// Rust #62376: validate every writable root on this host before enforcing a
+	// policy supplied by the client.
+	if err := validateHostAbsoluteWritableRoots(params.SandboxPolicy); err != nil {
+		return nil, jsonRPCInvalidRequest(err.Error())
+	}
 	profile := &sandbox.PermissionProfile{SandboxPolicy: params.SandboxPolicy}
 	switch params.SandboxPolicy.Kind {
 	case sandbox.SandboxDangerFullAccess:

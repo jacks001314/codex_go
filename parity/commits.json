@@ -52208,11 +52208,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "V2 sandbox policies already keep writableRoots as path strings; turn/start and command/exec now validate every root with the host's path rules before enforcement and reject a non-absolute root with `writable root is not absolute: <path>`.",
+    "Go has no client-side thread-permission display that projects server paths through path URIs (the TUI parity area), and spawned child threads inherit the live config permission profile instead of separately forwarding a legacy sandbox policy, so those two parts have no distinct Go carrier.",
+    "go test ./appserver -run 'Sandbox|Command|Permission|Writable' -count=1; go build ./...; go vet ./appserver"
    ],
    "kind": "runtime",
    "sha": "7d458c8fc5cfc99ec447e3af6c173949660c268b",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Preserve sandbox writable roots across client and server platforms (#62376)"
   },
   {
