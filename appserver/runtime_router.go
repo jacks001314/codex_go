@@ -11234,6 +11234,7 @@ func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams
 	}
 	snapshotRoots := threadRecordRuntimeWorkspaceRoots(record, settingsCWD, nil)
 	snapshot := rollout.ThreadSettingsApplied{
+		GuardianRetention:          r.guardianRetentionForRecord(record),
 		ApprovalPolicy:             appliedPolicy,
 		ApprovalsReviewer:          strings.TrimSpace(settingsApprovalsReviewer(committed)),
 		RequestedApprovalsReviewer: requestedApprovalsReviewerSnapshot(committed, record),
@@ -11284,6 +11285,7 @@ func (r *RuntimeRouter) checkpointThreadSettings(threadID string) {
 	}
 	snapshotRoots := append([]string{}, roots...)
 	snapshot := rollout.ThreadSettingsApplied{
+		GuardianRetention:          r.guardianRetentionForRecord(record),
 		ApprovalPolicy:             policy,
 		ApprovalsReviewer:          strings.TrimSpace(settingsApprovalsReviewer(settings)),
 		RequestedApprovalsReviewer: requestedApprovalsReviewerSnapshot(settings, record),
@@ -11299,6 +11301,20 @@ func (r *RuntimeRouter) checkpointThreadSettings(threadID string) {
 		snapshot.PermissionProfile = recordPermissionProfileJSON(record)
 	}
 	_ = r.services.ThreadRouter.appendThreadSettingsAppliedSnapshot(session.ThreadID(threadID), snapshot, runtimeRouterNow(r).UTC())
+}
+
+// guardianRetentionForRecord resolves the thread's effective Guardian recorder
+// policy from its configuration (Rust #62827 stores the startup-resolved policy
+// on every owned thread settings snapshot).
+func (r *RuntimeRouter) guardianRetentionForRecord(record *session.Record) *retainedctx.GuardianRetentionPolicy {
+	if r == nil || r.services.Config == nil || record == nil {
+		return nil
+	}
+	cfg, err := r.configForThreadRecord(record, threadRecordConfigOverrides(record))
+	if err != nil || cfg == nil {
+		return nil
+	}
+	return cfg.GuardianRetentionPolicy()
 }
 
 // requestedApprovalsReviewerSnapshot keeps the explicit reviewer on the

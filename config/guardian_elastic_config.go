@@ -5,7 +5,9 @@ import (
 	"strings"
 
 	codexctx "codex_go/context"
+	"codex_go/retainedctx"
 	"codex_go/state"
+	"codex_go/utils"
 )
 
 // ValidateGuardianSyncElasticBudget decodes and validates the opt-in section
@@ -47,6 +49,19 @@ func (c *Config) GuardianAsyncElasticBudget() (*state.GuardianElasticBudgetConfi
 		return nil, nil
 	}
 	return guardianAsyncElasticBudgetFromValues(c.Values)
+}
+
+// GuardianRetentionPolicy resolves the recorder limits from the Sync Elastic
+// retained-instruction entry budget (Rust #62827). nil keeps the Fixed
+// retention window, which is what an unconfigured or fixed-mode thread uses.
+func (c *Config) GuardianRetentionPolicy() *retainedctx.GuardianRetentionPolicy {
+	budget, err := c.GuardianSyncElasticBudget()
+	if err != nil || budget == nil {
+		return nil
+	}
+	entryTokens := budget.SectionLimits(state.GuardianElasticSectionRetainedUserInstructions).MaxSectionEntryTokens
+	recordBytes := utils.ApproxBytesForTokens(entryTokens)
+	return &retainedctx.GuardianRetentionPolicy{AssistantRecordBytes: &recordBytes}
 }
 
 // GuardianContextBudgeting returns the capture and request policy selected by

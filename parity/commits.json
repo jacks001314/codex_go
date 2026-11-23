@@ -53521,11 +53521,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Rust #62827: retainedctx.GuardianRetentionPolicy{assistant_record_bytes} is derived from the Sync Elastic retained_user_instructions entry limit (default section limit when omitted) by config.GuardianRetentionPolicy, persisted on rollout.ThreadSettingsApplied/ThreadSettingsSnapshot as guardian_retention, compared in ThreadSettingsAppliedEqual, restored by LatestPersistedOwnedThreadSettings, and populated by both app-server thread settings snapshot builders. Tests: go test ./config -run GuardianRetention -count=1; go test ./rollout -run GuardianRetention -count=1; go test ./appserver -run GuardianRetention -count=1"
    ],
    "kind": "runtime",
    "sha": "7fcb825b46433c4417c8ebdc5b5d0d08a4dc682e",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Persist Guardian retention limits in thread settings (#62827)"
   },
   {

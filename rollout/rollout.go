@@ -836,6 +836,9 @@ type ThreadSettingsApplied struct {
 	Personality                *string
 	CollaborationMode          json.RawMessage
 	RuntimeWorkspaceRoots      *[]string
+	// GuardianRetention is the recorder policy resolved at startup (Rust
+	// #62827). Fixed-mode snapshots and older rollouts omit it.
+	GuardianRetention *retainedctx.GuardianRetentionPolicy
 }
 
 // AppendThreadSettingsAppliedSnapshot persists a full thread-owned settings
@@ -864,9 +867,10 @@ func (r *Recorder) AppendThreadSettingsAppliedSnapshot(threadID string, settings
 	serviceTier := cloneStringPtr(settings.ServiceTier)
 	reasoningSummary := cloneStringPtr(settings.ReasoningSummary)
 	personality := cloneStringPtr(settings.Personality)
+	guardianRetention := settings.GuardianRetention.Clone()
 	if approvalPolicy == "" && approvalsReviewer == "" && cwd == "" && len(collaborationMode) == 0 &&
 		roots == nil && permissionProfile == nil && activePermissionProfile == nil &&
-		serviceTier == nil && reasoningSummary == nil && personality == nil {
+		serviceTier == nil && reasoningSummary == nil && personality == nil && guardianRetention == nil {
 		return errors.New("thread settings require an approval policy or cwd")
 	}
 	if now.IsZero() {
@@ -876,33 +880,35 @@ func (r *Recorder) AppendThreadSettingsAppliedSnapshot(threadID string, settings
 		Type           string `json:"type"`
 		ThreadID       string `json:"thread_id,omitempty"`
 		ThreadSettings struct {
-			ApprovalPolicy             string          `json:"approval_policy"`
-			ApprovalsReviewer          string          `json:"approvals_reviewer,omitempty"`
-			RequestedApprovalsReviewer *string         `json:"requested_approvals_reviewer,omitempty"`
-			PermissionProfile          json.RawMessage `json:"permission_profile,omitempty"`
-			ActivePermissionProfile    json.RawMessage `json:"active_permission_profile,omitempty"`
-			CWD                        string          `json:"cwd,omitempty"`
-			ServiceTier                *string         `json:"service_tier,omitempty"`
-			ReasoningSummary           *string         `json:"reasoning_summary,omitempty"`
-			Personality                *string         `json:"personality,omitempty"`
-			CollaborationMode          json.RawMessage `json:"collaboration_mode,omitempty"`
-			RuntimeWorkspaceRoots      *[]string       `json:"runtime_workspace_roots,omitempty"`
+			ApprovalPolicy             string                               `json:"approval_policy"`
+			ApprovalsReviewer          string                               `json:"approvals_reviewer,omitempty"`
+			RequestedApprovalsReviewer *string                              `json:"requested_approvals_reviewer,omitempty"`
+			PermissionProfile          json.RawMessage                      `json:"permission_profile,omitempty"`
+			ActivePermissionProfile    json.RawMessage                      `json:"active_permission_profile,omitempty"`
+			CWD                        string                               `json:"cwd,omitempty"`
+			ServiceTier                *string                              `json:"service_tier,omitempty"`
+			ReasoningSummary           *string                              `json:"reasoning_summary,omitempty"`
+			Personality                *string                              `json:"personality,omitempty"`
+			CollaborationMode          json.RawMessage                      `json:"collaboration_mode,omitempty"`
+			RuntimeWorkspaceRoots      *[]string                            `json:"runtime_workspace_roots,omitempty"`
+			GuardianRetention          *retainedctx.GuardianRetentionPolicy `json:"guardian_retention,omitempty"`
 		} `json:"thread_settings"`
 	}{
 		Type:     "thread_settings_applied",
 		ThreadID: threadID,
 		ThreadSettings: struct {
-			ApprovalPolicy             string          `json:"approval_policy"`
-			ApprovalsReviewer          string          `json:"approvals_reviewer,omitempty"`
-			RequestedApprovalsReviewer *string         `json:"requested_approvals_reviewer,omitempty"`
-			PermissionProfile          json.RawMessage `json:"permission_profile,omitempty"`
-			ActivePermissionProfile    json.RawMessage `json:"active_permission_profile,omitempty"`
-			CWD                        string          `json:"cwd,omitempty"`
-			ServiceTier                *string         `json:"service_tier,omitempty"`
-			ReasoningSummary           *string         `json:"reasoning_summary,omitempty"`
-			Personality                *string         `json:"personality,omitempty"`
-			CollaborationMode          json.RawMessage `json:"collaboration_mode,omitempty"`
-			RuntimeWorkspaceRoots      *[]string       `json:"runtime_workspace_roots,omitempty"`
+			ApprovalPolicy             string                               `json:"approval_policy"`
+			ApprovalsReviewer          string                               `json:"approvals_reviewer,omitempty"`
+			RequestedApprovalsReviewer *string                              `json:"requested_approvals_reviewer,omitempty"`
+			PermissionProfile          json.RawMessage                      `json:"permission_profile,omitempty"`
+			ActivePermissionProfile    json.RawMessage                      `json:"active_permission_profile,omitempty"`
+			CWD                        string                               `json:"cwd,omitempty"`
+			ServiceTier                *string                              `json:"service_tier,omitempty"`
+			ReasoningSummary           *string                              `json:"reasoning_summary,omitempty"`
+			Personality                *string                              `json:"personality,omitempty"`
+			CollaborationMode          json.RawMessage                      `json:"collaboration_mode,omitempty"`
+			RuntimeWorkspaceRoots      *[]string                            `json:"runtime_workspace_roots,omitempty"`
+			GuardianRetention          *retainedctx.GuardianRetentionPolicy `json:"guardian_retention,omitempty"`
 		}{
 			ApprovalPolicy:             approvalPolicy,
 			ApprovalsReviewer:          approvalsReviewer,
@@ -915,6 +921,7 @@ func (r *Recorder) AppendThreadSettingsAppliedSnapshot(threadID string, settings
 			Personality:                personality,
 			CollaborationMode:          collaborationMode,
 			RuntimeWorkspaceRoots:      roots,
+			GuardianRetention:          guardianRetention,
 		},
 	})
 	if err != nil {
@@ -938,7 +945,8 @@ func ThreadSettingsAppliedEqual(left, right ThreadSettingsApplied) bool {
 		stringPtrsEqual(left.ReasoningSummary, right.ReasoningSummary) &&
 		stringPtrsEqual(left.Personality, right.Personality) &&
 		rawJSONEqual(left.CollaborationMode, right.CollaborationMode) &&
-		stringSlicesPtrEqual(left.RuntimeWorkspaceRoots, right.RuntimeWorkspaceRoots)
+		stringSlicesPtrEqual(left.RuntimeWorkspaceRoots, right.RuntimeWorkspaceRoots) &&
+		left.GuardianRetention.Equal(right.GuardianRetention)
 }
 
 func normalizeThreadSettingsApplied(settings ThreadSettingsApplied) ThreadSettingsApplied {
@@ -950,6 +958,7 @@ func normalizeThreadSettingsApplied(settings ThreadSettingsApplied) ThreadSettin
 	settings.ServiceTier = cloneTrimmedStringPtr(settings.ServiceTier)
 	settings.ReasoningSummary = cloneTrimmedStringPtr(settings.ReasoningSummary)
 	settings.Personality = cloneTrimmedStringPtr(settings.Personality)
+	settings.GuardianRetention = settings.GuardianRetention.Clone()
 	settings.CollaborationMode = cloneRawJSON(settings.CollaborationMode)
 	if settings.RuntimeWorkspaceRoots != nil {
 		roots := make([]string, len(*settings.RuntimeWorkspaceRoots))

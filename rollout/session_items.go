@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/retainedctx"
 	"codex_go/session"
 	"codex_go/utils"
 )
@@ -784,6 +785,9 @@ type ThreadSettingsSnapshot struct {
 	ApprovalsReviewer       string
 	PermissionProfile       json.RawMessage
 	ActivePermissionProfile json.RawMessage
+	// GuardianRetention is the recorder policy the thread persisted (Rust
+	// #62827). nil when the snapshot predates the field or used Fixed mode.
+	GuardianRetention *retainedctx.GuardianRetentionPolicy
 }
 
 // LatestPersistedOwnedThreadSettings returns the newest settings snapshot
@@ -807,6 +811,7 @@ func LatestPersistedOwnedThreadSettings(threadID string, lines []Line) (ThreadSe
 			ApprovalsReviewer:       snapshot.ApprovalsReviewer,
 			PermissionProfile:       snapshot.PermissionProfile,
 			ActivePermissionProfile: snapshot.ActivePermissionProfile,
+			GuardianRetention:       snapshot.GuardianRetention.Clone(),
 		}, true
 	}
 	return ThreadSettingsSnapshot{}, false
@@ -1068,6 +1073,7 @@ type persistedThreadSettingsEvent struct {
 	ReasoningSummary           *string
 	Personality                *string
 	CollaborationMode          json.RawMessage
+	GuardianRetention          *retainedctx.GuardianRetentionPolicy
 }
 
 func threadSettingsSnapshotFromEvent(raw json.RawMessage) (persistedThreadSettingsEvent, bool) {
@@ -1075,17 +1081,18 @@ func threadSettingsSnapshotFromEvent(raw json.RawMessage) (persistedThreadSettin
 		Type           string `json:"type"`
 		ThreadID       string `json:"thread_id"`
 		ThreadSettings struct {
-			ApprovalPolicy             string          `json:"approval_policy"`
-			ApprovalsReviewer          string          `json:"approvals_reviewer"`
-			RequestedApprovalsReviewer *string         `json:"requested_approvals_reviewer"`
-			PermissionProfile          json.RawMessage `json:"permission_profile"`
-			ActivePermissionProfile    json.RawMessage `json:"active_permission_profile"`
-			CWD                        string          `json:"cwd"`
-			ServiceTier                *string         `json:"service_tier"`
-			ReasoningSummary           *string         `json:"reasoning_summary"`
-			Personality                *string         `json:"personality"`
-			CollaborationMode          json.RawMessage `json:"collaboration_mode"`
-			RuntimeWorkspaceRoots      *[]string       `json:"runtime_workspace_roots"`
+			ApprovalPolicy             string                               `json:"approval_policy"`
+			ApprovalsReviewer          string                               `json:"approvals_reviewer"`
+			RequestedApprovalsReviewer *string                              `json:"requested_approvals_reviewer"`
+			PermissionProfile          json.RawMessage                      `json:"permission_profile"`
+			ActivePermissionProfile    json.RawMessage                      `json:"active_permission_profile"`
+			CWD                        string                               `json:"cwd"`
+			ServiceTier                *string                              `json:"service_tier"`
+			ReasoningSummary           *string                              `json:"reasoning_summary"`
+			Personality                *string                              `json:"personality"`
+			CollaborationMode          json.RawMessage                      `json:"collaboration_mode"`
+			RuntimeWorkspaceRoots      *[]string                            `json:"runtime_workspace_roots"`
+			GuardianRetention          *retainedctx.GuardianRetentionPolicy `json:"guardian_retention"`
 		} `json:"thread_settings"`
 	}
 	if len(raw) == 0 {
@@ -1112,6 +1119,7 @@ func threadSettingsSnapshotFromEvent(raw json.RawMessage) (persistedThreadSettin
 		ReasoningSummary:           cloneTrimmedStringPtr(event.ThreadSettings.ReasoningSummary),
 		Personality:                cloneTrimmedStringPtr(event.ThreadSettings.Personality),
 		CollaborationMode:          cloneRawJSON(event.ThreadSettings.CollaborationMode),
+		GuardianRetention:          event.ThreadSettings.GuardianRetention.Clone(),
 	}, true
 }
 
