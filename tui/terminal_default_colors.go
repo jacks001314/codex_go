@@ -235,12 +235,30 @@ func SetDefaultTerminalColorsForTest(colors *DefaultColors) func() {
 	}
 }
 
-// defaultTerminalColorsRGB reports the default colors as RGB for shading.
-func defaultTerminalColorsRGB() (RGB, RGB, bool) {
+// DefaultTerminalForeground reports the palette foreground and whether the
+// terminal answered the foreground query (Rust terminal_palette::default_fg).
+func DefaultTerminalForeground() (RGB, bool) {
+	colors, ok := defaultTerminalColors()
+	if !ok || colors.ForegroundMissing {
+		return RGB{}, false
+	}
+	return RGB{R: colors.FG.R, G: colors.FG.G, B: colors.FG.B}, true
+}
+
+// DefaultTerminalBackground reports the palette background and whether any
+// palette is known. A background-only reply still shades surfaces (Rust #63191).
+func DefaultTerminalBackground() (RGB, bool) {
 	colors, ok := defaultTerminalColors()
 	if !ok {
-		return RGB{}, RGB{}, false
+		return RGB{}, false
 	}
-	return RGB{R: colors.FG.R, G: colors.FG.G, B: colors.FG.B},
-		RGB{R: colors.BG.R, G: colors.BG.G, B: colors.BG.B}, true
+	return RGB{R: colors.BG.R, G: colors.BG.G, B: colors.BG.B}, true
+}
+
+// defaultTerminalColorsRGB reports the default colors as RGB for callers that
+// need both halves of the palette.
+func defaultTerminalColorsRGB() (RGB, RGB, bool) {
+	foreground, foregroundKnown := DefaultTerminalForeground()
+	background, backgroundKnown := DefaultTerminalBackground()
+	return foreground, background, foregroundKnown && backgroundKnown
 }

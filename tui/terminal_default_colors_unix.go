@@ -82,7 +82,9 @@ func probePlatformTerminalDefaultColors(timeout time.Duration) (DefaultColors, [
 			if FindPrimaryDeviceAttributes(buffer) {
 				setTerminalDA1Supported(true)
 			}
-			if colors, ok := ParseDefaultColors(buffer); ok {
+			// Rust #63191 keeps a background-only reply and spends the rest of the
+			// window waiting for the foreground.
+			if colors, ok := ParseDefaultColors(buffer); ok && !colors.ForegroundMissing {
 				// Pick up a DA1 reply that arrived right behind the colors so it
 				// neither leaks into the input loop nor goes unrecorded.
 				if n, _ := file.Read(chunk); n > 0 {

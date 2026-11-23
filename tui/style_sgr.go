@@ -34,15 +34,13 @@ func ActiveTabSGR(level StdoutColorLevel) string {
 // DefaultBackgroundRGB reports the terminal's default background colour when the
 // palette is known (Rust's terminal_palette::default_bg).
 func DefaultBackgroundRGB() (RGB, bool) {
-	_, background, ok := defaultTerminalColorsRGB()
-	return background, ok
+	return DefaultTerminalBackground()
 }
 
 // DefaultForegroundRGB reports the terminal's default foreground colour when the
 // palette is known (Rust's terminal_palette::default_fg).
 func DefaultForegroundRGB() (RGB, bool) {
-	foreground, _, ok := defaultTerminalColorsRGB()
-	return foreground, ok
+	return DefaultTerminalForeground()
 }
 
 // TerminalColorRGB resolves a resolved terminal colour to the RGB it paints:
@@ -66,7 +64,7 @@ func SameTerminalColor(a TerminalColor, b TerminalColor) bool {
 // xterm grays with 8.4:1 contrast (Rust #59257); ANSI-16 terminals keep their
 // own foreground and background.
 func HistoryPromptSGR(level StdoutColorLevel) string {
-	_, terminalBG, known := defaultTerminalColorsRGB()
+	terminalBG, known := DefaultTerminalBackground()
 	if !known {
 		switch level {
 		case ColorTrue:
@@ -88,8 +86,7 @@ func HistoryPromptSGR(level StdoutColorLevel) string {
 // reset, such as the voice marker. A resolved terminal palette keeps the
 // terminal's default foreground.
 func HistoryPromptTextSGR(level StdoutColorLevel) string {
-	_, _, known := defaultTerminalColorsRGB()
-	if known {
+	if _, known := DefaultTerminalBackground(); known {
 		return ""
 	}
 	switch level {

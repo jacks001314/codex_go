@@ -52,16 +52,17 @@ func ReadableColorOn(preferred TerminalColor, background *RGB, level StdoutColor
 		return preferred
 	}
 	resolved, ok := terminalColorRGB(preferred)
-	defaultFG, defaultBG, known := defaultTerminalColorsRGB()
+	defaultFG, foregroundKnown := DefaultTerminalForeground()
+	defaultBG, backgroundKnown := DefaultTerminalBackground()
 	if !ok {
 		// Reset (or an indexed ANSI entry): the terminal's default foreground,
-		// or the terminal's own colour when it is unknown.
-		if !known {
+		// or Reset again when the terminal reported none (Rust #63191).
+		if !foregroundKnown {
 			return TerminalColor{}
 		}
 		resolved = defaultFG
 	}
-	if background == nil && known {
+	if background == nil && backgroundKnown {
 		// Rust's `background_rgb(None)` falls back to the terminal's default
 		// background, so a nil surface still yields a contrast-corrected colour.
 		background = &defaultBG
@@ -97,9 +98,13 @@ func ShadeRGB(surface RGB, terminalBG RGB) RGB {
 // never dimmed.
 func SecondaryTextStyle(level StdoutColorLevel) StyleSpec {
 	preferred := TerminalColor{}
-	if foreground, background, known := defaultTerminalColorsRGB(); known {
-		blended := BlendRGB(foreground, background, 0.6)
-		preferred = TerminalColor{RGB: &blended}
+	// Rust secondary_text_style needs both halves of the palette; a
+	// background-only reply keeps the terminal's own foreground.
+	if foreground, foregroundKnown := DefaultTerminalForeground(); foregroundKnown {
+		if background, backgroundKnown := DefaultTerminalBackground(); backgroundKnown {
+			blended := BlendRGB(foreground, background, 0.6)
+			preferred = TerminalColor{RGB: &blended}
+		}
 	}
 	return StyleSpec{Foreground: ReadableColorOn(preferred, nil, level)}
 }
@@ -126,15 +131,24 @@ func SecondarySurfaceStyle(level StdoutColorLevel) StyleSpec {
 // pulled toward the terminal background, or the dim terminal default when the
 // palette is unknown.
 func QuietWorkspaceStyle(level StdoutColorLevel) StyleSpec {
-	foreground, terminalBG, known := defaultTerminalColorsRGB()
-	fill := BestColorForLevel(BlendRGB(UserMessageBackgroundRGB(terminalBG), terminalBG, 0.40), level)
-	fillRGB, ok := terminalColorRGB(fill)
-	if !known || !ok {
+	terminalBG, backgroundKnown := DefaultTerminalBackground()
+	if !backgroundKnown {
 		return StyleSpec{Dim: true}
 	}
-	blended := BestColorForLevel(BlendRGB(foreground, terminalBG, 0.66), level)
+	fill := BestColorForLevel(BlendRGB(UserMessageBackgroundRGB(terminalBG), terminalBG, 0.40), level)
+	fillRGB, ok := terminalColorRGB(fill)
+	if !ok {
+		return StyleSpec{Dim: true}
+	}
+	// Rust #63191: the fill follows the reported background even when the
+	// terminal never answered the foreground query; the text keeps the
+	// terminal's own foreground in that case.
+	foreground := TerminalColor{}
+	if fg, foregroundKnown := DefaultTerminalForeground(); foregroundKnown {
+		foreground = BestColorForLevel(BlendRGB(fg, terminalBG, 0.66), level)
+	}
 	return StyleSpec{
-		Foreground: ReadableColorOn(blended, &fillRGB, level),
+		Foreground: ReadableColorOn(foreground, &fillRGB, level),
 		Background: fill,
 	}
 }

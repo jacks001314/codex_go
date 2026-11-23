@@ -54232,11 +54232,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Already equivalent by design: the resume picker loads sessions through OnListSessionPickerItems as a background command, so the picker paints immediately and tui/resume_picker.go renders the \"Loading sessions...\" row while the first page is in flight (pinned by tui/session_picker_paging_like_rust_test.go). app/interactive.go deliberately avoids an eager thread/list snapshot before the first frame, which is what the upstream commit adds a standalone loading line for."
    ],
    "kind": "runtime",
    "sha": "cf3ff1530d821ec2d26452da4971d8e3e7d18d25",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Show a loading indicator while the resume picker starts (#63102)"
   },
   {
@@ -54365,11 +54365,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Already equivalent: the side context label in tui/tea/side.go resolves keymap.primary_hint(global, toggle_side_conversation) into sideToggleBindingLabel, joins it as \"<binding> to switch\" beside \"ctrl+c to <close|archive>\" (action chosen by Storage.Attached()), and drops the switch hint when the toggle is unbound; tui/tea/side_context_label_like_rust_test.go pins the default ctrl+/ label, the main-thread and status variants, and the unbound toggle. The upstream commit extracts the same composition into conversation_navigation_hints, a refactor with no behaviour left to port."
    ],
    "kind": "runtime",
    "sha": "27cfadaf850f9f3add5f2ad76c58778054fb703a",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Extract TUI side conversation navigation hints (#63188)"
   },
   {
@@ -54389,11 +54389,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Background-only palettes are kept: DefaultColors carries ForegroundMissing, ParseDefaultColors requires the OSC 11 reply and accepts a missing OSC 10 reply, and the Unix startup probe spends the rest of its window waiting for the foreground while retaining a background-only result. DefaultTerminalBackground now shades QuietWorkspaceStyle (fill preserved, foreground stays Reset), HistoryPromptSGR and SecondarySurfaceStyle while DefaultTerminalForeground gates ReadableColorOn (Reset stays Reset), SecondaryTextStyle, contrast fills and the shortcut overlay; the shimmer indicator and SummaryShimmer fall back to the (128,128,128)/(255,255,255) pair instead of dropping out. Tests: TestBackgroundOnlyPaletteKeepsShadingLikeRust covers shading, Reset foreground, shimmer and history prompt with a background-only palette, and TestParseDefaultColorsKeepsBackgroundOnlyLikeRust pins the parser; go test ./tui ./tui/tea ./tui/history_cell ./tui/markdown ./tui/chatwidget ./tui/analytics and go build ./... pass."
    ],
    "kind": "runtime",
    "sha": "b087609f83932055ec9083c8afbd181fcffcd1a5",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Keep terminal background colors when foreground replies are missing (#63191)"
   },
   {
@@ -54401,11 +54401,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "N/A by architecture: the commit defers numbered questions while a key chord is pending by plumbing chat_widget.set_key_chord_pending from the key-chord matcher, and marks composer activity on a chord prefix. Go has no chord matcher (keymap_leader.go records that no KeyChord/chordPrefix/pending state exists), so there is no pending-chord signal that could defer a question or stamp composer activity."
    ],
    "kind": "runtime",
    "sha": "0bbbda9250645afb7eeb18a1b7a3c600c926ecc2",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Defer numbered TUI questions during active input (#63192)"
   },
   {

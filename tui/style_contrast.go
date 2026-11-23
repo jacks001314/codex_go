@@ -180,7 +180,7 @@ func ActiveTabStyleFor(background *RGB, level StdoutColorLevel) StyleSpec {
 	// Rust resolves the terminal's default foreground against the fill; an
 	// unknown default foreground keeps the terminal's own colour (Color::Reset).
 	foreground := TerminalColor{}
-	if fg, _, known := defaultTerminalColorsRGB(); known {
+	if fg, known := DefaultTerminalForeground(); known {
 		foreground = ContrastForeground(fg, &fillRGB, level)
 	}
 	return StyleSpec{

@@ -54,8 +54,15 @@ func SummaryShimmer(text string, elapsed time.Duration, motion MotionMode) []Sum
 	if ContainsRTLOrArabicNumber(text) {
 		return []SummaryShimmerSpan{{Text: text, Style: SummaryShimmerDim}}
 	}
-	fg, bg, ok := defaultTerminalColorsRGB()
-	if !ok || DetectStdoutColorLevel() != ColorTrue {
+	fg, foregroundKnown := DefaultTerminalForeground()
+	bg, backgroundKnown := DefaultTerminalBackground()
+	if !foregroundKnown {
+		fg = RGB{R: 128, G: 128, B: 128}
+	}
+	if !backgroundKnown {
+		bg = RGB{R: 255, G: 255, B: 255}
+	}
+	if DetectStdoutColorLevel() != ColorTrue {
 		return []SummaryShimmerSpan{{Text: text, Style: SummaryShimmerDim}}
 	}
 	return summaryShimmerTruecolor(text, elapsed, fg, bg)

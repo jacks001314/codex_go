@@ -23,6 +23,10 @@ type TerminalProbeResult struct {
 type DefaultColors struct {
 	FG RGBColor
 	BG RGBColor
+	// ForegroundMissing records a background reply that arrived without a
+	// foreground reply (Rust #63191 keeps the background for shading and
+	// leaves foreground-dependent surfaces to their fallbacks).
+	ForegroundMissing bool
 }
 
 type RGBColor struct {
@@ -157,16 +161,16 @@ func ParseOSCColor(buffer []byte, slot byte) (RGBColor, bool) {
 	return ParseOSCRGB(string(rest[:payloadEnd]))
 }
 
+// ParseDefaultColors mirrors Rust #63191: the background reply is required,
+// while a missing foreground reply keeps the background and records that the
+// foreground is unknown.
 func ParseDefaultColors(buffer []byte) (DefaultColors, bool) {
-	fg, ok := ParseOSCColor(buffer, 10)
-	if !ok {
-		return DefaultColors{}, false
-	}
 	bg, ok := ParseOSCColor(buffer, 11)
 	if !ok {
 		return DefaultColors{}, false
 	}
-	return DefaultColors{FG: fg, BG: bg}, true
+	fg, hasForeground := ParseOSCColor(buffer, 10)
+	return DefaultColors{FG: fg, BG: bg, ForegroundMissing: !hasForeground}, true
 }
 
 func ParseOSCRGB(payload string) (RGBColor, bool) {

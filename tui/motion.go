@@ -62,9 +62,15 @@ func ActivityIndicatorStyled(startTime *time.Time, mode MotionMode, reduced Redu
 // activity indicator: a two-second sweep synchronized to process start that
 // blends the terminal background into the foreground and always bolds the glyph.
 func shimmerIndicatorGlyph(glyph string, now time.Time) (string, bool) {
-	fg, bg, ok := defaultTerminalColorsRGB()
-	if !ok {
-		return "", false
+	// Rust #63191: a missing foreground or background falls back to the
+	// shared shimmer pair instead of dropping the indicator.
+	fg, foregroundKnown := DefaultTerminalForeground()
+	bg, backgroundKnown := DefaultTerminalBackground()
+	if !foregroundKnown {
+		fg = RGB{R: 128, G: 128, B: 128}
+	}
+	if !backgroundKnown {
+		bg = RGB{R: 255, G: 255, B: 255}
 	}
 	const (
 		padding       = 10.0
