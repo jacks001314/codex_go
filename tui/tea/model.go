@@ -394,7 +394,10 @@ type TerminalTitleWriterFunc func(sequence string) bubbletea.Cmd
 
 type NotificationPostFunc func(message string, method codextui.NotificationMethod) bubbletea.Cmd
 
-type GitDiffReaderFunc func(cwd string) (string, bool, error)
+// GitDiffReaderFunc computes `/diff` for a working directory. The second
+// argument is the session permission profile to apply, or empty for the
+// server defaults (Rust #63400 get_git_diff).
+type GitDiffReaderFunc func(cwd string, permissionProfile string) (string, bool, error)
 
 type StopBackgroundTerminalsFunc func() bubbletea.Cmd
 
@@ -1645,6 +1648,10 @@ type Options struct {
 	// (Rust #54114). Defaults to printing it to the terminal output.
 	OnWriteProgramStatus      TerminalTitleWriterFunc
 	OnPostNotification        NotificationPostFunc
+	// DiffPermissionProfileAllowed lets `/diff` carry the session permission
+	// profile. The host clears it when launch flags defined permissions the
+	// command/exec boundary cannot replay (Rust #63400 diff_permission_profile).
+	DiffPermissionProfileAllowed bool
 	OnReadGitDiff             GitDiffReaderFunc
 	OnStopBackgroundTerminals StopBackgroundTerminalsFunc
 	// OnListBackgroundTerminals reads the displayed thread's live background
@@ -3071,6 +3078,7 @@ type Model struct {
 	notificationMethod                 codextui.NotificationMethod
 	notificationCondition              codextui.NotificationCondition
 	onReadGitDiff                      GitDiffReaderFunc
+	diffPermissionProfileAllowed       bool
 	onStopBackgroundTerminals          StopBackgroundTerminalsFunc
 	onListBackgroundTerminals          ListBackgroundTerminalsFunc
 	pendingTerminalRestore             *terminalRestoreState
@@ -3954,6 +3962,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		notificationMethod:               notificationMethodOrDefault(options.NotificationMethod),
 		notificationCondition:            notificationConditionOrDefault(options.NotificationCondition),
 		onReadGitDiff:                    options.OnReadGitDiff,
+		diffPermissionProfileAllowed:     options.DiffPermissionProfileAllowed,
 		onStopBackgroundTerminals:        options.OnStopBackgroundTerminals,
 		onListBackgroundTerminals:        options.OnListBackgroundTerminals,
 		onReadDebugConfig:                options.OnReadDebugConfig,
@@ -13929,8 +13938,9 @@ func (m *Model) applyDiffCommand() bubbletea.Cmd {
 	m.refreshTranscript()
 	cwd := strings.TrimSpace(m.sessionCWD)
 	threadID := m.currentThreadID()
+	profile := m.diffPermissionProfileID()
 	return func() bubbletea.Msg {
-		text, isGitRepo, err := reader(cwd)
+		text, isGitRepo, err := reader(cwd, profile)
 		return DiffResultMsg{
 			RequestID: requestID,
 			ThreadID:  threadID,
@@ -13985,8 +13995,8 @@ func (m *Model) applyDiffResult(msg DiffResultMsg) bubbletea.Cmd {
 	return m.openPagerTerminalMode()
 }
 
-func defaultGitDiffReader(cwd string) (string, bool, error) {
-	return codextui.ReadGitDiff(strings.TrimSpace(cwd))
+func defaultGitDiffReader(cwd string, permissionProfile string) (string, bool, error) {
+	return codextui.ReadGitDiffWithProfile(context.Background(), codextui.LocalWorkspaceCommandRunner{}, strings.TrimSpace(cwd), permissionProfile)
 }
 
 func (m *Model) applyPsCommand() {

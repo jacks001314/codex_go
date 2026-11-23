@@ -1641,7 +1641,7 @@ func TestModelDiffCommandOpensPager(t *testing.T) {
 		Width:            60,
 		Height:           10,
 		SessionPickerCWD: `D:\repo`,
-		OnReadGitDiff: func(value string) (string, bool, error) {
+		OnReadGitDiff: func(value string, _ string) (string, bool, error) {
 			cwd = value
 			return "diff --git a/app.go b/app.go\n@@\n-old\n+new\n", true, nil
 		},
@@ -1677,7 +1677,7 @@ func TestModelDiffCommandOpensPager(t *testing.T) {
 
 func TestModelDiffCommandHandlesNoRepoAndEmptyDiff(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{
-		OnReadGitDiff: func(string) (string, bool, error) {
+		OnReadGitDiff: func(string, string) (string, bool, error) {
 			return "", false, nil
 		},
 	})
@@ -1693,7 +1693,7 @@ func TestModelDiffCommandHandlesNoRepoAndEmptyDiff(t *testing.T) {
 	}
 
 	model = NewModel(codextui.NewState(nil), Options{
-		OnReadGitDiff: func(string) (string, bool, error) {
+		OnReadGitDiff: func(string, string) (string, bool, error) {
 			return "", true, nil
 		},
 	})

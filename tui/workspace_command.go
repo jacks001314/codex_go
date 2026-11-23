@@ -34,6 +34,10 @@ type WorkspaceCommand struct {
 
 	Argv []string
 	Env  map[string]*string
+	// PermissionProfile names the session profile a command/exec host must
+	// apply (Rust #63400 WorkspaceCommand::permission_profile). A local
+	// in-process runner ignores it; the app-server runner forwards it.
+	PermissionProfile string
 	// Timeout bounds the wall clock; output bounds are owned by the executor
 	// (see DefaultWorkspaceCommandOutputBytesCap) unless DisableOutputCap is set.
 	Timeout          time.Duration

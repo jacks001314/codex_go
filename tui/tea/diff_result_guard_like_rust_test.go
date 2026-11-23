@@ -15,7 +15,7 @@ func TestDiffResultRequiresMatchingThreadAndCWDLikeRust(t *testing.T) {
 		Width:            60,
 		Height:           10,
 		SessionPickerCWD: `D:\repo`,
-		OnReadGitDiff: func(string) (string, bool, error) {
+		OnReadGitDiff: func(string, string) (string, bool, error) {
 			return "diff --git a/app.go b/app.go\n", true, nil
 		},
 	})

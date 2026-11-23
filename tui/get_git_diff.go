@@ -141,11 +141,33 @@ func ReadGitDiff(cwd string) (string, bool, error) {
 }
 
 func ReadGitDiffWithRunner(ctx context.Context, runner WorkspaceCommandRunner, cwd string) (string, bool, error) {
+	return ReadGitDiffWithProfile(ctx, runner, cwd, "")
+}
+
+// WorkspacePermissionProfileProber reports whether a named permission profile
+// can be resolved for a working directory (Rust #63400
+// WorkspaceCommandExecutor::has_permission_profile). App-server-backed runners
+// implement it through `permissionProfile/list`.
+type WorkspacePermissionProfileProber interface {
+	HasPermissionProfile(ctx context.Context, cwd string, profileID string) (bool, error)
+}
+
+// ReadGitDiffWithProfile runs `/diff` Git commands under a session permission
+// profile when the runner can still resolve it. A reattached client inherits
+// the profile id but not the flags that defined it, so a custom id is probed
+// once and the whole run falls back to the server defaults when it is gone
+// (Rust #63400 get_git_diff).
+func ReadGitDiffWithProfile(ctx context.Context, runner WorkspaceCommandRunner, cwd string, permissionProfile string) (string, bool, error) {
 	if runner == nil {
 		runner = LocalWorkspaceCommandRunner{}
 	}
 	cwd = strings.TrimSpace(cwd)
-	inside, err := insideGitRepo(ctx, runner, cwd)
+	profile, err := resolveDiffPermissionProfile(ctx, runner, cwd, permissionProfile)
+	if err != nil {
+		return "", false, err
+	}
+	runner = workspacePermissionProfiledRunner{runner: runner, profile: profile}
+	inside, err := insideGitRepo(ctx, runner, cwd, profile)
 	if err != nil {
 		return "", false, err
 	}
@@ -252,12 +274,62 @@ func GitTrackedDiffArgs() []string {
 	}
 }
 
-func insideGitRepo(ctx context.Context, runner WorkspaceCommandRunner, cwd string) (bool, error) {
+func insideGitRepo(ctx context.Context, runner WorkspaceCommandRunner, cwd string, permissionProfile string) (bool, error) {
 	output, err := runner.RunWorkspaceCommand(ctx, BuildGitProbeCommand(cwd, "rev-parse", "--is-inside-work-tree"))
 	if err != nil {
 		return false, err
 	}
+	// Exit 128 also covers inaccessible worktree metadata. Recognize the
+	// ordinary discovery miss and keep other diagnostics visible (Rust #63400
+	// inside_git_repo).
+	if permissionProfile != "" && !output.Success() {
+		stderr := strings.TrimRight(strings.ReplaceAll(output.Stderr, "\r\n", "\n"), "\n")
+		if !(output.ExitCode == 128 && stderr == "fatal: not a git repository (or any of the parent directories): .git") {
+			return false, fmt.Errorf("git rev-parse failed under the session permission profile (exit %d).\n%s", output.ExitCode, stderr)
+		}
+	}
 	return output.Success(), nil
+}
+
+// resolveDiffPermissionProfile decides whether the asked-for profile survives
+// into this run. Built-in `:` ids and an unset profile are used as-is; a named
+// id the runner cannot resolve falls back to the server defaults.
+func resolveDiffPermissionProfile(ctx context.Context, runner WorkspaceCommandRunner, cwd string, permissionProfile string) (string, error) {
+	profile := strings.TrimSpace(permissionProfile)
+	if profile == "" || strings.HasPrefix(profile, ":") {
+		return profile, nil
+	}
+	prober, ok := runner.(WorkspacePermissionProfileProber)
+	if !ok {
+		return profile, nil
+	}
+	exists, err := prober.HasPermissionProfile(ctx, cwd, profile)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return "", nil
+	}
+	return profile, nil
+}
+
+// workspacePermissionProfiledRunner attaches the session profile to every Git
+// command and keeps the profiled diff local: a thread profile can grant
+// network access outside the destination policy, so transports and lazy
+// fetching are disabled even on Git versions that ignore GIT_NO_LAZY_FETCH
+// (Rust #63400 DiffCommands::command).
+type workspacePermissionProfiledRunner struct {
+	runner  WorkspaceCommandRunner
+	profile string
+}
+
+func (r workspacePermissionProfiledRunner) RunWorkspaceCommand(ctx context.Context, command WorkspaceCommand) (WorkspaceCommandOutput, error) {
+	if r.profile != "" {
+		command.PermissionProfile = r.profile
+		command = command.WithEnv("GIT_NO_LAZY_FETCH", "1")
+		command = command.WithEnv("GIT_ALLOW_PROTOCOL", "")
+	}
+	return r.runner.RunWorkspaceCommand(ctx, command)
 }
 
 func diffFilterConfigOverridesForGit(ctx context.Context, runner WorkspaceCommandRunner, cwd string, fsmonitor GitFsmonitorOverride) ([]GitConfigOverride, error) {

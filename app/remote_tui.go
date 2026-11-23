@@ -663,6 +663,8 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		TerminalSizeAnalyticsEnabled: tuiTelemetry.analyticsEnabled,
 		StatuslineMetrics:            tuiTelemetry.statuslineMetrics,
 		LocalDaemonSession:           interactiveRemoteEndpointIsLocal(endpoint),
+		OnReadGitDiff:                remoteTUIDiffReader(ctx, endpoint),
+		DiffPermissionProfileAllowed: !hasExplicitRemotePermissionOverride(root),
 		LocalSession:                 interactiveRemoteEndpointIsLocal(endpoint),
 		DaemonCLIExecutable:          daemonCLIExecutable,
 		DaemonCLIVersion:             daemonCLIVersion,
