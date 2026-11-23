@@ -155,6 +155,9 @@ func DetectImageSupport(env map[string]string) PetImageSupport {
 	if hasEnv(env, "ZELLIJ") || hasEnv(env, "ZELLIJ_SESSION_NAME") || hasEnv(env, "ZELLIJ_VERSION") {
 		return PetImageSupport{Reason: PetImageUnsupportedZellij}
 	}
+	if strings.EqualFold(strings.TrimSpace(envValue(env, "TERM_PROGRAM")), "orca") {
+		return detectOrcaImageSupport(env)
+	}
 	if hasEnv(env, "KITTY_WINDOW_ID") || hasEnv(env, "WEZTERM_EXECUTABLE") || hasEnv(env, "WEZTERM_VERSION") {
 		return PetImageSupport{Protocol: ImageProtocolKitty}
 	}
@@ -175,6 +178,20 @@ func DetectImageSupport(env map[string]string) PetImageSupport {
 		return PetImageSupport{Protocol: ImageProtocolSixel}
 	}
 	return PetImageSupport{Reason: PetImageUnsupportedTerminal}
+}
+
+// detectOrcaImageSupport mirrors Rust #63013: Orca renders pets with Kitty
+// graphics only when it advertises ORCA_IMAGE_PROTOCOL=kitty and the session
+// still owns the direct terminal (no STY, and no screen/tmux TERM).
+func detectOrcaImageSupport(env map[string]string) PetImageSupport {
+	if hasEnv(env, "STY") || !strings.EqualFold(strings.TrimSpace(envValue(env, "ORCA_IMAGE_PROTOCOL")), "kitty") {
+		return PetImageSupport{Reason: PetImageUnsupportedTerminal}
+	}
+	term := strings.ToLower(strings.TrimSpace(envValue(env, "TERM")))
+	if term == "dumb" || strings.HasPrefix(term, "screen") || strings.HasPrefix(term, "tmux") {
+		return PetImageSupport{Reason: PetImageUnsupportedTerminal}
+	}
+	return PetImageSupport{Protocol: ImageProtocolKitty}
 }
 
 func hasEnv(env map[string]string, key string) bool {

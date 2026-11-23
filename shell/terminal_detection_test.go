@@ -54,6 +54,9 @@ func TestDetectNamedTerminals(t *testing.T) {
 		{name: "term session id falls back to term", env: map[string]string{"TERM_SESSION_ID": "A1B2C3", "TERM": "xterm-256color"}, wantName: TerminalUnknown, wantToken: "xterm-256color"},
 		{name: "ghostty", env: map[string]string{"TERM_PROGRAM": "Ghostty"}, wantName: TerminalGhostty, wantToken: "Ghostty"},
 		{name: "ghostty resources", env: map[string]string{"GHOSTTY_RESOURCES_DIR": "/Applications/Ghostty.app/Contents/Resources/ghostty"}, wantName: TerminalGhostty, wantToken: "Ghostty"},
+		// Rust #63013: Orca identifies itself through TERM_PROGRAM.
+		{name: "orca term program", env: map[string]string{"TERM_PROGRAM": "Orca", "TERM_PROGRAM_VERSION": "0.4.0"}, wantName: TerminalOrca, wantToken: "Orca/0.4.0"},
+		{name: "orca display token", env: map[string]string{"TERM_PROGRAM": "Orca"}, wantName: TerminalOrca, wantToken: "Orca"},
 		// Rust #58270: Rex identifies itself through TERM_PROGRAM or TERM.
 		{name: "rex term program", env: map[string]string{"TERM_PROGRAM": "rex"}, wantName: TerminalRex, wantToken: "rex"},
 		{name: "rex term", env: map[string]string{"TERM": "xterm-rex"}, wantName: TerminalRex, wantToken: "xterm-rex"},

@@ -4160,6 +4160,8 @@ func terminalNameForDoctor(info *shell.TerminalInfo) string {
 		return "Apple Terminal"
 	case shell.TerminalGhostty:
 		return "Ghostty"
+	case shell.TerminalOrca:
+		return "Orca"
 	case shell.TerminalRex:
 		return "Rex"
 	case shell.TerminalIterm2:

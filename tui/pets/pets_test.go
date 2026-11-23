@@ -96,6 +96,23 @@ func TestImageSupportDetectionMatchesRustBranches(t *testing.T) {
 	if got := DetectImageSupport(map[string]string{"ZELLIJ": "1"}); got.Reason != PetImageUnsupportedZellij {
 		t.Fatalf("zellij support = %#v", got)
 	}
+	// Rust #63013: Orca renders Kitty graphics only when it advertises the
+	// protocol and the session still owns the direct terminal.
+	orca := map[string]string{"TERM_PROGRAM": "Orca", "ORCA_IMAGE_PROTOCOL": "kitty", "TERM": "xterm-256color"}
+	if got := DetectImageSupport(orca); got.Protocol != ImageProtocolKitty {
+		t.Fatalf("orca kitty support = %#v", got)
+	}
+	for name, env := range map[string]map[string]string{
+		"missing protocol": {"TERM_PROGRAM": "Orca", "TERM": "xterm-256color"},
+		"screen term":      {"TERM_PROGRAM": "Orca", "ORCA_IMAGE_PROTOCOL": "kitty", "TERM": "screen-256color"},
+		"tmux term":        {"TERM_PROGRAM": "Orca", "ORCA_IMAGE_PROTOCOL": "kitty", "TERM": "tmux-256color"},
+		"dumb term":        {"TERM_PROGRAM": "Orca", "ORCA_IMAGE_PROTOCOL": "kitty", "TERM": "dumb"},
+		"sty present":      {"TERM_PROGRAM": "Orca", "ORCA_IMAGE_PROTOCOL": "kitty", "TERM": "xterm-256color", "STY": "1"},
+	} {
+		if got := DetectImageSupport(env); got.Protocol != "" || got.Reason != PetImageUnsupportedTerminal {
+			t.Fatalf("%s support = %#v, want terminal unsupported", name, got)
+		}
+	}
 	if got := DetectImageSupport(map[string]string{"KITTY_WINDOW_ID": "1"}); got.Protocol != ImageProtocolKitty {
 		t.Fatalf("kitty support = %#v", got)
 	}

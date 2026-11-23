@@ -54059,11 +54059,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Orca support: shell.TerminalOrca is detected from TERM_PROGRAM=Orca (case/space-insensitive like the other TERM_PROGRAM names) and renders the display token \"Orca\"; doctor reports it as \"Orca\". tui/pets DetectImageSupport routes Orca through detectOrcaImageSupport, which requires ORCA_IMAGE_PROTOCOL=kitty, no STY, and a TERM that is not dumb/screen*/tmux*, matching Rust #63013's direct-terminal checks (tmux/zellij env still win first). Copy-on-select already defaults to copying for Orca, and the Markdown renderer always emits label-only OSC 8 web links for every terminal, so the per-terminal label/destination switch has no separate Go carrier. Tests: shell detection case, pets Orca matrix (advertised protocol, missing protocol, screen/tmux/dumb TERM, STY), doctor Terminal tests; go test ./shell ./tui/pets ./doctor pass."
    ],
    "kind": "runtime",
    "sha": "586bd4b891fab95ad3abf9ff57e38746c63d7499",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Support the Orca integrated terminal (#63013)"
   },
   {
