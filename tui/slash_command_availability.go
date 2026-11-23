@@ -48,6 +48,23 @@ func (c Command) AvailableDuringTask() bool {
 	}
 }
 
+// AvailableWhenDisconnected reports whether the TUI can handle the command
+// locally after its app-server transport failed; mirrors
+// SlashCommand::available_when_disconnected (Rust #63258). Everything else needs
+// the server, so the command popup shows it disabled with that reason.
+func (c Command) AvailableWhenDisconnected() bool {
+	switch c {
+	case CommandWarnings,
+		CommandConfig,
+		CommandRemoteControl,
+		CommandFeedback,
+		CommandExit:
+		return true
+	default:
+		return false
+	}
+}
+
 // RequiresDispatchValidation reports whether dispatch must prove the thread
 // state allows this command before the composer consumes its draft; mirrors
 // SlashCommand::requires_dispatch_validation (Rust #58767). /fork and /review

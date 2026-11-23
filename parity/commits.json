@@ -54657,11 +54657,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Batch 122: partial - Rust keeps the slash-command menu usable while the TUI is disconnected from its app server, enabling only locally handled commands (warnings, config, rc, feedback, quit/exit). Go has the restricted-input popup for an unavailable thread (tui/tea/slash_popup.go updateUnavailableThreadSlashPopupKey + unavailableThreadCommand allowlist, Rust #61710), but the tea model has no app-server-disconnected composer state, so there is no disconnected menu, no disabled search results and no offline `/q` handling."
+    "Batch 128: complete - the TUI keeps a discoverable slash menu after its app-server transport fails. tui/tea records the offline state on AppServerDisconnectMsg, shows the whole command catalog with server-dependent rows disabled (reason `requires a server connection`) sorted after the usable ones, keeps side-conversation rows hidden, restricts completion and dispatch to Command.AvailableWhenDisconnected (warnings/config/rc/feedback/exit), refuses other submissions with a notice while keeping the draft, protects a multiline draft from offline completion, and answers /feedback with the thread ID plus `Reconnect to send feedback or save a ZIP.`; a fresh thread clears the state. Command.AvailableWhenDisconnected and SlashCommandItem.AvailableWhenDisconnected mirror the upstream availability predicate.",
+    "Tests: tui/tea/disconnected_slash_menu_like_rust_test.go covers the disabled catalog ordering, the searched /model row and its explanation, Tab on a disabled row, local /config completion and /model refusal with a notice, the offline /feedback history message, multiline draft preservation, and menu restoration after a thread reset; the full tui, tui/tea, tui/bottom_pane and tui/chatwidget suites pass."
    ],
    "kind": "runtime",
    "sha": "326bac6ce0ad9e91fbe5db1d2be5534bed1b50b5",
-   "status": "partial",
+   "status": "complete",
    "subject": "Show available slash commands in the disconnected TUI (#63258)"
   },
   {

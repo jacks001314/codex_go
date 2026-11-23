@@ -19,11 +19,16 @@ const slashPopupMaxRows = 8
 type slashCommandPopupItem struct {
 	Name        string
 	Description string
-	// Unavailable marks a known command that cannot run in the active side
-	// conversation (Rust #50756). Unavailable rows stay hidden from the
-	// unfiltered `/` menu, render disabled while searching, and are never
-	// selected, completed or dispatched.
+	// Unavailable marks a known command that cannot run here (Rust #50756 for a
+	// side conversation, #63258 while disconnected). Unavailable rows render
+	// disabled, are never selected, completed or dispatched, and explain why.
 	Unavailable bool
+	// DisabledReason is appended to the description of an unavailable row.
+	DisabledReason string
+	// HiddenInMenu keeps a disabled row out of the unfiltered `/` menu, which is
+	// how a side conversation hides its unavailable commands. Offline rows stay
+	// visible so the connection requirement is discoverable.
+	HiddenInMenu bool
 }
 
 type slashCommandPopup struct {
@@ -52,8 +57,15 @@ func (m *Model) refreshSlashPopup() {
 		m.slashPopup = slashCommandPopup{}
 		return
 	}
-	query, ok := slashPopupQuery(m.composerText())
+	composerText := m.composerText()
+	query, ok := slashPopupQuery(composerText)
 	if !ok {
+		m.slashPopup = slashCommandPopup{}
+		return
+	}
+	// Rust #63258: offline completion must not erase the rest of a draft, so the
+	// popup only treats the input as a command name when nothing follows it.
+	if m.appServerDisconnected && strings.TrimRight(composerText, " \t\r\n") != firstLineOfText(composerText) {
 		m.slashPopup = slashCommandPopup{}
 		return
 	}
@@ -126,7 +138,8 @@ func filterSlashPopupItems(items []slashCommandPopupItem, query string) []slashC
 		for _, item := range items {
 			// Rust #50756: a side conversation keeps its unavailable commands
 			// out of the unfiltered `/` menu; they surface only once searched.
-			if item.Unavailable {
+			// Rust #63258 shows offline rows there, sorted after the usable ones.
+			if item.HiddenInMenu {
 				continue
 			}
 			if popupAliasCommandTea(item.Name) {
@@ -134,6 +147,11 @@ func filterSlashPopupItems(items []slashCommandPopupItem, query string) []slashC
 			}
 			out = append(out, item)
 		}
+		// Ranking available rows first keeps the offline menu's disabled
+		// entries after everything that still works (Rust #63258).
+		sort.SliceStable(out, func(i, j int) bool {
+			return !out[i].Unavailable && out[j].Unavailable
+		})
 		return out
 	}
 	exact := []slashCommandPopupItem{}
@@ -205,6 +223,13 @@ func (m *Model) slashPopupCatalog() []slashCommandPopupItem {
 		item := slashPopupItemFromCommand(command)
 		if sideConversationActive && !command.AvailableInSideConversation() {
 			item.Unavailable = true
+			item.DisabledReason = slashPopupDisabledReasonSideConversation
+			item.HiddenInMenu = true
+		}
+		if m.appServerDisconnected && !command.AvailableWhenDisconnected() {
+			item.Unavailable = true
+			item.DisabledReason = slashPopupDisabledReasonDisconnected
+			item.HiddenInMenu = false
 		}
 		items = append(items, item)
 	}
@@ -252,8 +277,8 @@ func (m *Model) updateSlashPopupKey(msg keymsg.KeyMsg) (bubbletea.Cmd, bool) {
 	if m == nil || !m.slashPopup.Active {
 		return nil, false
 	}
-	if m.threadUnavailable {
-		return m.updateUnavailableThreadSlashPopupKey(msg)
+	if m.threadUnavailable || m.appServerDisconnected {
+		return m.updateRestrictedSlashPopupKey(msg)
 	}
 	switch msg.Type {
 	case keymsg.KeyUp, keymsg.KeyCtrlP:
@@ -275,11 +300,11 @@ func (m *Model) updateSlashPopupKey(msg keymsg.KeyMsg) (bubbletea.Cmd, bool) {
 	return nil, false
 }
 
-// updateUnavailableThreadSlashPopupKey mirrors Rust #61710's restricted
-// composer: navigation, Tab completion, and submission stay available, but a
-// command that cannot run while the thread is unavailable is neither completed
-// nor dispatched, and the draft stays intact.
-func (m *Model) updateUnavailableThreadSlashPopupKey(msg keymsg.KeyMsg) (bubbletea.Cmd, bool) {
+// updateRestrictedSlashPopupKey mirrors Rust #61710's restricted composer:
+// navigation, Tab completion, and submission stay available, but a command that
+// cannot run in the current restricted mode is neither completed nor dispatched,
+// and the draft stays intact. Rust #63258 uses the same path while disconnected.
+func (m *Model) updateRestrictedSlashPopupKey(msg keymsg.KeyMsg) (bubbletea.Cmd, bool) {
 	switch msg.Type {
 	case keymsg.KeyUp, keymsg.KeyCtrlP:
 		m.moveSlashPopupSelection(-1)
@@ -296,7 +321,7 @@ func (m *Model) updateUnavailableThreadSlashPopupKey(msg keymsg.KeyMsg) (bubblet
 		}
 		return nil, true
 	case keymsg.KeyTab:
-		if !m.unavailableThreadPopupCommandAllowed() {
+		if !m.restrictedPopupCommandAllowed() {
 			return nil, true
 		}
 		return m.completeSelectedSlashCommand(), true
@@ -306,7 +331,7 @@ func (m *Model) updateUnavailableThreadSlashPopupKey(msg keymsg.KeyMsg) (bubblet
 		if !m.keyMatches("composer", "submit", keySpecFromKeyMsg(msg)) {
 			return nil, true
 		}
-		if !m.unavailableThreadPopupCommandAllowed() {
+		if !m.restrictedPopupCommandAllowed() {
 			return nil, true
 		}
 		return m.dispatchSelectedSlashCommand()
@@ -314,9 +339,9 @@ func (m *Model) updateUnavailableThreadSlashPopupKey(msg keymsg.KeyMsg) (bubblet
 	return nil, false
 }
 
-// unavailableThreadPopupCommandAllowed reports whether the highlighted popup
-// row may complete or dispatch in restricted input.
-func (m *Model) unavailableThreadPopupCommandAllowed() bool {
+// restrictedPopupCommandAllowed reports whether the highlighted popup row may
+// complete or dispatch in restricted input.
+func (m *Model) restrictedPopupCommandAllowed() bool {
 	if m == nil || !m.slashPopup.Active {
 		return false
 	}
@@ -327,6 +352,9 @@ func (m *Model) unavailableThreadPopupCommandAllowed() bool {
 	name := strings.TrimSpace(item.Name)
 	if name == "" {
 		return false
+	}
+	if m.appServerDisconnected {
+		return disconnectedSlashCommand("/" + name)
 	}
 	return strings.EqualFold(name, "config") || unavailableThreadCommand("/"+name)
 }
@@ -483,9 +511,11 @@ func popupVisibleRange(length int, selected int, scrollTop int, maxRows int) sla
 	return slashPopupRange{start: start, end: start + visible}
 }
 
-// slashPopupDisabledReason is the row reason Rust #50756 shows for a side
-// conversation command that is known but cannot run here.
-const slashPopupDisabledReason = "not available in a side conversation"
+// Row reasons Rust shows for a command that is known but cannot run here.
+const (
+	slashPopupDisabledReasonSideConversation = "not available in a side conversation"
+	slashPopupDisabledReasonDisconnected     = "requires a server connection"
+)
 
 // slashPopupNameWidth mirrors Rust's compute_desc_col with
 // ColumnWidthMode::AutoAllRows (selection_popup_common.rs:150-170): the column
@@ -532,10 +562,14 @@ func slashPopupDisplayDescription(item slashCommandPopupItem) string {
 	if !item.Unavailable {
 		return item.Description
 	}
-	if item.Description == "" {
-		return "(disabled: " + slashPopupDisabledReason + ")"
+	reason := item.DisabledReason
+	if reason == "" {
+		reason = slashPopupDisabledReasonSideConversation
 	}
-	return item.Description + " (disabled: " + slashPopupDisabledReason + ")"
+	if item.Description == "" {
+		return "(disabled: " + reason + ")"
+	}
+	return item.Description + " (disabled: " + reason + ")"
 }
 
 func slashPopupRenderLine(item slashCommandPopupItem, selected bool, nameWidth int, width int) string {

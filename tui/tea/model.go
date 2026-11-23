@@ -3306,6 +3306,10 @@ type Model struct {
 	// status line preferences only takes effect on the next launch.
 	statuslineFeatureEnabled bool
 
+	// appServerDisconnected records Rust #63258's offline composer state: the
+	// transport failed, so only local commands run and the slash popup explains
+	// which commands need the server.
+	appServerDisconnected bool
 	// statuslineDisconnected hides provider content while the app-server
 	// transport is down (Rust #61985 statusline_disconnected): reads would only
 	// fail, so the built-in status line takes the footer until a new session
@@ -4742,6 +4746,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		reconnectThreads := m.retireThreadApprovalsForReconnect()
 		m.dropStaleBackendRequests()
 		m.handleAppServerDisconnect()
+		// Rust #63258: the composer keeps working offline, but the slash popup
+		// marks server-dependent commands and local ones stay runnable.
+		m.setAppServerDisconnected(true)
 		// Rust #61985: a disconnected transport cancels provider reads and shows
 		// the built-in status line instead of a stale provider footer.
 		m.statuslineDisconnected = true
@@ -5695,15 +5702,15 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 				return m, m.insertComposerNewline()
 			}
 		}
-		if m.threadUnavailable && m.keyMatches("composer", "submit", keySpec) {
-			// Rust #46566: restricted input keeps drafts editable while only
+		if (m.threadUnavailable || m.appServerDisconnected) && m.keyMatches("composer", "submit", keySpec) {
+			// Rust #46566/#63258: restricted input keeps drafts editable while only
 			// recovery and local commands may be submitted.
 			m.clearComposerPasteWindow()
 			// Rust #61710: a highlighted completion (including one selected with
 			// a custom submit key) dispatches instead of the raw draft. A blocked
 			// row and its draft stay untouched.
 			if m.slashPopup.Active {
-				if !m.unavailableThreadPopupCommandAllowed() {
+				if !m.restrictedPopupCommandAllowed() {
 					return m, nil
 				}
 				cmd, _ := m.dispatchSelectedSlashCommand()
@@ -7504,6 +7511,14 @@ func (m *Model) submitComposerWithSource(source SubmitSource) bubbletea.Cmd {
 	// Rust #58412: capture the draft's shell mode before the composer resets so a
 	// leading `!` that a deletion exposed stays literal.
 	shellMode := m.composerPrefix == composerPrefixShell
+	if m.appServerDisconnected && !disconnectedSlashCommand(rawInput) {
+		command := ""
+		if fields := strings.Fields(input); len(fields) > 0 {
+			command = fields[0]
+		}
+		m.noteOfflineConnectionRequirement(command)
+		return nil
+	}
 	if m.threadUnavailable && !unavailableThreadCommand(rawInput) {
 		m.notice = "This conversation is unavailable. Use /new, /resume, /clear, /status, /warnings, /config, /copy, or /quit."
 		m.refreshTranscript()
@@ -12180,6 +12195,12 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandMemories:
 		m.openMemoriesSettings()
 	case codextui.CommandFeedback:
+		if m.appServerDisconnected {
+			thread, guidance := m.offlineFeedbackMessage()
+			m.addInfoHistoryMessage(thread)
+			m.addInfoHistoryMessage(guidance)
+			break
+		}
 		m.openFeedbackFlow()
 	case codextui.CommandApp:
 		threadID := strings.TrimSpace(m.State.ThreadID)

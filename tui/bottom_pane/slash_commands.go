@@ -86,6 +86,15 @@ func (i SlashCommandItem) AvailableInSideConversation() bool {
 	return i.Command.AvailableInSideConversation()
 }
 
+// AvailableWhenDisconnected reports whether the row can run without the
+// app-server (Rust #63258). Service-tier rows need the server.
+func (i SlashCommandItem) AvailableWhenDisconnected() bool {
+	if i.Kind == SlashCommandItemServiceTier {
+		return false
+	}
+	return i.Command.AvailableWhenDisconnected()
+}
+
 // AvailableDuringTask reports whether the command can run while a task is in
 // progress. The list lives on codextui.Command (tui/slash_command_availability.go),
 // mirroring Rust where every caller reads SlashCommand::available_during_task

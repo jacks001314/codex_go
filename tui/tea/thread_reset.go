@@ -40,6 +40,9 @@ func (m *Model) resetThreadScopedState() {
 	// Rust #61985 clears statusline_disconnected when reconnect builds the next
 	// widget; a thread this TUI attaches to is that fresh widget here.
 	m.statuslineDisconnected = false
+	// Rust #63258 restores the full slash menu once a connection is back; a
+	// thread this TUI attaches to is that fresh connection.
+	m.appServerDisconnected = false
 	m.statusLineExtension = nil
 	// Rust ChatWidget::set_current_cwd/session_flow clear the cached project
 	// root whenever the transcript switches threads.
