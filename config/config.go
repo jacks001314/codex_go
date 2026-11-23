@@ -1712,6 +1712,34 @@ func microphoneChannelNumber(raw any) (uint16, bool) {
 	}
 }
 
+// guardianV3Count decodes a non-negative (optionally non-zero) Guardian V3
+// integer setting in any numeric spelling the TOML loader produces.
+func guardianV3Count(raw any, nonZero bool) (int64, bool) {
+	var value int64
+	switch typed := raw.(type) {
+	case int:
+		value = int64(typed)
+	case int64:
+		value = typed
+	case float64:
+		if typed != float64(int64(typed)) {
+			return 0, false
+		}
+		value = int64(typed)
+	case uint64:
+		if typed > uint64(math.MaxInt64) {
+			return 0, false
+		}
+		value = int64(typed)
+	default:
+		return 0, false
+	}
+	if value < 0 || (nonZero && value == 0) {
+		return 0, false
+	}
+	return value, true
+}
+
 func microphoneChannelRange(value int64) (uint16, bool) {
 	if value < 1 || value > 65535 {
 		return 0, false
@@ -1763,10 +1791,52 @@ func validateKnownFeatureFieldsAt(value any, prefix string) error {
 		}
 	}
 	if guardianV3, ok := features["guardianv3"].(map[string]any); ok {
-		// Rust GuardianV3ConfigToml (#56459) denies unknown fields and only
-		// carries the shared `enabled` toggle.
-		for key := range guardianV3 {
-			if key != "enabled" {
+		// Rust GuardianV3ConfigToml (#56459, #62372) denies unknown fields and
+		// carries the shared `enabled` toggle, the optional per-prompt token cap,
+		// and the configurable housekeeper routing and reviewer retrieval
+		// guidance.
+		for key, value := range guardianV3 {
+			switch key {
+			case "enabled":
+			case "max_instruction_tokens":
+				if _, ok := guardianV3Count(value, false); !ok {
+					return fmt.Errorf("invalid value for `%s.guardianv3.max_instruction_tokens`: expected a non-negative integer", prefix)
+				}
+			case "housekeeper":
+				table, isTable := value.(map[string]any)
+				if !isTable {
+					return fmt.Errorf("invalid type for `%s.guardianv3.housekeeper`: expected a table", prefix)
+				}
+				for nested, nestedValue := range table {
+					switch nested {
+					case "routing_instructions":
+						if _, isString := nestedValue.(string); !isString {
+							return fmt.Errorf("invalid type for `%s.guardianv3.housekeeper.routing_instructions`: expected a string", prefix)
+						}
+					case "batch_timeout_ms":
+						if _, ok := guardianV3Count(nestedValue, true); !ok {
+							return fmt.Errorf("invalid value for `%s.guardianv3.housekeeper.batch_timeout_ms`: expected a positive integer", prefix)
+						}
+					default:
+						return fmt.Errorf("unknown configuration field `%s.guardianv3.housekeeper.%s`", prefix, nested)
+					}
+				}
+			case "reviewer":
+				table, isTable := value.(map[string]any)
+				if !isTable {
+					return fmt.Errorf("invalid type for `%s.guardianv3.reviewer`: expected a table", prefix)
+				}
+				for nested, nestedValue := range table {
+					switch nested {
+					case "retrieval_instructions":
+						if _, isString := nestedValue.(string); !isString {
+							return fmt.Errorf("invalid type for `%s.guardianv3.reviewer.retrieval_instructions`: expected a string", prefix)
+						}
+					default:
+						return fmt.Errorf("unknown configuration field `%s.guardianv3.reviewer.%s`", prefix, nested)
+					}
+				}
+			default:
 				return fmt.Errorf("unknown configuration field `%s.guardianv3.%s`", prefix, key)
 			}
 		}
@@ -3992,6 +4062,27 @@ func sanitizeProjectConfigValues(values map[string]any, broker CredentialBrokerP
 			if _, ok := multiAgentV2["message_board_remote"]; ok {
 				delete(multiAgentV2, "message_board_remote")
 				ignored = append(ignored, "features.multi_agent_v2.message_board_remote")
+			}
+		}
+		// Rust sanitize_project_config (#62372): the Guardian V3 routing and
+		// retrieval prompts and the instruction cap are user settings, so a
+		// project cannot supply them. The per-batch timeout stays project-set.
+		if guardianV3, ok := features["guardianv3"].(map[string]any); ok {
+			if _, ok := guardianV3["max_instruction_tokens"]; ok {
+				delete(guardianV3, "max_instruction_tokens")
+				ignored = append(ignored, "features.guardianv3.max_instruction_tokens")
+			}
+			if housekeeper, ok := guardianV3["housekeeper"].(map[string]any); ok {
+				if _, ok := housekeeper["routing_instructions"]; ok {
+					delete(housekeeper, "routing_instructions")
+					ignored = append(ignored, "features.guardianv3.housekeeper.routing_instructions")
+				}
+			}
+			if reviewer, ok := guardianV3["reviewer"].(map[string]any); ok {
+				if _, ok := reviewer["retrieval_instructions"]; ok {
+					delete(reviewer, "retrieval_instructions")
+					ignored = append(ignored, "features.guardianv3.reviewer.retrieval_instructions")
+				}
 			}
 		}
 		// Rust sanitize_project_config: project configuration cannot change the

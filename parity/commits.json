@@ -51818,11 +51818,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1267: N/A (Rust extraction with no wire or behavior change) - the commit moves synchronous verdict execution into the Guardian review session (start review turn, track evidence admission, clear pending routing/context when the attempt ends) and adds a composed-context builder for reviewers that already hold the evidence. Go has no review-session object to extract into: appserver/guardian_reviewer.go builds the pending action context inline and appserver/guardian_isolated_assessment.go runs the isolated assessment, with the same transcript and permission inputs. No user-visible rule or protocol field changes."
    ],
    "kind": "runtime",
    "sha": "665b147afd5e2e6828daa3acf683222264a24437",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Extract Guardian verdict execution and pending-action context (#62308)"
   },
   {
@@ -51830,11 +51830,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1267: partial - Rust binds an attached reviewer to the pending action, reserves a review session after evidence preparation, submits the action and its permissions for a synchronous verdict, checks authorization before and after the verdict, and reserves a new session for retries under the original review deadline. Go captures the serving authorization when a review starts (appserver/guardian_reviewer.go servingAuthorization, guardianStaleAuthorizationInstructions for a stale decision) and reuses or discards the reviewer session, but it has no attached-reviewer evidence catch-up, no session reservation after preparation, and no retry that reserves a fresh session under the original deadline."
    ],
    "kind": "runtime",
    "sha": "924a48835da19191db20c16177231364565a267e",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Use attached Guardian reviewers for synchronous approvals (#62309)"
   },
   {
@@ -51842,11 +51842,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1267: N/A (no Guardian V3 board) - the commit attaches the Guardian V3 reviewer to the synchronous approval path so queued board evidence is delivered before the verdict. Go models only the guardianv3 feature/config surface (config/config.go, features) and has no housekeeper, board, or V3 reviewer; there is no evidence-catch-up step to attach."
    ],
    "kind": "runtime",
    "sha": "081f205f423eb2a4db54318e7ded3b074aeb5532",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Use Guardian V3 board evidence for synchronous approvals (#62310)"
   },
   {
@@ -51854,11 +51854,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1267: partial - Rust keeps authorization evidence local to agent forks: prepared forks that reference stored history inherit the root session id, ancestor and sender messages are marked inherited_user_message, and local authorization is scoped separately from the root authorization a host collects. Go already marks copied user messages and manual approvals as inherited (appserver/retained_context.go markInheritedUserMessages with harness metadata, guardianTranscriptIsInheritedManualApproval ignoring them) so a fork does not recapture the parent's approvals. Gap: no inherited-session-id tracking on prepared forks and no local-versus-root authorization scope."
    ],
    "kind": "runtime",
    "sha": "daa59ebd298ed6d7ee7dc92af09e5b25c5d63029",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Keep authorization evidence local to agent forks (#62314)"
   },
   {
@@ -52177,11 +52177,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1267: partial - features.guardianv3 now accepts `max_instruction_tokens`, `housekeeper.routing_instructions`, `housekeeper.batch_timeout_ms` and `reviewer.retrieval_instructions` in Go (config/config.go), rejects unknown nested fields and non-string or non-positive values with the full key path, and sanitizeProjectConfigValues strips the two prompts and the cap from project config while keeping the batch timeout, mirroring Rust's ignored_keys. Tests: config/guardian_v3_guidance_like_rust_test.go. Gap: Go has no Guardian V3 guidance consumer, so the values are validated and retained but do not influence routing or retrieval."
    ],
    "kind": "runtime",
    "sha": "8bbe7c7d66e5a0b22e516659d058a48ed019374f",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Make Guardian V3 routing and retrieval guidance configurable (#62372)"
   },
   {
@@ -52189,11 +52189,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1267: N/A (no Guardian V3 board) - the commit adds an opt-in in-memory SQLite message board per root thread (features.guardianv3.message_board_in_memory) shared by housekeeper and reviewer, with on-disk storage as the default and the attached reviewer unavailable on resumed roots. Go has no Guardian V3 board, housekeeper or reviewer at all: only the feature/config surface exists, so there is no storage mode to choose."
    ],
    "kind": "runtime",
    "sha": "d7c289ec258b5810ee0a5532039b645cf57cc14d",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Add opt-in in-memory message boards for Guardian v3 (#62373)"
   },
   {
