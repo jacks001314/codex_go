@@ -1514,7 +1514,44 @@ func (c *httpClient) doClientResponse(ctx context.Context, payload map[string]an
 		}
 		return fmt.Errorf("MCP HTTP client response failed: %s", response.Status)
 	}
+	// Rust #63075: a reply answers the peer's request, so a body returned to
+	// that POST must never be dispatched as a message for our own pending
+	// requests. Only an acknowledgement is acceptable.
+	body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+	if mcpReplyPostBodyCarriesResponse(body, response.Header.Get("Content-Type")) {
+		return errors.New("MCP HTTP client reply expected an acknowledgement, got a JSON-RPC response")
+	}
 	return nil
+}
+
+// mcpReplyPostBodyCarriesResponse reports whether a reply POST's body holds a
+// JSON-RPC response or error, either as JSON or as SSE data frames.
+func mcpReplyPostBodyCarriesResponse(body []byte, contentType string) bool {
+	isResponse := func(data []byte) bool {
+		var envelope struct {
+			Method string          `json:"method"`
+			ID     json.RawMessage `json:"id"`
+			Result json.RawMessage `json:"result"`
+			Error  json.RawMessage `json:"error"`
+		}
+		if json.Unmarshal(data, &envelope) != nil || strings.TrimSpace(envelope.Method) != "" {
+			return false
+		}
+		return len(bytes.TrimSpace(envelope.Result)) > 0 || len(bytes.TrimSpace(envelope.Error)) > 0
+	}
+	if strings.Contains(strings.ToLower(contentType), "text/event-stream") {
+		for _, line := range strings.Split(string(body), "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			if isResponse([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:")))) {
+				return true
+			}
+		}
+		return false
+	}
+	return isResponse(bytes.TrimSpace(body))
 }
 
 func (c *httpClient) bearerToken() string {

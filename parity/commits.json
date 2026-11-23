@@ -54121,11 +54121,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "mcp.httpClient.doClientResponse rejects a reply POST whose 2xx body carries a JSON-RPC response or error (JSON or SSE data frame), so a body answered to our reply can never be dispatched for one of our own request IDs; 202/204 acknowledgements stay accepted (Rust #63075). Tests: go test ./mcp -run TestReplyPostBodyCannotResolveRequestsLikeRust -count=1; go test ./mcp -count=1"
    ],
-   "kind": "runtime",
+   "kind": "security",
    "sha": "6fd58416e3134633539641d74755b177b0342a5a",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Prevent MCP reply POSTs from resolving pending requests (#63075)"
   },
   {
