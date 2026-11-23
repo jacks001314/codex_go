@@ -37,9 +37,12 @@ type slashCommandPopup struct {
 	Items     []slashCommandPopupItem
 	Selected  int
 	ScrollTop int
-	// Argument marks a popup that completes the first argument of
-	// ArgumentCommand instead of a command name (Rust #62343).
-	Argument        bool
+	// Argument marks a popup that completes an argument of ArgumentCommand
+	// instead of a command name (Rust #62343).
+	Argument bool
+	// ArgumentNamed marks flag and value completion from the command's named
+	// settings rather than its first positional argument (Rust #63036).
+	ArgumentNamed   bool
 	ArgumentCommand string
 	// ArgumentStart and ArgumentEnd bound the completed token in the composer.
 	ArgumentStart int
@@ -300,6 +303,13 @@ func (m *Model) updateSlashPopupKey(msg keymsg.KeyMsg) (bubbletea.Cmd, bool) {
 		m.moveSlashPopupSelection(1)
 		return nil, true
 	case keymsg.KeyEsc:
+		// Rust #63036: Esc dismisses the popup for this exact draft, so it
+		// stays closed until the completed token or the text changes.
+		if m.slashPopup.Argument {
+			if target, ok := m.slashArgumentTargetFor(); ok {
+				m.slashArgumentDismissed = slashArgumentIdentity(target, m.composerText())
+			}
+		}
 		m.slashPopup = slashCommandPopup{}
 		return nil, true
 	case keymsg.KeyTab:

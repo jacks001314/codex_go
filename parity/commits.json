@@ -54169,11 +54169,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1269: partial - Rust completes named settings (flags and their accepted values) for commands like `/model` in the TUI. Go's composer suggests command names only; there is no flag or value completion, and the slash input parser treats everything after the command text as plain input."
+    "Batch 142: complete - Rust #63036 named settings completion is carried by tui/tea/slash_argument_completion.go and the new tui/tea/slash_command_settings.go. The Model/Permissions/Title/Statusline/Mcp flag tables and value choices mirror slash_command_settings.rs; slashNamedArgumentTarget mirrors slash_argument/named.rs (token bounds around the cursor, a shlex probe so quoted, escaped and comment positions stay literal, `--` terminator handling, duplicate-flag filtering, boolean `--x`/`--no-x` expansion and the positional-title/statusline `--clear` rule). First positional completion still wins on line one, named completion also works in multiline drafts, Tab revalidates the live token and leaves the cursor after the inserted value, and Esc keeps the popup dismissed for the exact draft. Tests: go test ./tui/tea -run 'TestSlash' -count=1; go test ./tui/tea -count=1"
    ],
    "kind": "runtime",
    "sha": "59edd0d512a9fc1660f2ecf6562c803051b90faa",
-   "status": "partial",
+   "status": "complete",
    "subject": "Complete named settings for TUI slash commands (#63036)"
   },
   {

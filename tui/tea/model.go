@@ -2199,7 +2199,10 @@ type Model struct {
 	threadTransitionGuardUntil time.Time
 	overlay                    *chatwidget.TranscriptOverlay
 	slashPopup                 slashCommandPopup
-	agentsOverview             *agentsoverview.View
+	// slashArgumentDismissed keeps an Esc-dismissed argument popup closed
+	// for the exact draft it was dismissed on (Rust dismissed_argument_token).
+	slashArgumentDismissed string
+	agentsOverview         *agentsoverview.View
 	// analyticsDashboard is the retained /usage analytics view. It keeps its
 	// navigation state across open/close and cancels pending loads on close
 	// (Rust #45764 App::retained_analytics).
@@ -3169,10 +3172,10 @@ type Model struct {
 	// sidebarDocumentWatchScheduled keeps at most one refresh sweep armed so a
 	// load never stacks a second timer chain.
 	sidebarDocumentWatchScheduled bool
-	onOpenSideChat                    SideOpenFunc
-	onReadReviewBranches              ReviewBranchesReaderFunc
-	onReadReviewCommits               ReviewCommitsReaderFunc
-	activeSide                        *activeSideConversation
+	onOpenSideChat                SideOpenFunc
+	onReadReviewBranches          ReviewBranchesReaderFunc
+	onReadReviewCommits           ReviewCommitsReaderFunc
+	activeSide                    *activeSideConversation
 	// paneStatusText retains the plain status line of each thread so side panes
 	// can render their own dimmed status content (Rust #61141).
 	paneStatusText map[string]string
