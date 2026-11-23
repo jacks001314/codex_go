@@ -903,25 +903,46 @@ func collaborationModeInstructions(params *turn.TurnStartParams, info *model.Mod
 	if params == nil || params.CollaborationMode == nil {
 		return "", false
 	}
+	var catalog *model.CollaborationModeMessages
+	if info != nil && info.ModelMessages != nil {
+		catalog = info.ModelMessages.CollaborationModes
+	}
 	mode := strings.ToLower(strings.TrimSpace(stringFromAny(params.CollaborationMode["mode"])))
-	if info != nil && info.ModelMessages != nil && info.ModelMessages.CollaborationModes != nil {
-		var catalogValue *string
+	var catalogValue *string
+	if catalog != nil {
 		switch mode {
 		case string(ModeKindDefault):
-			catalogValue = info.ModelMessages.CollaborationModes.Default
+			catalogValue = catalog.Default
 		case string(ModeKindPlan):
-			catalogValue = info.ModelMessages.CollaborationModes.Plan
+			catalogValue = catalog.Plan
 		}
-		if catalogValue != nil {
-			value := *catalogValue
-			// Rust #41744 omits bundled planning guidance from catalog
-			// collaboration instructions when update_plan is disabled, but a
-			// custom model catalog owns its own instructions.
-			if !updatePlanEnabled && modelUsesBundledInstructions(info) {
-				value = promptctx.WithoutUpdatePlanInstructions(value)
-			}
-			return value, true
+	}
+	if mode == "" {
+		// Rust #62896: before the first Plan turn a catalog may supply
+		// collaboration_modes.initial. Caller-supplied text only wins when it
+		// would beat the catalog Default guidance; the bundled Default preset
+		// is caller text the catalog replaces, so it never reaches the model
+		// on its own here.
+		supplied := collaborationModeDeveloperInstructions(params)
+		hasDefaultOverride := catalog != nil && catalog.Default != nil
+		callerWins := supplied != "" && !hasDefaultOverride &&
+			strings.TrimSpace(supplied) != strings.TrimSpace(collaborationModeDefaultInstructions)
+		switch {
+		case !callerWins && catalog != nil && catalog.Initial != nil && *catalog.Initial != "":
+			catalogValue = catalog.Initial
+		case !callerWins:
+			return "", false
 		}
+	}
+	if catalogValue != nil {
+		value := *catalogValue
+		// Rust #41744 omits bundled planning guidance from catalog
+		// collaboration instructions when update_plan is disabled, but a
+		// custom model catalog owns its own instructions.
+		if !updatePlanEnabled && modelUsesBundledInstructions(info) {
+			value = promptctx.WithoutUpdatePlanInstructions(value)
+		}
+		return value, true
 	}
 	if legacy := collaborationModeDeveloperInstructions(params); legacy != "" {
 		// Clients send the built-in presets through the override field too.
@@ -941,7 +962,11 @@ func collaborationModeSnapshot(params *turn.TurnStartParams, info *model.ModelIn
 	}
 	mode := strings.ToLower(strings.TrimSpace(stringFromAny(params.CollaborationMode["mode"])))
 	if mode == "" {
-		return collaborationModeWorldStateSnapshot{}, false
+		// Rust's CollaborationModeSnapshot::Current records ModeKind::Default
+		// when the settings carry no explicit mode, so the initial-guidance
+		// snapshot stays comparable across the turns before the first Plan
+		// turn (Rust #62896).
+		mode = string(ModeKindDefault)
 	}
 	modelID := ""
 	if info != nil {

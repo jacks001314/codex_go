@@ -176,6 +176,9 @@ type PluginRecommendationMessages struct {
 }
 
 type CollaborationModeMessages struct {
+	// Initial is optional guidance for Default before the first Plan turn
+	// (Rust #62896). It only applies when no caller-supplied instructions win.
+	Initial *string `json:"initial,omitempty"`
 	Default *string `json:"default"`
 	Plan    *string `json:"plan"`
 }

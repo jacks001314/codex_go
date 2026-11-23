@@ -934,6 +934,14 @@ var (
 			{name: "retirement_at", kind: catalogTypeAny, optional: true},
 		},
 	}
+	catalogCollaborationModeMessagesSpec = &catalogStructSpec{
+		name: "CollaborationModeMessages",
+		fields: []catalogFieldSpec{
+			{name: "initial", kind: catalogTypeString, optional: true},
+			{name: "default", kind: catalogTypeString, optional: true},
+			{name: "plan", kind: catalogTypeString, optional: true},
+		},
+	}
 	catalogModelMessagesSpec = &catalogStructSpec{
 		name: "ModelMessages",
 		fields: []catalogFieldSpec{
@@ -942,7 +950,7 @@ var (
 			{name: "tools", kind: catalogTypeStruct, optional: true, structTy: catalogSimpleStruct("ToolMessages")},
 			{name: "instructions_template", kind: catalogTypeString, optional: true},
 			{name: "approvals", kind: catalogTypeStruct, optional: true, structTy: catalogSimpleStruct("ApprovalMessages")},
-			{name: "collaboration_modes", kind: catalogTypeStruct, optional: true, structTy: catalogSimpleStruct("CollaborationModeMessages")},
+			{name: "collaboration_modes", kind: catalogTypeStruct, optional: true, structTy: catalogCollaborationModeMessagesSpec},
 			{name: "auto_review", kind: catalogTypeStruct, optional: true, structTy: catalogSimpleStruct("AutoReviewMessages")},
 			{name: "permissions", kind: catalogTypeStruct, optional: true, structTy: catalogSimpleStruct("PermissionMessages")},
 			{name: "multi_agent", kind: catalogTypeStruct, optional: true, structTy: catalogSimpleStruct("MultiAgentMessages")},

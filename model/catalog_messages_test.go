@@ -22,7 +22,7 @@ func TestModelMessagesParseRustWireNames(t *testing.T) {
 		},
 		"permissions": {"danger_full_access": "x", "workspace_write": "y", "read_only": "z", "approved_prefixes": "{{ approved_prefixes }}"},
 		"persistent_instructions": "persist",
-		"collaboration_modes": {"default": "cm", "plan": "pm"},
+		"collaboration_modes": {"initial": "im", "default": "cm", "plan": "pm"},
 		"auto_review": {"policy": "policy"},
 		"multi_agent": {"role": {"root": "r", "subagent": "s"}},
 		"token_budget": {"enabled": true, "use_history_notes_extension": true, "reminder_threshold_tokens": 1, "reminder_message_template": "m"},
@@ -48,6 +48,9 @@ func TestModelMessagesParseRustWireNames(t *testing.T) {
 	}
 	if messages.PersistentInstructions == nil || *messages.PersistentInstructions != "persist" {
 		t.Fatalf("persistent_instructions = %#v", messages.PersistentInstructions)
+	}
+	if messages.CollaborationModes == nil || messages.CollaborationModes.Initial == nil || *messages.CollaborationModes.Initial != "im" {
+		t.Fatalf("collaboration_modes.initial = %#v", messages.CollaborationModes)
 	}
 	if messages.Permissions == nil || messages.Permissions.ApprovedPrefixes == nil || *messages.Permissions.ApprovedPrefixes != "{{ approved_prefixes }}" {
 		t.Fatalf("permissions.approved_prefixes = %#v", messages.Permissions)

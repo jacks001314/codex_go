@@ -53920,11 +53920,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "model.CollaborationModeMessages carries collaboration_modes.initial and the JSON catalog validator accepts it as an optional string. When the client sends no explicit mode, collaborationModeInstructions uses initial unless caller-supplied developer instructions would beat the catalog Default guidance (no catalog default override and not the bundled Default preset); Plan and Default keep selecting default/plan. The world-state snapshot records mode default for a mode-less turn so the initial section is emitted once, retained across resume, replaced on Plan, and replaced again by Default (Rust #62896, e3a398d3e4). Tests: go test ./appserver -run 'InitialCollaborationGuidance|CollaborationModeWorldState|CollaborationModeSnapshot|CollaborationModeUpdatePlan' -count=1; go test ./model -run 'ModelMessages|Catalog' -count=1; go test ./config -count=1"
    ],
    "kind": "runtime",
    "sha": "e3a398d3e40d4b53efb2860e0e5296d67b1212f4",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Allow model catalogs to set initial collaboration guidance (#62896)"
   },
   {
