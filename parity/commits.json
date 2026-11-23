@@ -54182,11 +54182,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Already equivalent in the only Go carrier: tool/environmentFailureMessage bounds the model-visible startup reason with maxWaitForEnvironmentFailureBytes = 256 and truncateUTF8Bytes keeps the cut on a UTF-8 rune boundary, matching ErrorContextBudget::take's per-detail cap for wait_for_environment. Go has no TurnEnvironmentState world-state fragment (the environments section is raw JSON passed through session/world_state.go, and exec's <environment_context> block carries cwd/date/timezone only), so the shared ErrorContextBudget's remaining 512-byte total across several failed environments has no second consumer to bound."
    ],
    "kind": "runtime",
    "sha": "357fe240c91563c1e6c9690bb27a2e609282d615",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Share truncation logic for environment startup errors (#63077)"
   },
   {
@@ -54280,11 +54280,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "N/A by architecture: Rust #63152 guards its terminal teardown so SetCursorStyle::DefaultUserShape is only queued after custom_terminal recorded that it changed the shape (STDOUT_CURSOR_STYLED + cursor_style_changed), keeping host-set cursor shapes intact on panic and handoff. Go never queues a default cursor shape during teardown: the only DECSCUSR writes are the agents-overview steady bar (\\x1b[6 q in tui/tea/agents_overview.go) and its reset (\\x1b[0 q), and both are guarded by agentsOverviewCursorBar so they fire only after the model set the bar. The Bubble Tea renderer owns the remaining terminal teardown, so there is no unconditional reset path to fix."
    ],
    "kind": "runtime",
    "sha": "104d2564181d8eb4e67d0c92005f3ab1052051d4",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Preserve the host terminal's cursor shape in default TUI sessions (#63152)"
   },
   {
