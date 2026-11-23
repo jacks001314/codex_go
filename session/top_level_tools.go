@@ -34,6 +34,9 @@ const (
 	ToolUpdateHint = "This is an incremental tools update. Previously declared tools remain available for direct calls unless explicitly marked unavailable. If a tool is redefined here, its latest definition replaces the earlier one."
 	// NamespaceUpdateHint is the pre-#52295 name for ToolUpdateHint.
 	NamespaceUpdateHint = ToolUpdateHint
+	// codeModeExecToolName is the Code Mode container tool whose declaration
+	// carries the global helper signatures (Rust #63046).
+	codeModeExecToolName = "exec"
 	// removedToolsHeader and removedNamespacesHeader head the two sections of a
 	// single removal notice (#51202 distinguishes whole namespace removals).
 	removedToolsHeader      = "The following tools are no longer available. Do not call them:"
@@ -428,7 +431,7 @@ func TopLevelToolsUpdatesWithMessages(definitions []any, previous map[string]str
 
 	updates := []WorldStateUpdate{}
 	if len(tools) > 0 {
-		if previousKnown && toolsContainNamespace(tools) && messages.ToolUpdateHint != "" {
+		if previousKnown && (toolsContainNamespace(tools) || toolsContainExecDeclaration(tools)) && messages.ToolUpdateHint != "" {
 			updates = append(updates, WorldStateUpdate{
 				Placement: WorldStatePrefix,
 				Role:      "developer",
@@ -458,6 +461,22 @@ func TopLevelToolsUpdatesWithMessages(definitions []any, previous map[string]str
 		}
 	}
 	return hashes, updates, nil
+}
+
+// toolsContainExecDeclaration reports whether an incremental batch redeclares
+// the Code Mode exec tool. Its declaration embeds the global helper text, so a
+// helper signature change must travel with the incremental tools hint even when
+// no namespace is declared (Rust #63046).
+func toolsContainExecDeclaration(tools []any) bool {
+	for _, tool := range tools {
+		if _, isNamespace := topLevelDefinitionMembers(tool); isNamespace {
+			continue
+		}
+		if topLevelDefinitionName(tool) == codeModeExecToolName {
+			return true
+		}
+	}
+	return false
 }
 
 func toolsContainNamespace(tools []any) bool {

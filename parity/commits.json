@@ -54171,11 +54171,14 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Rust #63046 tracks the signatures of global helpers inserted by the exec description renderer and redeclares the full functions.exec catalog when they change, then sends the incremental tools hint once per update including exec-only refreshes.",
+    "Go keeps the exec declaration atomic: turn/runtime.go builds the whole Code Mode exec description (including the Global helpers section with the legacy or unified image helper) through codemode.BuildExecToolDescriptionWithVisibility and stores it on the exec spec, so a helper signature change alters the declaration the incremental catalog hashes and the exec tool is redeclared in full. No separate signature tracking is needed.",
+    "Added the hint half: session.TopLevelToolsUpdatesWithMessages now also emits the incremental tools hint when a batch only redeclares the exec tool (session.toolsContainExecDeclaration), before the additional_tools item, matching Rust's \"including updates that only redeclare functions.exec\". Plain tool refreshes keep the previous no-hint behavior.",
+    "Tests: session/incremental_exec_hint_like_rust_test.go covers the exec-only refresh (hint then redeclared exec) and a plain tool refresh without a hint; `go test ./session ./turn ./appserver -run \"Incremental|WorldState|TopLevel|CodeMode\" -count=1` passes."
    ],
    "kind": "runtime",
    "sha": "704ffed1c58ac349c129e459c50c71979dfac6b4",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Refresh the Code Mode exec catalog when helper signatures change (#63046)"
   },
   {
