@@ -55342,9 +55342,45 @@
    "sha": "573bc548464aeef750d464e7cc33c15ddf5907fe",
    "status": "not_applicable",
    "subject": "Keep TUI event receivers with their threads (#63441)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 160: partial - Rust #63444 looks missing subagent nicknames up in the background and refreshes spawn/wait tool-call rows in the active transcript and parked panes when the metadata arrives, using archived subagent metadata to label older rows without putting archived threads back in the picker. Go's collab rows still print the raw receiver thread id: `historycell.NewCollabAgentToolCall` builds `Spawned <label>`/`Waiting for <label>`/`Sent input to <label>` from `item.ReceiverThreadIDs` (or the `receiverThreadIds` metadata), and the `agentsStates` listing prints the state key, so a live or replayed row shows a thread id until something else replaces it. Nicknames exist one layer up (`tui/app/agent_navigation.go` `AgentNickname`, `loaded_threads.go`, the picker's `FormatAgentPickerItemName`), but nothing hands them to the transcript cells and there is no row-refresh hook when metadata lands. Tests to add with the resolver: a replayed spawn row and a live wait row that gain a nickname after the lookup, and a subagent that closes during it."
+   ],
+   "kind": "runtime",
+   "sha": "a66312f2e9d680866ec73f21e03933c6261d9d8a",
+   "status": "partial",
+   "subject": "Resolve subagent nicknames in TUI transcripts (#63444)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 160: not_applicable - Rust #63445 scales the empty-state/onboarding logo with the terminal's pixel and grid dimensions so a non-square cell does not stretch it, falling back to the fixed grid mapping when pixel sizes are unavailable, and refreshes cached dimensions on resize. Go has no logo or empty-state animation surface: `tui/tea` renders the splash from text rows only, and the only `Logo` symbols in the tree are Apps-directory `logoUrl` fields (`apps/api.go`, `apps/directory.go`), which are remote image URLs rather than a terminal-drawn mark, so there is no cell-size scaling to preserve."
+   ],
+   "kind": "runtime",
+   "sha": "7a1325c191aa7642babd09cdd03297d2274263e6",
+   "status": "not_applicable",
+   "subject": "Preserve the TUI logo's aspect ratio across terminal cell sizes (#63445)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 160: not_applicable - Rust #63446 moves preview strings out of owned rollout items and state metadata (and Git metadata out of rollout items) instead of cloning them while building stored threads; it is a pure allocation optimization with no observable behavior change. Go's equivalent surface (`session`/`rollout` record building) shares immutable strings by header and copies slices where it must own them, so there is no ownership-based clone to convert into a move and nothing to port."
+   ],
+   "kind": "persistence",
+   "sha": "9c5ebee9dfdbb07591ec22679a3650f15d1eb49c",
+   "status": "not_applicable",
+   "subject": "Avoid unnecessary clones in local thread conversions (#63446)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "573bc548464aeef750d464e7cc33c15ddf5907fe",
+ "rustToInclusive": "9c5ebee9dfdbb07591ec22679a3650f15d1eb49c",
  "schemaVersion": 1
 }
