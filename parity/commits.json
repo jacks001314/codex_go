@@ -53223,11 +53223,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Executor discovery V2 inventories are cached per thread across turns (Rust #62640, e720e6c80b). The client cache is keyed by environment instance, executor session, cwd and sandbox, coalesces concurrent loads, keeps non-retryable failures cached and retries retryable ones. Reserving and registering a turn no longer replaces the thread's cache; `ThreadManager.InvalidateCapabilityDiscoveryV2Cache` marks every context dirty and the next lookup replaces it while loads already in flight keep the inventory their readers captured. Tests: go test ./execserver -run 'ExecutorCapabilityDiscoveryV2Cache' -count=1; go test ./appserver -run 'ExecutorCapabilityDiscoveryV2' -count=1; go test ./execserver -count=1"
    ],
    "kind": "runtime",
    "sha": "e720e6c80bbddb4e30611d1f501dbff82933eaff",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Reuse executor Discovery V2 inventories across turns (#62640)"
   },
   {
@@ -53341,11 +53341,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-20 upstream window; awaiting per-commit audit."
+    "Discovery V2 supports an explicit rescan (Rust #62675, 15c5444e87). `capabilities/discoverV2` accepts `forceReload`; the cache key ignores the flag because it controls how an entry is populated, not which inventory it identifies. The client cache sends `forceReload: true` for every invalidated context, replaces the matching entry so later ordinary lookups reuse the refreshed result, and late failures keep the reload pending. The executor-side manager bypasses its watcher-backed snapshot on `forceReload`, recomputes capability locations so newly added skills are visible before the watcher fires, and stores the refreshed inventory for ordinary requests. Tests: go test ./execserver -run 'ExecutorCapabilityDiscoveryV2CacheInvalidation|V2DiscoveryManagerForceReload' -count=1; go test ./execserver -count=1; go test ./appserver -run 'Environment|Discovery|Capability' -count=1; go test ./parity -count=1"
    ],
    "kind": "runtime",
    "sha": "15c5444e87e334d40262d07adb8e383c1e5172fc",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Force executor capability rescans after V2 cache invalidation (#62675)"
   },
   {

@@ -38,12 +38,13 @@ func (m *v2DiscoveryManager) Snapshot(params *DiscoverV2CapabilitiesParams) (*Di
 		return discoverCapabilitiesV2(params)
 	}
 	<-m.prewarmDone
+	forceReload := params != nil && params.ForceReload
 	m.mu.Lock()
 	m.ensureWatcherLocked()
 	locations := append([]v2CapabilityLocation(nil), m.prewarmed...)
 	warnings := append([]string(nil), m.prewarmWarnings...)
 	key := v2DiscoveryCacheKey(params)
-	if m.registrationSucceeded && !m.dirty {
+	if !forceReload && m.registrationSucceeded && !m.dirty {
 		if cached, ok := m.entries[key]; ok {
 			m.mu.Unlock()
 			return cached.response, nil
@@ -51,6 +52,12 @@ func (m *v2DiscoveryManager) Snapshot(params *DiscoverV2CapabilitiesParams) (*Di
 	}
 	m.mu.Unlock()
 
+	// Rust #62675: an invalidated context asks the executor to rescan its files
+	// instead of reusing the startup snapshot, and the refreshed result then
+	// replaces the entry so ordinary requests can reuse it.
+	if forceReload {
+		locations, warnings = v2DefaultCapabilityLocations()
+	}
 	response, err := discoverCapabilitiesV2WithLocations(params, locations, warnings)
 	if err != nil {
 		return nil, err
@@ -139,7 +146,14 @@ func (m *v2DiscoveryManager) markDirty() {
 }
 
 func v2DiscoveryCacheKey(params *DiscoverV2CapabilitiesParams) string {
-	data, err := json.Marshal(params)
+	if params == nil {
+		return ""
+	}
+	// Reload controls how the entry is populated, not which inventory it
+	// identifies (Rust #62675 DiscoveryCacheKey).
+	keyParams := *params
+	keyParams.ForceReload = false
+	data, err := json.Marshal(&keyParams)
 	if err != nil {
 		return ""
 	}

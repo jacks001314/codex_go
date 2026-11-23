@@ -120,12 +120,20 @@ type executorCapabilityDiscoveryV2CacheEntry struct {
 	err          error
 	retryable    bool
 	sawRetryable bool
+	// dirty marks a context invalidated by an explicit refresh; the next lookup
+	// replaces the entry and asks the executor to rescan (Rust #62640/#62675).
+	dirty bool
+	// forceReload is sent with this entry's discovery request so the executor
+	// ignores its own watcher-backed snapshot.
+	forceReload bool
 }
 
 // ExecutorCapabilityDiscoveryV2Cache caches V2 inventories by environment
 // instance, executor session, cwd, and sandbox. It coalesces concurrent loads,
 // retains non-retryable failures, and retries retryable failures on a later
-// call. Each turn owns a fresh cache; in-flight loads retain their entry.
+// call. The cache lives with its thread and is reused across turns; Invalidate
+// reloads each context on its next lookup while in-flight readers keep the
+// result they already captured (Rust #62640).
 type ExecutorCapabilityDiscoveryV2Cache struct {
 	mu      sync.Mutex
 	entries []*executorCapabilityDiscoveryV2CacheEntry
@@ -144,6 +152,27 @@ func (c *ExecutorCapabilityDiscoveryV2Cache) EnsureCapacity(minimum int) {
 		c.capacity = minimum
 	}
 	c.mu.Unlock()
+}
+
+// Invalidate marks every cached context for a reload without interrupting loads
+// that are already running (Rust #62640 ExecutorCapabilityDiscoveryV2Cache
+// ::invalidate). The next lookup replaces the entry and asks the executor to
+// rescan its files.
+func (c *ExecutorCapabilityDiscoveryV2Cache) Invalidate() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	entries := append([]*executorCapabilityDiscoveryV2CacheEntry(nil), c.entries...)
+	c.mu.Unlock()
+	for _, entry := range entries {
+		if entry == nil {
+			continue
+		}
+		entry.mu.Lock()
+		entry.dirty = true
+		entry.mu.Unlock()
+	}
 }
 
 // TakeRecoveredDiscovery reports whether a failed discovery recovered since the
@@ -172,18 +201,39 @@ func (c *ExecutorCapabilityDiscoveryV2Cache) Discover(ctx context.Context, envir
 	if c == nil {
 		return target.DiscoverCapabilitiesV2(ctx, request)
 	}
-	entry := c.entryFor(environmentID, target.CapabilityDiscoveryInstanceID(), sessionID, key)
+	entry := c.entryFor(environmentID, target.CapabilityDiscoveryInstanceID(), sessionID, key, request != nil && request.ForceReload)
 	return c.load(ctx, entry, target, request)
 }
 
-func (c *ExecutorCapabilityDiscoveryV2Cache) entryFor(environmentID string, instanceID string, sessionID string, requestKey string) *executorCapabilityDiscoveryV2CacheEntry {
+func (c *ExecutorCapabilityDiscoveryV2Cache) entryFor(environmentID string, instanceID string, sessionID string, requestKey string, forceReload bool) *executorCapabilityDiscoveryV2CacheEntry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, entry := range c.entries {
-		if entry.environmentID == environmentID && entry.instanceID == instanceID &&
-			entry.sessionID == sessionID && entry.requestKey == requestKey {
+	for index, entry := range c.entries {
+		if entry.environmentID != environmentID || entry.instanceID != instanceID ||
+			entry.sessionID != sessionID || entry.requestKey != requestKey {
+			continue
+		}
+		entry.mu.Lock()
+		dirty := entry.dirty
+		retryable := entry.retryable || entry.sawRetryable
+		entry.mu.Unlock()
+		if !dirty && !forceReload {
 			return entry
 		}
+		// Rust #62675: an invalidated or explicitly forced context replaces its
+		// entry with a reload; readers holding the old entry keep its result.
+		c.entries = append(c.entries[:index], c.entries[index+1:]...)
+		replacement := &executorCapabilityDiscoveryV2CacheEntry{
+			environmentID: environmentID,
+			instanceID:    instanceID,
+			sessionID:     sessionID,
+			requestKey:    requestKey,
+			retryable:     retryable,
+			sawRetryable:  retryable,
+			forceReload:   true,
+		}
+		c.appendEntryLocked(replacement)
+		return replacement
 	}
 	var retryable bool
 	for _, entry := range c.entries {
@@ -202,16 +252,23 @@ func (c *ExecutorCapabilityDiscoveryV2Cache) entryFor(environmentID string, inst
 		requestKey:    requestKey,
 		retryable:     retryable,
 		sawRetryable:  retryable,
+		forceReload:   forceReload,
 	}
+	c.appendEntryLocked(entry)
+	return entry
+}
+
+// appendEntryLocked stores a new entry, evicting the oldest context once the
+// cache reaches capacity. Callers hold c.mu.
+func (c *ExecutorCapabilityDiscoveryV2Cache) appendEntryLocked(entry *executorCapabilityDiscoveryV2CacheEntry) {
 	capacity := c.capacity
 	if capacity < minCachedDiscoveryContexts {
 		capacity = minCachedDiscoveryContexts
 	}
-	if len(c.entries) == capacity {
+	if len(c.entries) >= capacity {
 		c.entries = c.entries[1:]
 	}
 	c.entries = append(c.entries, entry)
-	return entry
 }
 
 func (c *ExecutorCapabilityDiscoveryV2Cache) load(ctx context.Context, entry *executorCapabilityDiscoveryV2CacheEntry, target ExecutorCapabilityDiscoveryV2Target, request *DiscoverV2CapabilitiesParams) (*DiscoverV2CapabilitiesResponse, error) {
@@ -244,7 +301,9 @@ func (c *ExecutorCapabilityDiscoveryV2Cache) load(ctx context.Context, entry *ex
 		entry.err = nil
 		entry.mu.Unlock()
 
-		response, err := target.DiscoverCapabilitiesV2(ctx, request)
+		loadRequest := *request
+		loadRequest.ForceReload = entry.forceReload
+		response, err := target.DiscoverCapabilitiesV2(ctx, &loadRequest)
 		canceled := ctx != nil && ctx.Err() != nil
 		retryable := canceled || IsRetryableRecoveryError(err)
 
@@ -269,7 +328,14 @@ func (c *ExecutorCapabilityDiscoveryV2Cache) load(ctx context.Context, entry *ex
 }
 
 func executorCapabilityDiscoveryV2RequestKey(request *DiscoverV2CapabilitiesParams) (string, error) {
-	encoded, err := json.Marshal(request)
+	if request == nil {
+		return "", nil
+	}
+	// Reload controls how the entry is populated, not which inventory it
+	// identifies (Rust #62675 DiscoveryCacheKey).
+	keyRequest := *request
+	keyRequest.ForceReload = false
+	encoded, err := json.Marshal(&keyRequest)
 	if err != nil {
 		return "", err
 	}

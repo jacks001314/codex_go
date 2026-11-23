@@ -616,7 +616,8 @@ func (m *ThreadManager) reserveTurn(threadID string, permit *TurnAdmissionPermit
 	if active := m.active[threadID]; active != nil {
 		return fmt.Errorf("%w: thread %s already has active turn %s", session.ErrConflict, threadID, active.TurnID)
 	}
-	m.replaceCapabilityDiscoveryV2CacheLocked(threadID)
+	// Rust #62640 keeps the thread's discovery cache across turns; an explicit
+	// InvalidateCapabilityDiscoveryV2Cache refreshes it on the next lookup.
 	m.active[threadID] = &activeRuntimeTurn{ThreadID: threadID}
 	if permit != nil {
 		if m.admittedTurns == nil {
@@ -679,7 +680,7 @@ func (m *ThreadManager) registerTurn(threadID string, turnID string, cancel cont
 		}
 		return fmt.Errorf("%w: thread %s already has active turn %s", session.ErrConflict, threadID, active.TurnID)
 	}
-	m.replaceCapabilityDiscoveryV2CacheLocked(threadID)
+	// Rust #62640: registering a turn reuses the thread's inventory cache.
 	m.active[threadID] = &activeRuntimeTurn{
 		ThreadID: threadID, TurnID: turnID, Cancel: cancel, StartedAtMS: startedAtMS,
 		Params: cloneTurnStartParams(params), Timing: turn.NewTimingState(),
@@ -715,11 +716,22 @@ func (m *ThreadManager) capabilityDiscoveryV2Cache(threadID string) *runtimeCapa
 	return cache
 }
 
-func (m *ThreadManager) replaceCapabilityDiscoveryV2CacheLocked(threadID string) {
-	if m.capabilityDiscoveryV2 == nil {
-		m.capabilityDiscoveryV2 = map[string]*runtimeCapabilityDiscoveryV2Cache{}
+// InvalidateCapabilityDiscoveryV2Cache marks every cached executor inventory
+// for the thread for a reload on its next lookup (Rust #62640
+// CodexThread::invalidate_executor_discovery). Loads already running keep the
+// result their readers captured.
+func (m *ThreadManager) InvalidateCapabilityDiscoveryV2Cache(threadID string) {
+	if m == nil || strings.TrimSpace(threadID) == "" {
+		return
 	}
-	m.capabilityDiscoveryV2[threadID] = newRuntimeCapabilityDiscoveryV2Cache()
+	threadID = strings.TrimSpace(threadID)
+	m.turnsMu.Lock()
+	cache := m.capabilityDiscoveryV2[threadID]
+	m.turnsMu.Unlock()
+	if cache == nil || cache.cache == nil {
+		return
+	}
+	cache.cache.Invalidate()
 }
 
 // BeginShutdown atomically prevents new turns and takes ownership of every

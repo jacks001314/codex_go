@@ -607,6 +607,9 @@ type CapabilityRootsDiscoverResponse struct {
 type DiscoverV2CapabilitiesParams struct {
 	CWD     string                    `json:"cwd"`
 	Sandbox *FileSystemSandboxContext `json:"sandbox,omitempty"`
+	// ForceReload rescans the executor's files even when its watcher has not
+	// reported a change (Rust #62675 capabilities/discoverV2.forceReload).
+	ForceReload bool `json:"forceReload,omitempty"`
 }
 
 type DiscoverV2CapabilitiesResponse struct {

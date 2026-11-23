@@ -240,7 +240,9 @@ func TestExecutorCapabilityDiscoveryV2FallsBackForOldExecutorLikeRust(t *testing
 	}
 }
 
-func TestExecutorCapabilityDiscoveryV2CacheRefreshesAtTurnStartLikeRust(t *testing.T) {
+// Rust #62640: a thread keeps its executor inventory cache across turns; only
+// an explicit invalidation asks the next lookup to rescan.
+func TestExecutorCapabilityDiscoveryV2CacheReusesAcrossTurnsLikeRust(t *testing.T) {
 	manager := NewThreadManager(nil)
 	idle := manager.capabilityDiscoveryV2Cache("thread-cache")
 	if idle == nil {
@@ -249,16 +251,19 @@ func TestExecutorCapabilityDiscoveryV2CacheRefreshesAtTurnStartLikeRust(t *testi
 	if err := manager.ReserveTurn("thread-cache"); err != nil {
 		t.Fatal(err)
 	}
-	started := manager.capabilityDiscoveryV2Cache("thread-cache")
-	if started == idle {
-		t.Fatal("turn start reused the previous inventory cache")
+	if got := manager.capabilityDiscoveryV2Cache("thread-cache"); got != idle {
+		t.Fatal("reserving a turn replaced the thread's inventory cache")
 	}
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if err := manager.RegisterTurn("thread-cache", "turn-1", cancel, time.Now().UnixMilli(), &turn.TurnStartParams{}); err != nil {
 		t.Fatal(err)
 	}
-	if got := manager.capabilityDiscoveryV2Cache("thread-cache"); got != started {
-		t.Fatal("registering the reserved turn replaced its cache a second time")
+	if got := manager.capabilityDiscoveryV2Cache("thread-cache"); got != idle {
+		t.Fatal("registering the turn replaced the thread's inventory cache")
+	}
+	manager.InvalidateCapabilityDiscoveryV2Cache("thread-cache")
+	if got := manager.capabilityDiscoveryV2Cache("thread-cache"); got != idle {
+		t.Fatal("explicit invalidation replaced the cache instead of reloading its entries")
 	}
 }
