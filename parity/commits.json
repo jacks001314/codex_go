@@ -53116,7 +53116,7 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1266: partial - Rust routes Guardian V2 classification through the configured Guardian provider and uses its classifier catalog for instructions, reasoning effort, thresholds and input limits, applies that provider's API-key access policy, and ignores actor-stream assessments when the provider is explicit. Go runs V2 scoring off the actor's provider catalog (turn_runtime.go GuardianV2Enabled from the actor model provider config); there is no explicit Guardian provider to route classification through or to take a separate access policy from."
+    "Round 1267: partial - Guardian V2 resources follow the host-selected provider where Go already resolves them through the review plan (Rust #62607): the preferred reviewer, auto-review messages, thresholds and reviewer instructions now come from the Guardian provider's preferred model, the dedicated Guardian runner carries that provider's API-key access policy, and the reviewer ignores the actor stream's serving assessment because it was produced by a different inference route. Tests: go test ./appserver -run 'Guardian' -count=1. Remaining: a dedicated Guardian model catalog (model_catalog_url, skip-bundled-seed and api-key discovery defaults) so classifier instructions/thresholds/input limits come from the provider's own catalog rather than the shared one; that catalog also carries #62588's remaining shared-catalog work."
    ],
    "kind": "runtime",
    "sha": "efcc0cf917330e397ad6f34f1445e0bc32a0286e",

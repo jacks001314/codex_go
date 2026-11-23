@@ -91,6 +91,16 @@ func (r *RuntimeRouter) recordGuardianServingAssessment(threadID, turnID, callID
 	})
 }
 
+// guardianServingAssessmentForReview mirrors Rust #62607: with a host-selected
+// Guardian provider the actor stream's serving assessment belongs to a
+// different inference route, so reviews run instead of trusting it.
+func (r *RuntimeRouter) guardianServingAssessmentForReview(threadID, turnID, callID string) *state.ServingAssessment {
+	if _, ok := r.guardianInferenceProvider(); ok {
+		return nil
+	}
+	return r.guardianServingAssessmentFor(threadID, turnID, callID)
+}
+
 // guardianServingAssessmentFor resolves the serving value retained for one
 // invocation. Missing values fall back to the synchronous review.
 func (r *RuntimeRouter) guardianServingAssessmentFor(threadID, turnID, callID string) *state.ServingAssessment {

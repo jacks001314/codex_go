@@ -96,6 +96,13 @@ func (r *RuntimeRouter) guardianInferenceAgent(cfg *config.Config) (model.AgentR
 		agent.ImageStore = r.threads.AttachmentStore()
 	}
 	agent.Metrics = r.services.TurnMetrics
+	// Rust #62607: Guardian requests carry the selected provider's own API-key
+	// access policy, independent of the actor's provider.
+	agent.ApiKeyCyberAccessPrograms = model.ApiKeyCyberAccessProgramsFromConfig(
+		cfg.FeatureSettings(),
+		provider.ID,
+		provider.Info,
+	)
 	return agent, nil
 }
 

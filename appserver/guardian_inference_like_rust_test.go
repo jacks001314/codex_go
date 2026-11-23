@@ -3,9 +3,12 @@ package appserver
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"codex_go/config"
 	"codex_go/model"
+	"codex_go/state"
+	"codex_go/turn"
 )
 
 // Mirrors Rust #62588: the host-selected Guardian provider supplies Guardian's
@@ -99,5 +102,34 @@ func TestGuardianReviewerUsesGuardianAgentLikeRust(t *testing.T) {
 	}
 	if session == actorSession {
 		t.Fatal("provider switch continued the actor's reviewer chain")
+	}
+}
+
+// Mirrors Rust #62607: with a host-selected Guardian provider the actor
+// stream's serving assessment belongs to another inference route, so the
+// reviewer ignores it and runs the review.
+func TestGuardianProviderIgnoresActorServingAssessmentLikeRust(t *testing.T) {
+	manager := NewThreadManager(nil)
+	if err := manager.RegisterTurn("thread-1", "turn-1", func() {}, time.Now().UnixMilli(), &turn.TurnStartParams{ThreadID: "thread-1"}); err != nil {
+		t.Fatalf("RegisterTurn() error = %v", err)
+	}
+	actorRouter := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(t.TempDir())})
+	actorRouter.threads = manager
+	actorRouter.active = manager.active
+	actorRouter.turnsMu = &manager.turnsMu
+	actorRouter.recordGuardianServingAssessment("thread-1", "turn-1", "call-1", state.ServingAssessment{})
+	if assessment := actorRouter.guardianServingAssessmentForReview("thread-1", "turn-1", "call-1"); assessment == nil {
+		t.Fatal("without a Guardian provider the actor assessment must be visible")
+	}
+
+	guardianRouter := NewRuntimeRouter(RuntimeServices{
+		Config:                config.NewConfigService(t.TempDir()),
+		GuardianModelProvider: &GuardianInferenceProvider{ID: "guardian", Info: model.ProviderInfo{EnvKey: "GUARDIAN_API_KEY"}},
+	})
+	guardianRouter.threads = manager
+	guardianRouter.active = manager.active
+	guardianRouter.turnsMu = &manager.turnsMu
+	if assessment := guardianRouter.guardianServingAssessmentForReview("thread-1", "turn-1", "call-1"); assessment != nil {
+		t.Fatal("a host-selected Guardian provider must ignore the actor's assessment")
 	}
 }
