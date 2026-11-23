@@ -51681,11 +51681,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1264: N/A (Rust module reorganization) - the commit moves realtime turn-input handoff construction out of session/turn_input.rs into session/realtime_handoff.rs, adds codex-history envelope accessors, and re-points rollout migration/reconstruction call sites at the new APIs. It adds no wire field, user-visible rule or test-observable behavior. Go has no crate/module split to mirror: handoff gating lives in appserver/realtime_runtime.go (retireVoiceHandoffsForMisalignment, clearVoiceHandoffsRetired) and realtime/history_wiring.go (NoteHandoffRequested, BindTurnSession)."
    ],
    "kind": "runtime",
    "sha": "6d9f0199ed0cfdd184754e593e0625917ad0ca28",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Refactor realtime handoff and history access (#62245)"
   },
   {
@@ -51764,11 +51764,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1264: partial - Rust prepares a realtime handoff from the same immutable transcript items history serves, holds the text until turn admission and an acceptance barrier settle, and recovers a persisted call lifecycle (Open/Ending/Closed) while draining whole V3 utterances. Go's carrier is realtime/history_wiring.go plus realtime/history.go: it queues a handoff for the next turn (NoteHandoffRequested, pendingHandoffs), binds the session when the turn starts (BindTurnSession), and appserver/realtime_runtime.go sealRealtimeUserInput seals live transcript segments before a typed turn. Gap: no prepared-input/admission-barrier settlement, no persisted session lifecycle recovery, and no whole-utterance drain."
    ],
    "kind": "runtime",
    "sha": "ad5dd4a1104c37c1ab9cb7d122d27a464613815a",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Persist realtime handoffs before accepting turn input (#62288)"
   },
   {
@@ -51792,11 +51792,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1264: partial - Rust keeps pending realtime speech when a call ends and drains the transcript tail into durable history. Go's realtime history keeps no pending-speech buffer: session close seals frames and emits the closed item (realtime/history.go SessionClosed), and realtime/realtime_test.go covers binary frame and close behaviour, but unfinished speech is not retained across a call ending. Gap: pending-speech retention and the transcript-tail drain."
    ],
    "kind": "runtime",
    "sha": "bd00a8a42ece6ea9d22d406b2e6923218c02e282",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Preserve pending realtime speech when a call ends (#62299)"
   },
   {
