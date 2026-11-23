@@ -53367,11 +53367,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-20 upstream window; awaiting per-commit audit."
+    "ExecutorCapabilityDiscoveryV2Cache records each context's failure with attempts and next retry time: lookups during the cooldown return the cached error without a request, the first lookup after it retries with delays doubling from 1s to 30s, queued callers share the failure and the single successful retry, cancellation adds no cooldown, and Invalidate/forceReload replaces the entry with a forced reload that survives failed retries.",
+    "executorCapabilityDiscoveryV2ForStep stores the thread's discovery snapshots and compares discovery identity (cached response pointer or repeated error message), invalidating the thread's MCP runtime when an inventory recovers or is replaced; TakeRecoveredDiscovery is removed from the V2 cache.",
+    "go test ./execserver -run ExecutorCapabilityDiscoveryV2Cache -count=1; go test ./appserver -run 'ExecutorCapabilityDiscoveryV2|ExecutorDiscoveryV2' -count=1"
    ],
    "kind": "runtime",
    "sha": "2fb728da7d0b3e4273f19c3b4eb798a13cacb37c",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Retry executor discovery V2 failures with backoff (#62679)"
   },
   {

@@ -23,6 +23,12 @@ type runtimeCapabilityDiscoveryV2Cache struct {
 
 	executorMCPMu        sync.Mutex
 	executorMCPDiscovery map[string]executorMCPDiscoveryResult
+
+	// discoveryMu guards the last published discovery snapshots. Consumers
+	// compare them across steps to detect recovery or replacement without an
+	// explicit refresh (Rust #62679).
+	discoveryMu     sync.Mutex
+	lastDiscoveryV2 []execserverclient.ExecutorCapabilityDiscoveryV2Snapshot
 }
 
 func newRuntimeCapabilityDiscoveryV2Cache() *runtimeCapabilityDiscoveryV2Cache {
@@ -201,15 +207,63 @@ func (r *RuntimeRouter) executorCapabilityDiscoveryV2ForStep(ctx context.Context
 			Response:      response,
 		})
 	}
-	if cache.cache.TakeRecoveredDiscovery() && r.mcpRuntimes != nil {
-		r.mcpRuntimes.invalidateThread(strings.TrimSpace(threadID))
-	}
 	if len(snapshots) == 0 && skippedIncompatibleExecutor {
+		// Rust #62679: dropping the stored inventory refreshes MCP when the
+		// thread previously had one.
+		if cache.clearDiscoverySnapshots() && r.mcpRuntimes != nil {
+			r.mcpRuntimes.invalidateThread(strings.TrimSpace(threadID))
+		}
 		// Rust #57192: an executor that only advertises the old V2 contract
 		// must keep V1 discovery (and its selected roots/skills) active.
 		return nil
 	}
+	// Rust #62679 replaces the recovered-discovery flag with snapshot
+	// comparison, so recovered plugins and MCP capabilities become available
+	// without an explicit refresh.
+	if cache.recordDiscoverySnapshots(snapshots) && r.mcpRuntimes != nil {
+		r.mcpRuntimes.invalidateThread(strings.TrimSpace(threadID))
+	}
 	return &snapshots
+}
+
+// recordDiscoverySnapshots stores this step's snapshots and reports whether
+// the thread's discovery identity changed (Rust
+// `Session::executor_capability_discovery_for_step_v2`). The slice keeps the
+// cached response pointers so a cache hit compares equal and a reload,
+// recovery, or error transition compares different.
+func (s *runtimeCapabilityDiscoveryV2Cache) recordDiscoverySnapshots(snapshots []execserverclient.ExecutorCapabilityDiscoveryV2Snapshot) bool {
+	if s == nil {
+		return false
+	}
+	s.discoveryMu.Lock()
+	defer s.discoveryMu.Unlock()
+	previous := s.lastDiscoveryV2
+	s.lastDiscoveryV2 = append([]execserverclient.ExecutorCapabilityDiscoveryV2Snapshot{}, snapshots...)
+	if previous == nil {
+		return len(snapshots) > 0
+	}
+	if len(previous) != len(snapshots) {
+		return true
+	}
+	for index := range previous {
+		if !execserverclient.ExecutorCapabilityDiscoveryV2SnapshotSameDiscovery(previous[index], snapshots[index]) {
+			return true
+		}
+	}
+	return false
+}
+
+// clearDiscoverySnapshots forgets the thread's published inventory and reports
+// whether one was stored.
+func (s *runtimeCapabilityDiscoveryV2Cache) clearDiscoverySnapshots() bool {
+	if s == nil {
+		return false
+	}
+	s.discoveryMu.Lock()
+	defer s.discoveryMu.Unlock()
+	had := s.lastDiscoveryV2 != nil
+	s.lastDiscoveryV2 = nil
+	return had
 }
 
 func executorCapabilityDiscoveryV2Failure(environmentID string) execserverclient.ExecutorCapabilityDiscoveryV2Snapshot {

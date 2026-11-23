@@ -5,13 +5,21 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
-	"sync/atomic"
+	"time"
 )
 
 // MIN_CACHED_DISCOVERY_CONTEXTS bounds the V2 inventory cache without forcing
 // eviction for ordinary environment selections (Rust
 // `MIN_CACHED_DISCOVERY_CONTEXTS`).
 const minCachedDiscoveryContexts = 16
+
+// Failed discovery loads are cached per context and retried on the first
+// lookup after their cooldown. Consecutive failures double the delay from one
+// second up to thirty seconds (Rust #62679).
+const (
+	initialDiscoveryRetryDelay = time.Second
+	maxDiscoveryRetryDelay     = 30 * time.Second
+)
 
 // ExecutorCapabilityDiscoveryV2Snapshot is one environment's caller-bound V2
 // inventory for a model step (Rust `ExecutorCapabilityDiscoveryV2Snapshot`).
@@ -45,6 +53,25 @@ func cloneExecutorCapabilityDiscoveryV2Snapshot(snapshot ExecutorCapabilityDisco
 		clone.Response = &response
 	}
 	return clone
+}
+
+// ExecutorCapabilityDiscoveryV2SnapshotSameDiscovery compares discovery
+// identity rather than inventory contents (Rust
+// `ExecutorCapabilityDiscoveryV2Snapshot::same_discovery`). Successful loads
+// compare by the cached response identity so a cache hit is unchanged and a
+// reload or recovery is a change; repeated errors compare by message.
+func ExecutorCapabilityDiscoveryV2SnapshotSameDiscovery(previous, current ExecutorCapabilityDiscoveryV2Snapshot) bool {
+	if previous.EnvironmentID != current.EnvironmentID {
+		return false
+	}
+	switch {
+	case previous.Response != nil && current.Response != nil:
+		return previous.Response == current.Response
+	case previous.Response == nil && current.Response == nil:
+		return previous.Err == current.Err
+	default:
+		return false
+	}
 }
 
 func cloneExecutorPlugins(plugins []ExecutorPlugin) []ExecutorPlugin {
@@ -105,41 +132,62 @@ type ExecutorCapabilityDiscoveryV2Target interface {
 	DiscoverCapabilitiesV2(context.Context, *DiscoverV2CapabilitiesParams) (*DiscoverV2CapabilitiesResponse, error)
 }
 
+// executorCapabilityDiscoveryV2Failure records one context's cached discovery
+// error and the earliest time a later lookup may retry it (Rust
+// `DiscoveryV2Failure`).
+type executorCapabilityDiscoveryV2Failure struct {
+	err         error
+	attempts    uint32
+	nextRetryAt time.Time
+}
+
 type executorCapabilityDiscoveryV2CacheEntry struct {
 	environmentID string
 	instanceID    string
 	sessionID     string
 	requestKey    string
-
-	mu           sync.Mutex
-	loading      bool
-	waiting      int
-	loaded       bool
-	wait         chan struct{}
-	response     *DiscoverV2CapabilitiesResponse
-	err          error
-	retryable    bool
-	sawRetryable bool
-	// dirty marks a context invalidated by an explicit refresh; the next lookup
-	// replaces the entry and asks the executor to rescan (Rust #62640/#62675).
-	dirty bool
 	// forceReload is sent with this entry's discovery request so the executor
-	// ignores its own watcher-backed snapshot.
+	// ignores its own watcher-backed snapshot. An invalidated entry keeps it
+	// through retries.
 	forceReload bool
+
+	mu       sync.Mutex
+	loading  bool
+	wait     chan struct{}
+	response *DiscoverV2CapabilitiesResponse
+	failure  *executorCapabilityDiscoveryV2Failure
+}
+
+// forceReloadEntry discards a cached snapshot and cooldown while retaining the
+// force-reload request (Rust `DiscoveryV2CacheEntry::force_reload`). Readers
+// holding the replaced entry keep their result.
+func (e *executorCapabilityDiscoveryV2CacheEntry) forceReloadEntry() *executorCapabilityDiscoveryV2CacheEntry {
+	if e == nil {
+		return nil
+	}
+	return &executorCapabilityDiscoveryV2CacheEntry{
+		environmentID: e.environmentID,
+		instanceID:    e.instanceID,
+		sessionID:     e.sessionID,
+		requestKey:    e.requestKey,
+		forceReload:   true,
+	}
 }
 
 // ExecutorCapabilityDiscoveryV2Cache caches V2 inventories by environment
-// instance, executor session, cwd, and sandbox. It coalesces concurrent loads,
-// retains non-retryable failures, and retries retryable failures on a later
-// call. The cache lives with its thread and is reused across turns; Invalidate
-// reloads each context on its next lookup while in-flight readers keep the
-// result they already captured (Rust #62640).
+// instance, executor session, cwd, and sandbox. It coalesces concurrent loads
+// and caches failed loads per context: lookups during the failure's cooldown
+// return the cached error without issuing a request, and the first lookup after
+// it retries with a doubling delay. The cache lives with its thread and is
+// reused across turns; Invalidate replaces every entry with a forced reload
+// while in-flight readers keep the result they already captured (Rust #62679).
 type ExecutorCapabilityDiscoveryV2Cache struct {
 	mu      sync.Mutex
 	entries []*executorCapabilityDiscoveryV2CacheEntry
 	// capacity never shrinks until the cache is replaced.
-	capacity  int
-	recovered atomic.Bool
+	capacity int
+	// now reports the wall clock for cooldown deadlines; tests replace it.
+	now func() time.Time
 }
 
 // EnsureCapacity reserves room for a complete environment selection.
@@ -154,38 +202,24 @@ func (c *ExecutorCapabilityDiscoveryV2Cache) EnsureCapacity(minimum int) {
 	c.mu.Unlock()
 }
 
-// Invalidate marks every cached context for a reload without interrupting loads
-// that are already running (Rust #62640 ExecutorCapabilityDiscoveryV2Cache
-// ::invalidate). The next lookup replaces the entry and asks the executor to
-// rescan its files.
+// Invalidate makes future lookups reload every context without interrupting
+// loads that are already running (Rust #62679
+// ExecutorCapabilityDiscoveryV2Cache::invalidate). The next lookup starts a
+// forced load immediately, without a failure cooldown.
 func (c *ExecutorCapabilityDiscoveryV2Cache) Invalidate() {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
-	entries := append([]*executorCapabilityDiscoveryV2CacheEntry(nil), c.entries...)
-	c.mu.Unlock()
-	for _, entry := range entries {
-		if entry == nil {
-			continue
-		}
-		entry.mu.Lock()
-		entry.dirty = true
-		entry.mu.Unlock()
+	defer c.mu.Unlock()
+	for index, entry := range c.entries {
+		c.entries[index] = entry.forceReloadEntry()
 	}
-}
-
-// TakeRecoveredDiscovery reports whether a failed discovery recovered since the
-// last observation.
-func (c *ExecutorCapabilityDiscoveryV2Cache) TakeRecoveredDiscovery() bool {
-	if c == nil {
-		return false
-	}
-	return c.recovered.Swap(false)
 }
 
 // Discover loads one inventory through the cache. The loader is called at most
-// once for concurrent callers with the same key.
+// once for concurrent callers with the same key; failed loads are shared until
+// their cooldown expires.
 func (c *ExecutorCapabilityDiscoveryV2Cache) Discover(ctx context.Context, environmentID string, target ExecutorCapabilityDiscoveryV2Target, request *DiscoverV2CapabilitiesParams) (*DiscoverV2CapabilitiesResponse, error) {
 	if target == nil {
 		return nil, errors.New("executor discovery V2 target is nil")
@@ -208,40 +242,22 @@ func (c *ExecutorCapabilityDiscoveryV2Cache) Discover(ctx context.Context, envir
 func (c *ExecutorCapabilityDiscoveryV2Cache) entryFor(environmentID string, instanceID string, sessionID string, requestKey string, forceReload bool) *executorCapabilityDiscoveryV2CacheEntry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for index, entry := range c.entries {
-		if entry.environmentID != environmentID || entry.instanceID != instanceID ||
-			entry.sessionID != sessionID || entry.requestKey != requestKey {
-			continue
+	if !forceReload {
+		for _, entry := range c.entries {
+			if entry.environmentID == environmentID && entry.instanceID == instanceID &&
+				entry.sessionID == sessionID && entry.requestKey == requestKey {
+				return entry
+			}
 		}
-		entry.mu.Lock()
-		dirty := entry.dirty
-		retryable := entry.retryable || entry.sawRetryable
-		entry.mu.Unlock()
-		if !dirty && !forceReload {
-			return entry
-		}
-		// Rust #62675: an invalidated or explicitly forced context replaces its
-		// entry with a reload; readers holding the old entry keep its result.
-		c.entries = append(c.entries[:index], c.entries[index+1:]...)
-		replacement := &executorCapabilityDiscoveryV2CacheEntry{
-			environmentID: environmentID,
-			instanceID:    instanceID,
-			sessionID:     sessionID,
-			requestKey:    requestKey,
-			retryable:     retryable,
-			sawRetryable:  retryable,
-			forceReload:   true,
-		}
-		c.appendEntryLocked(replacement)
-		return replacement
-	}
-	var retryable bool
-	for _, entry := range c.entries {
-		if entry.environmentID == environmentID && entry.instanceID == instanceID &&
-			entry.requestKey == requestKey {
-			entry.mu.Lock()
-			retryable = entry.retryable || entry.sawRetryable
-			entry.mu.Unlock()
+	} else {
+		for index, entry := range c.entries {
+			if entry.environmentID != environmentID || entry.instanceID != instanceID ||
+				entry.sessionID != sessionID || entry.requestKey != requestKey {
+				continue
+			}
+			// Rust #62679: a forced context replaces its entry with a fresh load;
+			// readers holding the old entry keep its result.
+			c.entries = append(c.entries[:index], c.entries[index+1:]...)
 			break
 		}
 	}
@@ -250,8 +266,6 @@ func (c *ExecutorCapabilityDiscoveryV2Cache) entryFor(environmentID string, inst
 		instanceID:    instanceID,
 		sessionID:     sessionID,
 		requestKey:    requestKey,
-		retryable:     retryable,
-		sawRetryable:  retryable,
 		forceReload:   forceReload,
 	}
 	c.appendEntryLocked(entry)
@@ -271,57 +285,86 @@ func (c *ExecutorCapabilityDiscoveryV2Cache) appendEntryLocked(entry *executorCa
 	c.entries = append(c.entries, entry)
 }
 
+func (c *ExecutorCapabilityDiscoveryV2Cache) clock() time.Time {
+	if c != nil && c.now != nil {
+		return c.now()
+	}
+	return time.Now()
+}
+
+// discoveryRetryDelay doubles the initial delay per consecutive failure up to
+// the maximum (Rust INITIAL_DISCOVERY_RETRY_DELAY / MAX_DISCOVERY_RETRY_DELAY).
+func discoveryRetryDelay(attempts uint32) time.Duration {
+	delay := initialDiscoveryRetryDelay
+	for attempt := uint32(1); attempt < attempts; attempt++ {
+		if delay >= maxDiscoveryRetryDelay {
+			break
+		}
+		delay *= 2
+	}
+	if delay > maxDiscoveryRetryDelay {
+		return maxDiscoveryRetryDelay
+	}
+	return delay
+}
+
 func (c *ExecutorCapabilityDiscoveryV2Cache) load(ctx context.Context, entry *executorCapabilityDiscoveryV2CacheEntry, target ExecutorCapabilityDiscoveryV2Target, request *DiscoverV2CapabilitiesParams) (*DiscoverV2CapabilitiesResponse, error) {
+	if entry == nil {
+		return nil, errors.New("executor discovery V2 cache entry is nil")
+	}
 	for {
 		entry.mu.Lock()
-		if entry.loading || entry.waiting > 0 {
+		if entry.loading {
 			wait := entry.wait
-			if wait == nil {
-				entry.mu.Unlock()
-				continue
-			}
-			entry.waiting++
 			entry.mu.Unlock()
 			<-wait
-			entry.mu.Lock()
-			entry.waiting--
-			response, err := entry.response, entry.err
-			entry.mu.Unlock()
-			return response, err
+			continue
 		}
-		if entry.loaded && !entry.retryable {
-			response, err := entry.response, entry.err
+		if entry.response != nil {
+			response := entry.response
 			entry.mu.Unlock()
-			return response, err
+			return response, nil
+		}
+		// Waiting callers must not immediately retry a failed request; the
+		// cooldown is checked again after every wake-up.
+		if failure := entry.failure; failure != nil && c.clock().Before(failure.nextRetryAt) {
+			err := failure.err
+			entry.mu.Unlock()
+			return nil, err
 		}
 		entry.loading = true
-		entry.loaded = false
 		entry.wait = make(chan struct{})
-		entry.response = nil
-		entry.err = nil
 		entry.mu.Unlock()
 
 		loadRequest := *request
 		loadRequest.ForceReload = entry.forceReload
 		response, err := target.DiscoverCapabilitiesV2(ctx, &loadRequest)
+		// Cancellation drops the load without starting a cooldown (Rust #62679).
 		canceled := ctx != nil && ctx.Err() != nil
-		retryable := canceled || IsRetryableRecoveryError(err)
 
 		entry.mu.Lock()
-		entry.response = response
-		entry.err = err
-		entry.retryable = retryable
-		entry.loaded = !retryable
-		if err == nil {
-			if entry.sawRetryable {
-				c.recovered.Store(true)
+		switch {
+		case err == nil:
+			entry.response = response
+			entry.failure = nil
+		case canceled:
+			entry.response = nil
+		default:
+			attempts := uint32(1)
+			if entry.failure != nil {
+				attempts = entry.failure.attempts + 1
 			}
-			entry.sawRetryable = false
-		} else if retryable {
-			entry.sawRetryable = true
+			entry.failure = &executorCapabilityDiscoveryV2Failure{
+				err:         err,
+				attempts:    attempts,
+				nextRetryAt: c.clock().Add(discoveryRetryDelay(attempts)),
+			}
+			entry.response = nil
 		}
+		wait := entry.wait
+		entry.wait = nil
 		entry.loading = false
-		close(entry.wait)
+		close(wait)
 		entry.mu.Unlock()
 		return response, err
 	}
