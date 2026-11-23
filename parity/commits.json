@@ -55270,9 +55270,33 @@
    "sha": "06d76ee77b6f66c9958f5a5286d262fbd8970709",
    "status": "not_applicable",
    "subject": "Remove test-only agent message grouping from TUI backtracking (#63423)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 154: not_applicable - Rust #63427 makes Rust test fixtures portable (writable copies of Bazel runfiles patch inputs, a Bubblewrap mount-permission skip in CLI and Linux sandbox tests, printf/tr generated code-mode output, and one worktree heading normalized at a time). Go's tests use t.TempDir() and os.WriteFile, and the Linux sandbox suites already skip when bubblewrap is unavailable, so no Go production or test code corresponds to this change."
+   ],
+   "kind": "runtime",
+   "sha": "91f5c31ddbea55f63457cbee36a1f218dd0a99ae",
+   "status": "not_applicable",
+   "subject": "Make Codex tests more portable across environments (#63427)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 154: partial - Rust #63428 validates the session configuration before `compact` interrupts the active turn, so a policy refresh that forbids compaction leaves the running turn intact (a warning while a turn runs, a BadRequest error plus errored status when idle). Go's `handleThreadCompactStartRuntime` already runs `ensureDirectInputAllowed` and `checkThreadModelProviderForID` before `abortRuntimeTurnForManualCompaction`, and `turn.TurnService.Start` can only fail on parameter validation, so the provider/direct-input rejections do not interrupt a turn today. Residual: Go has no separate session-configuration validation pass (Rust's SessionConfiguration::validate over the turn environments) and no compaction preflight that resolves the prompt and replacement context before the abort, so a failure raised by compactThread after the abort would still have replaced the running turn. Tests to add with the preflight: a rejected compact while a turn runs emits a warning and keeps the turn, and an idle rejection reports an error plus errored status."
+   ],
+   "kind": "runtime",
+   "sha": "bfb5f7d83b4ee9ab2bfaf639c77d609d87ee468b",
+   "status": "partial",
+   "subject": "Keep active turns running when `/compact` is rejected (#63428)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "06d76ee77b6f66c9958f5a5286d262fbd8970709",
+ "rustToInclusive": "bfb5f7d83b4ee9ab2bfaf639c77d609d87ee468b",
  "schemaVersion": 1
 }
