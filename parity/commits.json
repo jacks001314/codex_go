@@ -55258,9 +55258,21 @@
    "sha": "aae9db9f5fd0bc77eabf5ee7b3ad8c4809dcb7c5",
    "status": "not_applicable",
    "subject": "Test subagent metadata on stored thread conversions (#63422)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 152: not_applicable - Rust #63423 deletes the backtracking helpers `agent_group_count` / `agent_group_positions_iter` and the single test that asserted a context-compaction marker is not an agent message group; both were `#[cfg(test)]`-only. Go's backtracking targets user messages directly (tui/tea/backtrack.go) and has no agent-message grouping helper, so there is no Go state this edit changes."
+   ],
+   "kind": "runtime",
+   "sha": "06d76ee77b6f66c9958f5a5286d262fbd8970709",
+   "status": "not_applicable",
+   "subject": "Remove test-only agent message grouping from TUI backtracking (#63423)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "aae9db9f5fd0bc77eabf5ee7b3ad8c4809dcb7c5",
+ "rustToInclusive": "06d76ee77b6f66c9958f5a5286d262fbd8970709",
  "schemaVersion": 1
 }
