@@ -2259,6 +2259,9 @@ type Model struct {
 	hoverPointerX   int
 	hoverPointerY   int
 	hoverPointerSet bool
+	// collabTranscriptRows remembers rendered collab tool calls so a late
+	// subagent nickname can relabel them (Rust #63444).
+	collabTranscriptRows []collabTranscriptRow
 	// agentsOverviewInflightFor names the backend that owns the shared refresh
 	// slot, and agentsOverviewBackends keeps queued refreshes, Show more
 	// requests, refill counts, and failures per backend (Rust #61596).
@@ -9719,7 +9722,68 @@ func (m *Model) renderCollabAgentToolCall(item *protocol.ThreadItem, completed b
 		return
 	}
 	m.Transcript.finishAssistantPreambleBeforeTool(m.State)
+	m.recordCollabTranscriptRow(item, completed, cell)
 	m.applyHistoryCell(cell)
+}
+
+// recordCollabTranscriptRow keeps the collab item behind its painted row so a
+// late nickname lookup can relabel it (Rust #63444 refreshes tool-call rows as
+// metadata arrives). The registry is bounded: an old row keeps the label it
+// was painted with.
+func (m *Model) recordCollabTranscriptRow(item *protocol.ThreadItem, completed bool, cell historycell.HistoryCell) {
+	if m == nil || item == nil || cell == nil {
+		return
+	}
+	const maxCollabTranscriptRows = 128
+	if len(m.collabTranscriptRows) >= maxCollabTranscriptRows {
+		m.collabTranscriptRows = m.collabTranscriptRows[1:]
+	}
+	m.collabTranscriptRows = append(m.collabTranscriptRows, collabTranscriptRow{
+		item:      *item,
+		completed: completed,
+		raw:       strings.Join(cell.RawLines(), "\n"),
+	})
+}
+
+// refreshCollabTranscriptRows repaints the registered collab rows after agent
+// metadata arrives. A row whose label did not change is left untouched, and a
+// row that is no longer in the transcript is skipped.
+func (m *Model) refreshCollabTranscriptRows() {
+	if m == nil || m.State == nil || len(m.collabTranscriptRows) == 0 {
+		return
+	}
+	changed := false
+	for index := range m.collabTranscriptRows {
+		row := &m.collabTranscriptRows[index]
+		cell, ok := historycell.NewCollabAgentToolCallWithResolver(&row.item, row.completed, m.collabAgentNickname)
+		if !ok {
+			continue
+		}
+		width := m.width
+		if width < 20 {
+			width = 20
+		}
+		text := strings.Join(cell.DisplayLines(width), "\n")
+		raw := strings.Join(cell.RawLines(), "\n")
+		if raw == row.raw {
+			continue
+		}
+		for messageIndex := range m.State.Messages {
+			message := &m.State.Messages[messageIndex]
+			if message.RawText != row.raw {
+				continue
+			}
+			message.Text = text
+			message.RawText = raw
+			row.raw = raw
+			changed = true
+			break
+		}
+	}
+	if changed {
+		m.State.BumpMessagesRevision()
+		m.refreshTranscript()
+	}
 }
 
 func (m *Model) renderSubAgentActivity(item *protocol.ThreadItem) {

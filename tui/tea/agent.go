@@ -125,6 +125,7 @@ func (m *Model) applyAgentListResult(message AgentListResultMsg) bubbletea.Cmd {
 	visible := m.visibleAgentEntries(entries)
 	if len(visible) == 0 {
 		m.agentItems = append([]codextui.AgentThreadEntry(nil), entries...)
+		m.refreshCollabTranscriptRows()
 		if m.modal != nil && (m.modal.id == "agent-picker" || m.modal.id == "agent-picker-loading") {
 			m.modal = nil
 			m.showAgentInfo("No agents available yet.")
@@ -135,6 +136,7 @@ func (m *Model) applyAgentListResult(message AgentListResultMsg) bubbletea.Cmd {
 		return nil
 	}
 	m.agentItems = append([]codextui.AgentThreadEntry(nil), entries...)
+	m.refreshCollabTranscriptRows()
 	selectedID := ""
 	showPicker := false
 	if m.modal != nil {
