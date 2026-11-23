@@ -80,15 +80,22 @@ func composeMultiAgentRoleBody(base string, omitUpdatePlan bool, maxConcurrency 
 		body.WriteString(agent.MultiAgentV2WaitAgentUsageHint)
 		body.WriteString("\n\n")
 	}
-	if maxConcurrency < 1 {
-		maxConcurrency = 1
-	}
-	fmt.Fprintf(&body, "There are %d available concurrency slots, meaning that up to %d agents can be active at once, including you.", maxConcurrency, maxConcurrency)
+	body.WriteString(multiAgentConcurrencyGuidance(maxConcurrency))
 	if exposeOverrides {
 		body.WriteString("\n\n")
 		body.WriteString(agent.MultiAgentV2ModelOverrideUsageHint)
 	}
 	return body.String()
+}
+
+// multiAgentConcurrencyGuidance is Rust's concurrency_guidance text, shared by
+// the composed role body and the concurrency-only role used when native
+// collaboration tools are disabled (Rust #62864).
+func multiAgentConcurrencyGuidance(maxConcurrency int) string {
+	if maxConcurrency < 1 {
+		maxConcurrency = 1
+	}
+	return fmt.Sprintf("There are %d available concurrency slots, meaning that up to %d agents can be active at once, including you.", maxConcurrency, maxConcurrency)
 }
 
 // rustBundledMultiAgentRole restores the trailing newline of Rust's raw-string
@@ -121,14 +128,21 @@ func resolveMultiAgentRoleInstructions(configured *string, catalog *string, bund
 	if base == "" {
 		return multiAgentRoleInstructions{}, false
 	}
-	if v2 != nil && v2.DisableNativeTools {
-		return multiAgentRoleInstructions{}, false
-	}
 	maxConcurrency, waitEnabled, exposeOverrides := 1, true, false
 	if v2 != nil {
 		maxConcurrency = v2.MaxConcurrentThreadsPerSession
 		waitEnabled = v2.WaitAgentEnabled
 		exposeOverrides = v2.ExposeSpawnAgentModelOverrides
+	}
+	if v2 != nil && v2.DisableNativeTools {
+		// Rust #62864: with the native collaboration tools hidden, the default
+		// role guidance keeps only the concurrency slot count so hosted roles
+		// still describe their admission limit. An explicit role override still
+		// wins, and empty role text still suppresses the guidance.
+		return multiAgentRoleInstructions{
+			Text:   multiAgentConcurrencyGuidance(maxConcurrency),
+			Marked: true,
+		}, true
 	}
 	return multiAgentRoleInstructions{
 		Text:   composeMultiAgentRoleBody(base, omitUpdatePlan, maxConcurrency, waitEnabled, exposeOverrides),

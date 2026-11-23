@@ -53723,11 +53723,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Disabled native tools keep the concurrency-slot guidance: bundled and catalog default roles resolve to Rust's concurrency_only text (still wrapped in multi_agent_role markers), explicit role overrides stay verbatim, and empty role text still suppresses the guidance. Tests: go test ./appserver -run 'DisabledNativeToolsKeepsConcurrencyGuidanceLikeRust|TestMultiAgentRole|TestMultiAgentMode|TestMultiAgentUsageHint' -count=1; go build ./..."
    ],
    "kind": "runtime",
    "sha": "663358f98d20a35a9661fb9fa070fe2ecd6a5b42",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Keep agent concurrency guidance when native tools are disabled (#62864)"
   },
   {
