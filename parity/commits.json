@@ -54481,11 +54481,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Cloud transcript user messages keep mention parts: cloudclient.UserMessageMention decodes the field-7 mention message (name + path) and drops a summary with a missing or blank name/path instead of flattening it into text; cloudbackend.cloudUserContent maps the part to {type:mention,name,path} in announcement order, and encodeUserInputs round-trips the same part. Tests: go test ./cloudclient ./cloudbackend -run 'Mention|UserMessageContent' -count=1"
    ],
    "kind": "runtime",
    "sha": "f1fd6c4c3570401033d25ea1a34e111b000df0d4",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Preserve mentions in cloud conversation transcripts (#63237)"
   },
   {

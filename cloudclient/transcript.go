@@ -618,9 +618,19 @@ func decodeUserMessageSummary(data []byte) (ItemSummary, bool, error) {
 				return ItemSummary{}, false, nil
 			}
 			content = append(content, UserMessageInput{Kind: UserMessageImage, Image: image, Detail: detail})
+		case 7:
+			// Rust #63237: a mention part carries a name and an app/plugin URI.
+			// A malformed mention drops the whole summary instead of being
+			// flattened into text.
+			name, hasName := optionalStringField(value, 1)
+			path, hasPath := optionalStringField(value, 2)
+			if !hasName || !hasPath || strings.TrimSpace(name) == "" || strings.TrimSpace(path) == "" {
+				return ItemSummary{}, false, nil
+			}
+			content = append(content, UserMessageInput{Kind: UserMessageMention, Mention: MentionReference{Name: name, Path: path}})
 		default:
-			// Rust keeps only text and image parts; on any other alternative the
-			// whole summary is dropped rather than flattened to text.
+			// Rust keeps text, image and mention parts; on any other alternative
+			// the whole summary is dropped rather than flattened to text.
 			return ItemSummary{}, false, nil
 		}
 	}

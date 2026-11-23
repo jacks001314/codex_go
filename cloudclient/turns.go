@@ -34,6 +34,9 @@ const (
 	UserMessageText UserMessageInputKind = iota + 1
 	// UserMessageImage is an inline data URL or an uploaded file reference.
 	UserMessageImage
+	// UserMessageMention is an app or plugin mention in a cloud transcript
+	// (Rust #63237). Mentions are accepted in history, not as new submissions.
+	UserMessageMention
 )
 
 // ImageDetail is the server-side rendering detail of one image part. The wire
@@ -92,6 +95,15 @@ type UserMessageInput struct {
 	TextElements []UserMessageTextElement
 	Image        ImageReference
 	Detail       *ImageDetail
+	// Mention carries the display name and app/plugin URI of a mention part.
+	Mention MentionReference
+}
+
+// MentionReference is one app or plugin mention the server recorded in a user
+// message (Rust UserInput::Mention).
+type MentionReference struct {
+	Name string
+	Path string
 }
 
 // AddUserMessageRequest sends text and image parts using the thread's existing
@@ -294,6 +306,12 @@ func hasImageInput(inputs []UserMessageInput) bool {
 func encodeUserInputs(inputs []UserMessageInput) []byte {
 	var out []byte
 	for _, input := range inputs {
+		if input.Kind == UserMessageMention {
+			mention := appendProtoString(nil, 1, input.Mention.Name)
+			mention = appendProtoString(mention, 2, input.Mention.Path)
+			out = appendProtoBytes(out, 1, appendProtoBytes(nil, 7, mention))
+			continue
+		}
 		if input.Kind == UserMessageImage {
 			var reference []byte
 			if input.Detail != nil {

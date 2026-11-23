@@ -203,6 +203,7 @@ func TestUserMessageContentRoundTripsTypedPartsLikeRust(t *testing.T) {
 	want := []UserMessageInput{
 		{Kind: UserMessageText, Text: "read @file now", TextElements: []UserMessageTextElement{{Start: 5, End: 10, Placeholder: &placeholder}}},
 		{Kind: UserMessageImage, Image: ImageReference{FileID: "file-1"}, Detail: &detail},
+		{Kind: UserMessageMention, Mention: MentionReference{Name: "Example App", Path: "app://connector_example"}},
 	}
 	user := appendProtoBytes(nil, 2, encodeUserInputs(want))
 	user = appendProtoString(user, 3, "user-item")
@@ -251,5 +252,40 @@ func TestUserMessageContentDropsUnsupportedPartsLikeRust(t *testing.T) {
 	user = appendProtoString(user, 3, "user-item")
 	if _, ok, err := decodeItem(protoMessage(1, user)); ok || err != nil {
 		t.Fatalf("decodeItem ok=%v err=%v, want an unsupported part to drop the item", ok, err)
+	}
+}
+
+// TestTranscriptMentionPartsLikeRust pins Rust #63237: a mention part keeps its
+// display name and app/plugin URI, while a mention missing either field drops
+// the whole summary instead of being flattened into text.
+func TestTranscriptMentionPartsLikeRust(t *testing.T) {
+	mention := appendProtoString(nil, 1, "Example App")
+	mention = appendProtoString(mention, 2, "app://connector_example")
+	content := appendProtoBytes(nil, 1, appendProtoBytes(nil, 7, mention))
+	user := appendProtoBytes(nil, 2, content)
+	user = appendProtoString(user, 3, "user-mention")
+	item, ok, err := decodeItem(protoMessage(1, user))
+	if err != nil || !ok || item.Kind != ItemUserMessage || len(item.User.Content) != 1 {
+		t.Fatalf("mention item = %#v ok=%v err=%v", item, ok, err)
+	}
+	got := item.User.Content[0]
+	if got.Kind != UserMessageMention || got.Mention.Name != "Example App" || got.Mention.Path != "app://connector_example" {
+		t.Fatalf("mention part = %#v", got)
+	}
+	if len(item.User.Text) != 0 {
+		t.Fatalf("mention was flattened into text: %#v", item.User.Text)
+	}
+
+	for name, payload := range map[string][]byte{
+		"missing path": appendProtoString(nil, 1, "Example App"),
+		"missing name": appendProtoString(nil, 2, "app://connector_example"),
+		"blank name":   append(appendProtoString(nil, 1, " "), appendProtoString(nil, 2, "app://connector_example")...),
+	} {
+		badContent := appendProtoBytes(nil, 1, appendProtoBytes(nil, 7, payload))
+		badUser := appendProtoBytes(nil, 2, badContent)
+		badUser = appendProtoString(badUser, 3, "user-bad-mention")
+		if item, ok, err := decodeItem(protoMessage(1, badUser)); err != nil || ok {
+			t.Fatalf("%s mention item = %#v ok=%v err=%v, want opaque", name, item, ok, err)
+		}
 	}
 }

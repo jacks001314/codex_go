@@ -219,6 +219,14 @@ func cloudUserContent(user cloudclient.UserMessageSummary) []any {
 	if len(user.Content) > 0 {
 		content := make([]any, 0, len(user.Content))
 		for _, part := range user.Content {
+			if part.Kind == cloudclient.UserMessageMention {
+				content = append(content, map[string]any{
+					"type": "mention",
+					"name": part.Mention.Name,
+					"path": part.Mention.Path,
+				})
+				continue
+			}
 			if part.Kind == cloudclient.UserMessageImage {
 				entry := map[string]any{"type": "image"}
 				if part.Image.FileID != "" {
