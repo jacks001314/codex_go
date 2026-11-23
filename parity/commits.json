@@ -53545,11 +53545,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Rust #62829: GuardianRetentionPolicy now carries user_record_bytes (config derives both limits from the retained_user_instructions entry budget); retained contexts admit whole user instructions, keep more than the fixed record count, apply the byte limit, and recovery keeps the original excerpt under the Elastic policy. Sender evidence is rendered at delivery with the receiver's sender_user_messages Elastic entry budget (newest user messages claim space, older evidence is marked omitted, an unfittable snapshot is dropped), while fixed mode keeps the 3,600-byte cap; SenderUserMessages.Bound only truncates replay IDs. Tests: go test ./state ./retainedctx ./rollout ./config -count=1; go test ./appserver -run 'Retained|Guardian|Sender|DeliveredAssistant|UsageAttribution' -count=1; go build ./..."
    ],
    "kind": "runtime",
    "sha": "0a0b1021f06dffda763bdafbee32e25c04cac20b",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Apply elastic Guardian budgets to retained user and sender evidence (#62829)"
   },
   {

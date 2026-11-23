@@ -509,6 +509,13 @@ func guardianRootLiveUserMessages(items []session.Item) []retainedctx.LiveUserMe
 // source. A checkpoint backup wins over a compacted copy that kept the same
 // identity, matching Rust's recovery order.
 func (r *RuntimeRouter) guardianRootExcerptLookup(record *session.Record) func(string) (string, bool) {
+	return r.guardianRootExcerptLookupWithRetention(record, false)
+}
+
+// guardianRootExcerptLookupWithRetention keeps the whole original when the
+// recorder admits Elastic user instructions (Rust #62829); otherwise it returns
+// the fixed bounded excerpt.
+func (r *RuntimeRouter) guardianRootExcerptLookupWithRetention(record *session.Record, retainsOriginal bool) func(string) (string, bool) {
 	if r == nil || record == nil {
 		return nil
 	}
@@ -527,6 +534,9 @@ func (r *RuntimeRouter) guardianRootExcerptLookup(record *session.Record) func(s
 			if strings.TrimSpace(message.Text) == "" {
 				continue
 			}
+			if retainsOriginal {
+				return message.Text, true
+			}
 			text, _ := codexctx.GuardianTruncateText(message.Text, guardianMaxRootMessageTokens)
 			return text, true
 		}
@@ -534,6 +544,9 @@ func (r *RuntimeRouter) guardianRootExcerptLookup(record *session.Record) func(s
 			item := &items[index]
 			if strings.TrimSpace(item.ID) != id || !guardianRootItemIsUserMessage(item) {
 				continue
+			}
+			if retainsOriginal {
+				return guardianRootMessageText(item), true
 			}
 			text, _ := codexctx.GuardianTruncateText(guardianRootMessageText(item), guardianMaxRootMessageTokens)
 			return text, true

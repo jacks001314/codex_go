@@ -8,6 +8,9 @@ type GuardianRetentionPolicy struct {
 	// AssistantRecordBytes bounds one retained assistant record. Absent means
 	// the fixed 16 KiB record limit applies.
 	AssistantRecordBytes *int `json:"assistant_record_bytes,omitempty"`
+	// UserRecordBytes bounds one retained user instruction (Rust #62829).
+	// Absent keeps the fixed limit and the fixed family count.
+	UserRecordBytes *int `json:"user_record_bytes,omitempty"`
 }
 
 // Equal reports whether two policies resolve to the same recorder limits.
@@ -15,7 +18,8 @@ func (p *GuardianRetentionPolicy) Equal(other *GuardianRetentionPolicy) bool {
 	if p == nil || other == nil {
 		return p == nil && other == nil
 	}
-	return intPtrEqual(p.AssistantRecordBytes, other.AssistantRecordBytes)
+	return intPtrEqual(p.AssistantRecordBytes, other.AssistantRecordBytes) &&
+		intPtrEqual(p.UserRecordBytes, other.UserRecordBytes)
 }
 
 func intPtrEqual(left, right *int) bool {
@@ -34,6 +38,10 @@ func (p *GuardianRetentionPolicy) Clone() *GuardianRetentionPolicy {
 	if p.AssistantRecordBytes != nil {
 		value := *p.AssistantRecordBytes
 		cloned.AssistantRecordBytes = &value
+	}
+	if p.UserRecordBytes != nil {
+		value := *p.UserRecordBytes
+		cloned.UserRecordBytes = &value
 	}
 	return &cloned
 }

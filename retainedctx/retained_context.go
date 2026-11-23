@@ -657,7 +657,7 @@ func (c *RetainedContext) RetainsOriginalAssistantMessages() bool {
 // RetainsOriginalUserMessages reports whether user instructions have a
 // configured Elastic entry limit.
 func (c *RetainedContext) RetainsOriginalUserMessages() bool {
-	return false
+	return c != nil && c.messageRetention != nil && c.messageRetention.UserRecordBytes != nil
 }
 
 // ElasticAssistantRecordBytes returns the configured per-record limit, if any.
@@ -678,6 +678,9 @@ func (c *RetainedContext) AssistantRecordBytes() int {
 
 // UserRecordBytes returns the effective user instruction record limit.
 func (c *RetainedContext) UserRecordBytes() int {
+	if c != nil && c.messageRetention != nil && c.messageRetention.UserRecordBytes != nil {
+		return *c.messageRetention.UserRecordBytes
+	}
 	return MaxRecordBytes
 }
 

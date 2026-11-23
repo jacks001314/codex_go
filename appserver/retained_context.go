@@ -159,7 +159,7 @@ func (r *RuntimeRouter) restoreRetainedContextCheckpoint(threadID string) *retai
 	var excerptForID func(string) (string, bool)
 	if err == nil && record != nil {
 		surviving = survivingRetainedMetadata(record.Items)
-		excerptForID = r.guardianRootExcerptLookup(record)
+		excerptForID = r.guardianRootExcerptLookupWithRetention(record, context.RetainsOriginalUserMessages())
 	}
 	context.Restore(checkpoint, surviving)
 	if excerptForID != nil {
@@ -412,11 +412,18 @@ func retainedRecordForSessionItemWithContext(item *session.Item, index int, meta
 			message.Complete = len(text) <= utils.ApproxBytesForTokens(guardianMaxRootMessageTokens)
 		}
 	} else {
-		// Rust bounds every retained original, and an instruction is only complete
-		// when the harness classified each content entry as genuine user content.
-		message.Text, _ = codexctx.GuardianTruncateText(text, guardianMaxRootMessageTokens)
-		message.Complete = retainedInstructionComplete(responseItem, hasResponseItem) &&
-			len(text) <= utils.ApproxBytesForTokens(guardianMaxRootMessageTokens)
+		if context != nil && context.RetainsOriginalUserMessages() {
+			// Rust #62829: an Elastic entry limit admits the whole instruction;
+			// the recorder applies the configured byte limit.
+			message.Text = text
+			message.Complete = retainedInstructionComplete(responseItem, hasResponseItem)
+		} else {
+			// Rust bounds every retained original, and an instruction is only complete
+			// when the harness classified each content entry as genuine user content.
+			message.Text, _ = codexctx.GuardianTruncateText(text, guardianMaxRootMessageTokens)
+			message.Complete = retainedInstructionComplete(responseItem, hasResponseItem) &&
+				len(text) <= utils.ApproxBytesForTokens(guardianMaxRootMessageTokens)
+		}
 		// Rust's `UserInputOrigin::from_message`: only a user message whose
 		// classifications are exactly the heartbeat kind coalesces as one.
 		role := strings.TrimSpace(item.Role)
@@ -965,10 +972,30 @@ func (r *RuntimeRouter) captureSenderUserMessages(item *session.Item, receiverTh
 	snapshot := &retainedctx.SenderUserMessages{
 		ReceiverTurnID:    receiverTurnID,
 		ReceiverMessageID: deliveryID,
-		Text:              fragment.Render(),
+		Text:              r.senderEvidenceText(receiverThreadID, fragment),
 	}
 	snapshot.Bound()
 	return snapshot, true
+}
+
+// senderEvidenceText renders one sender snapshot at delivery (Rust #62829):
+// an Elastic sync budget decides how many exchanges fit, while the fixed window
+// keeps the 3,600-byte cap and becomes a host omission notice beyond it.
+func (r *RuntimeRouter) senderEvidenceText(receiverThreadID string, fragment state.GuardianSenderMessages) string {
+	if r != nil && r.services.Config != nil {
+		if record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(receiverThreadID)), false, false); err == nil && record != nil {
+			if cfg, cfgErr := r.configForThreadRecord(record, threadRecordConfigOverrides(record)); cfgErr == nil && cfg != nil {
+				if budget, budgetErr := cfg.GuardianSyncElasticBudget(); budgetErr == nil && budget != nil {
+					return fragment.RenderElastic(budget)
+				}
+			}
+		}
+	}
+	text := fragment.Render()
+	if len(text) > state.GuardianSenderMessagesFixedContextBytes {
+		return retainedctx.SenderContextExceedsBudgetNotice
+	}
+	return text
 }
 
 // senderContextEvidence resolves one delivery's sender evidence the way Rust's
@@ -1085,9 +1112,9 @@ func senderContextExchanges(context *retainedctx.RetainedContext) []state.Guardi
 			assistant = entry.Entry.AssistantMessage
 		}
 	}
-	if len(exchanges) > senderContextMessageLimit {
-		exchanges = exchanges[len(exchanges)-senderContextMessageLimit:]
-	}
+	// Rust #62829 leaves the exchange count to the renderer: the fixed window
+	// takes the newest three, while an Elastic snapshot fits what its budget
+	// admits.
 	return exchanges
 }
 

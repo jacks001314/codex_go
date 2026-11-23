@@ -61,7 +61,7 @@ func (c *Config) GuardianRetentionPolicy() *retainedctx.GuardianRetentionPolicy 
 	}
 	entryTokens := budget.SectionLimits(state.GuardianElasticSectionRetainedUserInstructions).MaxSectionEntryTokens
 	recordBytes := utils.ApproxBytesForTokens(entryTokens)
-	return &retainedctx.GuardianRetentionPolicy{AssistantRecordBytes: &recordBytes}
+	return &retainedctx.GuardianRetentionPolicy{AssistantRecordBytes: &recordBytes, UserRecordBytes: &recordBytes}
 }
 
 // GuardianContextBudgeting returns the capture and request policy selected by

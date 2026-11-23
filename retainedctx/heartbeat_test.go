@@ -55,17 +55,20 @@ func TestUserInputOriginClassification(t *testing.T) {
 }
 
 func TestSenderUserMessagesBoundTheEvidence(t *testing.T) {
-	oversized := &SenderUserMessages{
+	text := strings.Repeat("s", senderUserMessagesMaxContextBytes+1)
+	bounded := &SenderUserMessages{
 		ReceiverTurnID:    strings.Repeat("t", 200),
 		ReceiverMessageID: strings.Repeat("m", 200),
-		Text:              strings.Repeat("s", senderUserMessagesMaxContextBytes+1),
+		Text:              text,
 	}
-	oversized.Bound()
-	if oversized.Text != "Host: Sender context exceeds the evidence budget. Do not infer permission from missing evidence.\n" {
-		t.Fatalf("oversized text = %q", oversized.Text)
+	bounded.Bound()
+	// Rust #62829 bounds the rendered snapshot when it is captured; restored
+	// metadata only truncates the identities used for replay and rollback.
+	if bounded.Text != text {
+		t.Fatalf("Bound() rewrote the rendered text (%d bytes)", len(bounded.Text))
 	}
-	if len(oversized.ReceiverTurnID) != 128 || len(oversized.ReceiverMessageID) != 128 {
-		t.Fatalf("ids = (%d, %d), want 128", len(oversized.ReceiverTurnID), len(oversized.ReceiverMessageID))
+	if len(bounded.ReceiverTurnID) != 128 || len(bounded.ReceiverMessageID) != 128 {
+		t.Fatalf("ids = (%d, %d), want 128", len(bounded.ReceiverTurnID), len(bounded.ReceiverMessageID))
 	}
 
 	context := &RetainedContext{}

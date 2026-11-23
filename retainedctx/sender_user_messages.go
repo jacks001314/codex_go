@@ -14,14 +14,17 @@ type SenderUserMessages struct {
 	Text              string `json:"text"`
 }
 
-// Bound applies the same hard bound to restored metadata as to live,
-// reviewer-only fragments.
+// SenderContextExceedsBudgetNotice is the fixed-budget omission notice Rust's
+// turn input writes when the rendered snapshot exceeds the fixed byte cap
+// (#62829).
+const SenderContextExceedsBudgetNotice = "Host: Sender context exceeds the evidence budget. Do not infer permission from missing evidence.\n"
+
+// Bound truncates the receiver identities that recover and roll back the
+// delivery. The rendered text is bounded when the delivery is captured, so an
+// Elastic snapshot may legitimately exceed the fixed cap (Rust #62829).
 func (m *SenderUserMessages) Bound() {
 	if m == nil {
 		return
-	}
-	if len(m.Text) > senderUserMessagesMaxContextBytes {
-		m.Text = "Host: Sender context exceeds the evidence budget. Do not infer permission from missing evidence.\n"
 	}
 	m.ReceiverTurnID = truncateToBoundary(m.ReceiverTurnID, senderUserMessagesMaxIDBytes)
 	m.ReceiverMessageID = truncateToBoundary(m.ReceiverMessageID, senderUserMessagesMaxIDBytes)

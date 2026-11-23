@@ -38,6 +38,9 @@ max_section_entry_tokens = 250
 	if policy == nil || policy.AssistantRecordBytes == nil || *policy.AssistantRecordBytes != wantBytes {
 		t.Fatalf("GuardianRetentionPolicy() = %#v, want assistant_record_bytes %d", policy, wantBytes)
 	}
+	if policy.UserRecordBytes == nil || *policy.UserRecordBytes != wantBytes {
+		t.Fatalf("GuardianRetentionPolicy() user_record_bytes = %#v, want %d", policy.UserRecordBytes, wantBytes)
+	}
 
 	defaulted := load(t, `[features.guardianv2]
 sync_elastic_budgeting = true

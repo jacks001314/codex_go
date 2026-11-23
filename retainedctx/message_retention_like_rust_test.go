@@ -137,3 +137,40 @@ func TestMessageRetentionRoundTripsAndSurvivesRestoreLikeRust(t *testing.T) {
 		t.Fatalf("restore lost the checkpoint's retained evidence: %#v", live.OrderedEntries())
 	}
 }
+
+// Rust #62829: the configured retained-instruction entry limit admits whole user
+// messages and keeps more than the fixed record count, with the byte limit still
+// producing an incomplete marker beyond it.
+func TestUserRecordRetentionKeepsWholeInstructionsLikeRust(t *testing.T) {
+	limit := 30_000
+	context := (&RetainedContext{}).WithRetention(&MessageRetention{
+		ThreadID:                "thread-1",
+		GuardianRetentionPolicy: GuardianRetentionPolicy{AssistantRecordBytes: &limit, UserRecordBytes: &limit},
+	})
+	if !context.RetainsOriginalUserMessages() {
+		t.Fatal("retention did not enable whole user instructions")
+	}
+	if got := context.UserRecordBytes(); got != limit {
+		t.Fatalf("UserRecordBytes() = %d, want %d", got, limit)
+	}
+	long := strings.Repeat("u", 12_000)
+	context.RecordUserMessage(RetainedUserMessage{Text: long, Complete: true, TurnID: "turn-1"}, LocalInputSource(uintPtr(0)))
+	entries := context.OrderedEntries()
+	if len(entries) != 1 || entries[0].Entry.UserMessage == nil || entries[0].Entry.UserMessage.Text != long {
+		t.Fatalf("retained instruction = %#v, want the whole %d-byte message", entries, len(long))
+	}
+	for i := 1; i <= MaxFamilyRecords; i++ {
+		order := uint64(i)
+		context.RecordUserMessage(RetainedUserMessage{Text: "instruction", Complete: true, TurnID: "turn"}, LocalInputSource(&order))
+	}
+	if got := len(context.userMessages); got != MaxFamilyRecords+1 {
+		t.Fatalf("user family = %d records, want %d", got, MaxFamilyRecords+1)
+	}
+	overLimit := strings.Repeat("v", limit+1)
+	context.RecordUserMessage(RetainedUserMessage{Text: overLimit, Complete: true, TurnID: "turn-over"}, LocalInputSource(uintPtr(99)))
+	entries = context.OrderedEntries()
+	last := entries[len(entries)-1].Entry.UserMessage
+	if last == nil || last.Text != "" || last.Complete {
+		t.Fatalf("oversized instruction = %#v, want an incomplete marker", last)
+	}
+}
