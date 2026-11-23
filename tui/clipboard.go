@@ -41,6 +41,9 @@ type ClipboardEnvironment struct {
 	// ScreenSession marks GNU screen detected through STY while tmux is absent
 	// (Rust #58716). Screen needs its own DCS passthrough chunking.
 	ScreenSession bool
+	// RexSession marks the Rex terminal (Rust #62931). A Rex client can attach
+	// after Codex starts, so a successful native copy still forwards over OSC 52.
+	RexSession bool
 }
 
 func ClipboardCopyOrder(environment ClipboardEnvironment) []ClipboardBackend {
@@ -79,6 +82,8 @@ func ClipboardEnvironmentFromMap(env map[string]string, wslSession bool) Clipboa
 		// Rust #58716: GNU screen advertises itself through STY; tmux keeps
 		// precedence when both are set.
 		ScreenSession: !tmuxSession && envValuePresent(env, "STY"),
+		// Rust #62931: Rex is recognized through the shared terminal detection.
+		RexSession: clipboardTerminalIsRex(env),
 	}
 }
 
@@ -87,7 +92,17 @@ func ClipboardEnvironmentFromMap(env map[string]string, wslSession bool) Clipboa
 // gain clients after Codex starts, so tmux and Herdr forward even without
 // inherited SSH variables (Rust #52557).
 func ClipboardForwardingEnabled(environment ClipboardEnvironment) bool {
-	return environment.TmuxSession || environment.HerdrSession || environment.SSHSession
+	return environment.TmuxSession || environment.HerdrSession || environment.SSHSession || environment.RexSession
+}
+
+// clipboardTerminalIsRex mirrors the shared terminal detection's Rex match
+// (Rust terminal_detection::TerminalName::Rex, #62931): TERM_PROGRAM names the
+// terminal directly and TERM carries it in the xterm-<name> spelling.
+func clipboardTerminalIsRex(env map[string]string) bool {
+	if strings.EqualFold(strings.TrimSpace(env["TERM_PROGRAM"]), "rex") {
+		return true
+	}
+	return strings.Contains(strings.ToLower(env["TERM"]), "rex")
 }
 
 func CopyToClipboardWith(

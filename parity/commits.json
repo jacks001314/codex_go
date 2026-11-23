@@ -54079,11 +54079,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1268: partial - Rust uses shared terminal detection to force OSC 52 forwarding in Rex even when the native clipboard write succeeds, keeping tmux/Herdr/SSH routing and the Windows probe as fallbacks. Go confirms Rex in pets image protocol detection and markdown link styling but its ClipboardEnvironment (tui/clipboard.go) has no Rex flag: ClipboardCopyOrder returns native-first (or WSL/tmux variants) and only appends OSC 52 as a fallback, so a Rex client attached after the copy never receives the text."
+    "Round 1269: tui/clipboard.go now recognizes Rex through the same environment signals as the shared terminal detection (TERM_PROGRAM rex, or TERM containing rex) and carries it as ClipboardEnvironment.RexSession; ClipboardForwardingEnabled includes it, so CopyToClipboardWith forwards over OSC 52 after a native copy succeeds, exactly Rust's ClipboardCopyMode::Osc52 for Rex (#62931). app/remote_tui.go builds the environment through ClipboardEnvironmentFromMap, so the flag reaches the real copy path. tmux keeps its wrapped passthrough, Herdr and SSH keep forwarding, and a plain terminal still uses OSC 52 only as a fallback.",
+    "Round 1269: the VS Code half of the commit is behavior-preserving in Go: keyboard enhancement already consults shell.TerminalVSCode plus the Windows-side DetectVscodeTerminal probe as the fallback (tui/tui/keyboard_modes.go KeyboardEnhancementDisabledFor), which is what Rust's shared terminal_info() call now yields. Tests: tui/clipboard_rex_like_rust_test.go (detection spellings, forwarding predicate, one native copy plus one OSC 52 forward), go test ./tui -count=1, go build ./..., go vet ./tui."
    ],
    "kind": "runtime",
    "sha": "556901ba7218b9862827d00142a52f19746b1a18",
-   "status": "partial",
+   "status": "complete",
    "subject": "Forward TUI clipboard copies to Rex clients (#62931)"
   },
   {
