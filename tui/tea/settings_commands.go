@@ -601,6 +601,12 @@ func (m *Model) applyLocalSettingsValues(result SettingsWriteResult) {
 	if result.MultiAgentV2MaxConcurrentThreads > 0 {
 		m.multiAgentV2MaxConcurrentThreads = result.MultiAgentV2MaxConcurrentThreads
 	}
+	// Rust #62904/#62905: the effective reasoning summary travels with the
+	// reloaded settings so the /config row and turn/start agree on it.
+	if result.ReasoningSummaryAvailable {
+		m.State.ReasoningSummary = strings.TrimSpace(result.ReasoningSummary)
+		m.State.ReasoningSummaryAvailable = true
+	}
 	if result.UseMemories != nil {
 		m.useMemories = *result.UseMemories
 	}

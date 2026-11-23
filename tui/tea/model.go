@@ -453,6 +453,12 @@ type SettingsWriteResult struct {
 	// bootstrap thread is persistent, so Rust's `!config.ephemeral` guard
 	// always holds here.
 	DaybreakDefault bool
+	// ReasoningSummary is the connected app server's effective
+	// `model_reasoning_summary` (Rust #62904/#62905 config/read). An empty
+	// string means unset; ReasoningSummaryAvailable reports whether the read
+	// produced a value at all.
+	ReasoningSummary          string
+	ReasoningSummaryAvailable bool
 	// AnimationsEnabled is the effective `tui.animations` value after the host
 	// motion preference is applied (Rust #44666). Nil preserves the current
 	// value.
@@ -1885,12 +1891,17 @@ type Options struct {
 	// DaybreakDefault seeds a new thread's Daybreak preference (Rust
 	// `params.daybreak_enabled = config.daybreak_enabled && !ephemeral`,
 	// #49861). The live value is still gated by the cli_daybreak feature.
-	DaybreakDefault         bool
-	Personality             chatwidget.Personality
-	HideRateLimitModelNudge *bool
-	TUITheme                string
-	TUIPet                  string
-	CodexHome               string
+	DaybreakDefault bool
+	// ReasoningSummary / ReasoningSummaryAvailable seed the /config picker
+	// with the connected app server's effective `model_reasoning_summary`
+	// (Rust #62905 config_panel_reasoning_summary).
+	ReasoningSummary          string
+	ReasoningSummaryAvailable bool
+	Personality               chatwidget.Personality
+	HideRateLimitModelNudge   *bool
+	TUITheme                  string
+	TUIPet                    string
+	CodexHome                 string
 	// HistoryPersistence is the resolved `history.persistence` value
 	// (`save-all`/`none`). Empty keeps Rust's default of persisting history.
 	HistoryPersistence string
@@ -3633,6 +3644,12 @@ func NewModel(state *codextui.State, options Options) *Model {
 	// server connection (remote server or local background daemon) owns the model
 	// settings; the app attaches that connection kind to the tea options
 	// (app/remote_tui.go sets LocalDaemonSession / RemoteAppServer).
+	// Rust #62905: the /config reasoning-summary row renders the connected
+	// app server's effective value, which the host seeds from config/read.
+	if summary := strings.TrimSpace(options.ReasoningSummary); summary != "" {
+		state.ReasoningSummary = summary
+	}
+	state.ReasoningSummaryAvailable = state.ReasoningSummaryAvailable || options.ReasoningSummaryAvailable
 	state.RemoteConnection = options.LocalDaemonSession || options.RemoteAppServer
 	if state.RemoteConnection {
 		state.ServerConnection = &codextui.ServerConnectionStatus{
@@ -3731,9 +3748,11 @@ func NewModel(state *codextui.State, options Options) *Model {
 		presetClearReadOnly:          cloneBoolMapTea(options.PresetClearReadOnly),
 		localSettings: LocalSettings{
 			Tui: SettingsWriteResult{
-				QuickDials:          cloneTUIPresets(options.QuickDials),
-				PresetSetReadOnly:   cloneBoolMapTea(options.PresetSetReadOnly),
-				PresetClearReadOnly: cloneBoolMapTea(options.PresetClearReadOnly),
+				ReasoningSummary:          strings.TrimSpace(options.ReasoningSummary),
+				ReasoningSummaryAvailable: options.ReasoningSummaryAvailable,
+				QuickDials:                cloneTUIPresets(options.QuickDials),
+				PresetSetReadOnly:         cloneBoolMapTea(options.PresetSetReadOnly),
+				PresetClearReadOnly:       cloneBoolMapTea(options.PresetClearReadOnly),
 			},
 			AlternateScreen: options.NoAltScreen,
 		},

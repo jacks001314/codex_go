@@ -177,13 +177,19 @@ type State struct {
 	// ModelDisplayName is the catalog display label for Model. Only display
 	// surfaces use it; selection, persistence, and /copy keep the model id
 	// (Rust #46503/#61350 status_model_display_name).
-	ModelDisplayName        string
-	ReasoningEffort         string
-	PlanMode                bool
-	PlanModeReasoningEffort string
-	Personality             string
-	Provider                string
-	ApprovalPolicy          string
+	ModelDisplayName string
+	ReasoningEffort  string
+	// ReasoningSummary is the connected app server's effective
+	// `model_reasoning_summary` for new chats (Rust #62904/#62905). An empty
+	// value means the setting is unset; ReasoningSummaryAvailable separates
+	// that from "the server never reported a value".
+	ReasoningSummary          string
+	ReasoningSummaryAvailable bool
+	PlanMode                  bool
+	PlanModeReasoningEffort   string
+	Personality               string
+	Provider                  string
+	ApprovalPolicy            string
 	// ApprovalsReviewer is the thread's reviewer ("user", "auto_review", ...).
 	// turn/start carries it so a preset such as "Approve for me" survives the
 	// next turn instead of falling back to the user reviewer.

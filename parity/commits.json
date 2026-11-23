@@ -53936,11 +53936,15 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "app/reasoning_summary_defaults.go mirrors app_server_session::reasoning_summary_from_config: explicit model_reasoning_summary wins, OpenAI provider defaults to auto; remoteTurnReasoningSummary applies launch > connected-server effective > auto precedence.",
+    "app/remote_tui.go turn/start (client-owned params) now sets params.Summary; remoteThreadStartParamsForMode adds model_reasoning_summary to embedded thread/start config so the WebSocket prewarm matches the first turn (applyEmbeddedPrewarmReasoningSummary).",
+    "app/remote_tui_managed_defaults.go applyServerEffectiveLaunchDefaults overlays the server effective model_reasoning_summary when the launch did not set one (Rust overlay_reasoning_summary).",
+    "app/reasoning_summary_defaults.go remoteSettingsReadCWD + interactiveRemoteReadSettings(cwd) read effective new-chat settings at the resolved startup cwd.",
+    "Tests: app/reasoning_summary_defaults_like_rust_test.go (values/auto fallback, launch precedence, embedded prewarm vs remote, turn/start summary, startup cwd); go test ./app ./tui/... ./appserver -run ReasoningSummary pass; go build ./... passes."
    ],
    "kind": "runtime",
    "sha": "553c7f8ea63a921308b4b30ddaaef7730fd22bba",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Use automatic reasoning summaries by default in the TUI (#62904)"
   },
   {
@@ -53948,11 +53952,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "tui/tea/config_panel.go Sessions group adds \"Reasoning summary\" (Auto/Concise/Detailed/None picker) with Auto (default) for the unset value and Unavailable when the connected server never reported one; the picker saves model_reasoning_summary through the existing ConfigBatchWrite settings path.",
+    "tui/tea/config_panel.go finishConfigPanelSave reports Rust #62905 notices \"Saved - applies to new chats\" and \"Saved - overridden by config or launch setting\"; tui/state.go + tui/tea SettingsWriteResult/LocalSettings/Options carry the effective value from app/interactive.go interactiveSettingsFromConfig (config/read for remote).",
+    "Tests: tui/tea/config_panel_reasoning_summary_like_rust_test.go (row value, unavailable notice, picker labels/initial selection, explicit auto save, both save notices); app settings-read test; go test ./tui/... ./app pass."
    ],
    "kind": "runtime",
    "sha": "f63f8b9bc663eaf4dfd606e64afd61c5d0e1b249",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Add a reasoning summary picker to `/config` (#62905)"
   },
   {
@@ -53987,11 +53993,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "interactiveRemoteReadSettings now takes the startup_config_cwd equivalent (remoteSettingsReadCWD): remote config/read prefers --cd, then the resumed thread cwd, while Cloud ignores the resumed cwd; the /config reasoning-summary refresh and the initial settings load both pass it.",
+    "The rollout snapshot contract (reasoning.summary=auto and stream_options.reasoning_summary_delivery=sequential_cutoff) is already carried by model/responses_agent.go responsesStreamOptions and the catalog default ReasoningSummary applied in responses_agent.go; covered by model/responses_agent_test.go.",
+    "Tests: app/reasoning_summary_defaults_like_rust_test.go TestRemoteSettingsReadCWDMirrorsStartupConfigCwdLikeRust; go test ./app ./tui/... ./appserver -run ReasoningSummary pass."
    ],
    "kind": "runtime",
    "sha": "43d8b78241444f7268e75c87ca0f5f7d8138cef7",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Fix reasoning summary config lookup and request snapshot (#62932)"
   },
   {

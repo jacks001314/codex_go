@@ -151,6 +151,22 @@ func applyServerEffectiveLaunchDefaults(
 			params.Config["model_reasoning_effort"] = effort
 		}
 	}
+	// Rust #62904 overlay_reasoning_summary: a launch without an explicit
+	// summary adopts the app server's effective value.
+	if !config.HasLaunchSetting(layers, cliKVOverrides, "model_reasoning_summary") {
+		summary := ""
+		if effective != nil {
+			if value, ok := effective["model_reasoning_summary"].(string); ok {
+				summary = strings.ToLower(strings.TrimSpace(value))
+			}
+		}
+		if summary != "" {
+			if params.Config == nil {
+				params.Config = map[string]any{}
+			}
+			params.Config["model_reasoning_summary"] = summary
+		}
+	}
 }
 
 // serverCatalogDefaultModel resolves the server model catalog's default model

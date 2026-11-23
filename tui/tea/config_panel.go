@@ -63,6 +63,7 @@ const (
 	configActionSessionPicker
 	configActionResumeCWD
 	configActionModelProviders
+	configActionReasoningSummary
 	configActionCopyOnSelect
 	configActionCopyOnSelectClear
 	configActionMouseScrollSpeed
@@ -205,6 +206,13 @@ var configPanelRows = []configPanelRow{
 		description: "Browse providers configured on the connected app server",
 		keywords:    "provider gateway endpoint model default",
 		action:      configActionModelProviders,
+	},
+	{
+		section:     configSectionSessions,
+		label:       "Reasoning summary",
+		description: "Choose the reasoning summary style for new chats on the connected server",
+		keywords:    "model thinking concise detailed none auto",
+		action:      configActionReasoningSummary,
 	},
 	{
 		section:     configSectionTextSelection,
@@ -402,6 +410,11 @@ func (m *Model) configPanelValue(row configPanelRow) string {
 		return "Dense \u203a"
 	case configActionModelProviders:
 		return "Browse \u203a"
+	case configActionReasoningSummary:
+		if !m.reasoningSummaryAvailable() {
+			return "Unavailable"
+		}
+		return configReasoningSummaryLabel(m.reasoningSummaryValue()) + " \u203a"
 	case configActionResumeCWD:
 		switch normalizeResumeCWD(m.resumeCWD) {
 		case "current":
@@ -846,6 +859,16 @@ func (m *Model) activateConfigRow(row configPanelRow) bubbletea.Cmd {
 	case configActionModelProviders:
 		// Rust opens the browsing picker instead of changing the provider.
 		return m.openConfigProviderBrowser()
+	case configActionReasoningSummary:
+		// Rust #62905: the picker needs the connected server's effective value;
+		// without it the row reports the reconnect/update hint instead.
+		if !m.reasoningSummaryAvailable() {
+			m.notice = "Reasoning summary is unavailable."
+			m.setConfigPanelNotice(m.notice)
+			return nil
+		}
+		m.openConfigPanelChoice(row)
+		return nil
 	case configActionNotifyCondition, configActionRightClickPaste, configActionSessionPicker,
 		configActionResumeCWD, configActionCopyOnSelect, configActionMouseScrollSpeed:
 		// Rust opens a child picker for these editors instead of cycling the
@@ -907,6 +930,22 @@ func (m *Model) openConfigPanelChoice(row configPanelRow) {
 		add("Auto (default)", "auto", current == "auto")
 		add("On", "on", current == "on")
 		add("Off", "off", current == "off")
+	case configActionReasoningSummary:
+		// Rust #62905 render::reasoning_summary: the unset value shows as
+		// "Auto (default)" while Auto itself stays an explicit choice.
+		choice.subtitle = "Choose the reasoning summary style for new chats"
+		configured := m.reasoningSummaryValue()
+		current := configured
+		if current == "" {
+			current = "auto"
+		}
+		for _, value := range []string{"auto", "concise", "detailed", "none"} {
+			label := configReasoningSummaryLabel(value)
+			if value == current {
+				label = configReasoningSummaryLabel(configured)
+			}
+			add(label, value, value == current)
+		}
 	case configActionMouseScrollSpeed:
 		choice.subtitle = "Choose a mouse-wheel speed for the fullscreen transcript"
 		current := codextui.NormalizeMouseScrollSpeed(&m.mouseScrollSpeed)
@@ -965,6 +1004,13 @@ func (m *Model) applyConfigPanelChoiceItem(action configPanelAction, item config
 	case configActionRightClickPaste:
 		m.setRightClickPasteMode(item.value)
 		return m.saveConfigPanelPreference("tui.right_click_paste", item.value)
+	case configActionReasoningSummary:
+		// Rust #62905: save the explicit choice (including Auto) through the
+		// connected app server for new chats.
+		if m.State != nil {
+			m.State.ReasoningSummary = strings.TrimSpace(item.value)
+		}
+		return m.saveConfigPanelPreference("model_reasoning_summary", strings.TrimSpace(item.value))
 	case configActionMouseScrollSpeed:
 		speed, err := strconv.ParseFloat(strings.TrimSpace(item.value), 64)
 		if err != nil {
@@ -1172,6 +1218,39 @@ func normalizeResumeCWD(value string) string {
 	}
 }
 
+// reasoningSummaryAvailable reports whether the connected app server supplied
+// its effective `model_reasoning_summary` (Rust #62905
+// config_panel_reasoning_summary). A false value renders the row unavailable.
+func (m *Model) reasoningSummaryAvailable() bool {
+	return m != nil && m.State != nil && m.State.ReasoningSummaryAvailable
+}
+
+// reasoningSummaryValue returns the effective reasoning summary for new chats;
+// an empty string means the setting is unset (Rust's `None`).
+func (m *Model) reasoningSummaryValue() string {
+	if m == nil || m.State == nil {
+		return ""
+	}
+	return strings.TrimSpace(m.State.ReasoningSummary)
+}
+
+// configReasoningSummaryLabel mirrors Rust's reasoning_summary_label: an unset
+// setting reads "Auto (default)", while an explicit Auto reads "Auto".
+func configReasoningSummaryLabel(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "auto":
+		return "Auto"
+	case "concise":
+		return "Concise"
+	case "detailed":
+		return "Detailed"
+	case "none":
+		return "None"
+	default:
+		return "Auto (default)"
+	}
+}
+
 // resumeCWDCurrentUnavailable reports Rust's ResumeCurrentAvailability for an
 // explicit remote workspace without a --cd override.
 func (m *Model) resumeCWDCurrentUnavailable() bool {
@@ -1216,6 +1295,16 @@ func (m *Model) finishConfigPanelSave(result SettingsWriteResult) (string, bool)
 	if pending == nil {
 		return "", false
 	}
+	if pending.keyPath == "model_reasoning_summary" {
+		// Rust #62905 update_reasoning_summary: the picker reports whether the
+		// saved choice survived as the effective value.
+		requested, _ := pending.value.(string)
+		requested = strings.TrimSpace(requested)
+		if result.ReasoningSummaryAvailable && strings.EqualFold(strings.TrimSpace(result.ReasoningSummary), requested) {
+			return "Saved · applies to new chats", true
+		}
+		return "Saved · overridden by config or launch setting", true
+	}
 	notice := ""
 	if effective, ok := configPanelEffectiveValue(result, pending.keyPath); ok && !reflect.DeepEqual(effective, pending.value) {
 		notice = "Saved · overridden by config or system setting"
@@ -1230,6 +1319,10 @@ func (m *Model) finishConfigPanelSave(result SettingsWriteResult) (string, bool)
 // mismatch, because partial results preserve the live value.
 func configPanelEffectiveValue(result SettingsWriteResult, keyPath string) (any, bool) {
 	switch keyPath {
+	case "model_reasoning_summary":
+		if result.ReasoningSummaryAvailable {
+			return strings.TrimSpace(result.ReasoningSummary), true
+		}
 	case "tui.animations":
 		if result.AnimationsEnabled != nil {
 			return *result.AnimationsEnabled, true

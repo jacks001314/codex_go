@@ -1884,13 +1884,17 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		MultiAgentV2MaxConcurrentThreads: settings.MultiAgentV2MaxConcurrentThreads,
 		// Rust #49861: a fresh session starts from the configured Daybreak
 		// preference before any thread/resume reports the stored one.
-		DaybreakDefault:     settings.DaybreakDefault,
-		UseMemories:         settings.UseMemories,
-		GenerateMemories:    settings.GenerateMemories,
-		FeedbackEnabled:     settings.FeedbackEnabled,
-		DisablePasteBurst:   settings.DisablePasteBurst,
-		ModelPickerOptions:  interactiveModelPickerOptions(root),
-		ServiceTierCommands: interactiveServiceTierCommands(state.Model),
+		DaybreakDefault: settings.DaybreakDefault,
+		// Rust #62905: the /config reasoning-summary row shows the connected
+		// app server's effective value.
+		ReasoningSummary:          settings.ReasoningSummary,
+		ReasoningSummaryAvailable: settings.ReasoningSummaryAvailable,
+		UseMemories:               settings.UseMemories,
+		GenerateMemories:          settings.GenerateMemories,
+		FeedbackEnabled:           settings.FeedbackEnabled,
+		DisablePasteBurst:         settings.DisablePasteBurst,
+		ModelPickerOptions:        interactiveModelPickerOptions(root),
+		ServiceTierCommands:       interactiveServiceTierCommands(state.Model),
 		// Rust #51253: the server requirements the model catalog is constrained
 		// with, read by interactiveLoadSettings alongside the other preferences.
 		ServiceTierRequirements: settings.ServiceTierRequirements,
@@ -3018,6 +3022,12 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 			maxConcurrentThreads = v2.MaxConcurrentThreadsPerSession
 		}
 	}
+	// Rust #62905: the /config reasoning-summary row renders the effective
+	// model_reasoning_summary (an absent key is a real "Auto (default)").
+	reasoningSummary := ""
+	if raw, ok := values["model_reasoning_summary"].(string); ok {
+		reasoningSummary = strings.ToLower(strings.TrimSpace(raw))
+	}
 	userMarketplaces, gitMarketplaces := interactivePluginMarketplacesFromConfig(values)
 	// A missing `tui.presets` table is a real empty set, not "keep the live
 	// presets". SettingsWriteResult uses nil for the latter, so normalize the
@@ -3037,6 +3047,8 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		// (Config::daybreak_enabled). The TUI's bootstrap thread is persistent,
 		// so Rust's `!config.ephemeral` guard always holds here.
 		DaybreakDefault:            loaded.DaybreakEnabled(),
+		ReasoningSummary:           reasoningSummary,
+		ReasoningSummaryAvailable:  true,
 		UseMemories:                interactiveMemoryBoolFromConfig(values, "use_memories"),
 		GenerateMemories:           interactiveMemoryBoolFromConfig(values, "generate_memories"),
 		FeedbackEnabled:            interactiveFeedbackEnabledFromConfig(values),

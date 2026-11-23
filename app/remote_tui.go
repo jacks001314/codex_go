@@ -725,16 +725,18 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnAcknowledgeThreadRead: interactiveRemoteAgentsOverviewAcknowledgeThreadRead(ctx, endpoint),
 		// Rust #51500: the shared pinned section backs the dashboard's pin
 		// group and its `p` shortcut.
-		OnAgentsOverviewPinnedThreads:    interactiveRemoteAgentsOverviewPinnedThreads(agentsOverviewPinRequest),
-		OnAgentsOverviewTogglePin:        interactiveRemoteAgentsOverviewTogglePin(agentsOverviewPinRequest),
-		OnAgentsOverviewUsage:            interactiveRemoteAgentsOverviewUsage(ctx, endpoint),
-		OnAgentsOverviewNewSession:       interactiveRemoteAgentsOverviewNewSession(ctx, endpoint),
-		OnAgentsOverviewNewWorktree:      interactiveRemoteAgentsOverviewNewWorktree(ctx, endpoint, root),
-		OnAgentsOverviewStop:             interactiveRemoteAgentsOverviewStop(ctx, endpoint),
-		OnAgentsOverviewArchive:          interactiveRemoteAgentsOverviewArchive(ctx, endpoint),
-		OnAgentsOverviewDelete:           interactiveRemoteAgentsOverviewDelete(ctx, endpoint),
-		OnAgentsOverviewRename:           renameAgentsOverviewHandler,
-		OnWriteSettings:                  interactiveRemoteSettingsWriteHandler(ctx, endpoint),
+		OnAgentsOverviewPinnedThreads: interactiveRemoteAgentsOverviewPinnedThreads(agentsOverviewPinRequest),
+		OnAgentsOverviewTogglePin:     interactiveRemoteAgentsOverviewTogglePin(agentsOverviewPinRequest),
+		OnAgentsOverviewUsage:         interactiveRemoteAgentsOverviewUsage(ctx, endpoint),
+		OnAgentsOverviewNewSession:    interactiveRemoteAgentsOverviewNewSession(ctx, endpoint),
+		OnAgentsOverviewNewWorktree:   interactiveRemoteAgentsOverviewNewWorktree(ctx, endpoint, root),
+		OnAgentsOverviewStop:          interactiveRemoteAgentsOverviewStop(ctx, endpoint),
+		OnAgentsOverviewArchive:       interactiveRemoteAgentsOverviewArchive(ctx, endpoint),
+		OnAgentsOverviewDelete:        interactiveRemoteAgentsOverviewDelete(ctx, endpoint),
+		OnAgentsOverviewRename:        renameAgentsOverviewHandler,
+		OnWriteSettings: interactiveRemoteSettingsWriteHandler(ctx, endpoint, func() string {
+			return remoteSettingsReadCWD(threadParamsModeForLaunch(root), root, state)
+		}),
 		OnUpdateCollaborationMode:        interactiveRemoteCollaborationModeUpdateHandler(ctx, endpoint),
 		OnWriteMemorySettings:            interactiveRemoteMemorySettingsWriteHandler(ctx, endpoint),
 		OnResetMemories:                  interactiveRemoteMemoryResetHandler(ctx, endpoint),
@@ -745,6 +747,8 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		StatuslineFeatureEnabled:         &statuslineFeatureEnabled,
 		MultiAgentV2MaxConcurrentThreads: settings.MultiAgentV2MaxConcurrentThreads,
 		DaybreakDefault:                  settings.DaybreakDefault,
+		ReasoningSummary:                 settings.ReasoningSummary,
+		ReasoningSummaryAvailable:        settings.ReasoningSummaryAvailable,
 		UseMemories:                      settings.UseMemories,
 		GenerateMemories:                 settings.GenerateMemories,
 		FeedbackEnabled:                  settings.FeedbackEnabled,
@@ -1211,7 +1215,7 @@ func interactiveRemoteClearGoal(ctx context.Context, endpoint *appserverdaemon.R
 	return response.Cleared, nil
 }
 
-func interactiveRemoteSettingsWriteHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.SettingsWriteFunc {
+func interactiveRemoteSettingsWriteHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, readCWD ...func() string) codextea.SettingsWriteFunc {
 	return func(edits []codextea.SettingsEdit) (codextea.SettingsWriteResult, error) {
 		reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
 		defer cancel()
@@ -1232,8 +1236,14 @@ func interactiveRemoteSettingsWriteHandler(ctx context.Context, endpoint *appser
 				MergeStrategy: config.MergeReplace,
 			})
 		}
+		cwd := ""
+		for _, read := range readCWD {
+			if read != nil {
+				cwd = strings.TrimSpace(read())
+			}
+		}
 		if len(configEdits) == 0 {
-			return interactiveRemoteReadSettings(reqCtx, client)
+			return interactiveRemoteReadSettings(reqCtx, client, cwd)
 		}
 		var response config.ConfigWriteResponse
 		// Rust config_update::write_config_batch always asks the server to reload
@@ -1244,7 +1254,7 @@ func interactiveRemoteSettingsWriteHandler(ctx context.Context, endpoint *appser
 		}, &response); err != nil {
 			return codextea.SettingsWriteResult{}, err
 		}
-		result, err := interactiveRemoteReadSettings(reqCtx, client)
+		result, err := interactiveRemoteReadSettings(reqCtx, client, cwd)
 		if err != nil {
 			return codextea.SettingsWriteResult{}, err
 		}
@@ -1354,9 +1364,15 @@ func interactiveRemoteApproveAutoReviewDenialHandler(ctx context.Context, endpoi
 	}
 }
 
-func interactiveRemoteReadSettings(ctx context.Context, client *remoteAppServerTUIClient) (codextea.SettingsWriteResult, error) {
+func interactiveRemoteReadSettings(ctx context.Context, client *remoteAppServerTUIClient, cwd ...string) (codextea.SettingsWriteResult, error) {
+	params := config.ConfigReadParams{}
+	for _, value := range cwd {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			params.CWD = &trimmed
+		}
+	}
 	var response config.ConfigReadResponse
-	if err := remoteSessionRequest(ctx, client, appserver.MethodConfigRead, config.ConfigReadParams{}, &response); err != nil {
+	if err := remoteSessionRequest(ctx, client, appserver.MethodConfigRead, params, &response); err != nil {
 		return codextea.SettingsWriteResult{}, err
 	}
 	result := interactiveSettingsFromConfig(&config.Config{Values: response.Config})
@@ -6719,7 +6735,14 @@ func remoteThreadStartParamsForMode(mode ThreadParamsMode, root *cli.RootOptions
 	if mode.SettingsOwner() == ThreadSettingsOwnerServer {
 		return appserver.ThreadStartParams{}, nil
 	}
-	return remoteThreadStartParams(root, state)
+	params, err := remoteThreadStartParams(root, state)
+	if err != nil {
+		return params, err
+	}
+	// Rust #62904: an embedded WebSocket prewarm must use the same summary
+	// style as the first turn so the warmup response is reusable.
+	applyEmbeddedPrewarmReasoningSummary(&params, mode, root, state)
+	return params, nil
 }
 
 // remoteThreadStartParamsTemplate returns this client's transport-appropriate
@@ -6941,6 +6964,11 @@ func remoteTurnStartParamsForMode(mode ThreadParamsMode, root *cli.RootOptions, 
 	params.CollaborationMode = interactiveCollaborationModePayload(request.CollaborationMode)
 	if effort := strings.TrimSpace(shared.ModelReasoningEffort); effort != "" {
 		params.Effort = &effort
+	}
+	// Rust #62904: the TUI sends its reasoning summary instead of leaving it
+	// unset, defaulting to "auto" for OpenAI providers.
+	if summary := remoteTurnReasoningSummary(root, state); summary != "" {
+		params.Summary = &summary
 	}
 	if state != nil {
 		if tier := strings.TrimSpace(state.ServiceTier); tier != "" && tier != "default" {
