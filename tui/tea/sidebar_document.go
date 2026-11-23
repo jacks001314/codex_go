@@ -87,6 +87,12 @@ type sidebarDocumentTab struct {
 	// TargetCleared records that Esc removed the coordinate highlight (Rust
 	// Document::target.take()).
 	TargetCleared bool
+	// PathScroll is the full-path view's scroll offset, or nil while the path
+	// view is closed (Rust PathActions::scroll).
+	PathScroll *int
+	// PathFeedback is the clipboard status the path footer shows (Rust
+	// CopyFeedback).
+	PathFeedback *sidebarDocumentPathFeedback
 
 	renderWidth int
 	renderLines []string
@@ -223,6 +229,7 @@ func (m *Model) reloadSidebarDocument(tab *sidebarDocumentTab, linkIndex int, lo
 	tab.HoverLink = -1
 	tab.Selection.clear()
 	tab.TargetCleared = false
+	tab.PathScroll = nil
 	tab.Scroll = 0
 	tab.rendered = false
 	tab.renderLines = nil
@@ -265,6 +272,12 @@ func (m *Model) applySidebarDocumentLoaded(msg SidebarDocumentLoadedMsg) bubblet
 		tab.linkRowsSet = false
 		tab.HoverLink = -1
 		tab.Selection.clear()
+		// Rust loaded() dismisses the path view but keeps a finished copy
+		// message on screen.
+		tab.PathScroll = nil
+		if tab.PathFeedback != nil && tab.PathFeedback.pending {
+			tab.PathFeedback.reveal = false
+		}
 		if tab.Find.active() {
 			// Rust keeps the query and caret across a reload and rescans the
 			// freshly loaded rows.
@@ -366,7 +379,8 @@ func (m *Model) sidebarDocumentLinkRows(tab *sidebarDocumentTab) []sidebarDocume
 // on a rendered row, or -1. Rust resolves the pointer through the reader's row
 // layout; the preview keeps the same rows in sidebarDocumentLinkRows.
 func (m *Model) sidebarDocumentLinkAtRow(tab *sidebarDocumentTab, row int, column int) int {
-	if tab == nil || row < 0 {
+	if tab == nil || row < 0 || tab.PathScroll != nil {
+		// Rust link_at returns None while the path view covers the preview.
 		return -1
 	}
 	best, bestDistance := -1, 0
@@ -654,6 +668,23 @@ func (m *Model) updateSidebarDocumentKey(msg keymsg.KeyMsg) (bool, bubbletea.Cmd
 	if tab.Find.active() {
 		return m.updateSidebarDocumentFindKey(tab, msg)
 	}
+	if tab.PathScroll != nil {
+		// Rust: the path view owns the keyboard. Esc or the list's Cancel
+		// returns to the preview, `c`/`p` are the path shortcuts, vertical
+		// list actions scroll the wrapped path, and every other key is
+		// consumed so it cannot reach the preview underneath.
+		if msg.Type == keymsg.KeyEsc || sidebarChooserListAction(msg) == "cancel" {
+			m.dismissSidebarDocumentPath(tab)
+			return true, nil
+		}
+		if handled, cmd := m.handleSidebarDocumentPathKey(tab, msg); handled {
+			return true, cmd
+		}
+		if action := sidebarChooserListAction(msg); action != "" {
+			m.scrollSidebarDocumentPath(tab, action)
+		}
+		return true, nil
+	}
 	if m.keyMatches("global", "find_transcript", keySpecFromKeyMsg(msg)) ||
 		m.keyMatches("pager", "find", keySpecFromKeyMsg(msg)) {
 		// Rust handle_document_input starts the reader's own Find, not the
@@ -670,6 +701,13 @@ func (m *Model) updateSidebarDocumentKey(msg keymsg.KeyMsg) (bool, bubbletea.Cmd
 		case keymsg.KeyShiftTab:
 			m.cycleSidebarDocumentLink(tab, false)
 			return true, nil
+		}
+	}
+	if action == "" && m.sidebarDocumentPathActionsAvailable(tab) {
+		// Rust path_actions.handle_key runs while no link is selected and the
+		// reader has no active interaction.
+		if handled, cmd := m.handleSidebarDocumentPathKey(tab, msg); handled {
+			return true, cmd
 		}
 	}
 	if tab.Link >= 0 && action != "cancel" && action != "accept" {
@@ -1109,8 +1147,11 @@ func (m *Model) renderSidebarDocument(width int, height int) string {
 	if tab == nil || height <= 1 {
 		return strings.Join(rows, "\n")
 	}
-	footer := height - 1
-	contentHeight := max(footer-1, 0)
+	if tab.PathScroll != nil {
+		return m.renderSidebarDocumentPath(rows, width, height, tab)
+	}
+	footerRows := m.sidebarDocumentFooterRows(width, height, tab)
+	contentHeight := max(height-1-len(footerRows), 0)
 	bodyWidth := max(width-2, 1)
 	lines := m.sidebarDocumentLines(tab, bodyWidth)
 	tab.Scroll = clampModalInt(tab.Scroll, 0, max(len(lines)-contentHeight, 0))
@@ -1154,33 +1195,19 @@ func (m *Model) renderSidebarDocument(width int, height int) string {
 		}
 		rows[1+index] = " " + codextui.TruncateToWidth(line, bodyWidth)
 	}
-	rows[footer] = " " + m.sidebarDocumentFooterLine(bodyWidth, tab)
+	for index, line := range footerRows {
+		rows[height-len(footerRows)+index] = " " + line
+	}
 	return strings.Join(rows, "\n")
 }
 
-// sidebarDocumentFooter mirrors Rust's reader hints: read, find, link, select,
-// close. The Go pane only wires reading and closing so far.
+// sidebarDocumentFooter mirrors Rust's reader hints: close or clear highlight,
+// read, find, link, and select.
 func (m *Model) sidebarDocumentFooter(width int, tab *sidebarDocumentTab) string {
 	if m == nil || tab == nil {
 		return ""
 	}
-	hints := make([]string, 0, 4)
-	up := m.sidebarChooserListHint("move_up")
-	down := m.sidebarChooserListHint("move_down")
-	if up != "" && down != "" {
-		hints = append(hints, up+"/"+down+" read")
-	}
-	if len(m.sidebarDocumentLinks(tab)) > 0 {
-		hints = append(hints, "tab link")
-	}
-	if key := m.sidebarChooserListHint("cancel"); key != "" {
-		if tab.Link >= 0 || (tab.View.Target != nil && !tab.TargetCleared) {
-			hints = append(hints, key+" clear highlight")
-		} else {
-			hints = append(hints, key+" close")
-		}
-	}
-	return fitSidebarChooserHints(hints, width)
+	return fitSidebarChooserHints(m.sidebarDocumentReaderHints(tab), width)
 }
 
 // paintSidebarDocumentTarget shades the coordinate link's row (Rust

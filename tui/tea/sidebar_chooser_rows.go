@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	codextui "codex_go/tui"
-	"github.com/rivo/uniseg"
 )
 
 // Rust parity: codex-rs/tui/src/sidebar_chooser.rs ChoiceRows, ChooserScroll,
@@ -267,23 +266,45 @@ func (m *Model) wheelScrollSidebarChooser(delta int) {
 	m.sidebarChooserScroll = rows.wheelScroll(m.sidebarChooserScroll, m.sidebarChooserClampedChoice(), delta)
 }
 
+// sidebarFilePathBody is Rust sidebar_chooser::file_path_areas' body rect: it
+// skips the strip rows above and the one-row footer below, and narrows to
+// body_row's columns.
+func sidebarFilePathBody(width int, height int) (bodyWidth int, bodyHeight int, top int) {
+	footer := min(height, 1)
+	top = footer
+	if height > 3 {
+		top++
+	}
+	return max(width-3, 1), max(height-(top+footer), 0), top
+}
+
+// sidebarFilePathVisible is the wrapped-path window inside the body: the
+// caption and its blank row only exist when the body has room for them.
+func sidebarFilePathVisible(bodyHeight int) int {
+	if bodyHeight > 2 {
+		return bodyHeight - 2
+	}
+	return max(bodyHeight, 0)
+}
+
 // sidebarChooserFilePathLayout is Rust file_path_layout: the wrapped path rows
 // and how many of them fit between the "File path" caption and the footer.
 func sidebarChooserFilePathLayout(width int, height int, path string) ([]string, int) {
-	body := height
-	if height > 2 {
-		body -= 3
-	}
-	visible := body
-	if body > 2 {
-		visible -= 2
-	}
-	return wrapSidebarFilePath(path, max(sidebarChooserBodyWidth(width), 1)), max(visible, 0)
+	bodyWidth, bodyHeight, _ := sidebarFilePathBody(width, height)
+	return wrapSidebarFilePath(path, bodyWidth), sidebarFilePathVisible(bodyHeight)
 }
 
 // scrollSidebarFilePath is Rust scroll_file_path.
 func scrollSidebarFilePath(width int, height int, path string, top int, action string) int {
-	rows, visible := sidebarChooserFilePathLayout(width, height, path)
+	bodyWidth, bodyHeight, _ := sidebarFilePathBody(width, height)
+	return scrollSidebarFilePathBody(bodyWidth, bodyHeight, path, top, action)
+}
+
+// scrollSidebarFilePathBody scrolls the path view inside an already split body
+// (Rust scroll_file_path takes that body rect directly).
+func scrollSidebarFilePathBody(bodyWidth int, bodyHeight int, path string, top int, action string) int {
+	rows := wrapSidebarFilePath(path, bodyWidth)
+	visible := sidebarFilePathVisible(bodyHeight)
 	limit := max(len(rows)-visible, 0)
 	top = clampViewportOffset(top, 0, limit)
 	switch action {
@@ -303,8 +324,9 @@ func scrollSidebarFilePath(width int, height int, path string, top int, action s
 	return top
 }
 
-// wrapSidebarFilePath hard-wraps a path the way textwrap::wrap breaks a long
-// unbroken word, so the file-path view shows every character.
+// wrapSidebarFilePath is Rust file_path_layout's wrap: the path splits after
+// each directory separator, segments fill a row while they fit, and a segment
+// wider than the pane is broken so every character stays visible.
 func wrapSidebarFilePath(path string, width int) []string {
 	if path == "" {
 		return nil
@@ -313,19 +335,43 @@ func wrapSidebarFilePath(path string, width int) []string {
 		return []string{path}
 	}
 	lines := make([]string, 0, 4)
-	rest := path
-	for rest != "" {
-		prefix, suffix, taken := codextui.TakePrefixByWidth(rest, width)
-		if taken == 0 {
-			graphemes := uniseg.NewGraphemes(rest)
-			if !graphemes.Next() {
-				break
-			}
-			_, end := graphemes.Positions()
-			prefix, suffix = rest[:end], rest[end:]
+	current := ""
+	for _, segment := range sidebarFilePathSegments(path) {
+		segmentWidth := codextui.DisplayWidth(segment)
+		if current != "" && codextui.DisplayWidth(current)+segmentWidth > width {
+			lines = append(lines, strings.TrimRight(current, " "))
+			current = ""
 		}
-		lines = append(lines, strings.TrimRight(prefix, " "))
-		rest = strings.TrimLeft(suffix, " ")
+		if current == "" && segmentWidth > width {
+			parts := sidebarDocumentErrorHardWrap(segment, width)
+			lines = append(lines, parts[:len(parts)-1]...)
+			current = parts[len(parts)-1]
+			continue
+		}
+		current += segment
+	}
+	if current != "" {
+		lines = append(lines, strings.TrimRight(current, " "))
+	}
+	if len(lines) == 0 {
+		return []string{path}
 	}
 	return lines
+}
+
+// sidebarFilePathSegments splits a path after each separator, keeping the
+// separator with the preceding name (Rust split_inclusive(['/', '\\'])).
+func sidebarFilePathSegments(path string) []string {
+	segments := make([]string, 0, 4)
+	start := 0
+	for index, r := range path {
+		if r == '/' || r == '\\' {
+			segments = append(segments, path[start:index+1])
+			start = index + 1
+		}
+	}
+	if start < len(path) {
+		segments = append(segments, path[start:])
+	}
+	return segments
 }

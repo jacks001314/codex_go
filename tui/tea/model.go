@@ -4773,11 +4773,20 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		m.applyTurnInterrupted(msg)
 		return m, bubbletea.Batch(m.refreshStatusControlsCmd(), m.submitNextQueued(), m.noteRecapTurnFinished(appserver.TurnStatusInterrupted), m.refreshThreadUsageAfterTurn())
 	case ClipboardWriteResultMsg:
+		if handled, cmd := m.applySidebarDocumentPathCopyResult(msg); handled {
+			return m, cmd
+		}
 		m.applyClipboardWriteResult(msg)
 		return m, m.finishSelectCopyClose(msg.Err == nil)
 	case ClipboardBusyMsg:
+		if handled, cmd := m.applySidebarDocumentPathBusy(msg.Label); handled {
+			return m, cmd
+		}
 		m.selectCopyClose = false
 		m.notice = "Copy already in progress; try again after it finishes"
+		return m, nil
+	case sidebarDocumentPathFeedbackExpiredMsg:
+		m.applySidebarDocumentPathFeedbackExpired()
 		return m, nil
 	case SteerResultMsg:
 		m.applySteerResult(msg)

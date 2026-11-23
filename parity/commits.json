@@ -55066,11 +55066,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1401: partial - Rust #63388 adds preview-local path actions: `p` opens a scrollable full-path view, `c` copies the path with clipboard feedback (including when the file failed to load), Esc returns to the preview, long paths wrap at directory separators in the preview and chooser, and preview footer hints wrap to two rows. Go's sidebar document pane (tui/tea sidebar_chooser.go/side.go with app/sidebar_document.go) shows the preview, its failure reason and the tab strip, but has no path view, no path copy or clipboard feedback, and no separator-aware path wrapping or wrapped footer hints. Remaining work: add the path-view mode and copy action to the document tab state, render the full path in a scrollable area, and wrap preview footer hints."
+    "Batch 135: complete - TUI sidebar previews show and copy their file path (Rust #63388). tui/tea/sidebar_document_path.go adds the preview's path actions: `p` toggles a scrollable full-path view, `c` copies the full path through the shared clipboard worker, a failed or busy write reveals the path and reports `Could not copy path`/`Clipboard busy` on the preview footer instead of the transcript notice, `Path copied` clears after five seconds through sidebarDocumentPathFeedbackExpiredMsg, and dismissing the view while a write runs keeps the message without reopening it. The pane paints the `File path` caption, the wrapped path and a `p/esc hide path · c copy path` footer, Esc inside the path view returns to the preview, and the reader footer keeps its first hint (close or clear highlight), inserts `c copy path`/`p show path` plus the copy status, and wraps across at most two rows (wrapSidebarChooserHintRows = Rust HintLine::wrapped). sidebar_chooser_rows.go splits paths after each directory separator and breaks only over-long segments for both the chooser and the preview (Rust file_path_layout), with body/footer rects split like file_path_areas. tui/tea/sidebar_document_path_like_rust_test.go covers the missing-file copy reveal, path scrolling and dismissal, and the two-row footer. Verified with go test ./tui/tea."
    ],
    "kind": "runtime",
    "sha": "0c7efeb50d8d44511ee68dc788d550149a63656c",
-   "status": "partial",
+   "status": "complete",
    "subject": "Show and copy file paths from TUI sidebar previews (#63388)"
   }
  ],
