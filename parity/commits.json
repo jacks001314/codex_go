@@ -51948,11 +51948,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1268: partial - Rust opens `codex://threads/<id>` Markdown links from chat and transcript views inside the TUI (also in the resume picker preview), resolves nested agent links through the owning session, and shows archived conversations read-only. Go only builds the desktop URL (tui/app/history_ui.go DesktopThreadURL returns `codex://threads/<id>` for launching the desktop app); no TUI link handler navigates to the linked conversation, so clicking such a link in a transcript has no in-place effect."
    ],
    "kind": "runtime",
    "sha": "0a82fdf49d98feb33638cd38f79451ac966da572",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Open Codex thread links inside the TUI (#62332)"
   },
   {
@@ -52770,11 +52770,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1268: partial - Rust renders `<br>`, `<br/>` and `<br />` as line breaks inside flowchart edge labels, reserving a row per line and preserving blank lines. Go's mermaid package supports those breaks in node labels only (mermaid/parse.go flowchartLabel rewriting, mermaid/draw.go label lines); edge labels with `<br>` still fail closed as ErrUnsupported (mermaid/mermaid_test.go multi-error case) and draw.go places one label row per edge port."
    ],
    "kind": "runtime",
    "sha": "76aa61878757298bebde2d4382194ba1a8f9335a",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Render multiline Mermaid flowchart edge labels (#62550)"
   },
   {
@@ -54079,11 +54079,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Round 1268: partial - Rust uses shared terminal detection to force OSC 52 forwarding in Rex even when the native clipboard write succeeds, keeping tmux/Herdr/SSH routing and the Windows probe as fallbacks. Go confirms Rex in pets image protocol detection and markdown link styling but its ClipboardEnvironment (tui/clipboard.go) has no Rex flag: ClipboardCopyOrder returns native-first (or WSL/tmux variants) and only appends OSC 52 as a fallback, so a Rex client attached after the copy never receives the text."
    ],
    "kind": "runtime",
    "sha": "556901ba7218b9862827d00142a52f19746b1a18",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Forward TUI clipboard copies to Rex clients (#62931)"
   },
   {
@@ -54556,11 +54556,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Round 1268: partial - Rust adds a Tab-toggle creation-time sort to Command Center search so recently created tasks are findable ahead of last-update ordering. Go's agents overview sorts by group key then recency only (tui/agents_overview/overview.go sortByGroupKeyThenRecency, status_order_like_rust_test.go) and its Row model carries no creation timestamp, so there is no creation-time ordering or toggle."
    ],
    "kind": "runtime",
    "sha": "4ae20b9f28f72d46fcea7431381b88fb4c70514a",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Add creation-time sorting to Command Center search (#63208)"
   },
   {
