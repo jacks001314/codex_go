@@ -119,6 +119,17 @@ func (r *RuntimeRouter) validateTurnStepSettings(params *turn.TurnStartParams, r
 	if err != nil {
 		return err
 	}
+	return r.validateTurnStepSettingsWithConfig(params, reviewerExplicit, cfg)
+}
+
+// validateTurnStepSettingsWithConfig applies the step-settings constraint
+// check against an already loaded config so a caller that needs the same
+// config for its own gating (Rust #63428's `/compact` admission) loads it
+// once.
+func (r *RuntimeRouter) validateTurnStepSettingsWithConfig(params *turn.TurnStartParams, reviewerExplicit bool, cfg *config.Config) error {
+	if r == nil || params == nil || cfg == nil || strings.TrimSpace(params.ThreadID) == "" {
+		return nil
+	}
 	settings := r.threadSettingsForTurn(params.ThreadID)
 	currentModel := firstNonEmpty(
 		threadSettingsModel(settings),

@@ -4734,6 +4734,13 @@ func (r *RuntimeRouter) handleThreadCompactStartRuntime(request *Request) (*Thre
 	if err := r.checkThreadModelProviderForID(params.ThreadID); err != nil {
 		return nil, err
 	}
+	// Rust #63428: `handlers::compact` validates the session settings before
+	// `abort_all_tasks(TurnAbortReason::Replaced)`, so a policy refresh that
+	// forbids compaction leaves a running turn intact.
+	if err := r.validateManualCompactionSettings(params.ThreadID); err != nil {
+		r.rejectManualCompaction(params.ThreadID, err)
+		return &ThreadCompactStartResponse{}, nil
+	}
 	// Rust #46310: `handlers::compact` stops the old turn
 	// (`abort_all_tasks(TurnAbortReason::Replaced)`) before the compact task
 	// picks up the next turn's environments, so a running turn is replaced
@@ -10909,6 +10916,53 @@ func (r *RuntimeRouter) handleTurnInterrupt(request *Request) (*turn.TurnInterru
 // `abort_all_tasks(TurnAbortReason::Replaced)` for this, so the superseded turn
 // is reported as interrupted with a `replaced` abort marker instead of being
 // left running beside the compact turn.
+// validateManualCompactionSettings rechecks the thread's current step
+// settings before `/compact` interrupts anything. Rust keeps them in the
+// session's retained `SessionConfiguration` and calls
+// `configuration.validate(&environments)`; Go rebuilds the same constraints
+// from the live thread settings, config requirements and permission profile.
+// The token-budget local reset builds the compact turn with default settings,
+// so Rust skips admission there (Rust #63428).
+func (r *RuntimeRouter) validateManualCompactionSettings(threadID string) error {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return nil
+	}
+	params := &turn.TurnStartParams{ThreadID: strings.TrimSpace(threadID), Originator: "compact"}
+	cfg, err := r.effectiveConfigForTurn(params)
+	if err != nil {
+		return err
+	}
+	if features.Enabled(cfg.FeatureSettings(), "token_budget") {
+		return nil
+	}
+	return r.validateTurnStepSettingsWithConfig(params, false, cfg)
+}
+
+// rejectManualCompaction reports a rejected `/compact` without starting the
+// compaction. Rust keeps a running turn's status and emits a warning that is
+// ordered with turn registration; an idle agent turns errored and reports a
+// bad request (Rust #63428).
+func (r *RuntimeRouter) rejectManualCompaction(threadID string, cause error) {
+	message := "Cannot start /compact. " + cause.Error()
+	if r.hasRuntimeThreadStore() {
+		if active := r.threads.ActiveTurn(threadID); active != nil && strings.TrimSpace(active.TurnID) != "" {
+			r.notify(NotificationWarning, &WarningNotification{
+				ThreadID: stringPtrIfNotEmpty(threadID),
+				Message:  message,
+			})
+			return
+		}
+	}
+	r.notify(NotificationError, &ErrorNotification{
+		Error: TurnError{
+			Message:        message,
+			CodexErrorInfo: CodexErrorInfo("badRequest"),
+		},
+		ThreadID: threadID,
+	})
+	r.notifyThreadStatus(r.requireThreadStatus().NoteSystemError(threadID))
+}
+
 func (r *RuntimeRouter) abortRuntimeTurnForManualCompaction(threadID string) {
 	if r == nil || !r.hasRuntimeThreadStore() {
 		return

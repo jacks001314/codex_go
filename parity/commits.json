@@ -55288,11 +55288,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Batch 154: partial - Rust #63428 validates the session configuration before `compact` interrupts the active turn, so a policy refresh that forbids compaction leaves the running turn intact (a warning while a turn runs, a BadRequest error plus errored status when idle). Go's `handleThreadCompactStartRuntime` already runs `ensureDirectInputAllowed` and `checkThreadModelProviderForID` before `abortRuntimeTurnForManualCompaction`, and `turn.TurnService.Start` can only fail on parameter validation, so the provider/direct-input rejections do not interrupt a turn today. Residual: Go has no separate session-configuration validation pass (Rust's SessionConfiguration::validate over the turn environments) and no compaction preflight that resolves the prompt and replacement context before the abort, so a failure raised by compactThread after the abort would still have replaced the running turn. Tests to add with the preflight: a rejected compact while a turn runs emits a warning and keeps the turn, and an idle rejection reports an error plus errored status."
+    "Batch 155: complete - Rust #63428 validates the session configuration before `compact` interrupts the active turn, so a policy refresh that forbids compaction leaves the running turn intact (a warning while a turn runs, a BadRequest error plus errored status when idle). Go's `handleThreadCompactStartRuntime` now calls `validateManualCompactionSettings` before `abortRuntimeTurnForManualCompaction`: it loads the thread config once, skips admission under the token-budget local reset exactly like Rust's `local_reset` branch, and reuses the step-settings constraint check (`validateTurnStepSettingsWithConfig`) so a model that now requires auto review rejects the compaction. `rejectManualCompaction` emits Rust's `Cannot start /compact. <error>` notice as a warning while a turn is active and as a `badRequest` error plus `systemError` thread status when idle. `TestCompactSessionSettingsPreflightLikeRust` covers both paths, and disabling the preflight makes both subtests fail."
    ],
    "kind": "runtime",
    "sha": "bfb5f7d83b4ee9ab2bfaf639c77d609d87ee468b",
-   "status": "partial",
+   "status": "complete",
    "subject": "Keep active turns running when `/compact` is rejected (#63428)"
   }
  ],
