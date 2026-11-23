@@ -28,6 +28,9 @@ const (
 	// SelectUnitTableCells marks whole Markdown table cells (Rust
 	// select_mode::table::TableMarkKind::Cells, #61422).
 	SelectUnitTableCells
+	// SelectUnitBlock marks a Markdown block from the rendered rows (Rust
+	// select_mode::Scope::Block, #63047).
+	SelectUnitBlock
 )
 
 // SelectAction reports what the key handler asks the owner to do next.
@@ -73,8 +76,15 @@ const (
 	SelectCmdHalfPageDown
 	SelectCmdMarkCharacter
 	SelectCmdMarkLine
-	// SelectCmdMarkTable marks the table cells under the caret (`pager.mark_markdown`).
-	SelectCmdMarkTable
+	// SelectCmdMarkMarkdown marks the Markdown block under the caret, or the
+	// table cells when the caret already sits in one (`pager.mark_markdown`).
+	SelectCmdMarkMarkdown
+	// SelectCmdExpandBlock expands a block mark to its enclosing block or
+	// heading section (Tab, Alt+Up).
+	SelectCmdExpandBlock
+	// SelectCmdShrinkBlock restores the previous expansion level (Shift+Tab,
+	// Alt+Down).
+	SelectCmdShrinkBlock
 	SelectCmdSwapEnds
 	SelectCmdCopy
 	SelectCmdCopyAndFollow
@@ -114,6 +124,12 @@ type selectOrigin struct {
 	anchorCell      tableCellPosition
 	activeCell      tableCellPosition
 	tableText       bool
+	// blockMark records a Markdown block mark and the blocks at both ends
+	// (Rust Scope::Block). blockBack unwinds Tab expansion one level at a time.
+	blockMark   bool
+	anchorBlock int
+	activeBlock int
+	blockBack   []blockMarkState
 }
 
 type selectModeState struct {
@@ -130,6 +146,12 @@ type selectModeState struct {
 	// tableText marks the character mark that `v` creates from a cell mark
 	// (Rust TableMarkKind::Text).
 	tableText bool
+	// blockMark records a Markdown block mark (Rust Scope::Block, #63047).
+	// blockBack remembers the ranges Tab expanded so Shift+Tab can unwind them.
+	blockMark   bool
+	anchorBlock int
+	activeBlock int
+	blockBack   []blockMarkState
 	// originStart/originEnd remember the text unit a mouse gesture started on so
 	// Shift-click can extend it in either direction without losing the anchor
 	// (Rust transcript_view::Selection::origin, #47414).
@@ -230,6 +252,10 @@ func (o *TranscriptOverlay) ClearSelectionMark() SelectAction {
 	o.selectMode.activeCell = tableCellPosition{}
 	o.selectMode.anchor = cursor
 	o.selectMode.activeEnd = cursor
+	o.selectMode.blockMark = false
+	o.selectMode.anchorBlock = noBlock
+	o.selectMode.activeBlock = noBlock
+	o.selectMode.blockBack = nil
 	o.selectMode.preferredColumn = -1
 	o.viewport.SetContent(o.viewContent())
 	return SelectActionChanged
@@ -321,6 +347,9 @@ func (o *TranscriptOverlay) hasSelectionRange() bool {
 	if o == nil || !o.selectMode.active || !o.selectMode.marked {
 		return false
 	}
+	if o.selectMode.blockMark {
+		return true
+	}
 	if o.selectMode.tableMark {
 		return o.selectMode.anchorCell != o.selectMode.activeCell
 	}
@@ -390,6 +419,9 @@ func (o *TranscriptOverlay) SelectedText() string {
 	if o == nil || !o.selectMode.active || !o.selectMode.marked {
 		return ""
 	}
+	if o.selectMode.blockMark {
+		return o.markdownBlockText()
+	}
 	if o.selectMode.tableMark {
 		return o.selectedTableText()
 	}
@@ -445,10 +477,24 @@ func (o *TranscriptOverlay) HandleSelectCommand(command SelectCommand) SelectAct
 	case SelectCmdMarkLine:
 		o.startSelectMark(SelectUnitLine)
 		return SelectActionChanged
-	case SelectCmdMarkTable:
-		if !o.startSelectTable() {
+	case SelectCmdMarkMarkdown:
+		if !o.toggleMarkdown() {
 			return SelectActionNone
 		}
+		return SelectActionChanged
+	case SelectCmdExpandBlock:
+		if !o.expandBlockMark() {
+			return SelectActionNone
+		}
+		o.revealSelectionCursor()
+		o.viewport.SetContent(o.viewContent())
+		return SelectActionChanged
+	case SelectCmdShrinkBlock:
+		if !o.shrinkBlockMark() {
+			return SelectActionNone
+		}
+		o.revealSelectionCursor()
+		o.viewport.SetContent(o.viewContent())
 		return SelectActionChanged
 	case SelectCmdSwapEnds:
 		o.swapSelectEnds()
@@ -479,6 +525,9 @@ func (o *TranscriptOverlay) HandleSelectCommand(command SelectCommand) SelectAct
 			return SelectActionChanged
 		}
 		return SelectActionNone
+	}
+	if o.selectMode.blockMark {
+		return o.handleBlockMarkCommand(command)
 	}
 	if o.selectMode.tableMark {
 		var moved bool
@@ -548,6 +597,14 @@ func (o *TranscriptOverlay) HandleSelectCommand(command SelectCommand) SelectAct
 func (o *TranscriptOverlay) startSelectMark(unit SelectUnit) {
 	if !o.selectMode.active {
 		return
+	}
+	if o.selectMode.blockMark {
+		// Rust Mark::at: a text mark replaces a block mark at the caret.
+		o.selectMode.blockMark = false
+		o.selectMode.anchorBlock = noBlock
+		o.selectMode.activeBlock = noBlock
+		o.selectMode.blockBack = nil
+		o.selectMode.marked = false
 	}
 	cursor := o.selectCursor()
 	if unit == SelectUnitCharacter && o.selectMode.tableMark {
@@ -649,6 +706,15 @@ func (o *TranscriptOverlay) moveTableCell(deltaColumn int, deltaRow int) bool {
 
 func (o *TranscriptOverlay) swapSelectEnds() {
 	if !o.selectMode.active || !o.selectMode.marked {
+		return
+	}
+	if o.selectMode.blockMark {
+		o.selectMode.anchorBlock, o.selectMode.activeBlock = o.selectMode.activeBlock, o.selectMode.anchorBlock
+		o.selectMode.anchor = o.blockStartPoint(o.selectMode.anchorBlock)
+		o.selectMode.activeEnd = o.blockStartPoint(o.selectMode.activeBlock)
+		o.selectMode.preferredColumn = -1
+		o.revealSelectionCursor()
+		o.viewport.SetContent(o.viewContent())
 		return
 	}
 	if o.selectMode.tableMark {
@@ -836,6 +902,9 @@ func (o *TranscriptOverlay) beginSelectFind() {
 		anchorCell:      o.selectMode.anchorCell,
 		activeCell:      o.selectMode.activeCell,
 		tableText:       o.selectMode.tableText,
+		blockMark:       o.selectMode.blockMark,
+		anchorBlock:     o.selectMode.anchorBlock,
+		activeBlock:     o.selectMode.activeBlock,
 	}
 	o.find.editing = true
 	o.find.accepted = false
@@ -868,7 +937,19 @@ func (o *TranscriptOverlay) acceptSelectFind(line int) {
 		o.selectMode.anchorCell = origin.anchorCell
 		o.selectMode.activeCell = origin.activeCell
 		o.selectMode.tableText = origin.tableText
+		o.selectMode.blockMark = origin.blockMark
+		o.selectMode.anchorBlock = origin.anchorBlock
+		o.selectMode.activeBlock = origin.activeBlock
 		o.selectMode.searchOrigin = nil
+	}
+	if o.selectMode.blockMark {
+		// A find hit is a text position; Rust drops the non-text scope.
+		o.selectMode.blockMark = false
+		o.selectMode.anchorBlock = noBlock
+		o.selectMode.activeBlock = noBlock
+		o.selectMode.blockBack = nil
+		o.selectMode.unit = SelectUnitCharacter
+		o.selectMode.marked = false
 	}
 	if o.selectMode.tableMark {
 		// A find hit is a text position, so a cell rectangle no longer applies.
@@ -908,6 +989,9 @@ func (o *TranscriptOverlay) restoreSelectFindOrigin() {
 	o.selectMode.anchorCell = origin.anchorCell
 	o.selectMode.activeCell = origin.activeCell
 	o.selectMode.tableText = origin.tableText
+	o.selectMode.blockMark = origin.blockMark
+	o.selectMode.anchorBlock = origin.anchorBlock
+	o.selectMode.activeBlock = origin.activeBlock
 	o.revealSelectionCursor()
 	o.viewport.SetContent(o.viewContent())
 }
@@ -929,6 +1013,14 @@ func (o *TranscriptOverlay) repeatSelectFind(newer bool) bool {
 	o.find.index = index
 	point := o.selectPointForMatch(o.find.matches[index])
 	o.selectMode.preferredColumn = -1
+	if o.selectMode.blockMark {
+		o.selectMode.blockMark = false
+		o.selectMode.anchorBlock = noBlock
+		o.selectMode.activeBlock = noBlock
+		o.selectMode.blockBack = nil
+		o.selectMode.unit = SelectUnitCharacter
+		o.selectMode.marked = false
+	}
 	if o.selectMode.tableMark {
 		o.selectMode.tableMark = false
 		o.selectMode.tableText = false
@@ -951,6 +1043,17 @@ func (o *TranscriptOverlay) repeatSelectFind(newer bool) bool {
 func (o *TranscriptOverlay) selectionSpanForRow(row int) (int, int, bool) {
 	if o == nil || !o.selectMode.active || !o.selectMode.marked {
 		return 0, 0, false
+	}
+	if o.selectMode.blockMark {
+		start, end, ok := o.markedBlockRows()
+		if !ok || row < start || row > end {
+			return 0, 0, false
+		}
+		width := o.lineWidth(row)
+		if width <= 0 {
+			return 0, 0, false
+		}
+		return 0, width, true
 	}
 	if o.selectMode.tableMark {
 		return o.tableSelectionSpan(row)

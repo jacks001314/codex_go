@@ -13252,7 +13252,9 @@ func (m *Model) openTranscriptOverlay() bubbletea.Cmd {
 	m.transcriptSelection.clear()
 	m.ensureSize()
 	if m.overlay == nil {
-		m.overlay = chatwidget.NewTranscriptOverlay(m.width, m.height, m.renderTranscriptOverlayCached())
+		content, ranges := m.renderTranscriptOverlayRanged()
+		m.overlay = chatwidget.NewTranscriptOverlay(m.width, m.height, content)
+		m.overlay.SetMessageRanges(ranges)
 		m.seedOverlayMouseScrollSpeed()
 		m.overlayTranscript = true
 	} else {
@@ -13337,9 +13339,11 @@ func (m *Model) syncTranscriptOverlay() {
 	if !m.overlayTranscript {
 		return
 	}
-	if content := m.renderTranscriptOverlayCached(); content != m.overlay.Content() {
+	content, ranges := m.renderTranscriptOverlayRanged()
+	if content != m.overlay.Content() {
 		m.overlay.SetContent(content)
 	}
+	m.overlay.SetMessageRanges(ranges)
 	// Rust transcript_view::prompt_header: keep the first visible answer's
 	// prompt on the row above the content.
 	m.syncOverlayPinnedHeader()
@@ -13357,12 +13361,23 @@ func (m *Model) renderTranscriptOverlayCached() string {
 	if m == nil {
 		return ""
 	}
+	content, _ := m.renderTranscriptOverlayRanged()
+	return content
+}
+
+// renderTranscriptOverlayRanged renders the overlay content together with each
+// message's content-row range, so the pager can bound Markdown blocks per
+// message (#63047).
+func (m *Model) renderTranscriptOverlayRanged() (string, [][2]int) {
+	if m == nil {
+		return "", nil
+	}
 	expandedHistory := true
 	if m.backtrack.OverlayPreviewActive {
 		expandedHistory = m.browsingDetails
 	}
 	view, cache := m.overlayTranscriptView()
-	return renderTranscriptWithCache(cache, view, m.rawOutput, m.width, m.activeTUITheme(), expandedHistory, m.sessionCWD, m.showRawReasoning)
+	return renderTranscriptMessagesWithRanges(cache, view, m.rawOutput, m.width, m.activeTUITheme(), expandedHistory, m.sessionCWD, m.showRawReasoning)
 }
 
 // overlayTranscriptView returns the conversation the full-screen transcript

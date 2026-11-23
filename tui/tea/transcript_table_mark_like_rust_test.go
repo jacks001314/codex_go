@@ -18,23 +18,16 @@ func tableSelectionModel(t *testing.T) *Model {
 	return model
 }
 
-// Rust #61422: inside transcript selection mode the implicit `leader v` chord
-// dispatches `pager.mark_markdown` and marks the table cell under the caret.
-func TestMarkMarkdownLeaderMarksTableCellLikeRust(t *testing.T) {
+// Rust #63047: `pager.mark_markdown` defaults to bare `m` and marks the table
+// cell under the caret before any enclosing Markdown block.
+func TestMarkMarkdownKeyMarksTableCellLikeRust(t *testing.T) {
 	model := tableSelectionModel(t)
 	model.Update(key(keymsg.KeyCtrlX))
 	model.Update(runes("["))
 	if model.overlay == nil || !model.overlay.SelectionActive() {
 		t.Fatalf("selection mode did not start (overlay=%v)", model.overlay != nil)
 	}
-	model.Update(key(keymsg.KeyCtrlX))
-	if !model.leaderChordPending {
-		t.Fatal("leader prefix was not recorded in selection mode")
-	}
-	model.Update(runes("v"))
-	if model.leaderChordPending {
-		t.Fatal("leader chord stayed pending after `v`")
-	}
+	model.Update(runes("m"))
 	if !model.overlay.SelectionMarked() {
 		t.Fatal("pager.mark_markdown did not mark a table cell")
 	}

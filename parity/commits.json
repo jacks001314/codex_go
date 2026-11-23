@@ -54107,11 +54107,14 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "pager.mark_markdown now defaults to plain `m` and marks the Markdown block under the caret (table cells first), with h/l sibling motion, j/k extension, Tab/Alt+Up expansion to the enclosing block or heading section, Shift+Tab/Alt+Down shrink, and `v` still converting the mark to text.",
+    "tui/chatwidget/transcript_blocks.go rebuilds the block tree (paragraph, heading, code, list, item, quote, table) from rendered rows, scoped by per-message ranges, and renders a marked range back to Markdown with heading markers, list markers, quote bars and table formatting.",
+    "Rust configure_transcript_and_vim_defaults: a transcript action that claims `m` drops the default mark binding, while an explicitly configured leader chord still dispatches.",
+    "Coverage: tui/chatwidget/transcript_blocks_like_rust_test.go (paragraph/sibling, list, nested items, heading sections, quote, table round trip, raw fences, footer hint) and tui/tea/transcript_markdown_block_like_rust_test.go (default m, remapped find, explicit leader chord); go test ./tui/chatwidget ./tui/tea ./tui pass."
    ],
    "kind": "runtime",
    "sha": "9302bb553e70512888a9053fd7aa52e23fa30d1e",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Select and copy Markdown blocks in the transcript (#63047)"
   },
   {

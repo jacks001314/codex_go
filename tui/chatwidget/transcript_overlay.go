@@ -74,6 +74,12 @@ type TranscriptOverlay struct {
 	// tables caches the rendered Markdown table grids recovered from
 	// plainLines (Rust transcript_view text layout table cells, #61380/#61422).
 	tables []tableLayout
+	// blocks caches the Markdown block tree recovered from plainLines
+	// (Rust select_mode Scope::Block, #63047).
+	blocks []markdownBlock
+	// messageRanges bounds each rendered message so recovered heading sections
+	// never cross into the next message.
+	messageRanges [][2]int
 	// selectMode is Rust transcript_view::SelectMode over this pager's rows.
 	selectMode selectModeState
 	// dragActive keeps a mouse drag extending the current selection.
@@ -356,6 +362,26 @@ func (o *TranscriptOverlay) refreshPlainLines() {
 	}
 	o.plainLines = plain
 	o.tables = buildTableLayouts(plain)
+	o.blocks = buildMarkdownBlocks(plain, o.tables, o.messageRanges)
+	if o.selectMode.blockMark {
+		// A refreshed transcript can renumber rows; keep a block mark only while
+		// both endpoints still describe rows in this content.
+		if _, _, ok := o.markdownBlockRows(o.selectMode.anchorBlock); !ok {
+			o.selectMode.blockMark = false
+			o.selectMode.anchorBlock = noBlock
+			o.selectMode.activeBlock = noBlock
+			o.selectMode.blockBack = nil
+			o.selectMode.marked = false
+			o.selectMode.unit = SelectUnitCharacter
+		} else if _, _, ok := o.markdownBlockRows(o.selectMode.activeBlock); !ok {
+			o.selectMode.blockMark = false
+			o.selectMode.anchorBlock = noBlock
+			o.selectMode.activeBlock = noBlock
+			o.selectMode.blockBack = nil
+			o.selectMode.marked = false
+			o.selectMode.unit = SelectUnitCharacter
+		}
+	}
 	if o.selectMode.tableMark {
 		// A refreshed transcript can renumber rows; drop a cell mark whose
 		// table no longer exists instead of highlighting unrelated text.
@@ -366,6 +392,16 @@ func (o *TranscriptOverlay) refreshPlainLines() {
 			o.selectMode.unit = SelectUnitCharacter
 		}
 	}
+}
+
+// SetMessageRanges installs the rendered message boundaries used to scope
+// Markdown block sections.
+func (o *TranscriptOverlay) SetMessageRanges(ranges [][2]int) {
+	if o == nil {
+		return
+	}
+	o.messageRanges = append(o.messageRanges[:0], ranges...)
+	o.blocks = buildMarkdownBlocks(o.plainLines, o.tables, o.messageRanges)
 }
 
 // applyCellStyle wraps the display cells [from, to) of one rendered row in the
@@ -659,6 +695,12 @@ func (o *TranscriptOverlay) handleSelectMouse(msg mousemsg.MouseMsg) bool {
 				savedFollow:     o.viewport.AtBottom(),
 			}
 		}
+		// A pointer gesture always starts a text range; Rust replaces a block
+		// scope with the click's unit range.
+		o.selectMode.blockMark = false
+		o.selectMode.anchorBlock = noBlock
+		o.selectMode.activeBlock = noBlock
+		o.selectMode.blockBack = nil
 		if clicks == 1 || clicks == 3 {
 			// Rust #61380: a press inside a table cell anchors a cell drag so
 			// dragging marks the cell rectangle instead of raw text. Triple
@@ -829,7 +871,11 @@ func (o *TranscriptOverlay) View() string {
 		return o.staticPagerView(width)
 	}
 	header := overlayHeader(width, o.scrollPercent(), o.title)
-	help := fitLine(o.navigationHint, width)
+	navigation := o.navigationHint
+	if hint := o.BlockMarkHint(); hint != "" {
+		navigation = hint
+	}
+	help := fitLine(navigation, width)
 	actions := fitLine(o.actionsHint, width)
 	if o.find.active() {
 		actions = fitLine(o.FindBarLine(), width)

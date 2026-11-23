@@ -1,6 +1,7 @@
 package tea
 
 import (
+	"strings"
 	"time"
 
 	bubbletea "charm.land/bubbletea/v2"
@@ -54,7 +55,9 @@ func selectTranscriptOnly(action string) bool {
 }
 
 // markMarkdownOnly restricts leader chords inside transcript selection mode to
-// the Markdown cell mark (Rust keymap/chords.rs contains_action).
+// an explicitly configured Markdown block mark (Rust keymap/chords.rs
+// contains_action). The default binding is plain `m`, so no leader default is
+// installed (#63047).
 func markMarkdownOnly(action string) bool {
 	return action == "pager.mark_markdown"
 }
@@ -84,6 +87,9 @@ var leaderShortcuts = []struct {
 	{"global", "resize_panes", true},
 	{"global", "move_divider_left", true},
 	{"global", "move_divider_right", true},
+	// The body is implicitly registered so an explicitly configured leader
+	// chord still dispatches; the default plain `m` binding suppresses the old
+	// implicit `leader v` completion (#63047).
 	{"pager", "mark_markdown", true},
 }
 
@@ -109,9 +115,6 @@ var implicitWorkspaceLeaderCompletions = map[string][]string{
 	"global.resize_panes":         {"r"},
 	"global.move_divider_left":    {"shift-h"},
 	"global.move_divider_right":   {"shift-l"},
-	// Rust keymap/chords/leader_defaults.rs installs `leader v` for the
-	// transcript-only Markdown cell mark (#61422).
-	"pager.mark_markdown": {"v"},
 }
 
 // leaderBindingsFor collects every leader completion reachable from keySpec.
@@ -165,6 +168,34 @@ func (m *Model) leaderBindingsFor(keySpec string, allow func(action string) bool
 		return nil, nil, false
 	}
 	return actions, prefixes, true
+}
+
+// transcriptKeyClaimed reports whether another transcript action binds keySpec.
+// Rust configure_transcript_and_vim_defaults drops the default
+// `pager.mark_markdown` binding when a transcript action claims the same key, so
+// a remapped find or close keeps winning over `m` (#63047).
+func (m *Model) transcriptKeyClaimed(keySpec string) bool {
+	if m == nil || strings.TrimSpace(keySpec) == "" {
+		return false
+	}
+	for _, descriptor := range codextui.KeymapConfigActions(codextui.KeymapActionFilter{FastModeEnabled: true}) {
+		if descriptor.Context != "global" && descriptor.Context != "pager" {
+			continue
+		}
+		if descriptor.Context == "pager" && descriptor.Action == "mark_markdown" {
+			continue
+		}
+		if descriptor.Context == "global" && descriptor.Action == "leader" {
+			continue
+		}
+		bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, descriptor.Context, descriptor.Action)
+		for _, binding := range bindings {
+			if normalized, err := codextui.NormalizeKeybindingSpec(binding); err == nil && normalized == keySpec {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // leaderPrefixClaimed mirrors leader_defaults.rs: an implicit leader shortcut
@@ -227,7 +258,7 @@ func (m *Model) dispatchLeaderAction(action string) bubbletea.Cmd {
 		return m.nudgeSidePaneWidth(-2)
 	case "pager.mark_markdown":
 		if m.overlay != nil {
-			m.overlay.HandleSelectCommand(chatwidget.SelectCmdMarkTable)
+			m.overlay.HandleSelectCommand(chatwidget.SelectCmdMarkMarkdown)
 		}
 		return nil
 	default:

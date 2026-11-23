@@ -33,7 +33,7 @@ func TestKeymapPageRowsLikeRust(t *testing.T) {
 
 	all := keymapPageTabByLabel(t, tabs, "All")
 	// composer.undo/composer.redo (#61954) join the picker.
-	if all.Summary != "175 actions, 0 customized, 23 unbound." {
+	if all.Summary != "175 actions, 0 customized, 22 unbound." {
 		t.Fatalf("all summary = %q (rows=%d)", all.Summary, len(rows))
 	}
 	if got := keymapPageTabByLabel(t, tabs, "Common").Summary; got != "21 actions." {
@@ -43,8 +43,8 @@ func TestKeymapPageRowsLikeRust(t *testing.T) {
 	if customized.Summary != "0 actions." || len(customized.Rows) != 0 {
 		t.Fatalf("customized tab = %q rows:%d", customized.Summary, len(customized.Rows))
 	}
-	unbound := keymapPageTabByLabel(t, tabs, "Unbound (23)")
-	if unbound.Summary != "23 actions." || len(unbound.Rows) != 23 {
+	unbound := keymapPageTabByLabel(t, tabs, "Unbound (22)")
+	if unbound.Summary != "22 actions." || len(unbound.Rows) != 22 {
 		t.Fatalf("unbound tab = %q rows:%d", unbound.Summary, len(unbound.Rows))
 	}
 	wantUnbound := []string{
@@ -54,7 +54,6 @@ func TestKeymapPageRowsLikeRust(t *testing.T) {
 		"Minimize Pane Width", "Maximize Pane Width", "Equalize Pane Widths",
 		"Resize Panes", "Move Divider Left", "Move Divider Right",
 		"Previous Permission Mode", "Next Permission Mode", "Kill Whole Line",
-		"Mark Markdown",
 	}
 	for index, label := range wantUnbound {
 		if unbound.Rows[index].Label != label {
@@ -101,11 +100,16 @@ func TestKeymapPageRowsLikeRust(t *testing.T) {
 		}
 	}
 
+	// Rust #63047 binds pager.mark_markdown to plain `m` by default.
+	if row := keymapPageRowByAction(t, rows, "pager", "mark_markdown"); row.BindingSummary != "m" {
+		t.Fatalf("pager.mark_markdown = %q, want m", row.BindingSummary)
+	}
+
 	labels := make([]string, len(tabs))
 	for index, tab := range tabs {
 		labels[index] = tab.Label
 	}
-	wantLabels := []string{"All", "Common", "Customized (0)", "Unbound (23)", "App", "Composer", "Editor", "Vim", "Navigation", "Agents", "Approval", "Debug"}
+	wantLabels := []string{"All", "Common", "Customized (0)", "Unbound (22)", "App", "Composer", "Editor", "Vim", "Navigation", "Agents", "Approval", "Debug"}
 	if len(labels) != len(wantLabels) {
 		t.Fatalf("tabs = %#v", labels)
 	}

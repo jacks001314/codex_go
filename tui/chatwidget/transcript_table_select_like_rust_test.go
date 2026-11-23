@@ -71,7 +71,7 @@ func TestMarkMarkdownMarksCellAndRectangleLikeRust(t *testing.T) {
 	overlay.selectMode.anchor = overlay.tableCellPoint(cell)
 	overlay.selectMode.activeEnd = overlay.selectMode.anchor
 
-	if action := overlay.HandleSelectCommand(SelectCmdMarkTable); action != SelectActionChanged {
+	if action := overlay.HandleSelectCommand(SelectCmdMarkMarkdown); action != SelectActionChanged {
 		t.Fatalf("mark table action = %v", action)
 	}
 	if !overlay.SelectionMarked() {
@@ -107,11 +107,11 @@ func TestMarkMarkdownTogglesOffLikeRust(t *testing.T) {
 	cell := tableCellPosition{Table: 0, Row: 1, Col: 0}
 	overlay.selectMode.anchor = overlay.tableCellPoint(cell)
 	overlay.selectMode.activeEnd = overlay.selectMode.anchor
-	overlay.HandleSelectCommand(SelectCmdMarkTable)
+	overlay.HandleSelectCommand(SelectCmdMarkMarkdown)
 	if !overlay.SelectionMarked() {
 		t.Fatal("cell mark did not mark the selection")
 	}
-	overlay.HandleSelectCommand(SelectCmdMarkTable)
+	overlay.HandleSelectCommand(SelectCmdMarkMarkdown)
 	if overlay.SelectionMarked() || overlay.SelectedText() != "" {
 		t.Fatalf("second mark table did not clear mark: marked=%v text=%q", overlay.SelectionMarked(), overlay.SelectedText())
 	}
@@ -122,7 +122,7 @@ func TestTableCellMotionStaysInsideTableLikeRust(t *testing.T) {
 	cell := tableCellPosition{Table: 0, Row: 2, Col: 1}
 	overlay.selectMode.anchor = overlay.tableCellPoint(cell)
 	overlay.selectMode.activeEnd = overlay.selectMode.anchor
-	overlay.HandleSelectCommand(SelectCmdMarkTable)
+	overlay.HandleSelectCommand(SelectCmdMarkMarkdown)
 
 	if action := overlay.HandleSelectCommand(SelectCmdDown); action != SelectActionNone {
 		t.Fatalf("down past the last row action = %v, want none", action)

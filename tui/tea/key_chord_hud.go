@@ -180,7 +180,7 @@ func leaderHUDEntry(action string, side bool, canSize bool, canResize bool, hasS
 			return 2, "Hide pane", true
 		}
 	case "mark_markdown":
-		return 2, "Mark table cell", true
+		return 2, "Mark Markdown block", true
 	case "focus_pane_left":
 		if side {
 			return 1, "Pane left", true

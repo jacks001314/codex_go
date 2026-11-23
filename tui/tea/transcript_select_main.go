@@ -48,7 +48,7 @@ func (m *Model) updateTranscriptSelectionKey(msg keymsg.KeyMsg) bubbletea.Cmd {
 	if handled, cmd := m.handleLeaderChordKey(keySpec, markMarkdownOnly); handled {
 		return cmd
 	}
-	if m.keyMatches("global", "find_transcript", keySpec) {
+	if m.keyMatches("global", "find_transcript", keySpec) || m.keyMatches("pager", "find", keySpec) {
 		m.overlay.HandleSelectCommand(chatwidget.SelectCmdBeginFind)
 		return nil
 	}
@@ -75,6 +75,15 @@ func (m *Model) updateTranscriptSelectionKey(msg keymsg.KeyMsg) bubbletea.Cmd {
 // overlaySelectCommand resolves a key to a selection command, giving fixed
 // selection controls precedence over remapped pager shortcuts.
 func (m *Model) overlaySelectCommand(msg keymsg.KeyMsg, keySpec string) (chatwidget.SelectCommand, bool) {
+	// Rust accepts Alt+Up/Alt+Down for Markdown block expansion.
+	if msg.Alt {
+		switch msg.Type {
+		case keymsg.KeyUp:
+			return chatwidget.SelectCmdExpandBlock, true
+		case keymsg.KeyDown:
+			return chatwidget.SelectCmdShrinkBlock, true
+		}
+	}
 	switch msg.Type {
 	case keymsg.KeyEsc:
 		return chatwidget.SelectCmdClearMark, true
@@ -118,6 +127,10 @@ func (m *Model) overlaySelectCommand(msg keymsg.KeyMsg, keySpec string) (chatwid
 		return chatwidget.SelectCmdHalfPageDown, true
 	case keymsg.KeySpace:
 		return chatwidget.SelectCmdMarkCharacter, true
+	case keymsg.KeyTab:
+		return chatwidget.SelectCmdExpandBlock, true
+	case keymsg.KeyShiftTab:
+		return chatwidget.SelectCmdShrinkBlock, true
 	case keymsg.KeyRunes:
 		if len(msg.Runes) != 1 {
 			return chatwidget.SelectCmdNone, true
@@ -167,8 +180,8 @@ func (m *Model) overlaySelectCommand(msg keymsg.KeyMsg, keySpec string) (chatwid
 			return chatwidget.SelectCmdEnd, true
 		}
 	}
-	if m.keyMatches("pager", "mark_markdown", keySpec) {
-		return chatwidget.SelectCmdMarkTable, true
+	if m.keyMatches("pager", "mark_markdown", keySpec) && !m.transcriptKeyClaimed(keySpec) {
+		return chatwidget.SelectCmdMarkMarkdown, true
 	}
 	// Configured pager motions still drive the caret (Rust pager_motion).
 	for action, command := range map[string]chatwidget.SelectCommand{
