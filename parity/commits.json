@@ -52279,11 +52279,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Prepared managed proxy settings are bound once per sandbox command. The controller's managed-network resolver snapshots the environment via PreparedProxyManagedNetwork.PrepareForEnvironment, and the executor-local launch prepares its proxy exactly once in prepareExecutorNetworkProxy; a caller-prepared route (EnforceManagedNetwork plus ManagedNetwork context) is passed through without starting another proxy or reapplying proxy variables. Tests: go test ./network -run 'PreparedProxyEnvironmentSnapshot' -count=1; go test ./execserver -run 'PrepareExecutorNetworkProxy' -count=1",
+    "macOS Seatbelt derives IP egress from the prepared route the way Rust #62386 does: the managed-network context now carries loopbackPorts and allowLocalBinding, and seatbeltNetworkPolicy denies network* before allowing local binding and the proxy's loopback ports (plus the TLS trust service when loopback access exists). Tests: go test ./sandbox -run 'Seatbelt' -count=1; go test ./sandbox ./network ./execserver ./tool -count=1",
+    "go build ./...; go vet ./sandbox ./network ./execserver. The managed MITM CA trust-bundle path filter and the enforcement-without-context error already existed in Go (#60663 and the managedNetwork context guard), so those parts needed no change."
    ],
    "kind": "runtime",
    "sha": "e1b755849216aacd40574b5ccf9ee18d18b1a867",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Prepare managed proxy settings once per sandbox command (#62386)"
   },
   {

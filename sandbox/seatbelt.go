@@ -30,6 +30,8 @@ type seatbeltParameter struct {
 // context that shapes the Seatbelt policy. Rust #45548 reads this policy from
 // the context for this command instead of falling back to a live proxy.
 type seatbeltManagedNetworkContext struct {
+	LoopbackPorts                  []uint16 `json:"loopbackPorts"`
+	AllowLocalBinding              bool     `json:"allowLocalBinding"`
 	AllowUnixSockets               []string `json:"allowUnixSockets"`
 	DangerouslyAllowAllUnixSockets bool     `json:"dangerouslyAllowAllUnixSockets"`
 }
@@ -185,18 +187,9 @@ func buildSeatbeltPolicyWithManagedNetwork(cwd string, profile *PermissionProfil
 		lines = append(lines, fmt.Sprintf(`(deny file-read* (subpath (param "%s")))`, name))
 	}
 
-	if !profile.AllowsNetwork() {
-		lines = append(lines, "(deny network*)", "(deny system-socket)")
-	}
-	// Rust #48565: system libcurl needs the trust-evaluation service for TLS.
-	// Keep it out of network-disabled and Unix-socket-only profiles, which never
-	// reach this branch.
-	if profile.AllowsNetwork() {
-		lines = append(lines, seatbeltTLSTrustService)
-	}
-	socketLines, socketParameters := seatbeltUnixSocketRules(allowUnixSockets, managedNetwork)
-	lines = append(lines, socketLines...)
-	parameters = append(parameters, socketParameters...)
+	networkLines, networkParameters := seatbeltNetworkPolicy(profile, allowUnixSockets, managedNetwork)
+	lines = append(lines, networkLines...)
+	parameters = append(parameters, networkParameters...)
 	// Rust #45984: network grants and Unix-socket allowlists must never reopen
 	// the privileged app-server control socket to filesystem-restricted
 	// commands. Keep this after the allowlist so the deny wins.
@@ -239,6 +232,45 @@ func buildSeatbeltPolicyWithManagedNetwork(cwd string, profile *PermissionProfil
 		lines = append(lines, `(deny system-fcntl (fcntl-command 80 110))`)
 	}
 	return strings.Join(lines, "\n") + "\n", parameters, nil
+}
+
+// seatbeltNetworkPolicy mirrors Rust's dynamic_network_policy_for_network
+// (sandboxing/src/seatbelt.rs, #45548/#62386). A prepared managed-network route
+// restricts IP egress to the route's loopback proxy endpoints instead of
+// inheriting the profile's unrestricted network grant, while a profile without
+// networking still denies IP traffic outright.
+func seatbeltNetworkPolicy(profile *PermissionProfile, allowUnixSockets []string, managedNetwork *seatbeltManagedNetworkContext) ([]string, []seatbeltParameter) {
+	if !profile.AllowsNetwork() {
+		lines := []string{"(deny network*)", "(deny system-socket)"}
+		socketLines, socketParameters := seatbeltUnixSocketRules(allowUnixSockets, managedNetwork)
+		return append(lines, socketLines...), socketParameters
+	}
+	// Rust #48565: system libcurl needs the trust-evaluation service for TLS.
+	if managedNetwork == nil {
+		lines := []string{seatbeltTLSTrustService}
+		socketLines, socketParameters := seatbeltUnixSocketRules(allowUnixSockets, nil)
+		return append(lines, socketLines...), socketParameters
+	}
+	// The prepared route replaces the profile's network grant. The deny comes
+	// first so each later loopback or Unix-socket allowance wins.
+	lines := []string{"(deny network*)"}
+	loopbackAllowed := managedNetwork.AllowLocalBinding || len(managedNetwork.LoopbackPorts) > 0
+	if managedNetwork.AllowLocalBinding {
+		lines = append(lines,
+			`(allow network-bind (local ip "*:*"))`,
+			`(allow network-inbound (local ip "localhost:*"))`,
+			`(allow network-outbound (remote ip "localhost:*"))`,
+		)
+	}
+	for _, port := range managedNetwork.LoopbackPorts {
+		lines = append(lines, fmt.Sprintf(`(allow network-outbound (remote ip "localhost:%d"))`, port))
+	}
+	if loopbackAllowed {
+		lines = append(lines, seatbeltTLSTrustService)
+	}
+	socketLines, socketParameters := seatbeltUnixSocketRules(allowUnixSockets, managedNetwork)
+	lines = append(lines, socketLines...)
+	return lines, socketParameters
 }
 
 // seatbeltUnixSocketRules mirrors Rust #45548's prepared-context precedence:
