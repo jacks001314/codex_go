@@ -915,6 +915,9 @@ var (
 		name: "ModelAccessPrograms",
 		fields: []catalogFieldSpec{
 			{name: "cyber", kind: catalogTypeSeq, elem: &catalogFieldSpec{kind: catalogTypeString}},
+			// Rust decodes the status into an enum whose `#[serde(other)]` arm
+			// accepts unknown strings as Default, so only the type is pinned.
+			{name: "daybreak_availability", kind: catalogTypeString, hasDefault: true},
 		},
 	}
 	catalogServiceTierSpec = &catalogStructSpec{

@@ -66,6 +66,8 @@ func (p *ModelListParams) MarshalJSON() ([]byte, error) {
 // discovery access metadata (Rust #44893). Program names are camelCase.
 type ModelAccessProgramsSummary struct {
 	Cyber []string `json:"cyber"`
+	// DaybreakAvailability is the app-server camelCase status (Rust #62499).
+	DaybreakAvailability string `json:"daybreakAvailability"`
 }
 
 // ModelAccessProgramsSummaryFromInfo converts catalog metadata (snake_case) to
@@ -74,7 +76,10 @@ func ModelAccessProgramsSummaryFromInfo(programs *ModelAccessPrograms) *ModelAcc
 	if programs == nil {
 		return nil
 	}
-	out := &ModelAccessProgramsSummary{Cyber: make([]string, 0, len(programs.Cyber))}
+	out := &ModelAccessProgramsSummary{
+		Cyber:                make([]string, 0, len(programs.Cyber)),
+		DaybreakAvailability: DaybreakAvailabilityWireValue(programs.DaybreakAvailability),
+	}
 	for _, program := range programs.Cyber {
 		switch program {
 		case CyberAccessProgramStandard:
@@ -86,6 +91,22 @@ func ModelAccessProgramsSummaryFromInfo(programs *ModelAccessPrograms) *ModelAcc
 		}
 	}
 	return out
+}
+
+// DaybreakAvailabilityWireValue maps the catalog's snake_case status to the
+// app-server camelCase wire value; missing and unknown statuses normalize to
+// "default" (Rust v2 protocol, #62499).
+func DaybreakAvailabilityWireValue(value DaybreakAvailability) string {
+	switch value {
+	case DaybreakAvailabilityAvailable:
+		return "available"
+	case DaybreakAvailabilityEnrollmentRequired:
+		return "enrollmentRequired"
+	case DaybreakAvailabilityUnavailableForModel:
+		return "unavailableForModel"
+	default:
+		return "default"
+	}
 }
 
 type ModelSummary struct {

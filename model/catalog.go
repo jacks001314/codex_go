@@ -789,6 +789,44 @@ const (
 // A non-nil value with an empty Cyber list is distinct from missing metadata.
 type ModelAccessPrograms struct {
 	Cyber []CyberAccessProgram `json:"cyber"`
+	// DaybreakAvailability is the server-resolved status for this caller and
+	// model (Rust #62499). Missing or unrecognized values decode as Default.
+	DaybreakAvailability DaybreakAvailability `json:"daybreak_availability"`
+}
+
+// DaybreakAvailability is the server-resolved availability of Daybreak for a
+// caller and model (Rust `DaybreakAvailability`, #62499). It distinguishes a
+// caller who must enroll from a model that does not support Daybreak.
+type DaybreakAvailability string
+
+const (
+	DaybreakAvailabilityAvailable           DaybreakAvailability = "available"
+	DaybreakAvailabilityEnrollmentRequired  DaybreakAvailability = "enrollment_required"
+	DaybreakAvailabilityUnavailableForModel DaybreakAvailability = "unavailable_for_model"
+	DaybreakAvailabilityDefault             DaybreakAvailability = "default"
+)
+
+// MarshalJSON keeps Rust's wire spelling: a zero value serializes as "default".
+func (d DaybreakAvailability) MarshalJSON() ([]byte, error) {
+	if d == "" {
+		return json.Marshal(string(DaybreakAvailabilityDefault))
+	}
+	return json.Marshal(string(d))
+}
+
+// daybreakAvailabilityFromCatalog maps a catalog status to Rust's enum, whose
+// `#[serde(other)]` arm turns missing and unrecognized statuses into Default.
+func daybreakAvailabilityFromCatalog(value string) DaybreakAvailability {
+	switch DaybreakAvailability(strings.TrimSpace(value)) {
+	case DaybreakAvailabilityAvailable:
+		return DaybreakAvailabilityAvailable
+	case DaybreakAvailabilityEnrollmentRequired:
+		return DaybreakAvailabilityEnrollmentRequired
+	case DaybreakAvailabilityUnavailableForModel:
+		return DaybreakAvailabilityUnavailableForModel
+	default:
+		return DaybreakAvailabilityDefault
+	}
 }
 
 // SavedDaybreakChoice is the user's saved Daybreak preference resolved against
@@ -863,7 +901,8 @@ func (m *ModelAccessPrograms) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 	var raw struct {
-		Cyber []string `json:"cyber"`
+		Cyber                []string `json:"cyber"`
+		DaybreakAvailability string   `json:"daybreak_availability"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -877,6 +916,7 @@ func (m *ModelAccessPrograms) UnmarshalJSON(data []byte) error {
 		}
 	}
 	m.Cyber = programs
+	m.DaybreakAvailability = daybreakAvailabilityFromCatalog(raw.DaybreakAvailability)
 	return nil
 }
 

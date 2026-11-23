@@ -136,3 +136,24 @@ func TestValidateModelCatalogJSONAcceptsLegacyBaseInstructions(t *testing.T) {
 		t.Fatalf("expected 1 model, got %d", models)
 	}
 }
+
+// Rust #62499: catalog decoding accepts a known, missing or unrecognized
+// Daybreak status; the model layer maps the latter two to default.
+func TestValidateModelCatalogJSONAcceptsDaybreakAvailability(t *testing.T) {
+	for _, availability := range []string{`"available"`, `"enrollment_required"`, `"unavailable_for_model"`, `"default"`, `"future_status"`} {
+		doc := `{"models": [{"slug":"m","display_name":"M","supported_reasoning_levels":[],` +
+			`"shell_type":"shell_command","visibility":"list","supported_in_api":true,"priority":1,` +
+			`"support_verbosity":true,"truncation_policy":{"mode":"tokens","limit":5},` +
+			`"experimental_supported_tools":[],"model_messages":{"instructions_template":"x"},"available_access_programs":{"cyber":["standard"],"daybreak_availability":` + availability + `}}]}`
+		if _, err := validateModelCatalogJSON([]byte(doc)); err != nil {
+			t.Fatalf("validateModelCatalogJSON(%s) error = %v", availability, err)
+		}
+	}
+	doc := `{"models": [{"slug":"m","display_name":"M","supported_reasoning_levels":[],` +
+		`"shell_type":"shell_command","visibility":"list","supported_in_api":true,"priority":1,` +
+		`"support_verbosity":true,"truncation_policy":{"mode":"tokens","limit":5},` +
+		`"experimental_supported_tools":[],"model_messages":{"instructions_template":"x"},"available_access_programs":{"cyber":["standard"]}}]}`
+	if _, err := validateModelCatalogJSON([]byte(doc)); err != nil {
+		t.Fatalf("validateModelCatalogJSON(missing status) error = %v", err)
+	}
+}

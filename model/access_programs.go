@@ -19,7 +19,10 @@ func cloneModelAccessPrograms(value *ModelAccessPrograms) *ModelAccessPrograms {
 	if value == nil {
 		return nil
 	}
-	return &ModelAccessPrograms{Cyber: append([]CyberAccessProgram(nil), value.Cyber...)}
+	return &ModelAccessPrograms{
+		Cyber:                append([]CyberAccessProgram(nil), value.Cyber...),
+		DaybreakAvailability: value.DaybreakAvailability,
+	}
 }
 
 // ApiKeyCyberAccessPrograms mirrors Rust
