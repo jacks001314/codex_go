@@ -53831,11 +53831,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Implemented in #62894's carrier: Config.WebSearchModeWasExplicit mirrors web_search_mode_was_explicit by comparing the raw web_search value with the mode the managed requirement constraint kept, and the loader records it (config/config.go, config/web_search_mode.go); app-server and exec turn resolution consume it.",
+    "The Rust thread-manager-sample field assignment and the TypeScript SDK WebSearchMode union have no codex_go counterpart: the repository has no thread-manager-sample or sdk/ directory, and Go's codexapi.WebSearchMode already accepts indexed (codexapi/search_config.go).",
+    "Verified: go test ./config -run 'WebSearchMode' -count=1; go test ./appserver -run 'WebSearch' -count=1; go test ./app -run 'WebSearchOverrides' -count=1; go test ./exec -run 'WebSearch' -count=1."
    ],
    "kind": "runtime",
    "sha": "7edf91b13c54f20aab22fece0abfa4a5c28379b3",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Track explicit web search modes and expose indexed in the SDK (#62884)"
   },
   {
