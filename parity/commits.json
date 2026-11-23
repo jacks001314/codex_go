@@ -52766,11 +52766,14 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Go never read and replaced a whole watch-channel snapshot: unifiedExecProcess state already lives in one mutex and finishWithExit is first-writer-wins.",
+    "Confirming termination (local, sandbox or remote) now marks the process exited without finalizing it, so the output collector can still publish the exit code; rejected remote stdin marks exited and keeps any exit code already reported.",
+    "hasExited also reports exited when the local process state is complete, writeStdin rejects writes after a confirmed exit, and repeated failure paths keep the first failure message.",
+    "go test ./tool -run 'UnifiedExecTerminateMarks|UnifiedExecRejectedStdin|UnifiedExecRepeatedFailures' -count=1; go test ./tool -run 'UnifiedExec|ExecCommand' -count=1"
    ],
    "kind": "runtime",
    "sha": "4d517cce4abf9ccfe999b0a078d1b84f6043709b",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Preserve process state across concurrent unified exec updates (#62557)"
   },
   {

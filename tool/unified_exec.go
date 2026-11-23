@@ -353,13 +353,17 @@ type unifiedExecProcess struct {
 	eventPending      []byte
 	emittedDeltas     int
 	exited            bool
-	exitCode          int
-	waitErr           error
-	timedOut          bool
-	sandboxDenied     bool
-	eventsStarted     bool
-	pendingEvents     []UnifiedExecEvent
-	endOnce           sync.Once
+	// processExited reports that the executor or OS process has exited. It
+	// can precede finalization while the output collector still records the
+	// exit code (Rust #62557 state.has_exited).
+	processExited bool
+	exitCode      int
+	waitErr       error
+	timedOut      bool
+	sandboxDenied bool
+	eventsStarted bool
+	pendingEvents []UnifiedExecEvent
+	endOnce       sync.Once
 }
 
 type unifiedExecSandboxProcess interface {
@@ -2114,7 +2118,7 @@ func (p *unifiedExecProcess) writeStdin(input string) error {
 	remoteID := p.remoteID
 	p.remoteWrite++
 	writeID := p.remoteWrite
-	exited := p.exited
+	exited := p.exited || p.processExited
 	p.mu.Unlock()
 	if exited {
 		return ErrUnifiedExecStdinClosed
@@ -2129,6 +2133,9 @@ func (p *unifiedExecProcess) writeStdin(input string) error {
 			return err
 		}
 		if response.Status != "accepted" {
+			// Rust #62557: the executor rejected the write because the process
+			// is gone. Mark it exited and keep any exit code it already reported.
+			p.markProcessExited()
 			return ErrUnifiedExecStdinClosed
 		}
 		return nil
@@ -2178,15 +2185,29 @@ func (p *unifiedExecProcess) terminate() error {
 	p.mu.Unlock()
 	if remote != nil {
 		_, err := remote.Terminate(context.Background(), &execserver.TerminateParams{ProcessID: remoteID})
+		if err == nil {
+			// Termination confirms exit without reporting a new exit code; keep
+			// any status the output collector published meanwhile.
+			p.markProcessExited()
+		}
 		return err
 	}
 	if sandboxProcess != nil {
-		return sandboxProcess.Terminate()
-	}
-	if process == nil {
+		if err := sandboxProcess.Terminate(); err != nil {
+			return err
+		}
+		p.markProcessExited()
 		return nil
 	}
-	return terminateUnifiedExecProcess(process)
+	if process == nil {
+		p.markProcessExited()
+		return nil
+	}
+	if err := terminateUnifiedExecProcess(process); err != nil {
+		return err
+	}
+	p.markProcessExited()
+	return nil
 }
 
 func (p *unifiedExecProcess) enforceTimeout(timeout time.Duration) {
@@ -2206,7 +2227,22 @@ func (p *unifiedExecProcess) enforceTimeout(timeout time.Duration) {
 func (p *unifiedExecProcess) hasExited() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.exited
+	if p.processExited || p.exited {
+		return true
+	}
+	return p.cmd != nil && p.cmd.ProcessState != nil
+}
+
+// markProcessExited records an executor-confirmed exit without clearing the
+// exit code, sandbox denial, or failure message another handler may already
+// have published (Rust #62557).
+func (p *unifiedExecProcess) markProcessExited() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.processExited = true
+	p.mu.Unlock()
 }
 
 func (p *unifiedExecProcess) appendOutput(data []byte) {
