@@ -175,8 +175,12 @@ type modelGuardianReviewer struct {
 	// keeps concurrently forked threads on separate response chains; Go keeps
 	// one reusable session per thread so a review from one thread never
 	// continues another thread's reviewer conversation.
-	sessionsMu    sync.Mutex
-	sessions      map[string]*guardianSessionRunner
+	sessionsMu sync.Mutex
+	sessions   map[string]*guardianSessionRunner
+	// guardianAgent, when set, is the model runner bound to the host-selected
+	// Guardian provider (Rust #62588 GuardianInferenceContext). Review sessions
+	// continue their response chain on it instead of the actor's runner.
+	guardianAgent model.AgentRunner
 	store         *state.ReviewStore
 	breaker       *state.CircuitBreaker
 	scoreMu       sync.Mutex
@@ -1021,6 +1025,19 @@ func guardianReviewContext(ctx context.Context, timeout time.Duration) (context.
 	return context.WithTimeout(ctx, timeout)
 }
 
+// useGuardianAgent binds review sessions to the host-selected Guardian
+// provider's runner (Rust #62588). The reviewer keeps its own per-thread
+// response chains, so switching providers never continues an actor chain.
+func (r *modelGuardianReviewer) useGuardianAgent(agent model.AgentRunner) {
+	if r == nil || agent == nil {
+		return
+	}
+	r.sessionsMu.Lock()
+	r.guardianAgent = agent
+	r.sessions = map[string]*guardianSessionRunner{}
+	r.sessionsMu.Unlock()
+}
+
 func newModelGuardianReviewer(agent model.AgentRunner) GuardianReviewer {
 	if agent == nil {
 		return nil
@@ -1059,8 +1076,14 @@ func (r *modelGuardianReviewer) sessionFor(threadID string) *guardianSessionRunn
 	if r == nil || r.agent == nil {
 		return nil
 	}
-	if runner, ok := r.agent.(*guardianSessionRunner); ok {
-		return runner
+	runner := r.agent
+	r.sessionsMu.Lock()
+	if r.guardianAgent != nil {
+		runner = r.guardianAgent
+	}
+	r.sessionsMu.Unlock()
+	if sessionRunner, ok := runner.(*guardianSessionRunner); ok {
+		return sessionRunner
 	}
 	key := strings.TrimSpace(threadID)
 	r.sessionsMu.Lock()
@@ -1071,7 +1094,7 @@ func (r *modelGuardianReviewer) sessionFor(threadID string) *guardianSessionRunn
 	if session := r.sessions[key]; session != nil {
 		return session
 	}
-	session := &guardianSessionRunner{agent: r.agent}
+	session := &guardianSessionRunner{agent: runner}
 	if key != guardianReviewerTrunkSession {
 		if trunk := r.sessions[guardianReviewerTrunkSession]; trunk != nil {
 			if previous, ok := trunk.takePrewarm(); ok {

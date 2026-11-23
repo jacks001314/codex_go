@@ -42,11 +42,11 @@ func TestGuardianRetrievalGuidanceSelectsInstalledToolsLikeRust(t *testing.T) {
 			"guardian_conversation_history_tools": true,
 		},
 	}}
-	history := guardianReviewInstructions(cfg, nil, GuardianConversationHistoryRetrieval)
+	history := guardianReviewInstructions(cfg, nil, GuardianConversationHistoryRetrieval, false)
 	if !strings.Contains(history, "## Conversation history retrieval") {
 		t.Fatalf("conversation history reviewer lost its guidance: %q", history)
 	}
-	board := guardianReviewInstructions(cfg, nil, GuardianBoardRetrieval)
+	board := guardianReviewInstructions(cfg, nil, GuardianBoardRetrieval, false)
 	if strings.Contains(board, "## Conversation history retrieval") {
 		t.Fatalf("board reviewer kept conversation history guidance: %q", board)
 	}

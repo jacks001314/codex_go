@@ -220,13 +220,13 @@ func TestGuardianConversationHistoryInstructionsLikeRust(t *testing.T) {
 			"experimental_conversation_history_prompt": "Use the owner's history.",
 		},
 	}}
-	instructions := guardianReviewInstructions(cfg, nil, GuardianConversationHistoryRetrieval)
+	instructions := guardianReviewInstructions(cfg, nil, GuardianConversationHistoryRetrieval, false)
 	if !strings.Contains(instructions, "Use the owner's history.") ||
 		strings.Contains(instructions, "## Conversation history retrieval") {
 		t.Fatalf("custom history instructions = %q", instructions)
 	}
 	cfg.Values["auto_review"] = map[string]any{"experimental_conversation_history_prompt": ""}
-	instructions = guardianReviewInstructions(cfg, nil, GuardianConversationHistoryRetrieval)
+	instructions = guardianReviewInstructions(cfg, nil, GuardianConversationHistoryRetrieval, false)
 	if strings.Contains(instructions, "## Conversation history retrieval") {
 		t.Fatalf("blank override retained bundled history instructions: %q", instructions)
 	}
@@ -234,7 +234,7 @@ func TestGuardianConversationHistoryInstructionsLikeRust(t *testing.T) {
 		"apps":                                true,
 		"guardian_conversation_history_tools": false,
 	}
-	instructions = guardianReviewInstructions(cfg, nil, GuardianConversationHistoryRetrieval)
+	instructions = guardianReviewInstructions(cfg, nil, GuardianConversationHistoryRetrieval, false)
 	if strings.Contains(instructions, "Use the owner's history.") {
 		t.Fatalf("disabled feature retained history instructions: %q", instructions)
 	}

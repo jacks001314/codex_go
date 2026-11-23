@@ -89,10 +89,14 @@ type RuntimeServices struct {
 	Feedback           *FeedbackSnapshot
 	// FeedbackUpload is the Sentry transport behind feedback/upload. Nil uses
 	// the bundled DSN with the router's policy-aware HTTP client.
-	FeedbackUpload      *FeedbackTransport
-	Config              *config.ConfigService
-	Account             *auth.AccountManager
-	AccountOAuthOptions *auth.OAuthOptions
+	FeedbackUpload *FeedbackTransport
+	Config         *config.ConfigService
+	// GuardianModelProvider is the inference route the host selected for
+	// Guardian (Rust #62588 Config::guardian_model_provider). Nil keeps the
+	// actor's provider for reviews and scoring.
+	GuardianModelProvider *GuardianInferenceProvider
+	Account               *auth.AccountManager
+	AccountOAuthOptions   *auth.OAuthOptions
 	// UsageAccounting is the embedding host's accounting for completed model
 	// responses (Rust AgentRuntimeServices::Host usage_accounting, #61958).
 	// Nil keeps the native rollout budget.

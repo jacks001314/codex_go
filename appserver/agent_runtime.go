@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -61,12 +62,20 @@ func (r *RuntimeRouter) requireAgentForTurn(params *turn.TurnStartParams) model.
 	if err == nil && agent != nil {
 		r.services.Agent = agent
 		prewarm := true
+		var guardianAgent model.AgentRunner
 		if cfg, cfgErr := r.effectiveConfigForTurn(params); cfgErr == nil && cfg != nil {
 			if strings.EqualFold(turnApprovalsReviewerForTurn(cfg, params), string(config.ApprovalsReviewerUser)) || turnIsFullAccess(cfg, firstNonEmpty(params.CWD, r.services.DefaultCWD), params) {
 				prewarm = false
 			}
+			// Rust #62588: a host-selected Guardian provider gets its own model
+			// runner, so review requests never borrow the actor's route.
+			if resolved, resolveErr := r.guardianInferenceAgent(cfg); resolveErr == nil {
+				guardianAgent = resolved
+			} else {
+				slog.Warn("failed to prepare the host-selected Guardian provider", "error", resolveErr)
+			}
 		}
-		r.ensureGuardianReviewerWithRequestCountry(agent, prewarm, r.capturedRequestCountryForThread(params.ThreadID))
+		r.ensureGuardianReviewerWithAgents(agent, guardianAgent, prewarm, r.capturedRequestCountryForThread(params.ThreadID))
 		return agent
 	}
 	r.services.Agent = &model.UnavailableAgentRunner{Err: err}
@@ -125,6 +134,12 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 // ensureGuardianReviewerWithRequestCountry also seeds the reviewer pool's
 // startup prewarm with the parent step's captured country (Rust #61535).
 func (r *RuntimeRouter) ensureGuardianReviewerWithRequestCountry(agent model.AgentRunner, prewarm bool, country protocol.RequestCountry) GuardianReviewer {
+	return r.ensureGuardianReviewerWithAgents(agent, nil, prewarm, country)
+}
+
+// ensureGuardianReviewerWithAgents also binds the reviewer pool to the
+// host-selected Guardian provider's runner (Rust #62588).
+func (r *RuntimeRouter) ensureGuardianReviewerWithAgents(agent model.AgentRunner, guardianAgent model.AgentRunner, prewarm bool, country protocol.RequestCountry) GuardianReviewer {
 	if r == nil {
 		return nil
 	}
@@ -132,6 +147,11 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithRequestCountry(agent model.Age
 		return r.services.GuardianReviewer
 	}
 	reviewer := newModelGuardianReviewer(agent)
+	if guardianAgent != nil {
+		if modelReviewer, ok := reviewer.(*modelGuardianReviewer); ok {
+			modelReviewer.useGuardianAgent(guardianAgent)
+		}
+	}
 	if modelReviewer, ok := reviewer.(*modelGuardianReviewer); ok {
 		modelReviewer.notify = r.notifyGuardianReviewEvent
 		modelReviewer.logAssessment = r.logGuardianAssessmentForThread
@@ -840,10 +860,11 @@ func (r *RuntimeRouter) guardianReviewPlanForTurnContext(ctx context.Context, th
 	if active.Params != nil {
 		reasoningSummary = firstNonEmpty(reasoningSummary, stringPtrValue(active.Params.Summary))
 	}
+	_, guardianProviderSelected := r.guardianInferenceProvider()
 	plan := guardianReviewPlan{
 		Selection:          selection,
 		AutoReview:         autoReview,
-		Instructions:       guardianReviewInstructions(cfg, autoReview, GuardianConversationHistoryRetrieval),
+		Instructions:       guardianReviewInstructions(cfg, autoReview, GuardianConversationHistoryRetrieval, guardianProviderSelected),
 		NodeReplPolicy:     guardianNodeReplPolicy(autoReview),
 		CyberAccessProgram: model.GuardianCyberAccessProgram(active.RunConfig.CyberAccessProgram),
 		ReasoningSummary:   reasoningSummary,
@@ -853,22 +874,23 @@ func (r *RuntimeRouter) guardianReviewPlanForTurnContext(ctx context.Context, th
 	if active.Params != nil {
 		parentEnvironments = active.Params.Environments
 	}
+	guardianProviderID := r.guardianReviewProviderID(active.RunConfig.ProviderID)
 	prepareInput := guardianReviewerPrepareInput{
 		ParentConfig:                    cfg,
 		ParentEnvironments:              parentEnvironments,
 		ParentModel:                     parentModel,
 		ReviewerModel:                   selection.Model,
 		ReviewerEffort:                  selection.ReasoningEffort,
-		BaseInstructions:                guardianReviewBaseInstructions(cfg, autoReview),
+		BaseInstructions:                guardianReviewBaseInstructions(cfg, autoReview, guardianProviderSelected),
 		ParentPermissionProfile:         r.guardianParentPermissionProfileForTurn(active, cfg),
 		PreserveClientDeveloperMessages: nodeReplAutoReviewRequiredForModel(parentInfo),
 		Ephemeral:                       active.RunConfig.Ephemeral,
-		ProviderID:                      active.RunConfig.ProviderID,
+		ProviderID:                      guardianProviderID,
 		SessionID:                       active.RunConfig.SessionID,
 	}
 	plan.PrepareInput = prepareInput
 	prepared, prepareErr := guardianPrepareReviewerOptions(prepareInput)
-	plan.ProviderID = strings.TrimSpace(active.RunConfig.ProviderID)
+	plan.ProviderID = guardianProviderID
 	plan.SessionID = strings.TrimSpace(active.RunConfig.SessionID)
 	plan.Ephemeral = active.RunConfig.Ephemeral
 	if prepareErr != nil {
@@ -950,7 +972,7 @@ func guardianNodeReplPolicy(autoReview *model.AutoReviewMessages) string {
 // contract. The catalog wins over the bundled templates and the managed/config
 // policy wins over both. This is the value the prepared reviewer config stores
 // as `base_instructions` (#40742).
-func guardianReviewBaseInstructions(cfg *config.Config, autoReview *model.AutoReviewMessages) string {
+func guardianReviewBaseInstructions(cfg *config.Config, autoReview *model.AutoReviewMessages, managedPolicyOnly bool) string {
 	policy, policyTemplate := state.GuardianPolicy(), state.GuardianPolicyTemplate()
 	if autoReview != nil {
 		if autoReview.Policy != nil {
@@ -961,7 +983,14 @@ func guardianReviewBaseInstructions(cfg *config.Config, autoReview *model.AutoRe
 		}
 	}
 	if cfg != nil {
-		if value, ok := cfg.GuardianPolicyConfig(); ok {
+		// Rust #62588 Config::guardian_policy_config: a host-selected Guardian
+		// provider reads the managed policy only, so policy text that came from
+		// the actor's configuration cannot steer Guardian.
+		if managedPolicyOnly {
+			if value, ok := managedGuardianPolicyRequirement(cfg); ok {
+				policy = value
+			}
+		} else if value, ok := cfg.GuardianPolicyConfig(); ok {
 			policy = value
 		}
 		if value, ok := cfg.GuardianPolicyTemplate(); ok {
@@ -1001,8 +1030,8 @@ func managedGuardianRulesPresent(cfg *config.Config) bool {
 // guardianReviewInstructions adds the reviewer-only prompt sections (the
 // guidance for the retrieval tools this session installed and the JSON
 // transcript grammar) to the base instructions.
-func guardianReviewInstructions(cfg *config.Config, autoReview *model.AutoReviewMessages, retrieval GuardianReviewRetrieval) string {
-	instructions := guardianReviewBaseInstructions(cfg, autoReview)
+func guardianReviewInstructions(cfg *config.Config, autoReview *model.AutoReviewMessages, retrieval GuardianReviewRetrieval, managedPolicyOnly bool) string {
+	instructions := guardianReviewBaseInstructions(cfg, autoReview, managedPolicyOnly)
 	if guidance := retrieval.guidance(cfg); guidance != "" {
 		instructions += "\n" + guidance
 	}
@@ -1027,6 +1056,11 @@ func (r *RuntimeRouter) guardianReviewModelForTurn(threadID, turnID string) stri
 // codex-auto-review otherwise). A config that cannot be resolved falls back to
 // the default so the selection stays deterministic.
 func (r *RuntimeRouter) guardianReviewPreferredModel(cfg *config.Config, params *turn.TurnStartParams) string {
+	// Rust #62588: the host-selected Guardian provider supplies the preferred
+	// reviewer for every Guardian request.
+	if provider, ok := r.guardianInferenceProvider(); ok {
+		return provider.preferredReviewModel()
+	}
 	if cfg == nil {
 		return model.DefaultApprovalReviewPreferredModel
 	}
