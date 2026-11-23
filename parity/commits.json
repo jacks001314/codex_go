@@ -51503,11 +51503,14 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Lifecycle preserved: the exec-server normalizes sandbox.workspaceRoots and passes them into sandbox.BuildCommandRunPlan (execserver/server.go:3007, 4986-4992), which binds symbolic :workspace_roots entries on the execution host through MaterializePermissionProfileWorkspaceRoots (sandbox/run.go:286-296), so a grant is anchored at the granted directory.",
+    "The app-server command/exec path resolves permission profiles against the command cwd (appserver/runtime_router.go:17032 commandExecPermissionProfileResolver -> config.ResolveSandboxPermissionProfile), and the run plan refuses restricted launches this host cannot sandbox (sandbox/run.go RequiresPlatformSandbox, appserver/command_exec.go:240 commandExecRequiresPlatformSandbox, execserver processSandboxUnavailableFailure).",
+    "Parity test added: appserver/command_exec_project_roots_subpath_like_rust_test.go covers the new Rust case - :workspace_roots subpath \"granted\" grants write to <command cwd>/granted while the command cwd, a sibling file and the parent granted directory stay unwritable, and the launch profile carries no unresolved project_roots entries. `go test ./appserver -run TestRuntimeRouterCommandExecProjectRootsSubpathGrantUsesCommandCWDLikeRust -count=1` passes.",
+    "Rust launch-preparation refactor (SandboxSelection::Platform { preference, windows_sandbox }, shared prepare_local_sandbox for tool commands and shell snapshots) has no separate Go carrier: Go resolves the platform backend inside BuildCommandRunPlan for both paths, and PermissionProfile::has_workspace_root_rules has no Go counterpart because the config resolver materializes workspace rules before the plan is built."
    ],
    "kind": "runtime",
    "sha": "6ee9bc1ba7b6375faf040042728add58f796e79c",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Select process sandboxes during launch preparation (#62183)"
   },
   {
