@@ -38,7 +38,40 @@ type renderedRegion struct {
 	w            int
 	h            int
 	text         []string
+	links        map[int][]regionThreadLink
 	hash         string
+}
+
+// regionThreadLink records a saved-conversation link painted in a region row.
+// The displayed text drops the OSC 8 escapes, so the hit test needs the
+// destination recorded while the escapes were still present (Rust #62332).
+type regionThreadLink struct {
+	Start    int
+	End      int
+	ThreadID string
+}
+
+// threadLinkRanges maps each rendered row of a painted section to the
+// saved-conversation links it carries.
+func threadLinkRanges(section string) map[int][]regionThreadLink {
+	if !strings.Contains(section, codextui.CodexThreadLinkPrefix) {
+		return nil
+	}
+	rows := strings.Split(strings.ReplaceAll(section, "\r\n", "\n"), "\n")
+	var links map[int][]regionThreadLink
+	for row, line := range rows {
+		for _, link := range codextui.OSC8LinksInLine(line) {
+			threadID, ok := codextui.ThreadIDFromLink(link.Destination)
+			if !ok {
+				continue
+			}
+			if links == nil {
+				links = map[int][]regionThreadLink{}
+			}
+			links[row] = append(links[row], regionThreadLink{Start: link.Start, End: link.End, ThreadID: threadID})
+		}
+	}
+	return links
 }
 
 type renderedSelectionState struct {
@@ -88,7 +121,7 @@ func (m *Model) captureRenderedSelectionRegions(sections []string, statusIndex i
 		for _, section := range sections[:statusIndex] {
 			y += sectionHeight(section)
 		}
-		m.captureRenderedRegion(renderedRegionStatus, statusIndex, 0, 0, y, m.width, len(statusText), statusText)
+		m.captureRenderedRegion(renderedRegionStatus, statusIndex, 0, 0, y, m.width, len(statusText), statusText, threadLinkRanges(sections[statusIndex]))
 	} else {
 		m.clearRenderedRegion(renderedRegionStatus)
 	}
@@ -98,7 +131,7 @@ func (m *Model) captureRenderedSelectionRegions(sections []string, statusIndex i
 		for _, section := range sections[:footerIndex] {
 			y += sectionHeight(section)
 		}
-		m.captureRenderedRegion(renderedRegionFooter, footerIndex, 0, 0, y, m.width, len(footerText), footerText)
+		m.captureRenderedRegion(renderedRegionFooter, footerIndex, 0, 0, y, m.width, len(footerText), footerText, threadLinkRanges(sections[footerIndex]))
 	}
 }
 
@@ -127,10 +160,10 @@ func (m *Model) captureWarningsSelectionRegion(sections []string, warningIndex i
 	y := sectionTop(sections, warningIndex) + row
 	left := m.warningsView.BodyLeft()
 	width := max(m.width-left, 1)
-	m.captureRenderedRegion(renderedRegionWarnings, warningIndex, row, left, y, width, len(rows), plain)
+	m.captureRenderedRegion(renderedRegionWarnings, warningIndex, row, left, y, width, len(rows), plain, nil)
 }
 
-func (m *Model) captureRenderedRegion(kind renderedRegionKind, sectionIndex, sectionRow, x, y, width, height int, text []string) {
+func (m *Model) captureRenderedRegion(kind renderedRegionKind, sectionIndex, sectionRow, x, y, width, height int, text []string, links map[int][]regionThreadLink) {
 	region := &m.renderedSelection.regions[kind]
 	hash := renderedRegionHash(text)
 	if m.renderedSelection.active && m.renderedSelection.region == kind {
@@ -158,6 +191,7 @@ func (m *Model) captureRenderedRegion(kind renderedRegionKind, sectionIndex, sec
 		w:            width,
 		h:            height,
 		text:         text,
+		links:        filterRegionLinks(links, height),
 		hash:         hash,
 	}
 }
@@ -196,7 +230,7 @@ func (m *Model) captureTurnTipSelectionRegion(kind renderedRegionKind, sections 
 		return
 	}
 	y := sectionTop(sections, sectionIndex) + row
-	m.captureRenderedRegion(kind, sectionIndex, row, 0, y, m.width, 1, []string{lines[row]})
+	m.captureRenderedRegion(kind, sectionIndex, row, 0, y, m.width, 1, []string{lines[row]}, threadLinkRanges(sections[sectionIndex]))
 }
 
 func sectionTop(sections []string, index int) int {
@@ -235,6 +269,24 @@ func sectionHeight(section string) int {
 		return 1
 	}
 	return strings.Count(section, "\n") + 1
+}
+
+// filterRegionLinks keeps only links whose row survived into the painted text.
+func filterRegionLinks(links map[int][]regionThreadLink, height int) map[int][]regionThreadLink {
+	if len(links) == 0 {
+		return nil
+	}
+	out := make(map[int][]regionThreadLink, len(links))
+	for row, rowLinks := range links {
+		if row < 0 || row >= height {
+			continue
+		}
+		out[row] = rowLinks
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func (m *Model) renderedSelectionRegionAt(x, y int) (renderedRegion, bool) {

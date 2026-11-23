@@ -5828,6 +5828,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		if handled, cmd := m.handleComposerGapLinkClick(msg); handled {
 			return m, cmd
 		}
+		if handled, cmd := m.handleThreadLinkClick(msg); handled {
+			return m, cmd
+		}
 		// Rust pointer_down toggles an activity disclosure before it starts a
 		// text selection, so the control wins an unmodified left press.
 		if m.handleTranscriptDisclosureClick(msg) {
@@ -5917,7 +5920,7 @@ func (m *Model) View() bubbletea.View {
 	if m == nil {
 		return bubbletea.NewView("")
 	}
-	v := bubbletea.NewView(m.viewString())
+	v := bubbletea.NewView(m.frameOutput())
 	if m.composerCaretVisible && m.composerCaretRow >= 0 && m.composerCaretRow < strings.Count(v.Content, "\n")+1 {
 		cursor := bubbletea.NewCursor(m.composerCaretX, m.composerCaretRow)
 		cursor.Shape = bubbletea.CursorBar
@@ -5933,7 +5936,18 @@ func (m *Model) View() bubbletea.View {
 	return v
 }
 func (m *Model) ViewContent() string {
-	return m.viewString()
+	return m.frameOutput()
+}
+
+// frameOutput is the painted frame with app-only hyperlinks stripped.
+// Saved-conversation links stay in the model text so clicks can hit-test
+// them, but the terminal must never receive an OSC 8 target that would
+// launch the desktop app (Rust thread_links.rs #62332).
+func (m *Model) frameOutput() string {
+	if m == nil {
+		return ""
+	}
+	return codextui.StripThreadLinkHyperlinks(m.viewString())
 }
 
 func (m *Model) viewString() string {

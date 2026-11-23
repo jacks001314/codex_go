@@ -51944,11 +51944,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1268: partial - Rust opens `codex://threads/<id>` Markdown links from chat and transcript views inside the TUI (also in the resume picker preview), resolves nested agent links through the owning session, and shows archived conversations read-only. Go only builds the desktop URL (tui/app/history_ui.go DesktopThreadURL returns `codex://threads/<id>` for launching the desktop app); no TUI link handler navigates to the linked conversation, so clicking such a link in a transcript has no in-place effect."
+    "Batch 148: complete - Rust #62332 opens `codex://threads/<id>` Markdown links inside the TUI instead of handing them to the desktop app. Go now parses and renders those links and switches the conversation in place: tui/thread_links.go adds ThreadIDFromLink (only an exact canonical `codex://threads/<uuid>` destination is navigable, so a web URL, an extra path/query/fragment, a control byte, or a non-canonical id is rejected), MarkdownDestination (thread links sit beside web links in the Markdown link pass) and StripThreadLinkHyperlinks; tui/markdown/thread_links.go wraps the rendered label (or the destination text of a label-less link) in an app-only OSC 8 target that stays in the model text for hit-testing; tui/tea captures those ranges per painted row (regionThreadLink in rendered_selection.go and transcript_selection.go) and tui/tea/thread_links.go resolves a Ctrl-click on the transcript, status, footer or tip rows to openThreadLink, which switches through applyAgentModalOptionAllowed; a cached archived target reopens in the frozen read-only view (setArchivedThread, U unarchives) instead of being refused, and the composer-gap handler routes a thread destination to the TUI before the browser opener (Rust open_url_in_browser). View/ViewContent emit frameOutput, which strips the app-only target so the terminal can never launch the desktop app; the label stays visible. Rust's resume-picker preview link has no Go carrier because Go's picker shows a one-line Preview instead of a rendered transcript, and nested subagent links resolve directly against the local session store, so no root-ancestry walk is needed there. Tests: go test ./tui -run 'ThreadIDFromLink|MarkdownDestination|StripThreadLinkHyperlinks' -count=1; go test ./tui/markdown -run 'ThreadLink|WebLinksStill' -count=1; go test ./tui/tea -run 'ThreadLink|ComposerGap' -count=1; go test ./tui ./tui/markdown ./tui/tea -count=1; go build ./...; go vet ./tui ./tui/markdown ./tui/tea"
    ],
    "kind": "runtime",
    "sha": "0a82fdf49d98feb33638cd38f79451ac966da572",
-   "status": "partial",
+   "status": "complete",
    "subject": "Open Codex thread links inside the TUI (#62332)"
   },
   {

@@ -247,6 +247,13 @@ func (m *Model) clearBackgroundThreadEvents() {
 }
 
 func (m *Model) applyAgentModalOption(optionID string) bubbletea.Cmd {
+	return m.applyAgentModalOptionAllowed(optionID, false)
+}
+
+// applyAgentModalOptionAllowed switches to a thread. allowArchived lets a
+// saved-conversation link revisit an archived thread: the archived view is
+// frozen for reading and only U reopens it (Rust #61486/#62332).
+func (m *Model) applyAgentModalOptionAllowed(optionID string, allowArchived bool) bubbletea.Cmd {
 	if m == nil {
 		return nil
 	}
@@ -255,7 +262,7 @@ func (m *Model) applyAgentModalOption(optionID string) bubbletea.Cmd {
 		m.notice = "Subagents"
 		return nil
 	}
-	if m.agentThreadArchived(threadID) {
+	if !allowArchived && m.agentThreadArchived(threadID) {
 		m.notice = "This agent is archived. Unarchive it before switching."
 		return nil
 	}
@@ -406,6 +413,11 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		m.clearProviderError()
 	}
 	m.setThreadUnavailable(message.Response.Entry.IsClosed)
+	if entry.Archived {
+		// Rust show_read_only_thread(Archived): a selected archived
+		// conversation is readable but frozen until it is unarchived.
+		m.setArchivedThread(true)
+	}
 	m.restorePendingAgentsOverviewDraft()
 	m.resumedQueueThreadID = m.currentThreadID()
 	m.refreshTranscript()

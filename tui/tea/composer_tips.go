@@ -108,7 +108,7 @@ func (m *Model) applyOpenURLResult(msg OpenURLResultMsg) {
 // to an OSC 8 destination. Bubble Tea v1 has no Super modifier, so Ctrl-click
 // is the available carrier for Rust's Ctrl/Super-click behavior.
 func (m *Model) handleComposerGapLinkClick(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd) {
-	if m == nil || m.onOpenURL == nil || !msg.Ctrl ||
+	if m == nil || !msg.Ctrl ||
 		msg.Action != mousemsg.MouseActionPress || msg.Button != mousemsg.MouseButtonLeft {
 		return false, nil
 	}
@@ -121,12 +121,25 @@ func (m *Model) handleComposerGapLinkClick(msg mousemsg.MouseMsg) (bool, bubblet
 		return false, nil
 	}
 	column := msg.X - region.x
+	// Saved-conversation links keep their range in the region record because
+	// the painted text drops the OSC 8 escape (Rust #62332).
+	if threadID, ok := threadLinkInRanges(region.links, column, row); ok {
+		return true, m.openThreadLink(threadID)
+	}
 	for _, link := range codextui.OSC8LinksInLine(region.text[row]) {
 		if column < link.Start || column >= link.End {
 			continue
 		}
 		destination := link.Destination
+		if threadID, ok := codextui.ThreadIDFromLink(destination); ok {
+			// Rust #62332 open_url_in_browser: a saved-conversation link is
+			// handled by the TUI instead of the browser opener.
+			return true, m.openThreadLink(threadID)
+		}
 		opener := m.onOpenURL
+		if opener == nil {
+			return false, nil
+		}
 		return true, func() bubbletea.Msg {
 			return OpenURLResultMsg{URL: destination, Err: opener(destination)}
 		}

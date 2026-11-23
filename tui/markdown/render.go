@@ -302,7 +302,7 @@ func renderWithStyleSpacing(text string, width int, themeID string, cwd string, 
 		text = UnwrapMarkdownFences(text)
 	}
 	text, citationLinks := rewriteFileCitations(text, cwd)
-	text, localLinks, webLinks := rewriteLinksWithInfo(text, cwd)
+	text, localLinks, webLinks, threadLinks := rewriteLinksWithInfo(text, cwd)
 	localLinks = append(citationLinks, localLinks...)
 	urlPlaceholders, text := protectLongBareURLs(text, width)
 	mathPlaceholders, text := protectMathSpans(text, width)
@@ -361,6 +361,7 @@ func renderWithStyleSpacing(text string, width int, themeID string, cwd string, 
 	out = restoreMathPlaceholders(out, mathPlaceholders)
 	out = annotateRenderedLineURLs(out)
 	out = annotateWebLinkLabels(out, webLinks)
+	out = annotateThreadLinkLabels(out, threadLinks)
 	out = annotateLocalFileLinks(out, localLinks, cwd)
 	out = restoreURLPlaceholders(out, urlPlaceholders, linkSGR)
 	if uniformLists {
@@ -838,27 +839,28 @@ type webFileLink struct {
 }
 
 func rewriteLocalFileLinks(source string, cwd string) string {
-	out, _, _ := rewriteLinksWithInfo(source, cwd)
+	out, _, _, _ := rewriteLinksWithInfo(source, cwd)
 	return out
 }
 
 // rewriteLinksWithInfo rewrites local file link labels to their resolved target
 // paths and returns the rewritten source plus the annotations needed to add
 // OSC-8 hyperlinks afterward (local file targets and web link labels).
-func rewriteLinksWithInfo(source string, cwd string) (string, []localFileLink, []webFileLink) {
+func rewriteLinksWithInfo(source string, cwd string) (string, []localFileLink, []webFileLink, []threadFileLink) {
 	if !strings.Contains(source, "](") {
-		return source, nil, nil
+		return source, nil, nil, nil
 	}
 	data := []byte(source)
 	document := defaultMarkdownParser.Parse(gmtext.NewReader(data))
 	codeRanges := collectCodeRanges(document)
 	matches := markdownLinkRE.FindAllStringSubmatchIndex(source, -1)
 	if len(matches) == 0 {
-		return source, nil, nil
+		return source, nil, nil, nil
 	}
 	var sb strings.Builder
 	var links []localFileLink
 	var webLinks []webFileLink
+	var threadLinks []threadFileLink
 	cursor := 0
 	for _, m := range matches {
 		// Skip matches inside code blocks/code spans so code text is preserved.
@@ -898,6 +900,17 @@ func rewriteLinksWithInfo(source string, cwd string) (string, []localFileLink, [
 			links = append(links, localFileLink{Display: display, Dest: dest})
 			continue
 		}
+		if threadID, ok := codextui.ThreadIDFromLink(dest); ok {
+			// Rust #62332: a saved-conversation link renders its label and opens
+			// inside the TUI. A blank label keeps the destination text visible.
+			threadLinks = append(threadLinks, threadFileLink{Label: label, ThreadID: threadID})
+			if strings.TrimSpace(label) != "" {
+				sb.WriteString(source[cursor:m[0]])
+				sb.WriteString(label)
+				cursor = m[1]
+			}
+			continue
+		}
 		if webURL, ok := codextui.WebDestination(dest); ok {
 			webLinks = append(webLinks, webFileLink{Label: label, URL: webURL})
 			if strings.TrimSpace(label) != "" && hideWebLinkDestination(webURL) {
@@ -910,7 +923,7 @@ func rewriteLinksWithInfo(source string, cwd string) (string, []localFileLink, [
 		}
 	}
 	sb.WriteString(source[cursor:])
-	return sb.String(), links, webLinks
+	return sb.String(), links, webLinks, threadLinks
 }
 
 // annotateWebLinkLabels wraps the rendered label of each markdown web link in an
