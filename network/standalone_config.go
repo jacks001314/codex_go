@@ -15,7 +15,8 @@ const MaxStandaloneProxyConfigBytes = 1024 * 1024
 // standaloneProxyConfig is the top-level `--config` document: a single
 // `network` object (Rust StandaloneConfig).
 type standaloneProxyConfig struct {
-	Network standaloneNetworkSettings `json:"network"`
+	Network     standaloneNetworkSettings   `json:"network"`
+	Constraints *standaloneProxyConstraints `json:"constraints,omitempty"`
 }
 
 // standaloneNetworkSettings mirrors the Rust NetworkProxyConfig JSON shape.
@@ -141,7 +142,11 @@ func ParseStandaloneProxyConfig(data []byte) (*ProxyConfig, error) {
 	}
 	// Policy validation runs when the proxy starts (Rust's build_config_state in
 	// main), matching the parse step that this function mirrors.
-	return &ProxyConfig{Network: settings}, nil
+	var constraints ProxyConstraints
+	if config.Constraints != nil {
+		constraints = config.Constraints.toProxyConstraints()
+	}
+	return &ProxyConfig{Network: settings, Constraints: constraints}, nil
 }
 
 // standaloneSettingsToConfigValues re-encodes the strict settings struct into

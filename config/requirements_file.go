@@ -62,6 +62,9 @@ func ParseRequirementsTOMLWithPathContext(data []byte, context *ConfigPathContex
 	if err != nil {
 		return nil, err
 	}
+	// Capture the raw network declarations before aliases are normalized or the
+	// nested table is lifted, so managed layers can compose them (Rust #62882).
+	networkLayerValues := managedNetworkRequirementLayerValues(values)
 	if permissions, ok := values["permissions"].(map[string]any); ok {
 		if err := resolveFilesystemDenyReadPathsWithContext(permissions, context); err != nil {
 			return nil, err
@@ -70,6 +73,9 @@ func ParseRequirementsTOMLWithPathContext(data []byte, context *ConfigPathContex
 	requirements, err := configRequirementsFromValidatedMap(values)
 	if err != nil {
 		return nil, err
+	}
+	if requirements != nil {
+		requirements.networkRequirementLayerValues = networkLayerValues
 	}
 	if err := resolveOtelRequirementPaths(requirements, context); err != nil {
 		return nil, err

@@ -110,6 +110,10 @@ type proxyRuntimePolicy struct {
 	mitmHooks        ProxyMITMHooksByHost
 	broker           *ProxyCredentialBroker
 	headerInjections []ProxyHeaderInjection
+	// constraints is the controller-side managed policy (Rust #62882).
+	constraints ProxyConstraints
+	// standalone marks the codex-network-proxy process.
+	standalone bool
 }
 
 func StartProxyManagedNetwork(ctx context.Context, config ProxyConfig, baseEnv map[string]string) (*PreparedProxyManagedNetwork, error) {
@@ -170,6 +174,8 @@ func startProxyServer(parent context.Context, config ProxyConfig, runtimeConfig 
 		return nil, err
 	}
 	policy.headerInjections = cloneProxyHeaderInjections(config.HeaderInjections)
+	policy.constraints = cloneProxyConstraints(config.Constraints)
+	policy.standalone = config.Standalone
 	var mitmRuntime *proxyMITMRuntime
 	if settings.MITM {
 		mitmRuntime, err = newProxyMITMRuntime(baseEnv, settings.MITMCA)
@@ -258,6 +264,9 @@ func StartStandaloneProxy(ctx context.Context, config ProxyConfig, baseEnv map[s
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// The standalone process may narrow a managed wildcard to an explicit local
+	// grant (Rust #62882).
+	config.Standalone = true
 	runtimeConfig, err := ResolveProxyRuntime(config)
 	if err != nil {
 		return nil, err
@@ -324,6 +333,8 @@ func (s *ProxyServer) ReloadConfig(config ProxyConfig) error {
 	if err != nil {
 		return err
 	}
+	policy.constraints = cloneProxyConstraints(s.runtimePolicy().constraints)
+	policy.standalone = s.runtimePolicy().standalone
 	s.policy.Store(policy)
 	return nil
 }
@@ -2122,7 +2133,7 @@ func (s *ProxyServer) evaluateProxyPolicy(ctx context.Context, request ProxyPoli
 	// so a matching host is not yet authorized for the pre-approval DNS guard.
 	needsReview := policy.reviewMatcher != nil && policy.reviewMatcher.Match(request.Host)
 	if !settings.AllowLocalBinding {
-		if baselineLocalBindingReason(request, allowlist, allowed && !needsReview) != "" {
+		if baselineLocalBindingReason(request, allowlist, allowed && !needsReview, policy) != "" {
 			return deny(ProxyReasonNotAllowedLocal, ProxyDecisionSourceBaselinePolicy)
 		}
 	}
@@ -2142,7 +2153,7 @@ func (s *ProxyServer) evaluateProxyPolicy(ctx context.Context, request ProxyPoli
 			// or explicit deny policy. Re-run the local/private guard for the now
 			// authorized host before honoring the approval, so an approved host
 			// that resolves (or rebinds) to a non-public address is still rejected.
-			if !settings.AllowLocalBinding && approvedLocalBindingReason(request, allowlist) != "" {
+			if !settings.AllowLocalBinding && approvedLocalBindingReason(request, allowlist, policy) != "" {
 				return deny(ProxyReasonNotAllowedLocal, ProxyDecisionSourceBaselinePolicy)
 			}
 			decision.Reason = ProxyReasonNotAllowed
@@ -2166,8 +2177,8 @@ func (s *ProxyServer) evaluateProxyPolicy(ctx context.Context, request ProxyPoli
 // branch only runs for a host that is already allowlisted. A request that is
 // merely *decidable* (policyDecider configured) is not yet authorized to touch
 // DNS; an approval grants that later, in approvedLocalBindingReason.
-func baselineLocalBindingReason(request ProxyPolicyRequest, allowlist []string, authorized bool) string {
-	if handled, reason := literalLocalBindingReason(request, allowlist); handled {
+func baselineLocalBindingReason(request ProxyPolicyRequest, allowlist []string, authorized bool, policy *proxyRuntimePolicy) string {
+	if handled, reason := literalLocalBindingReason(request, allowlist, policy); handled {
 		return reason
 	}
 	if authorized && proxyHostResolvesToNonPublicIP(request.Host, request.Port) {
@@ -2182,8 +2193,8 @@ func baselineLocalBindingReason(request ProxyPolicyRequest, allowlist []string, 
 // restriction. Mirrors Rust #51650's
 // host_blocked_with_local_binding(HostAuthorization::Approved) recheck after
 // the decider, and its inner-HTTPS re-check after an approved CONNECT.
-func approvedLocalBindingReason(request ProxyPolicyRequest, allowlist []string) string {
-	if handled, reason := literalLocalBindingReason(request, allowlist); handled {
+func approvedLocalBindingReason(request ProxyPolicyRequest, allowlist []string, policy *proxyRuntimePolicy) string {
+	if handled, reason := literalLocalBindingReason(request, allowlist, policy); handled {
 		return reason
 	}
 	if proxyHostResolvesToNonPublicIP(request.Host, request.Port) {
@@ -2196,16 +2207,40 @@ func approvedLocalBindingReason(request ProxyPolicyRequest, allowlist []string) 
 // any DNS lookup. handled reports whether the host was such a literal, so the
 // caller must not additionally fall through to the DNS-backed branch (mirrors
 // the original `if literal { .. } else if resolves_non_public { .. }`).
-func literalLocalBindingReason(request ProxyPolicyRequest, allowlist []string) (handled bool, reason string) {
+func literalLocalBindingReason(request ProxyPolicyRequest, allowlist []string, policy *proxyRuntimePolicy) (handled bool, reason string) {
 	normalizedHost := request.Host
 	parsedHost, _ := ParseProxyHost(normalizedHost)
 	if ip := proxyIPLiteral(normalizedHost); IsNonPublicProxyIP(ip) || IsLoopbackProxyHost(parsedHost) {
-		if !explicitLocalProxyAllowlisted(allowlist, normalizedHost) {
+		if !explicitLocalGrantAllowed(policy, allowlist, normalizedHost) {
 			return true, ProxyReasonNotAllowedLocal
 		}
 		return true, ""
 	}
 	return false, ""
+}
+
+// explicitLocalGrantAllowed mirrors Rust #62882's explicit_local_allow check: the
+// effective policy must name the literal, and an attached executor's grant must
+// also satisfy the controller's allowlist constraints. A standalone proxy may
+// narrow a managed wildcard to an explicit local grant.
+func explicitLocalGrantAllowed(policy *proxyRuntimePolicy, allowlist []string, host string) bool {
+	if !explicitLocalProxyAllowlisted(allowlist, host) {
+		return false
+	}
+	if policy == nil {
+		return true
+	}
+	constraints := policy.constraints
+	if policy.standalone && constraints.AllowlistExpansionEnabled == nil {
+		return true
+	}
+	if constraints.AllowlistExpansionEnabled != nil && *constraints.AllowlistExpansionEnabled {
+		return true
+	}
+	if constraints.AllowedDomains == nil {
+		return true
+	}
+	return explicitLocalProxyAllowlisted(*constraints.AllowedDomains, host)
 }
 
 const maxProxyBlockedEvents = 200

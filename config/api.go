@@ -617,16 +617,20 @@ type ConfigRequirements struct {
 	// RuntimeAuthMode pins `features.runtime_agent_instances.mode` (Rust
 	// FeatureRequirementsToml.runtime_auth_mode, #60014). It is internal and
 	// stays off the app-server wire schema.
-	RuntimeAuthMode          *RuntimeAuthModeRequirement `json:"-"`
-	Hooks                    *ManagedHooksRequirements   `json:"hooks,omitempty"`
-	EnforceResidency         *ResidencyRequirement       `json:"enforceResidency,omitempty"`
-	Application              *ApplicationRequirements    `json:"application,omitempty"`
-	Network                  *NetworkRequirements        `json:"network,omitempty"`
-	Models                   *ModelsRequirements         `json:"models,omitempty"`
-	AllowedLoginMethods      []ForcedLoginMethod         `json:"allowedLoginMethods,omitempty"`
-	AllowedChatGPTWorkspaces []string                    `json:"allowedChatGPTWorkspaces,omitempty"`
-	CliAuthCredentialsStore  *AuthCredentialsStoreMode   `json:"cliAuthCredentialsStore,omitempty"`
-	ChatgptBaseURL           *string                     `json:"chatgptBaseUrl,omitempty"`
+	RuntimeAuthMode  *RuntimeAuthModeRequirement `json:"-"`
+	Hooks            *ManagedHooksRequirements   `json:"hooks,omitempty"`
+	EnforceResidency *ResidencyRequirement       `json:"enforceResidency,omitempty"`
+	Application      *ApplicationRequirements    `json:"application,omitempty"`
+	Network          *NetworkRequirements        `json:"network,omitempty"`
+	// networkRequirementLayerValues keeps the raw network declarations this
+	// requirements document supplied so a later managed layer can compose domain
+	// rules with it (Rust #62882). It is internal and stays off the wire schema.
+	networkRequirementLayerValues map[string]any            `json:"-"`
+	Models                        *ModelsRequirements       `json:"models,omitempty"`
+	AllowedLoginMethods           []ForcedLoginMethod       `json:"allowedLoginMethods,omitempty"`
+	AllowedChatGPTWorkspaces      []string                  `json:"allowedChatGPTWorkspaces,omitempty"`
+	CliAuthCredentialsStore       *AuthCredentialsStoreMode `json:"cliAuthCredentialsStore,omitempty"`
+	ChatgptBaseURL                *string                   `json:"chatgptBaseUrl,omitempty"`
 	// ConfigServer is the local managed requirement selecting a customer-hosted
 	// configuration server (Rust ConfigRequirementsToml.config_server). Only
 	// local managed requirements may configure it, so it stays off the
@@ -4601,6 +4605,7 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 	clone.RequireMXC = cloneBoolPtr(requirements.RequireMXC)
 	clone.AllowedPermissionProfiles = cloneBoolMap(requirements.AllowedPermissionProfiles)
 	clone.Permissions = cloneMap(requirements.Permissions)
+	clone.networkRequirementLayerValues = cloneMap(requirements.networkRequirementLayerValues)
 	clone.AllowedWebSearchModes = cloneSlice(requirements.AllowedWebSearchModes)
 	clone.FeatureRequirements = cloneBoolMap(requirements.FeatureRequirements)
 	clone.DefaultPermissions = cloneStringPtr(requirements.DefaultPermissions)

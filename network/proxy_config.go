@@ -103,6 +103,13 @@ type ProxyConfig struct {
 	// CredentialBroker reuses an executor-session broker across proxy launches.
 	// It is internal-only and never serialized to or from remote configs.
 	CredentialBroker *ProxyCredentialBroker
+	// Constraints is the managed policy this config was validated against. The
+	// proxy consults it when an explicit local grant has to satisfy the
+	// controller's allowlist (Rust #62882). It is internal-only.
+	Constraints ProxyConstraints
+	// Standalone marks the codex-network-proxy process, whose policy may narrow a
+	// managed wildcard to an explicit local grant (Rust #62882).
+	Standalone bool
 }
 
 type ProxySettings struct {

@@ -50,7 +50,7 @@ func run(args []string) error {
 		if err := static.Validate(); err != nil {
 			return fmt.Errorf("invalid network proxy config: %w", err)
 		}
-		config = &network.ProxyConfig{Network: static.Network}
+		config = &network.ProxyConfig{Network: static.Network, Constraints: static.Constraints}
 	} else {
 		parsed, err := network.ParseStandaloneProxyConfig(data)
 		if err != nil {

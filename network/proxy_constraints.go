@@ -178,7 +178,31 @@ func (s *ProxySpec) Config() ProxyConfig {
 	if s == nil {
 		return ProxyConfig{}
 	}
-	return cloneProxyConfig(s.config)
+	config := cloneProxyConfig(s.config)
+	config.Constraints = cloneProxyConstraints(s.constraints)
+	return config
+}
+
+// Clone returns a defensive copy of the managed constraints.
+func cloneProxyConstraints(constraints ProxyConstraints) ProxyConstraints {
+	clone := constraints
+	clone.Enabled = cloneBool(constraints.Enabled)
+	clone.AllowUpstreamProxy = cloneBool(constraints.AllowUpstreamProxy)
+	clone.DangerouslyAllowNonLoopbackProxy = cloneBool(constraints.DangerouslyAllowNonLoopbackProxy)
+	clone.DangerouslyAllowAllUnixSockets = cloneBool(constraints.DangerouslyAllowAllUnixSockets)
+	clone.AllowedDomains = cloneStringSlicePtrPtr(constraints.AllowedDomains)
+	clone.ReviewDomains = cloneStringSlicePtrPtr(constraints.ReviewDomains)
+	clone.AllowlistExpansionEnabled = cloneBool(constraints.AllowlistExpansionEnabled)
+	clone.DeniedDomains = cloneStringSlicePtrPtr(constraints.DeniedDomains)
+	clone.DenylistExpansionEnabled = cloneBool(constraints.DenylistExpansionEnabled)
+	clone.AllowUnixSockets = cloneStringSlicePtrPtr(constraints.AllowUnixSockets)
+	clone.AllowLocalBinding = cloneBool(constraints.AllowLocalBinding)
+	if constraints.Mode != nil {
+		mode := *constraints.Mode
+		clone.Mode = &mode
+	}
+	clone.HeaderInjections = cloneProxyHeaderInjections(constraints.HeaderInjections)
+	return clone
 }
 
 func (s *ProxySpec) HardDenyAllowlistMisses() bool {
@@ -257,6 +281,9 @@ func applyProxyRequirements(config ProxyConfig, requirements *ProxyRequirements,
 
 	managedDenied, hasManagedDenied := proxyRequirementDomains(requirements.Domains, ProxyDomainDeny)
 	if hasManagedDenied {
+		// Rust #62882: the managed allowlist can carry a different spelling of a
+		// denied selector; deny that spelling explicitly for text-based executors.
+		managedDenied = carryDeniedSelectorSpellings(managedDenied, managedAllowed)
 		effective := managedDenied
 		if denyExpansion {
 			effective = mergeProxyDomainLists(managedDenied, settings.DeniedDomains())
@@ -548,7 +575,47 @@ func boolPtr(value bool) *bool {
 	return &value
 }
 
+func cloneStringSlicePtrPtr(values *[]string) *[]string {
+	if values == nil {
+		return nil
+	}
+	clone := append([]string(nil), (*values)...)
+	return &clone
+}
+
 func cloneStringSlicePtr(values []string) *[]string {
 	clone := append([]string(nil), values...)
 	return &clone
+}
+
+// carryDeniedSelectorSpellings appends every managed allowlist entry whose
+// canonical review identity matches a denied selector, so an equivalent spelling
+// cannot slip past a text-based executor policy.
+func carryDeniedSelectorSpellings(denied, allowed []string) []string {
+	if len(denied) == 0 || len(allowed) == 0 {
+		return denied
+	}
+	deniedIdentities := make(map[string]struct{}, len(denied))
+	present := make(map[string]struct{}, len(denied))
+	for _, pattern := range denied {
+		present[pattern] = struct{}{}
+		if identity, err := CanonicalDenyProxyPattern(pattern); err == nil {
+			deniedIdentities[identity] = struct{}{}
+		}
+	}
+	out := append([]string(nil), denied...)
+	for _, pattern := range allowed {
+		if _, ok := present[pattern]; ok {
+			continue
+		}
+		identity, err := CanonicalReviewProxyPattern(pattern)
+		if err != nil {
+			continue
+		}
+		if _, ok := deniedIdentities[identity]; ok {
+			out = append(out, pattern)
+			present[pattern] = struct{}{}
+		}
+	}
+	return out
 }

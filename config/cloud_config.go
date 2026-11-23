@@ -630,6 +630,10 @@ func applyCloudConfigBundleWithFilesystemSource(values map[string]any, requireme
 	cloudFilesystem := false
 	networkFragments := []string{}
 	networkFragmentSeen := map[string]bool{}
+	// Rust #62882: managed network requirements compose across sources instead
+	// of the highest layer replacing the whole table.
+	var cloudNetworkLayers []managedNetworkRequirementLayer
+	hasCloudNetwork := false
 	for _, layer := range layers.EnterpriseManagedRequirements {
 		parsed, err := parseRequirementsTOMLValues([]byte(layer.RawTOML))
 		if err != nil {
@@ -638,6 +642,28 @@ func applyCloudConfigBundleWithFilesystemSource(values map[string]any, requireme
 		normalizeFeatureRequirementAliases(parsed)
 		if err := normalizeNetworkRequirementAliases(parsed); err != nil {
 			return nil, false, fmt.Errorf("%w: invalid cloud requirements: %s", ErrInvalidCloudConfig, err)
+		}
+		// Rust #62882 validates every fragment's network table before
+		// composition, so a conflicting mirror or mixed list/map shape names the
+		// offending fragment.
+		if table, ok := parsed["network_proxy"].(map[string]any); ok {
+			if err := validateNetworkRequirementsTOML(table); err != nil {
+				return nil, false, fmt.Errorf("%w: invalid cloud requirements: %s (%s)", ErrInvalidCloudConfig, err, layer.Source.Name)
+			}
+			hasCloudNetwork = true
+			cloudNetworkLayers = append(cloudNetworkLayers, managedNetworkRequirementLayer{
+				Name:   layer.Source.Name,
+				Values: managedNetworkRequirementLayerValues(parsed),
+			})
+		}
+		if permissions, ok := parsed["permissions"].(map[string]any); ok {
+			if _, ok := permissions["network"].(map[string]any); ok {
+				hasCloudNetwork = true
+				cloudNetworkLayers = append(cloudNetworkLayers, managedNetworkRequirementLayer{
+					Name:   layer.Source.Name,
+					Values: managedNetworkRequirementLayerValues(parsed),
+				})
+			}
 		}
 		// Rust #61391: the two managed-network spellings are normalized per
 		// fragment, and a fragment that publishes both must describe one
@@ -689,6 +715,29 @@ func applyCloudConfigBundleWithFilesystemSource(values map[string]any, requireme
 		}
 		mergeConfigMaps(managedRequirementValues, parsed)
 	}
+	var composedNetworkTable map[string]any
+	if hasCloudNetwork {
+		networkLayers := make([]managedNetworkRequirementLayer, 0, len(cloudNetworkLayers)+1)
+		if requirements != nil && len(requirements.networkRequirementLayerValues) > 0 {
+			networkLayers = append(networkLayers, managedNetworkRequirementLayer{
+				Name:   localManagedNetworkRequirementSource,
+				Values: requirements.networkRequirementLayerValues,
+			})
+		}
+		networkLayers = append(networkLayers, cloudNetworkLayers...)
+		composed, composeErr := composeManagedNetworkRequirementLayers(networkLayers)
+		if composeErr != nil {
+			if len(networkFragments) > 0 {
+				return nil, false, fmt.Errorf("%w: invalid cloud requirements: %s (%s)", ErrInvalidCloudConfig, composeErr, strings.Join(networkFragments, ", "))
+			}
+			return nil, false, fmt.Errorf("%w: invalid cloud requirements: %s", ErrInvalidCloudConfig, composeErr)
+		}
+		composedNetworkTable = composed
+		removeManagedNetworkRequirementTables(managedRequirementValues)
+		if composed != nil {
+			managedRequirementValues["network_proxy"] = composed
+		}
+	}
 	managedRequirements, err := configRequirementsFromValidatedMap(managedRequirementValues)
 	if err != nil {
 		if strings.Contains(err.Error(), "same network policy") && len(networkFragments) > 0 {
@@ -707,6 +756,11 @@ func applyCloudConfigBundleWithFilesystemSource(values map[string]any, requireme
 		managedRequirements.ConfigServer = nil
 	}
 
+	if composedNetworkTable != nil && requirements != nil {
+		// The composed network table already includes this requirements layer's
+		// contribution, so the overlay must replace it wholesale.
+		requirements.Network = nil
+	}
 	// Permission profiles in requirements are executable policy definitions,
 	// while the remaining fields constrain which config values may be selected.
 	if rawProfiles, ok := managedRequirementValues["permissions"].(map[string]any); ok {
@@ -1020,5 +1074,25 @@ func reverseCloudConfigLayers(values []CloudConfigLayer) {
 func reverseCloudConfigRequirements(values []CloudConfigRequirementsLayer) {
 	for i, j := 0, len(values)-1; i < j; i, j = i+1, j-1 {
 		values[i], values[j] = values[j], values[i]
+	}
+}
+
+// localManagedNetworkRequirementSource names the machine-owned requirements
+// layer when it composes with cloud-managed network policy.
+const localManagedNetworkRequirementSource = "system"
+
+// removeManagedNetworkRequirementTables drops every raw managed-network
+// spelling from composed requirement values before the composed table is set.
+func removeManagedNetworkRequirementTables(values map[string]any) {
+	if values == nil {
+		return
+	}
+	delete(values, "network_proxy")
+	delete(values, "experimental_network")
+	if permissions, ok := values["permissions"].(map[string]any); ok {
+		delete(permissions, "network")
+		if len(permissions) == 0 {
+			delete(values, "permissions")
+		}
 	}
 }

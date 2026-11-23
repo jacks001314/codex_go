@@ -53807,11 +53807,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Implemented: config/network_requirement_compose.go ports Rust compose_domains (list replacement per kind, keyed domains updates by source priority, deny-wins across surviving lists, a surviving allowed_domains = [] clearing lower grants, empty domains maps contributing no updates, canonical review/deny selector identities including IPv6 and wildcard ports, mirrored-declaration agreement, and the Unix socket single-spelling restriction). applyCloudConfigBundleWithFilesystemSource composes cloud fragments and the local requirements layer through it and validates each fragment first.",
+    "Implemented: network/proxy_constraints.go carries equivalent denied selector spellings from the managed allowlist into the effective denylist (carryDeniedSelectorSpellings); ProxySpec.Config exposes the managed constraints, the runtime policy keeps them, and explicit local grants must satisfy the controller allowlist unless the standalone proxy narrows a managed wildcard or the allowlist expansion is enabled.",
+    "Verified: go test ./config ./network -count=1; go test ./execserver -count=1; go test ./appserver -run 'ManagedNetwork|NetworkProxy|NetworkApprov|NetworkPolicy' -count=1; go build ./..."
    ],
    "kind": "runtime",
    "sha": "bb1037ba042f88ec566f7364ee49c9070ebd03bf",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Compose managed domain rules across network config layers (#62882)"
   },
   {

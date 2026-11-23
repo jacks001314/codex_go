@@ -210,9 +210,11 @@ func TestCloudConfigLoaderRetriesTimeoutOnNextLoadLikeRust(t *testing.T) {
 }
 
 // TestCloudValidationChecksNetworkSpellingsPerFragmentLikeRust mirrors Rust
-// #61391: fragments are normalized one at a time, so a fragment may publish
-// both spellings when they describe the same policy, while differing policies
-// are rejected with the participating fragment names and no policy contents.
+// #61391/#62882: fragments are normalized one at a time, so a fragment may
+// publish both spellings when they describe the same policy. Mixed spellings
+// across fragments now compose their domain rules, while a single fragment whose
+// two spellings describe different policies is rejected with the participating
+// fragment names and no policy contents.
 func TestCloudValidationChecksNetworkSpellingsPerFragmentLikeRust(t *testing.T) {
 	for _, alias := range []string{"experimental_network", "network_proxy"} {
 		nested := "[permissions.network]\nenabled = false"
@@ -225,15 +227,16 @@ func TestCloudValidationChecksNetworkSpellingsPerFragmentLikeRust(t *testing.T) 
 		}{
 			{name: "same fragment matching", contents: []string{nested + "\n" + topLevel}},
 			{name: "across fragments matching", contents: []string{nested, topLevel}},
-			{name: "across fragments conflicting", contents: []string{nested, conflicting}, wantErr: true},
-			{name: "reversed conflicting", contents: []string{conflicting, nested}, wantErr: true},
+			// Rust #62882: sources using different spellings compose; the TOML
+			// merge settles non-domain fields and domain lists compose by priority.
+			{name: "across fragments conflicting", contents: []string{nested, conflicting}},
+			{name: "reversed conflicting", contents: []string{conflicting, nested}},
 			{
 				name: "different selector kinds",
 				contents: []string{
 					"[permissions.network]\ndenied_domains = ['shared.test']",
 					fmt.Sprintf("[%s]\nallowed_domains = ['shared.test']", alias),
 				},
-				wantErr: true,
 			},
 			{
 				name:     "embedded conflicting selectors",
