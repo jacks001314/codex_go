@@ -267,17 +267,17 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if req.Exec.Subcommand == "review" {
 		strictConfig = strictConfig || req.Exec.Review.StrictConfig
 	}
-	cfg, err := config.LoadEffectiveWithOptions(r.CodexHome, &config.EffectiveOptions{
-		RawOverrides:    mergedOverrides(req.Root.ConfigOverrides, req.Exec.ConfigOverrides),
-		EnableFeatures:  req.Root.EnableFeatures,
-		DisableFeatures: req.Root.DisableFeatures,
-		CWD:             requestCWD(req),
-		StrictConfig:    strictConfig,
-		// `--ignore-user-config` has to reach the loader, not just the CLI
-		// parser and the worktree conflict check: the user config file is the
-		// thing the flag claims this run does not read.
-		IgnoreUserConfig: req.Exec.IgnoreUserConfig,
-	})
+	// Rust #62194 restores a resumed conversation's saved working directory
+	// before config assembly, so cwd-derived project defaults come from the
+	// workspace being resumed instead of the process directory. The record is
+	// resolved once and reused by promptForRequest, so a `--last` lookup still
+	// searches the working directory the caller invoked from.
+	resumeRecord, err := r.execResumeRecordForRun(req)
+	if err != nil {
+		return nil, err
+	}
+	r.applyExecResumeWorkingDirectory(req, resumeRecord)
+	cfg, err := r.loadExecRunConfig(req, strictConfig)
 	if err != nil {
 		if r.NetworkPolicy != nil {
 			r.NetworkPolicy.Unavailable()
@@ -359,14 +359,14 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if extra := strings.TrimSpace(req.AdditionalInstructions); extra != "" {
 		instructions = strings.Join(nonEmptyStrings([]string{extra, instructions}), "\n\n")
 	}
-	prompt, resumeContext, err := r.promptForRequest(req, cfg, stdin, stderr)
+	prompt, resumeContext, err := r.promptForRequestWithResume(req, cfg, resumeRecord, stdin, stderr)
 	if err != nil {
 		return nil, err
 	}
 	var resumePermissions *execResumePermissionState
 	if req.Exec.Subcommand == "resume" && resumeContext != nil && resumeContext.Record != nil {
-		// Rust #62194: a resume restores the saved working directory unless the
-		// caller passed an explicit one.
+		// Rust #62194: the saved working directory already seeded the config
+		// above; keep it pinned to the resumed conversation for the turn.
 		if strings.TrimSpace(req.Exec.Shared.CWD) == "" && strings.TrimSpace(req.Root.Shared.CWD) == "" {
 			if saved := strings.TrimSpace(resumeContext.Record.Metadata.CWD); filepath.IsAbs(saved) {
 				req.Exec.Shared.CWD = saved
@@ -2493,7 +2493,66 @@ func resumePreviousResponseID(ctx *execResumeContext) string {
 	return ""
 }
 
+// loadExecRunConfig assembles the run's effective config. A resumed
+// conversation's saved working directory has already widened requestCWD, so
+// project layers and cwd-derived defaults come from the resumed workspace
+// (Rust #62194 applies resume settings ahead of config assembly).
+func (r *Runner) loadExecRunConfig(req *Request, strictConfig bool) (*config.Config, error) {
+	return config.LoadEffectiveWithOptions(r.CodexHome, &config.EffectiveOptions{
+		RawOverrides:    mergedOverrides(req.Root.ConfigOverrides, req.Exec.ConfigOverrides),
+		EnableFeatures:  req.Root.EnableFeatures,
+		DisableFeatures: req.Root.DisableFeatures,
+		CWD:             requestCWD(req),
+		StrictConfig:    strictConfig,
+		// `--ignore-user-config` has to reach the loader, not just the CLI
+		// parser and the worktree conflict check: the user config file is the
+		// thing the flag claims this run does not read.
+		IgnoreUserConfig: req.Exec.IgnoreUserConfig,
+	})
+}
+
+// execResumeRecordForRun resolves the conversation a `codex exec resume`
+// continues. An unknown name or empty `--last` is None, matching Rust's
+// resolve_resume_thread_id, so the run falls back to thread/start.
+func (r *Runner) execResumeRecordForRun(req *Request) (*session.Record, error) {
+	if req == nil || req.Exec.Subcommand != "resume" {
+		return nil, nil
+	}
+	record, err := r.resolveExecResumeRecordForMethod(req, execThreadResumeMethod)
+	if err != nil {
+		if errors.Is(err, errExecResumeNoTarget) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return record, nil
+}
+
+// applyExecResumeWorkingDirectory restores the saved working directory of a
+// resumed conversation unless the caller passed an explicit one (Rust #62194).
+func (r *Runner) applyExecResumeWorkingDirectory(req *Request, record *session.Record) {
+	if record == nil || req == nil || req.Exec.Subcommand != "resume" {
+		return
+	}
+	if strings.TrimSpace(req.Exec.Shared.CWD) != "" || strings.TrimSpace(req.Root.Shared.CWD) != "" {
+		return
+	}
+	if saved := strings.TrimSpace(record.Metadata.CWD); filepath.IsAbs(saved) {
+		req.Exec.Shared.CWD = saved
+	}
+}
+
 func (r *Runner) promptForRequest(req *Request, cfg *config.Config, stdin io.Reader, stderr io.Writer) (string, *execResumeContext, error) {
+	record, err := r.execResumeRecordForRun(req)
+	if err != nil {
+		return "", nil, err
+	}
+	return r.promptForRequestWithResume(req, cfg, record, stdin, stderr)
+}
+
+// promptForRequestWithResume builds the first prompt with an already resolved
+// resume record, so config assembly and prompt resolution share one lookup.
+func (r *Runner) promptForRequestWithResume(req *Request, cfg *config.Config, resumeRecord *session.Record, stdin io.Reader, stderr io.Writer) (string, *execResumeContext, error) {
 	if req.Exec.Subcommand == "review" {
 		prompt, _, err := review.BuildPromptFromOptionsWithStderr(req.Exec.Review, stdin, stderr, &review.GitDiffProvider{
 			Dir: requestCWD(req),
@@ -2504,15 +2563,7 @@ func (r *Runner) promptForRequest(req *Request, cfg *config.Config, stdin io.Rea
 		return prompt, nil, nil
 	}
 	if req.Exec.Subcommand == "resume" {
-		record, err := r.resolveExecResumeRecordForMethod(req, execThreadResumeMethod)
-		if err != nil {
-			if !errors.Is(err, errExecResumeNoTarget) {
-				return "", nil, err
-			}
-			// Rust's resolve_resume_thread_id returns None for an unknown name or
-			// an empty --last lookup, and exec then starts a fresh thread.
-			record = nil
-		}
+		record := resumeRecord
 		if record != nil && req.Exec.Resume.Prompt == "" && (len(req.Input) > 0 || len(req.AdditionalInputItems) > 0) {
 			return "", &execResumeContext{Record: record}, nil
 		}

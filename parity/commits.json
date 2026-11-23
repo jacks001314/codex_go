@@ -51563,13 +51563,11 @@
     "codex_go"
    ],
    "evidence": [
-    "codex exec resume now restores the saved permission selection from rollout history through resolveExecPermissionProfileForRun: an explicit --sandbox/bypass still wins, a recorded named or built-in profile is resolved against the resumed working directory, an unnamed recorded profile is restored verbatim, and histories without any recorded selection recover the built-in read-only profile instead of widening to the current config default (Rust #62194). Tests: go test ./exec -run 'ResolveExecPermissionProfile' -count=1",
-    "Resume restores the saved session working directory when the caller passed no explicit one, and --add-dir roots are appended to the resolved workspace roots (managed profiles materialize the symbolic project roots, legacy workspace-write profiles extend their writable-root list). Tests: go test ./exec -run 'ResolveExecPermissionProfileAppendsAddDirs' -count=1",
-    "go test ./exec -count=1; go build ./...; go vet ./exec. Remaining gap: the effective config is still loaded before the resumed working directory is restored, so cwd-derived config defaults come from the process directory; Rust applies resume settings ahead of config assembly. The full Rust resume integration suite (denied write after resume, app-server thread_permissions reader) has no direct Go counterpart."
+    "Batch 143: complete - Rust #62194 resume settings are applied ahead of config assembly in exec/exec.go. RunContext resolves the resumed conversation once (execResumeRecordForRun, reused by promptForRequestWithResume so a `--last` lookup still searches the caller's working directory), restores the saved working directory unless an explicit -C was passed (applyExecResumeWorkingDirectory) and only then assembles config through loadExecRunConfig, so project layers and cwd-derived defaults come from the resumed workspace. Explicit --sandbox/bypass still wins, a recorded named or built-in profile resolves against the resumed directory, an unnamed recorded profile is restored verbatim, and histories without a recorded selection recover the built-in read-only profile. Tests: go test ./exec -run 'TestExecResumeLoadsConfigFromSavedWorkingDirectoryLikeRust|TestExecResumeKeepsExplicitWorkingDirectoryLikeRust' -count=1; go test ./exec -run 'ResolveExecPermissionProfile' -count=1; go test ./exec -count=1"
    ],
    "kind": "runtime",
    "sha": "89feadf3cca2a53d01bbf4c35ce53227704b2417",
-   "status": "partial",
+   "status": "complete",
    "subject": "Preserve saved sandbox permissions when resuming `codex exec` (#62194)"
   },
   {
