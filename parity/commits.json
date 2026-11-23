@@ -51775,13 +51775,15 @@
     "codex_go"
    ],
    "evidence": [
-    "Rust #62292 routes inject batches that consist only of single-text agent messages with valid agent paths through the native Multi-Agent v2 mailbox as queue-only mail, and holds a residency pin across the batch so eviction cannot interrupt delivery.",
-    "Go already has the mailbox and wake policy for child-to-parent mail: appserver/agent_controller.go enqueues through enqueueRuntimeAgentMessage, wakes an idle root in maybeWakeRootForPendingAgentMessages (feature wake_on_agent_messages, root-only, honoring plan mode and interrupted rollouts), and requeues on a failed wake.",
-    "Gap: appserver.handleThreadInjectItemsRuntime (appserver/guardian_reviewer.go:3726) persists injected items and, when a turn is active, enqueues them into the steer mailbox; for an idle thread it neither queues the mail nor wakes it, and Go has no residency pin API, so injected plaintext agent mail cannot wake a sleeping root the way Rust now allows. Mixed/encrypted batches and native-tools-disabled configurations keep Rust's raw-injection behavior in both implementations."
+    "Rust #62292 routes inject batches that consist only of single-text agent messages with valid agent paths through the native Multi-Agent v2 mailbox as queue-only mail instead of raw response injection, and only preempts sampling when the matching turn still accepts mailbox delivery.",
+    "Go now takes that path for native child agents: appserver.injectedAgentMailBatch (appserver/injected_items.go) admits only batches where every item is an agent_message with exactly one input_text block, valid author and recipient agent paths and no explicit retention, and RuntimeRouter.routesInjectedAgentMail (appserver/agent_controller.go) requires a child thread with native tools enabled.",
+    "Routing uses the existing mailbox machinery: appserver.handleThreadInjectItemsRuntime queues each payload through enqueueRuntimeAgentMessage for an idle child (queue-only; child threads are never auto-woken because maybeWakeRootForPendingAgentMessages is root-only) and through the steer mailbox when the child has a live turn, skipping the history write so the message is delivered once. Roots keep the persisted history path, matching the final upstream state after #62537.",
+    "The separate residency pin has no Go counterpart because the runtime mailbox is an unbounded in-memory queue without capacity eviction between submissions (appserver/agent_controller.go agentMessages), so no batch can be interrupted by eviction.",
+    "Tests: appserver/agent_mail_injection_like_rust_test.go covers child routing (queued, history unchanged), root persistence, and the mixed-batch fallback to history. `go test ./appserver -run \"Inject|Mailbox|AgentMessage|Wake\" -count=1` passes."
    ],
    "kind": "runtime",
    "sha": "bd3eaf7829187f18d05205222bf2f67c0af80fb4",
-   "status": "partial",
+   "status": "complete",
    "subject": "Route injected plaintext agent mail through the native mailbox (#62292)"
   },
   {
@@ -52727,11 +52729,14 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Rust #62537 has three parts: gate ordinary automatic mailbox wakes on app-server turn admission, queue plain-text agent mail injected into native child threads, and extract a remote app-server client crate.",
+    "The injection half is implemented in Go: plaintext agent mail injected into a native child thread is queued for its mailbox and consumed on the next turn (appserver/agent_controller.go routesInjectedAgentMail + handleThreadInjectItemsRuntime; see appserver/agent_mail_injection_like_rust_test.go).",
+    "Gap: Go has no turn-admission permit or drain pause to gate mailbox wakes on. appserver/daemon_recovery_restore.go documents that `turn_admission.admit()` has no Go equivalent and the restore loop is bounded by sequential execution instead, so a permission-gated automatic wake and its retry-on-reopen cannot be mirrored.",
+    "The crate extraction has no Go carrier: Go already exposes remote app-server transport pieces in appserverdaemon/cloudbackend packages separately from the runtime, so there is no client/runtime link split to perform."
    ],
    "kind": "runtime",
    "sha": "0b248182be6ff496c7b11401e3217c4c380848ca",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Respect app-server turn admission for agent mailbox wakes (#62537)"
   },
   {

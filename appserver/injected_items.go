@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/agent"
 	"codex_go/compact"
 	"codex_go/session"
 )
@@ -67,6 +68,40 @@ func parseInjectedResponseItems(rawItems []json.RawMessage) ([]injectedResponseI
 		items = append(items, injectedResponseItem{Payload: inner, Retention: retention})
 	}
 	return items, nil
+}
+
+// injectedAgentMailBatch reports whether an injection batch is plaintext agent
+// mail that the native mailbox can carry (Rust #62292/#62537): every item is an
+// agent_message with exactly one input_text block, valid author and recipient
+// agent paths, and no explicit retention policy. Mixed batches and multipart or
+// encrypted messages keep the raw history-injection path.
+func injectedAgentMailBatch(items []injectedResponseItem) bool {
+	if len(items) == 0 {
+		return false
+	}
+	for _, item := range items {
+		if item.Retention != "" {
+			return false
+		}
+		if strings.TrimSpace(stringFromMap(item.Payload, "type")) != "agent_message" {
+			return false
+		}
+		if err := agent.ValidateAgentPath(stringFromMap(item.Payload, "author")); err != nil {
+			return false
+		}
+		if err := agent.ValidateAgentPath(stringFromMap(item.Payload, "recipient")); err != nil {
+			return false
+		}
+		blocks, ok := item.Payload["content"].([]any)
+		if !ok || len(blocks) != 1 {
+			return false
+		}
+		block, ok := blocks[0].(map[string]any)
+		if !ok || strings.TrimSpace(stringFromMap(block, "type")) != "input_text" {
+			return false
+		}
+	}
+	return true
 }
 
 // validateInjectedResponseItems runs the shared uploaded-file admission checks

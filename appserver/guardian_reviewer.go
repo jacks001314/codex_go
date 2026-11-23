@@ -3747,6 +3747,26 @@ func (r *RuntimeRouter) handleThreadInjectItemsRuntime(request *Request) (*Threa
 	if err != nil {
 		return nil, err
 	}
+	// Rust #62292/#62537: plaintext agent mail injected into a native child
+	// thread travels through the mailbox instead of the raw history path, so
+	// the child consumes it on its next turn. Roots keep the persisted
+	// injection path.
+	if r.routesInjectedAgentMail(params.ThreadID, parsedItems) {
+		payloads := make([]any, 0, len(parsedItems))
+		for _, injected := range parsedItems {
+			payloads = append(payloads, injected.Payload)
+		}
+		if active := r.activeRuntimeTurnSnapshot(params.ThreadID); active != nil && strings.TrimSpace(active.ID) != "" {
+			if err := r.requireSteerMailbox().Enqueue(&turn.SteerEnqueueParams{ThreadID: params.ThreadID, TurnID: active.ID, InputItems: payloads}); err != nil {
+				return nil, err
+			}
+			return &ThreadInjectItemsResponse{}, nil
+		}
+		for _, payload := range payloads {
+			r.enqueueRuntimeAgentMessage(params.ThreadID, payload)
+		}
+		return &ThreadInjectItemsResponse{}, nil
+	}
 	r.markThreadMemoryPollutedOnExternalContext(params.ThreadID, items)
 	if _, ok := r.appendEphemeralThreadItems(session.ThreadID(params.ThreadID), items); ok {
 		return &ThreadInjectItemsResponse{}, nil

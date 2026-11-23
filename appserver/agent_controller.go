@@ -1499,6 +1499,35 @@ func (r *RuntimeRouter) runtimeAgentMessageWakeEligible(threadID string, record 
 	return err == nil && cfg != nil && features.Enabled(cfg.FeatureSettings(), "wake_on_agent_messages")
 }
 
+// routesInjectedAgentMail reports whether an injection batch takes the native
+// mailbox path Rust #62292/#62537 use: the target is a native child agent with
+// native tools enabled and the batch is plaintext agent mail. Roots keep the
+// persisted history-injection path.
+func (r *RuntimeRouter) routesInjectedAgentMail(threadID string, items []injectedResponseItem) bool {
+	if r == nil || strings.TrimSpace(threadID) == "" || !injectedAgentMailBatch(items) {
+		return false
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil {
+		return false
+	}
+	if strings.TrimSpace(string(record.ParentThreadID)) == "" && !runtimeRecordIsSubagent(record) {
+		return false
+	}
+	settings := r.threadSettingsForTurn(threadID)
+	params := &turn.TurnStartParams{ThreadID: threadID}
+	if settings != nil {
+		params.CWD = threadSettingsCWD(settings)
+	}
+	params.Config = threadRecordConfigOverrides(record)
+	cfg, err := r.effectiveConfigForTurn(params)
+	if err != nil || cfg == nil {
+		return false
+	}
+	v2, err := cfg.MultiAgentV2Config(0)
+	return err == nil && v2 != nil && !v2.DisableNativeTools
+}
+
 func runtimeAgentMessagesInterrupted(record *session.Record) bool {
 	if record == nil || len(record.Metadata.RolloutTurns) == 0 {
 		return false
