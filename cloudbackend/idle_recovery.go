@@ -16,9 +16,17 @@ import (
 )
 
 const (
-	// idleRecoveryTotalTimeout bounds one accepted recovery episode, including
-	// credential checks, Attach attempts, and retry backoff.
-	idleRecoveryTotalTimeout = 8 * time.Second
+	// idleRecoveryAttachTimeout bounds one quiet Attach episode, including the
+	// inner transient retries. Rust #63058 keeps this budget separate from the
+	// backoff and from the caller's worker dispatch, so time spent waiting to
+	// reattach never eats the time available to install the replacement.
+	idleRecoveryAttachTimeout = 8 * time.Second
+	// maxIdleRecoveryBackoff caps the exponential delay between replacements
+	// (Rust #63058 MAX_RECOVERY_BACKOFF).
+	maxIdleRecoveryBackoff = 30 * time.Second
+	// idleRecoveryBackoffStep starts the exponential delay at 500 ms per
+	// installed replacement.
+	idleRecoveryBackoffStep = 500 * time.Millisecond
 	// idleRecoveryStableWindow rejects a reopen for a stream that died right
 	// after it was installed; that stream never proved it could stay open.
 	idleRecoveryStableWindow = 15 * time.Second
@@ -28,24 +36,37 @@ const (
 	// recoveryFailedReason reports a nontransient Attach failure that is not
 	// one of the specific conversation access errors.
 	recoveryFailedReason = "Cloud could not restore the reply stream for this conversation."
-	// recoveryExhaustedReason reports that every bounded retry was transient.
-	recoveryExhaustedReason = "Cloud did not restore the reply stream after several attempts."
-	// recoveryKeepsDisconnectingReason reports that the quiet reopen replaced the
-	// stream too many times in a row (Rust #62151). The transcript and draft stay
-	// on screen, so the message says they are still available.
-	recoveryKeepsDisconnectingReason = "The cloud reply stream keeps disconnecting. Your transcript and draft are still here."
-	// idleRecoveryMaxReplacements bounds one recovery sequence. Every installed
-	// replacement delays the next reopen further, and the next loss stops the
-	// loop instead of reconnecting forever.
-	idleRecoveryMaxReplacements = 3
-	// idleRecoveryAttemptDelay is added per installed replacement before the next
-	// quiet Attach, so a flapping stream backs off instead of hammering Cloud.
-	idleRecoveryAttemptDelay = 500 * time.Millisecond
+	// recoveryTimedOutReason reports that an attach budget expired. Callers can
+	// retry the quiet reopen; Rust #63058 surfaces this as a transport timeout.
+	recoveryTimedOutReason = "Cloud could not restore the reply stream in time."
+	// recoveryTransientReason reports that every attach attempt failed
+	// transiently. It stays retryable instead of disabling recovery, which Rust
+	// #63058 replaced the old replacement budget with.
+	recoveryTransientReason = "Cloud lost the reply stream. Reopen the conversation to reconnect."
 )
 
-// idleRecoveryDelays is the retry schedule of one episode: an immediate
-// attempt, then two backed-off retries.
+// idleRecoveryDelays is the retry schedule inside one attach budget: an
+// immediate attempt, then two backed-off retries.
 var idleRecoveryDelays = []time.Duration{0, 500 * time.Millisecond, time.Second}
+
+// idleRecoveryBackoff mirrors Rust #63058 recovery_backoff: the first
+// replacement is immediate, then the delay doubles from 500 ms up to a 30 s
+// cap. Recovery stays retryable forever instead of stopping after a fixed
+// number of replacements.
+func idleRecoveryBackoff(attempts int) time.Duration {
+	if attempts <= 0 {
+		return 0
+	}
+	shift := attempts - 1
+	if shift > 6 {
+		shift = 6
+	}
+	delay := idleRecoveryBackoffStep << uint(shift)
+	if delay > maxIdleRecoveryBackoff {
+		delay = maxIdleRecoveryBackoff
+	}
+	return delay
+}
 
 // IdleRecoveryOptions configures the quiet reopen of a lost reply stream. The
 // Go cloud client holds a single active attachment, so that attachment is the
@@ -100,10 +121,14 @@ type idleRecoveryResult struct {
 	// returns for a rejected recovery; empty means the generic stream-ended
 	// message.
 	failureReason string
-	events        <-chan cloudclient.Event
-	errs          <-chan error
-	cancel        context.CancelFunc
-	first         *cloudclient.Event
+	// transient marks an episode whose attempts all failed transiently (or ran
+	// out of time). The loss stays retryable and does not disable recovery
+	// (Rust #63058).
+	transient bool
+	events    <-chan cloudclient.Event
+	errs      <-chan error
+	cancel    context.CancelFunc
+	first     *cloudclient.Event
 }
 
 // blockedCloudRecoveryReason maps a non-retryable RPC status to Rust's
@@ -237,39 +262,34 @@ func (c *Client) startIdleRecovery(threadID string) bool {
 	}
 	c.recovery.state = idleReconnectOpening
 	c.recovery.pending = true
-	// Rust #62151 answers a recovery request for a sequence that already
-	// installed three replacements with a message that keeps the transcript and
-	// draft in place, instead of attaching a fourth time.
-	if c.recovery.attempts >= idleRecoveryMaxReplacements {
-		results := c.recoveryResults
-		results <- idleRecoveryResult{threadID: threadID, failureReason: recoveryKeepsDisconnectingReason}
-		return true
-	}
-	ctx, cancel := context.WithTimeout(c.runCtx, idleRecoveryTotalTimeout)
+	// Rust #63058 counts the attempt before opening so repeated transient
+	// failures keep backing off instead of exhausting a fixed budget.
 	results := c.recoveryResults
 	source := c.source
 	attempts := c.recovery.attempts
+	c.recovery.attempts++
 	go func() {
-		defer cancel()
-		results <- attachWithRetry(ctx, source, threadID, loginCurrent, attempts)
+		results <- attachWithRetry(c.runCtx, source, threadID, loginCurrent, attempts)
 	}()
 	return true
 }
 
 // attachWithRetry runs one recovery episode. It returns a connected stream with
 // at most one buffered event, or an unsuccessful result.
-func attachWithRetry(ctx context.Context, source cloudSource, threadID string, loginCurrent func() bool, attempts int) idleRecoveryResult {
-	// Rust #62151 delays each replacement by 500 ms per replacement already
-	// installed in this sequence, then attaches under the same login permit.
-	if attempts > 0 {
-		timer := time.NewTimer(time.Duration(attempts) * idleRecoveryAttemptDelay)
+func attachWithRetry(parent context.Context, source cloudSource, threadID string, loginCurrent func() bool, attempts int) idleRecoveryResult {
+	// Rust #63058 backs off exponentially before the per-attempt budget starts,
+	// then attaches under the same login permit.
+	if backoff := idleRecoveryBackoff(attempts); backoff > 0 {
+		timer := time.NewTimer(backoff)
 		select {
 		case <-timer.C:
-		case <-ctx.Done():
+		case <-parent.Done():
 			timer.Stop()
-			return idleRecoveryResult{threadID: threadID}
+			return idleRecoveryResult{threadID: threadID, transient: true}
 		}
 	}
+	ctx, cancelAttach := context.WithTimeout(parent, idleRecoveryAttachTimeout)
+	defer cancelAttach()
 	for _, delay := range idleRecoveryDelays {
 		if delay > 0 {
 			timer := time.NewTimer(delay)
@@ -281,7 +301,7 @@ func attachWithRetry(ctx context.Context, source cloudSource, threadID string, l
 			}
 		}
 		if ctx.Err() != nil {
-			return idleRecoveryResult{threadID: threadID}
+			return idleRecoveryResult{threadID: threadID, transient: true, failureReason: recoveryTimedOutReason}
 		}
 		if !loginCurrent() {
 			return idleRecoveryResult{threadID: threadID, failureReason: signInAgainReason}
@@ -330,7 +350,9 @@ func attachWithRetry(ctx context.Context, source cloudSource, threadID string, l
 		}
 		return idleRecoveryResult{threadID: threadID, connected: true, events: events, errs: errs, cancel: streamCancel}
 	}
-	return idleRecoveryResult{threadID: threadID, failureReason: recoveryExhaustedReason}
+	// Rust #63058 surfaces an episode whose attempts all failed transiently as a
+	// retryable transport failure instead of a final message.
+	return idleRecoveryResult{threadID: threadID, transient: true, failureReason: recoveryTransientReason}
 }
 
 // handleIdleRecoveryResult installs a recovered attachment or, when the episode
@@ -352,11 +374,16 @@ func (c *Client) handleIdleRecoveryResult(result idleRecoveryResult) {
 	if !result.connected {
 		c.recovery.state = idleReconnectInactive
 		c.recovery.root = ""
-		c.reportStreamLossWithReason(result.threadID, result.failureReason)
+		// A transient failure keeps the transcript and draft and lets the user
+		// (or the TUI) reopen again; the generic loss message carries that hint.
+		reason := result.failureReason
+		if result.transient && strings.TrimSpace(reason) == "" {
+			reason = recoveryTransientReason
+		}
+		c.reportStreamLossWithReason(result.threadID, reason)
 		return
 	}
 	c.recovery.installed = time.Now()
-	c.recovery.attempts++
 	c.active = &attachment{threadID: result.threadID, events: result.events, errs: result.errs, cancel: result.cancel}
 	c.supersedeStreamLosses(result.threadID)
 	if result.first != nil {

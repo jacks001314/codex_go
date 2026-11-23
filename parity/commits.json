@@ -51320,11 +51320,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Audit: tui/tea already cancels an in-flight agents-overview read through generation invalidation. cancelAgentsOverviewRefresh discards the busy backend slot and bumps agentsOverviewRefresh so a late page cannot apply, and it is called when the overview closes, when a backend switch changes the displayed backend, on mutations (pin, archive, delete), and on disconnect.",
+    "Go runs each overview refresh on its own short-lived app-server connection, so there is no shared Cloud worker that a stale list request could block; the Rust abort-and-wait step has no Go counterpart, and the equivalent guarantee is that stale results are never applied. Tests in tui/tea/agents_overview_backends_like_rust_test.go cover per-backend invalidation and queue preservation."
    ],
    "kind": "runtime",
    "sha": "2f7c5a858865b413f5b56ebe1af70fbeb349b218",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Cancel Cloud overview refreshes that block TUI navigation (#62150)"
   },
   {
@@ -54127,11 +54128,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "cloudbackend/idle_recovery.go ports Rust #63058: idleRecoveryBackoff doubles from 500 ms and caps at 30 s, the fixed three-replacement budget and its keeps-disconnecting message are gone, and startIdleRecovery counts the attempt before opening.",
+    "attachWithRetry sleeps the backoff before starting a separate idleRecoveryAttachTimeout budget, so the caller worker time is no longer shared with the attach budget; idleRecoveryResult.transient marks episodes whose attempts all failed transiently or timed out and reports a retryable loss instead of a final failure.",
+    "Tests: cloudbackend/idle_recovery_attempts_like_rust_test.go covers the backoff curve and 30 s cap, repeated replacements staying retryable, transient failures keeping a later quiet reopen working, and backoff reset after a stable stream; go test ./cloudbackend and go build ./... pass."
    ],
    "kind": "runtime",
    "sha": "d4014cb19d23614be39c0cf57d981e042ba0763a",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Keep Cloud reply stream recovery retryable after transient failures (#63058)"
   },
   {
@@ -54285,11 +54288,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Audit: the Go TUI account refresh already reads account/read only. interactiveRemoteStatusAccount and refreshAccountEmail (app/remote_tui.go, app/remote_account_status.go) call remoteReadAccount, which issues account/read on a dedicated connection and never config/read, so a Cloud session refresh cannot hit the project configuration that Rust #63171 removed.",
+    "The Cloud account display, plan and workspace still come from the account/read snapshot (remoteStatusAccountValues, remoteStatusWorkspaceValue); existing tests app/gcp_account_tui_like_rust_test.go and app/remote_platform_metadata_like_rust_test.go pin the ChatGPT/API-key/GCP projections, and go test ./app -run Cloud passes."
    ],
    "kind": "runtime",
    "sha": "a0995c2b2b68248960c69cb812b5f4898dac7e4c",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Fix account refresh for new cloud sessions (#63171)"
   },
   {
