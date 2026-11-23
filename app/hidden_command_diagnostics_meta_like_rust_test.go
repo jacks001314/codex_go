@@ -9,8 +9,8 @@ import (
 )
 
 // TestHiddenCommandDiagnosticsMetaLikeRust checks the clap blocks for the
-// execpolicy, stdio-to-uds and tcp-tunnel argument surfaces, including the exit
-// status Rust reports.
+// execpolicy and tcp-tunnel argument surfaces, including the exit status Rust
+// reports.
 func TestHiddenCommandDiagnosticsMetaLikeRust(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 	t.Setenv("GCODE_HOME", t.TempDir())
@@ -23,11 +23,6 @@ func TestHiddenCommandDiagnosticsMetaLikeRust(t *testing.T) {
 			name: "execpolicy check missing both",
 			args: []string{"execpolicy", "check"},
 			want: "error: the following required arguments were not provided:\n  --rules <PATH>\n  <COMMAND>...\n\nUsage: codex execpolicy check --rules <PATH> <COMMAND>...\n\nFor more information, try '--help'.\n",
-		},
-		{
-			name: "stdio-to-uds unknown flag",
-			args: []string{"stdio-to-uds", "--bogus"},
-			want: "error: unexpected argument '--bogus' found\n\n  tip: to pass '--bogus' as a value, use '-- --bogus'\n\nUsage: codex stdio-to-uds [OPTIONS] <SOCKET_PATH>\n\nFor more information, try '--help'.\n",
 		},
 		{
 			name: "tcp-tunnel missing required",

@@ -15,7 +15,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func TestStdioToUDSBridgesWindowsNamedPipe(t *testing.T) {
+// Rust #62163 dropped the hidden relay subcommand; the bridge now serves
+// `codex app-server proxy`.
+func TestAppServerProxyBridgesWindowsNamedPipeLikeRust(t *testing.T) {
 	pipeName := fmt.Sprintf(`\\.\pipe\codex-stdio-uds-%d-%d`, windows.GetCurrentProcessId(), time.Now().UnixNano())
 	namePtr, err := windows.UTF16PtrFromString(pipeName)
 	if err != nil {
@@ -57,8 +59,8 @@ func TestStdioToUDSBridgesWindowsNamedPipe(t *testing.T) {
 	}()
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"stdio-to-uds", pipeName}, strings.NewReader("hello\n"), &stdout, &bytes.Buffer{}); err != nil {
-		t.Fatalf("stdio-to-uds returned error: %v", err)
+	if err := Run(context.Background(), []string{"app-server", "proxy", "--sock", pipeName}, strings.NewReader("hello\n"), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("app-server proxy returned error: %v", err)
 	}
 	if stdout.String() != "reply:hello\n" {
 		t.Fatalf("stdout = %q", stdout.String())

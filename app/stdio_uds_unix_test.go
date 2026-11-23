@@ -31,7 +31,9 @@ func unixSocketTempDir(t *testing.T) string {
 	return dir
 }
 
-func TestStdioToUDSBridgesUnixSocket(t *testing.T) {
+// Rust #62163 dropped the hidden relay subcommand; the bridge now serves
+// `codex app-server proxy`.
+func TestAppServerProxyBridgesUnixSocketLikeRust(t *testing.T) {
 	socketPath := filepath.Join(unixSocketTempDir(t), "codex.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -56,8 +58,8 @@ func TestStdioToUDSBridgesUnixSocket(t *testing.T) {
 	}()
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"stdio-to-uds", socketPath}, strings.NewReader("hello\n"), &stdout, &bytes.Buffer{}); err != nil {
-		t.Fatalf("stdio-to-uds returned error: %v", err)
+	if err := Run(context.Background(), []string{"app-server", "proxy", "--sock", socketPath}, strings.NewReader("hello\n"), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("app-server proxy returned error: %v", err)
 	}
 	if stdout.String() != "reply:hello\n" {
 		t.Fatalf("stdout = %q", stdout.String())
@@ -67,10 +69,10 @@ func TestStdioToUDSBridgesUnixSocket(t *testing.T) {
 	}
 }
 
-// TestStdioToUDSBridgesLongSymlinkSocket mirrors the Rust consumer of #48772:
-// codex-rs/stdio-to-uds connects through codex_uds::UnixStream::connect, so a
+// TestAppServerProxyBridgesLongSymlinkSocketLikeRust mirrors the Rust consumer
+// of #48772: the relay connects through codex_uds::UnixStream::connect, so a
 // long advertised alias must still reach the short socket it points at.
-func TestStdioToUDSBridgesLongSymlinkSocket(t *testing.T) {
+func TestAppServerProxyBridgesLongSymlinkSocketLikeRust(t *testing.T) {
 	physicalPath := filepath.Join(unixSocketTempDir(t), "codex.sock")
 	listener, err := net.Listen("unix", physicalPath)
 	if err != nil {
@@ -106,8 +108,8 @@ func TestStdioToUDSBridgesLongSymlinkSocket(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"stdio-to-uds", advertisedPath}, strings.NewReader("hello\n"), &stdout, &bytes.Buffer{}); err != nil {
-		t.Fatalf("stdio-to-uds through a long symlink path returned error: %v", err)
+	if err := Run(context.Background(), []string{"app-server", "proxy", "--sock", advertisedPath}, strings.NewReader("hello\n"), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("app-server proxy through a long symlink path returned error: %v", err)
 	}
 	if stdout.String() != "reply:hello\n" {
 		t.Fatalf("stdout = %q", stdout.String())

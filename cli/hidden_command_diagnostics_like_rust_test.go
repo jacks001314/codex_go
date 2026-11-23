@@ -2,12 +2,13 @@ package cli
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
-// TestHiddenCommandClapDiagnosticsLikeRust pins clap's blocks for the three
-// parsers that used to answer in Go wording: `execpolicy check`,
-// `stdio-to-uds` and the hidden `tcp-tunnel`.
+// TestHiddenCommandClapDiagnosticsLikeRust pins clap's blocks for the parsers
+// that used to answer in Go wording: `execpolicy check` and the hidden
+// `tcp-tunnel`.
 func TestHiddenCommandClapDiagnosticsLikeRust(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -38,24 +39,6 @@ func TestHiddenCommandClapDiagnosticsLikeRust(t *testing.T) {
 			args:    []string{"execpolicy", "check", "--dry-run", "--rules", "policy.rules"},
 			message: "the following required arguments were not provided:\n  --rules <PATH>",
 			usage:   "Usage: codex execpolicy check --rules <PATH> <COMMAND>...",
-		},
-		{
-			name:    "stdio-to-uds missing path",
-			args:    []string{"stdio-to-uds"},
-			message: "the following required arguments were not provided:\n  <SOCKET_PATH>",
-			usage:   "Usage: codex stdio-to-uds <SOCKET_PATH>",
-		},
-		{
-			name:    "stdio-to-uds unknown flag",
-			args:    []string{"stdio-to-uds", "--bogus"},
-			message: "unexpected argument '--bogus' found\n\n  tip: to pass '--bogus' as a value, use '-- --bogus'",
-			usage:   "Usage: codex stdio-to-uds [OPTIONS] <SOCKET_PATH>",
-		},
-		{
-			name:    "stdio-to-uds extra positional",
-			args:    []string{"stdio-to-uds", "a", "b"},
-			message: "unexpected argument 'b' found",
-			usage:   "Usage: codex stdio-to-uds [OPTIONS] <SOCKET_PATH>",
 		},
 		{
 			name:    "tcp-tunnel missing required",
@@ -149,14 +132,33 @@ func TestHiddenCommandClapDiagnosticsLikeRust(t *testing.T) {
 	}
 }
 
-// TestStdioToUDSSeparatorLikeRust keeps `--` binding the socket path instead of
-// ending argument parsing with an error.
-func TestStdioToUDSSeparatorLikeRust(t *testing.T) {
-	parsed, err := Parse([]string{"stdio-to-uds", "--", "x"})
+// TestStdioToUDSSubcommandRemovedLikeRust pins Rust #62163: the relay moved into
+// the CLI crate and the hidden `codex stdio-to-uds` subcommand is gone, so the
+// token falls back to the root PROMPT positional instead of selecting a
+// command; `codex app-server proxy` keeps the same bridge.
+func TestStdioToUDSSubcommandRemovedLikeRust(t *testing.T) {
+	prompt, err := Parse([]string{"stdio-to-uds"})
 	if err != nil {
-		t.Fatalf("Parse(stdio-to-uds -- x) error = %v", err)
+		t.Fatalf("Parse(stdio-to-uds) error = %v", err)
 	}
-	if parsed.StdioToUDS.SocketPath != "x" {
-		t.Fatalf("SocketPath = %q, want x", parsed.StdioToUDS.SocketPath)
+	if prompt.Command != CommandInteractive || prompt.Root.Prompt != "stdio-to-uds" {
+		t.Fatalf("Parse(stdio-to-uds) = %q prompt %q, want the interactive prompt", prompt.Command, prompt.Root.Prompt)
+	}
+	parsed, err := Parse([]string{"stdio-to-uds", "a", "b"})
+	if err == nil || parsed != nil {
+		t.Fatalf("Parse(stdio-to-uds a b) = %#v, %v; want the extra positional rejected", parsed, err)
+	}
+	if !strings.Contains(err.Error(), "unexpected argument 'a' found") {
+		t.Fatalf("error = %v, want clap's extra-positional diagnostic", err)
+	}
+	proxy, err := Parse([]string{"app-server", "proxy", "--sock", `\\.\pipe\codex-app-server`})
+	if err != nil {
+		t.Fatalf("Parse(app-server proxy) error = %v", err)
+	}
+	if proxy.Command != CommandAppServer || len(proxy.AppServer.Subcommand) == 0 || proxy.AppServer.Subcommand[0] != "proxy" {
+		t.Fatalf("app-server proxy = %#v", proxy.AppServer)
+	}
+	if proxy.AppServer.Proxy.SocketPath != `\\.\pipe\codex-app-server` {
+		t.Fatalf("proxy socket = %q", proxy.AppServer.Proxy.SocketPath)
 	}
 }

@@ -230,8 +230,6 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 		return runCloud(ctx, &parsed.Cloud, stdin, stdout, stderr)
 	case cli.CommandResponsesAPIProxy:
 		return runResponsesAPIProxy(ctx, &parsed.ResponsesAPIProxy, stdin, stdout, stderr)
-	case cli.CommandStdioToUDS:
-		return runStdioToUDS(&parsed.StdioToUDS, stdin, stdout)
 	case cli.CommandExecServer:
 		return runExecServer(ctx, &parsed.ExecServer, &parsed.Root, stdin, stdout, runOpts)
 	case cli.CommandSandbox:
@@ -1001,11 +999,15 @@ func runExecpolicy(opts *cli.ExecpolicyOptions, stdout io.Writer) error {
 	}
 }
 
-func runStdioToUDS(opts *cli.StdioToUDSOptions, stdin io.Reader, stdout io.Writer) error {
-	if opts.SocketPath == "" {
-		return errors.New("stdio-to-uds requires SOCKET_PATH")
+// runStdioToUDSBridge relays stdio to the app-server control socket. Rust
+// #62163 moved this relay out of the standalone `codex-stdio-to-uds` crate and
+// dropped the hidden `codex stdio-to-uds` subcommand; `codex app-server proxy`
+// is now its only caller.
+func runStdioToUDSBridge(socketPath string, stdin io.Reader, stdout io.Writer) error {
+	if strings.TrimSpace(socketPath) == "" {
+		return errors.New("app-server proxy requires a control socket path")
 	}
-	return bridgeStdioToUDS(opts.SocketPath, stdin, stdout)
+	return bridgeStdioToUDS(socketPath, stdin, stdout)
 }
 
 func isWindowsNamedPipePath(path string) bool {
@@ -1939,7 +1941,7 @@ func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.Root
 			if socketPath == "" {
 				socketPath = appserver.AppServerControlSocketPath(auth.DefaultCodexHome())
 			}
-			return runStdioToUDS(&cli.StdioToUDSOptions{SocketPath: socketPath}, stdin, stdout)
+			return runStdioToUDSBridge(socketPath, stdin, stdout)
 		case "generate-ts":
 			if err := appserver.GenerateTypeScript(&appserver.SchemaGenerateOptions{
 				OutDir:       opts.Generate.OutDir,

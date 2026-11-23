@@ -51412,11 +51412,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "CLI surface aligned with Rust #62163: the hidden `codex stdio-to-uds` subcommand is gone (CommandStdioToUDS, its parser, help pages and diagnostics removed from cli/cli.go and cli/subcommand_help.go), and the stdio-to-UDS relay now lives only behind `codex app-server proxy` via app.runStdioToUDSBridge, the role Rust gave the relay after folding the standalone codex-stdio-to-uds crate into the CLI. `codex stdio-to-uds` now falls back to the root PROMPT positional and an extra argument raises clap's unexpected-argument diagnostic; TestStdioToUDSSubcommandRemovedLikeRust pins both that fallback and the surviving `app-server proxy --sock` parse, and the Windows named-pipe and Unix socket relay tests drive the bridge through app-server proxy. go test ./cli and the app Proxy/Stdio/HiddenCommand/AppServer subset pass."
    ],
    "kind": "runtime",
    "sha": "bb6b4b63b9df5432f4f45c90072d7823764ced00",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Move the app-server socket relay into the Codex CLI (#62163)"
   },
   {

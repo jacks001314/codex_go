@@ -44,7 +44,6 @@ const (
 	CommandFork              Command = "fork"
 	CommandCloud             Command = "cloud"
 	CommandResponsesAPIProxy Command = "responses-api-proxy"
-	CommandStdioToUDS        Command = "stdio-to-uds"
 	CommandExecServer        Command = "exec-server"
 	CommandFeatures          Command = "features"
 	CommandMigrateRollouts   Command = "migrate-rollouts"
@@ -82,7 +81,6 @@ var knownCommands = map[string]Command{
 	"cloud":               CommandCloud,
 	"cloud-tasks":         CommandCloud,
 	"responses-api-proxy": CommandResponsesAPIProxy,
-	"stdio-to-uds":        CommandStdioToUDS,
 	"exec-server":         CommandExecServer,
 	"features":            CommandFeatures,
 	"migrate-rollouts":    CommandMigrateRollouts,
@@ -359,10 +357,6 @@ type ResponsesAPIProxyOptions struct {
 	IdentityProviderIDSet   bool
 	ServiceAccountIDSet     bool
 	GithubOIDCRequestURLSet bool
-}
-
-type StdioToUDSOptions struct {
-	SocketPath string
 }
 
 type ExecServerOptions struct {
@@ -846,7 +840,6 @@ type Parsed struct {
 	Execpolicy        ExecpolicyOptions
 	Cloud             CloudOptions
 	ResponsesAPIProxy ResponsesAPIProxyOptions
-	StdioToUDS        StdioToUDSOptions
 	ExecServer        ExecServerOptions
 	AppServer         AppServerOptions
 	App               AppOptions
@@ -1172,8 +1165,6 @@ func parseSubcommand(p *Parsed, args []string) (*Parsed, error) {
 		return p, parseCloud(args, &p.Cloud)
 	case CommandResponsesAPIProxy:
 		return p, parseResponsesAPIProxy(args, &p.ResponsesAPIProxy)
-	case CommandStdioToUDS:
-		return p, parseStdioToUDS(args, &p.StdioToUDS)
 	case CommandExecServer:
 		return p, parseExecServer(args, &p.ExecServer)
 	case CommandAppServer:
@@ -3838,38 +3829,6 @@ func responsesAPIProxyRequiresError(proxy *ResponsesAPIProxyOptions) error {
 		Message: "the following required arguments were not provided:\n" + strings.Join(missing, "\n"),
 		Usage:   "Usage: codex responses-api-proxy --github-oidc <--oidc-audience <AUDIENCE>|--identity-provider-id <ID>|--service-account-id <ID>|--github-oidc-request-url <URL>>",
 	}
-}
-
-// stdioToUDSUnexpectedUsage is the usage clap prints once the flag parser was
-// involved: `[OPTIONS]` stays because the command declares no options beyond
-// help.
-const stdioToUDSUnexpectedUsage = "Usage: codex stdio-to-uds [OPTIONS] <SOCKET_PATH>"
-
-func parseStdioToUDS(args []string, stdio *StdioToUDSOptions) error {
-	var positionals []string
-	afterSeparator := false
-	for _, arg := range args {
-		if !afterSeparator && arg == "--" {
-			afterSeparator = true
-			continue
-		}
-		if !afterSeparator && len(arg) > 1 && strings.HasPrefix(arg, "-") {
-			return unexpectedArgumentError(arg, stdioToUDSUnexpectedUsage)
-		}
-		positionals = append(positionals, arg)
-	}
-	switch {
-	case len(positionals) == 0:
-		// clap prints the positional-only usage when nothing was consumed.
-		return &UsageError{
-			Message: requiredArgumentsMessage("<SOCKET_PATH>"),
-			Usage:   "Usage: codex stdio-to-uds <SOCKET_PATH>",
-		}
-	case len(positionals) > 1:
-		return unexpectedPositionalError(positionals[1], stdioToUDSUnexpectedUsage)
-	}
-	stdio.SocketPath = positionals[0]
-	return nil
 }
 
 var execServerRemoteTransports = []string{"noise", "direct"}

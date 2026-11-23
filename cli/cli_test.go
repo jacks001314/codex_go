@@ -44,7 +44,6 @@ func TestRustSubcommandSurfaceParity(t *testing.T) {
 		{name: "fork", args: []string{"fork", "--last"}, want: CommandFork},
 		{name: "cloud", args: []string{"cloud", "status", "task-1"}, want: CommandCloud},
 		{name: "responses-api-proxy", args: []string{"responses-api-proxy", "--port", "3456"}, want: CommandResponsesAPIProxy},
-		{name: "stdio-to-uds", args: []string{"stdio-to-uds", `\\.\pipe\codex-test`}, want: CommandStdioToUDS},
 		{name: "exec-server", args: []string{"exec-server", "--listen", "stdio"}, want: CommandExecServer},
 		{name: "features", args: []string{"features", "list"}, want: CommandFeatures},
 	}
@@ -365,8 +364,6 @@ func normalizeRustCommandName(name string) string {
 		return "execpolicy"
 	case "Cloud":
 		return "cloud"
-	case "StdioToUds":
-		return "stdio-to-uds"
 	case "TcpTunnel":
 		return "tcp-tunnel"
 	case "GitCredential":
@@ -1636,7 +1633,7 @@ func TestParseResponsesAPIProxy(t *testing.T) {
 	}
 }
 
-func TestParseExecServerAndStdioToUDS(t *testing.T) {
+func TestParseExecServer(t *testing.T) {
 	defaultListen, err := Parse([]string{"exec-server"})
 	if err != nil {
 		t.Fatalf("Parse exec-server default returned error: %v", err)
@@ -1669,14 +1666,6 @@ func TestParseExecServerAndStdioToUDS(t *testing.T) {
 	}
 	if !listen.ExecServer.ListenSet || listen.ExecServer.Listen != "stdio" {
 		t.Fatalf("exec-server listen = %#v", listen.ExecServer)
-	}
-
-	stdio, err := Parse([]string{"stdio-to-uds", `\\.\pipe\codex-test`})
-	if err != nil {
-		t.Fatalf("Parse stdio-to-uds returned error: %v", err)
-	}
-	if stdio.Command != CommandStdioToUDS || stdio.StdioToUDS.SocketPath != `\\.\pipe\codex-test` {
-		t.Fatalf("stdio-to-uds = %#v", stdio)
 	}
 
 	_, err = Parse([]string{"exec-server", "--remote", "ws://127.0.0.1:7777"})
