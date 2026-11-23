@@ -44,7 +44,7 @@ func (c *RetainedContext) RecordAssistantMessage(message RetainedUserMessage, so
 		return nil
 	}
 	message.Origin = normalizeOrigin(message.Origin)
-	message.bound()
+	message.bound(c.AssistantRecordBytes())
 	empty := message.Complete && message.Text == ""
 	inherited := source.Inherited
 	if index := findOrderedMessageIndex(c.assistantMessages, message.MessageID); index >= 0 {
@@ -72,8 +72,6 @@ func (c *RetainedContext) RecordAssistantMessage(message RetainedUserMessage, so
 	entry := orderedUserMessage{Value: message, Revision: revision, Inherited: inherited, Order: order}
 	out := entry.source(RetainedSourceRoleAssistant)
 	c.assistantMessages = append(c.assistantMessages, entry)
-	boundFamily(&c.assistantMessages, func(item *orderedUserMessage) RetainedContextOrder {
-		return item.key()
-	}, &c.assistantMessagesIncomplete)
+	c.boundAssistantFamily()
 	return out
 }

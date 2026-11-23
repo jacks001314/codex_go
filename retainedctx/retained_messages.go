@@ -9,7 +9,7 @@ import "reflect"
 // the original envelope, independently of buffer eviction.
 func (c *RetainedContext) RecordUserMessage(message RetainedUserMessage, source RetainedInputSource) *RetainedSource {
 	message.Origin = normalizeOrigin(message.Origin)
-	message.bound()
+	message.bound(c.UserRecordBytes())
 	inherited := source.Inherited
 	// An unchanged invocation is not a new instruction. Keep the original
 	// acceptance order; compare only the latest version of this automation, so
@@ -62,9 +62,7 @@ func (c *RetainedContext) RecordUserMessage(message RetainedUserMessage, source 
 	entry := orderedUserMessage{Value: message, Revision: revision, Inherited: inherited, Order: order}
 	out := entry.source(RetainedSourceRoleUser)
 	c.userMessages = append(c.userMessages, entry)
-	boundFamily(&c.userMessages, func(item *orderedUserMessage) RetainedContextOrder {
-		return item.key()
-	}, &c.userMessagesIncomplete)
+	c.boundUserFamily()
 	return out
 }
 
@@ -82,11 +80,9 @@ func (c *RetainedContext) RecoverUserMessageExcerpts(excerptForID func(string) (
 			continue
 		}
 		message.Text = text
-		message.bound()
+		message.bound(c.UserRecordBytes())
 	}
-	boundFamily(&c.userMessages, func(item *orderedUserMessage) RetainedContextOrder {
-		return item.key()
-	}, &c.userMessagesIncomplete)
+	c.boundUserFamily()
 }
 
 // Record retains one accepted event. Same-event delivery is idempotent; changed
@@ -112,11 +108,15 @@ func (c *RetainedContext) Record(event RetainedContextEvent) bool {
 // Surviving local input metadata also advances the counter when its retained
 // record is missing.
 func (c *RetainedContext) Restore(checkpoint *RetainedContext, survivingItems []*HarnessMetadata) {
+	retention := c.MessageRetentionPolicy()
 	if checkpoint != nil {
 		*c = *checkpoint.Clone()
 	} else {
 		*c = RetainedContext{userMessagesIncomplete: true}
 	}
+	// The live recorder keeps the policy its owner resolved; the checkpoint's
+	// own copy only helps a replay that starts at the compaction.
+	c.messageRetention = retention
 	for i := range c.verifiedAnswers {
 		entry := &c.verifiedAnswers[i]
 		event := RetainedContextEvent{Answer: entry.Value, AcceptanceOrder: uintPointer(entry.Order)}
@@ -124,15 +124,21 @@ func (c *RetainedContext) Restore(checkpoint *RetainedContext, survivingItems []
 		entry.Value = event.Answer
 		c.advanceOrder(entry.Order)
 	}
-	for _, family := range [][]orderedUserMessage{c.userMessages, c.assistantMessages} {
-		for i := range family {
-			entry := &family[i]
-			entry.Value.bound()
-			// Also repair checkpoints written before adoption recorded the answer gap.
-			c.verifiedAnswersIncomplete = c.verifiedAnswersIncomplete || entry.Inherited
-			if !entry.Inherited {
-				c.advanceOrder(entry.Order)
-			}
+	for i := range c.userMessages {
+		entry := &c.userMessages[i]
+		entry.Value.bound(c.UserRecordBytes())
+		// Also repair checkpoints written before adoption recorded the answer gap.
+		c.verifiedAnswersIncomplete = c.verifiedAnswersIncomplete || entry.Inherited
+		if !entry.Inherited {
+			c.advanceOrder(entry.Order)
+		}
+	}
+	for i := range c.assistantMessages {
+		entry := &c.assistantMessages[i]
+		entry.Value.bound(c.AssistantRecordBytes())
+		c.verifiedAnswersIncomplete = c.verifiedAnswersIncomplete || entry.Inherited
+		if !entry.Inherited {
+			c.advanceOrder(entry.Order)
 		}
 	}
 	for i := range c.senderDeliveries {
@@ -159,12 +165,8 @@ func (c *RetainedContext) Restore(checkpoint *RetainedContext, survivingItems []
 	boundFamily(&c.verifiedAnswers, func(item *orderedVerifiedAnswer) RetainedContextOrder {
 		return item.key()
 	}, &c.verifiedAnswersIncomplete)
-	boundFamily(&c.userMessages, func(item *orderedUserMessage) RetainedContextOrder {
-		return item.key()
-	}, &c.userMessagesIncomplete)
-	boundFamily(&c.assistantMessages, func(item *orderedUserMessage) RetainedContextOrder {
-		return item.key()
-	}, &c.assistantMessagesIncomplete)
+	c.boundUserFamily()
+	c.boundAssistantFamily()
 }
 
 // RetainAnswers keeps legacy answers whose source calls survive when no retained

@@ -582,7 +582,7 @@ func (r *RuntimeRouter) guardianRootConversationWithHandoffAndBudgeting(
 	} else {
 		userCandidates = guardianRootItemUserCandidates(record.Items)
 	}
-	deliveredTexts := guardianRootDeliveredTexts(record.Items)
+	deliveredTexts, missingDeliveredContext := guardianRootDeliveredTexts(record.Items)
 	assistantCandidates := guardianRootLiveAssistantCandidates(record.Items, deliveredTexts)
 	var handoffBoundaries []uint64
 	if handoffEnabled {
@@ -595,7 +595,7 @@ func (r *RuntimeRouter) guardianRootConversationWithHandoffAndBudgeting(
 		retainedUserSources:     retainedUserSources,
 		handoffBoundaries:       handoffBoundaries,
 		missingRootInstructions: missingRootInstructions,
-		missingAssistantContext: retained != nil && retained.HasOmittedAssistantMessages(),
+		missingAssistantContext: missingDeliveredContext || (retained != nil && retained.HasOmittedAssistantMessages()),
 		missingVerifiedAnswers:  retained != nil && !retained.VerifiedAnswersComplete(),
 	}, r.guardianRootLegacyUserMessages(record), budgeting)
 	return prepared.messages

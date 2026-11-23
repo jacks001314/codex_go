@@ -53533,11 +53533,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Rust #62828: retainedctx.MessageRetention (thread_id + flattened GuardianRetentionPolicy) rides compaction checkpoints; RetainedContext records whole assistant messages under an Elastic entry limit, keeps more than the fixed record count, projects FixedMessageView for fixed reviewers, and applies the configured record limit to delivered assistant messages. A confirmed delivery that exceeds the limit keeps only delivered_assistant_message_incomplete (HarnessMetadata.ConfirmedDelivery), and the root delivered-context lookup marks missing assistant context. rollout.SavedMessageRetention recovers the policy from the newest owned settings snapshot or a compaction checkpoint, and the app-server restores it when rebuilding retained evidence. Tests: go test ./retainedctx -run 'MessageRetention|FixedMessageView' -count=1; go test ./rollout -run SavedMessageRetention -count=1; go test ./appserver -run 'ElasticOriginals|IncompleteMarker|DeliveredTexts' -count=1; go test ./appserver -run 'Retained|Guardian|DeliveredAssistant' -count=1; go build ./..."
    ],
    "kind": "runtime",
    "sha": "ab7a93771efc8a15421106f6ec9a33121d216c05",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Honor Guardian retention settings for assistant messages (#62828)"
   },
   {

@@ -1583,9 +1583,21 @@ reviewAttempt:
 	// Rust's review prompt renders the retained user-instruction section from the
 	// session's retained context, so the reviewer sees the thread's original
 	// instructions even after compaction.
+	var contextBudgeting = codexctx.GuardianContextBudgetingFixed
+	var elasticBudget *state.GuardianElasticBudgetConfig
+	var elasticBudgetErr error
+	if plan.Prepared != nil && plan.Prepared.Config != nil {
+		contextBudgeting = plan.Prepared.Config.GuardianContextBudgeting()
+		elasticBudget, elasticBudgetErr = plan.Prepared.Config.GuardianSyncElasticBudget()
+	}
 	var retainedContext *retainedctx.RetainedContext
 	if r.retainedContext != nil {
 		retainedContext = r.retainedContext(threadID, turnID)
+	}
+	if contextBudgeting == codexctx.GuardianContextBudgetingFixed {
+		// Rust #62828: a Fixed-budget reviewer reads the fixed retention window
+		// even though the recorder kept the thread's Elastic originals.
+		retainedContext = retainedContext.FixedMessageView()
 	}
 	previousOmissions := r.retainedOmissionDelivery(threadID)
 	pendingOmissions := state.CurrentRetainedOmissions(retainedContext, state.ActionPresentationSyncFull)
@@ -1593,13 +1605,6 @@ reviewAttempt:
 	// the retained snapshot in Rust's synchronous layout (#51627): one retained
 	// section ahead of the transcript, with the assistant context inside it. The
 	// asynchronous independent snapshot's split belongs to ActionPresentationAsync.
-	var elasticBudget *state.GuardianElasticBudgetConfig
-	var elasticBudgetErr error
-	contextBudgeting := codexctx.GuardianContextBudgetingFixed
-	if plan.Prepared != nil && plan.Prepared.Config != nil {
-		contextBudgeting = plan.Prepared.Config.GuardianContextBudgeting()
-		elasticBudget, elasticBudgetErr = plan.Prepared.Config.GuardianSyncElasticBudget()
-	}
 	buildOptions := state.BuildPromptOptions{
 		Presentation:              state.ActionPresentationSyncFull,
 		TranscriptFormat:          transcriptFormat,

@@ -672,9 +672,12 @@ func guardianRootLiveAssistantCandidates(items []session.Item, delivered map[str
 }
 
 // guardianRootDeliveredTexts joins messaging calls to their host-confirmed
-// output text, newest first, as Rust's delivered-candidate lookup does.
-func guardianRootDeliveredTexts(items []session.Item) map[string]string {
+// output text, newest first, as Rust's delivered-candidate lookup does. An
+// omitted delivery (Rust #62828) contributes no text and marks the assistant
+// context missing so the reviewer knows a confirmed reply was dropped.
+func guardianRootDeliveredTexts(items []session.Item) (map[string]string, bool) {
 	delivered := map[string]string{}
+	missing := false
 	count := 0
 	for index := len(items) - 1; index >= 0 && count < guardianMaxRootMessages; index-- {
 		item := &items[index]
@@ -682,17 +685,25 @@ func guardianRootDeliveredTexts(items []session.Item) map[string]string {
 			continue
 		}
 		metadata := harnessMetadataFromSessionItem(item)
-		if metadata == nil || metadata.DeliveredAssistantMessage == nil {
+		if metadata == nil {
+			continue
+		}
+		text, incomplete, confirmed := metadata.ConfirmedDelivery()
+		if !confirmed {
+			continue
+		}
+		if incomplete {
+			missing = true
 			continue
 		}
 		callID := guardianRootItemCallID(item)
 		if callID == "" {
 			continue
 		}
-		delivered[callID] = *metadata.DeliveredAssistantMessage
+		delivered[callID] = text
 		count++
 	}
-	return delivered
+	return delivered, missing
 }
 
 func guardianRootItemCallID(item *session.Item) string {

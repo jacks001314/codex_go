@@ -150,7 +150,7 @@ func (r *RuntimeRouter) checkpointRetainedContext(threadID string) (*retainedctx
 // retained context leaves the user-instruction history incomplete.
 func (r *RuntimeRouter) restoreRetainedContextCheckpoint(threadID string) *retainedctx.RetainedContext {
 	checkpoint, hasCheckpoint := r.checkpointRetainedContext(threadID)
-	context := &retainedctx.RetainedContext{}
+	context := (&retainedctx.RetainedContext{}).WithRetention(r.savedMessageRetention(threadID))
 	if !hasCheckpoint {
 		return context
 	}
@@ -168,6 +168,25 @@ func (r *RuntimeRouter) restoreRetainedContextCheckpoint(threadID string) *retai
 		context.RecoverUserMessageExcerpts(excerptForID)
 	}
 	return context
+}
+
+// savedMessageRetention recovers the thread-owned recorder policy from its
+// rollout, including a compaction checkpoint that outlived the settings
+// snapshot (Rust MessageRetention::saved, #62828).
+func (r *RuntimeRouter) savedMessageRetention(threadID string) *retainedctx.MessageRetention {
+	record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(threadID)), false, false)
+	if err != nil || record == nil || r.services.ThreadRouter == nil {
+		return nil
+	}
+	path := r.services.ThreadRouter.threadRolloutPath(record)
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	lines, _, err := rollout.Load(path)
+	if err != nil {
+		return nil
+	}
+	return rollout.SavedMessageRetention(threadID, lines)
 }
 
 func survivingRetainedMetadata(items []session.Item) []*retainedctx.HarnessMetadata {
@@ -293,13 +312,13 @@ func (r *RuntimeRouter) recordRetainedUserMessages(context *retainedctx.Retained
 			// thread from minting a colliding order for later evidence.
 			context.ObserveOrder(*metadata.UserInputOrder)
 		}
-		record, ok := retainedRecordForSessionItem(item, index, metadata, retainInherited)
+		record, ok := retainedRecordForSessionItemWithContext(item, index, metadata, retainInherited, context)
 		if !ok {
 			continue
 		}
 		recordRetainedSessionItem(context, record, metadata)
 	}
-	for _, record := range deliveredAssistantRecordsFromHistory(record.Items) {
+	for _, record := range deliveredAssistantRecordsFromHistory(record.Items, context) {
 		if record.source.Inherited && !retainInherited {
 			continue
 		}
@@ -324,6 +343,10 @@ type retainedSessionItemRecord struct {
 // establishes. Compaction output is skipped, because a summary is a digest of the
 // conversation rather than host-observed evidence.
 func retainedRecordForSessionItem(item *session.Item, index int, metadata *retainedctx.HarnessMetadata, retainInherited bool) (retainedSessionItemRecord, bool) {
+	return retainedRecordForSessionItemWithContext(item, index, metadata, retainInherited, nil)
+}
+
+func retainedRecordForSessionItemWithContext(item *session.Item, index int, metadata *retainedctx.HarnessMetadata, retainInherited bool, context *retainedctx.RetainedContext) (retainedSessionItemRecord, bool) {
 	if item == nil || sessionItemIsCompactionOutput(item) {
 		return retainedSessionItemRecord{}, false
 	}
@@ -377,10 +400,17 @@ func retainedRecordForSessionItem(item *session.Item, index int, metadata *retai
 		}
 	}
 	if assistantMessage {
-		// Rust records retained evidence through `guardian_truncate_text`, so the
-		// omission marker and both retained ends must match the root projection.
-		message.Text, _ = codexctx.GuardianTruncateText(text, guardianMaxRootMessageTokens)
-		message.Complete = len(text) <= utils.ApproxBytesForTokens(guardianMaxRootMessageTokens)
+		if context != nil && context.RetainsOriginalAssistantMessages() {
+			// Rust #62828: an Elastic entry limit admits the whole assistant
+			// message; the recorder applies the configured byte limit.
+			message.Text = text
+			message.Complete = true
+		} else {
+			// Rust records retained evidence through `guardian_truncate_text`, so the
+			// omission marker and both retained ends must match the root projection.
+			message.Text, _ = codexctx.GuardianTruncateText(text, guardianMaxRootMessageTokens)
+			message.Complete = len(text) <= utils.ApproxBytesForTokens(guardianMaxRootMessageTokens)
+		}
 	} else {
 		// Rust bounds every retained original, and an instruction is only complete
 		// when the harness classified each content entry as genuine user content.
@@ -568,19 +598,27 @@ func (r *RuntimeRouter) annotateRetainedHarnessMetadata(threadID session.ThreadI
 	// its assistant text at the call's position instead of the completion order.
 	annotateMissingRetainedInputOrders(context, items)
 	historyLength := len(r.retainedCallLookupHistory(threadID))
-	delivered := r.deliveredAssistantRecords(threadID, items)
+	delivered := r.deliveredAssistantRecords(threadID, items, context)
 	retainInherited := !r.turnThreadIsSubagent(threadKey)
 	for _, record := range delivered {
 		if record.source.Inherited && !retainInherited {
 			continue
 		}
 		captured := context.RecordAssistantMessage(record.message, record.source)
+		offset := record.itemIndex - historyLength
+		if !record.message.Complete {
+			if _, elastic := context.ElasticAssistantRecordBytes(); elastic && offset >= 0 && offset < len(items) {
+				// Rust #62828: an oversized delivery exceeds the record limit, so
+				// only the incomplete marker survives on the tool output.
+				markDeliveredAssistantIncomplete(&items[offset])
+			}
+		}
 		// Rust #60839: persist the captured revision next to the tool output so
 		// a replay can reuse it; older readers keep the text and order.
 		if captured == nil {
 			continue
 		}
-		if offset := record.itemIndex - historyLength; offset >= 0 && offset < len(items) {
+		if offset >= 0 && offset < len(items) {
 			annotateSessionItemHarnessMetadata(&items[offset], captured, 0, false)
 		}
 	}
@@ -602,7 +640,7 @@ func (r *RuntimeRouter) annotateRetainedHarnessMetadata(threadID session.ThreadI
 			// The item already carries its recorded version.
 			continue
 		}
-		record, ok := retainedRecordForSessionItem(item, index, metadata, retainInherited)
+		record, ok := retainedRecordForSessionItemWithContext(item, index, metadata, retainInherited, context)
 		if !ok {
 			continue
 		}
@@ -630,24 +668,28 @@ type deliveredAssistantEvidence struct {
 // the later completion position. Rust looks the call up in the live history, and
 // Go does the same through the thread record because a call and its output are
 // usually appended separately.
-func (r *RuntimeRouter) deliveredAssistantRecords(threadID session.ThreadID, items []session.Item) []deliveredAssistantEvidence {
+func (r *RuntimeRouter) deliveredAssistantRecords(threadID session.ThreadID, items []session.Item, context *retainedctx.RetainedContext) []deliveredAssistantEvidence {
 	if r == nil || len(items) == 0 {
 		return nil
 	}
 	history := r.retainedCallLookupHistory(threadID)
-	return deliveredAssistantRecordsFromHistory(append(history, items...))
+	return deliveredAssistantRecordsFromHistory(append(history, items...), context)
 }
 
 // deliveredAssistantRecordsFromHistory resolves each confirmed output against
 // the call that precedes it in the same recorded history. Rebuilding this during
 // a context reload preserves the evidence across resume instead of depending on
 // the live append path having observed the output.
-func deliveredAssistantRecordsFromHistory(items []session.Item) []deliveredAssistantEvidence {
+func deliveredAssistantRecordsFromHistory(items []session.Item, context *retainedctx.RetainedContext) []deliveredAssistantEvidence {
 	var records []deliveredAssistantEvidence
 	for index := range items {
 		item := &items[index]
 		metadata := harnessMetadataFromSessionItem(item)
-		if metadata == nil || metadata.DeliveredAssistantMessage == nil {
+		if metadata == nil {
+			continue
+		}
+		text, incomplete, confirmed := metadata.ConfirmedDelivery()
+		if !confirmed {
 			continue
 		}
 		if !sessionItemIsFunctionCallOutput(item) {
@@ -664,12 +706,20 @@ func deliveredAssistantRecordsFromHistory(items []session.Item) []deliveredAssis
 		}
 		message := retainedctx.RetainedUserMessage{
 			Origin:   retainedctx.UserInputOriginUser,
-			Text:     *metadata.DeliveredAssistantMessage,
-			Complete: true,
+			Text:     text,
+			Complete: !incomplete,
 			TurnID:   runtimeSessionItemTurnID(call, 0),
 		}
 		if id := strings.TrimSpace(call.ID); id != "" {
 			message.MessageID = &id
+		}
+		if message.Complete && context != nil {
+			if limit, ok := context.ElasticAssistantRecordBytes(); ok && retainedctx.RecordBytes(message) > limit {
+				// Rust #62828: an oversized confirmed delivery keeps only an
+				// incomplete marker instead of partial text.
+				message.Text = ""
+				message.Complete = false
+			}
 		}
 		records = append(records, deliveredAssistantEvidence{
 			message:        message,
@@ -1071,6 +1121,29 @@ func mergeSessionItemHarnessMetadata(item *session.Item, fields map[string]any) 
 		}
 		merged[key] = json.RawMessage(encoded)
 	}
+	encoded, err := json.Marshal(merged)
+	if err != nil {
+		return
+	}
+	if item.Data == nil {
+		item.Data = map[string]any{}
+	}
+	item.Data[harnessMetadataKey] = json.RawMessage(encoded)
+}
+
+// markDeliveredAssistantIncomplete mirrors Rust's history record path
+// (#62828): an oversized confirmed delivery is replaced by an incomplete marker
+// so later replays do not treat partial text as complete evidence.
+func markDeliveredAssistantIncomplete(item *session.Item) {
+	if item == nil {
+		return
+	}
+	merged := map[string]any{}
+	if raw := harnessMetadataRawFromItem(item); len(raw) > 0 {
+		_ = json.Unmarshal(raw, &merged)
+	}
+	delete(merged, "delivered_assistant_message")
+	merged["delivered_assistant_message_incomplete"] = true
 	encoded, err := json.Marshal(merged)
 	if err != nil {
 		return

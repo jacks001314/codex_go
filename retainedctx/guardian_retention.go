@@ -37,3 +37,28 @@ func (p *GuardianRetentionPolicy) Clone() *GuardianRetentionPolicy {
 	}
 	return &cloned
 }
+
+// MessageRetention is the recorder policy owned by the thread that produced a
+// history snapshot (Rust codex-history MessageRetention, #62828). It is stored
+// on the compaction checkpoint so a replay can recover the policy even when it
+// starts at a compaction instead of the thread settings snapshot.
+type MessageRetention struct {
+	ThreadID string `json:"thread_id"`
+	GuardianRetentionPolicy
+}
+
+// Clone returns an independent copy.
+func (r *MessageRetention) Clone() *MessageRetention {
+	if r == nil {
+		return nil
+	}
+	return &MessageRetention{ThreadID: r.ThreadID, GuardianRetentionPolicy: *r.GuardianRetentionPolicy.Clone()}
+}
+
+// Equal reports whether two retained policies match.
+func (r *MessageRetention) Equal(other *MessageRetention) bool {
+	if r == nil || other == nil {
+		return r == nil && other == nil
+	}
+	return r.ThreadID == other.ThreadID && r.GuardianRetentionPolicy.Equal(&other.GuardianRetentionPolicy)
+}

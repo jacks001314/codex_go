@@ -2507,6 +2507,42 @@ func CompactedRetainedContext(lines []Line) *retainedctx.RetainedContext {
 	return nil
 }
 
+// SavedMessageRetention recovers the latest owned recorder policy even when a
+// replay starts at a compaction checkpoint (Rust MessageRetention::saved,
+// #62828). The newest owned settings snapshot or checkpoint decides; an item of
+// the same kind without a policy for this thread ends the search.
+func SavedMessageRetention(threadID string, lines []Line) *retainedctx.MessageRetention {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		if lines[i].Type == "compacted" {
+			event := compactedEventFromPayload(lines[i].Payload)
+			if event == nil || event.RetainedContext == nil {
+				continue
+			}
+			retention := event.RetainedContext.MessageRetentionPolicy()
+			if retention != nil && retention.ThreadID == threadID {
+				return retention
+			}
+			return nil
+		}
+		snapshot, ok := threadSettingsSnapshotFromEvent(lines[i].Payload)
+		if !ok || snapshot.ThreadID != threadID {
+			continue
+		}
+		if snapshot.GuardianRetention == nil {
+			return nil
+		}
+		return &retainedctx.MessageRetention{
+			ThreadID:                threadID,
+			GuardianRetentionPolicy: *snapshot.GuardianRetention.Clone(),
+		}
+	}
+	return nil
+}
+
 // HasCompactionCheckpoint reports whether the rollout contains a compaction
 // checkpoint, whether or not that checkpoint carries retained context. A
 // checkpoint written before retained context existed still replaced the model

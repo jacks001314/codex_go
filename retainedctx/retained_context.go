@@ -177,6 +177,9 @@ type HarnessMetadata struct {
 	// `CodexHarnessMetadata::delivered_assistant_message`). The host retains it as
 	// an assistant message at the originating call's position.
 	DeliveredAssistantMessage *string `json:"delivered_assistant_message,omitempty"`
+	// DeliveredAssistantMessageIncomplete records that the confirmed delivery
+	// exceeded the configured record limit and was omitted (Rust #62828).
+	DeliveredAssistantMessageIncomplete bool `json:"delivered_assistant_message_incomplete,omitempty"`
 	// HarnessAuthoredConfiguration marks a response-configuration update created
 	// by the Codex harness itself rather than a client.
 	HarnessAuthoredConfiguration bool `json:"harness_authored_configuration,omitempty"`
@@ -199,6 +202,23 @@ type HarnessMetadata struct {
 	// provider-specific references (Rust #62144). Absent on older rollouts.
 	ModelSearchState   *ModelSearchState   `json:"model_search_state,omitempty"`
 	SenderUserMessages *SenderUserMessages `json:"sender_user_messages,omitempty"`
+}
+
+// ConfirmedDelivery mirrors `CodexHarnessMetadata::confirmed_delivery`: an
+// omitted delivery reports incomplete with no text; otherwise the captured text
+// is complete exactly when it is non-empty. ok is false when this item recorded
+// no confirmed delivery at all.
+func (m *HarnessMetadata) ConfirmedDelivery() (text string, incomplete bool, ok bool) {
+	if m == nil {
+		return "", false, false
+	}
+	if m.DeliveredAssistantMessageIncomplete {
+		return "", true, true
+	}
+	if m.DeliveredAssistantMessage == nil {
+		return "", false, false
+	}
+	return *m.DeliveredAssistantMessage, *m.DeliveredAssistantMessage == "", true
 }
 
 // MarkRetainedSourcesIncomplete mirrors
@@ -330,9 +350,9 @@ func (e *RetainedContextEvent) Bound() {
 }
 
 // bound bounds one retained record by clearing its text when the serialized
-// record exceeds the per-record budget.
-func (m *RetainedUserMessage) bound() {
-	if recordBytes(*m) <= MaxRecordBytes {
+// record or its text exceeds the per-record budget.
+func (m *RetainedUserMessage) bound(maxRecordBytes int) {
+	if len(m.Text) <= maxRecordBytes && recordBytes(*m) <= maxRecordBytes {
 		return
 	}
 	m.Text = ""
@@ -342,6 +362,11 @@ func (m *RetainedUserMessage) bound() {
 		truncated := truncateToBoundary(*m.MessageID, 1_024)
 		m.MessageID = &truncated
 	}
+}
+
+// RecordBytes reports the wire size of one retained record.
+func RecordBytes(value any) int {
+	return recordBytes(value)
 }
 
 func recordBytes(value any) int {
@@ -461,6 +486,9 @@ type RetainedContext struct {
 	assistantMessagesIncomplete bool
 	nextOrder                   uint64
 	senderDeliveries            []orderedSenderUserMessages
+	// messageRetention is the recorder policy owning this history. nil keeps
+	// the fixed record and family limits.
+	messageRetention *MessageRetention
 	// pendingAssistantOrders reserves an assistant message's acceptance order
 	// when its source stream starts (#47584), before the completed message is
 	// recorded. The reservation is consumed by the matching record.
@@ -497,6 +525,9 @@ func (c RetainedContext) MarshalJSON() ([]byte, error) {
 		}
 		fields["sender_deliveries"] = deliveries
 	}
+	if c.messageRetention != nil {
+		fields["message_retention"] = c.messageRetention
+	}
 	return marshalNoEscape(fields)
 }
 
@@ -512,6 +543,7 @@ func (c *RetainedContext) UnmarshalJSON(data []byte) error {
 		AssistantMessagesIncomplete bool                        `json:"assistant_messages_incomplete"`
 		NextOrder                   uint64                      `json:"next_order"`
 		SenderDeliveries            []orderedSenderUserMessages `json:"sender_deliveries"`
+		MessageRetention            *MessageRetention           `json:"message_retention"`
 	}
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
@@ -527,6 +559,7 @@ func (c *RetainedContext) UnmarshalJSON(data []byte) error {
 	c.assistantMessagesIncomplete = wire.AssistantMessagesIncomplete
 	c.nextOrder = wire.NextOrder
 	c.senderDeliveries = wire.SenderDeliveries
+	c.messageRetention = wire.MessageRetention.Clone()
 	return nil
 }
 
@@ -554,6 +587,7 @@ func (c *RetainedContext) Clone() *RetainedContext {
 			cloned.senderDeliveries[i].Revision = &value
 		}
 	}
+	cloned.messageRetention = c.messageRetention.Clone()
 	if len(c.pendingAssistantOrders) > 0 {
 		cloned.pendingAssistantOrders = make(map[string]uint64, len(c.pendingAssistantOrders))
 		for messageID, order := range c.pendingAssistantOrders {
@@ -583,15 +617,123 @@ func cloneOrderedUserMessages(items []orderedUserMessage) []orderedUserMessage {
 }
 
 func boundFamily[T any](items *[]T, key func(*T) RetainedContextOrder, incomplete *bool) {
+	boundFamilyWithLimit(items, key, incomplete, MaxFamilyRecords, MaxFamilyBytes)
+}
+
+func boundFamilyWithLimit[T any](items *[]T, key func(*T) RetainedContextOrder, incomplete *bool, maxRecords int, maxBytes int) {
 	// Queued instructions can be recorded after later-accepted answers. Evict by
 	// acceptance order, not by the order in which persistence happened to finish.
 	sort.SliceStable(*items, func(i, j int) bool {
 		return key(&(*items)[i]).Less(key(&(*items)[j]))
 	})
-	for len(*items) > MaxFamilyRecords || familyBytes(*items) > MaxFamilyBytes {
+	for len(*items) > maxRecords || familyBytes(*items) > maxBytes {
 		*items = (*items)[1:]
 		*incomplete = true
 	}
+}
+
+// WithRetention installs the recorder policy that owns this history.
+func (c *RetainedContext) WithRetention(retention *MessageRetention) *RetainedContext {
+	if c != nil {
+		c.messageRetention = retention.Clone()
+	}
+	return c
+}
+
+// MessageRetentionPolicy returns the recorder policy, if any.
+func (c *RetainedContext) MessageRetentionPolicy() *MessageRetention {
+	if c == nil {
+		return nil
+	}
+	return c.messageRetention.Clone()
+}
+
+// RetainsOriginalAssistantMessages reports whether an Elastic entry limit lets
+// this recorder admit whole assistant messages (Rust #62828).
+func (c *RetainedContext) RetainsOriginalAssistantMessages() bool {
+	return c != nil && c.messageRetention != nil
+}
+
+// RetainsOriginalUserMessages reports whether user instructions have a
+// configured Elastic entry limit.
+func (c *RetainedContext) RetainsOriginalUserMessages() bool {
+	return false
+}
+
+// ElasticAssistantRecordBytes returns the configured per-record limit, if any.
+func (c *RetainedContext) ElasticAssistantRecordBytes() (int, bool) {
+	if c == nil || c.messageRetention == nil || c.messageRetention.AssistantRecordBytes == nil {
+		return 0, false
+	}
+	return *c.messageRetention.AssistantRecordBytes, true
+}
+
+// AssistantRecordBytes returns the effective assistant record limit.
+func (c *RetainedContext) AssistantRecordBytes() int {
+	if limit, ok := c.ElasticAssistantRecordBytes(); ok {
+		return limit
+	}
+	return MaxRecordBytes
+}
+
+// UserRecordBytes returns the effective user instruction record limit.
+func (c *RetainedContext) UserRecordBytes() int {
+	return MaxRecordBytes
+}
+
+// boundAssistantFamily applies the assistant family budget; a recorder with an
+// Elastic entry limit keeps every admitted record and is bounded by bytes only.
+func (c *RetainedContext) boundAssistantFamily() {
+	maxRecords := MaxFamilyRecords
+	if c.RetainsOriginalAssistantMessages() {
+		maxRecords = int(^uint(0) >> 1)
+	}
+	boundFamilyWithLimit(&c.assistantMessages, func(item *orderedUserMessage) RetainedContextOrder {
+		return item.key()
+	}, &c.assistantMessagesIncomplete, maxRecords, MaxFamilyBytes)
+}
+
+// boundUserFamily applies the user instruction family budget.
+func (c *RetainedContext) boundUserFamily() {
+	maxRecords := MaxFamilyRecords
+	if c.RetainsOriginalUserMessages() {
+		maxRecords = int(^uint(0) >> 1)
+	}
+	boundFamilyWithLimit(&c.userMessages, func(item *orderedUserMessage) RetainedContextOrder {
+		return item.key()
+	}, &c.userMessagesIncomplete, maxRecords, MaxFamilyBytes)
+}
+
+// EmptyWithSameLimits clears retained evidence while keeping the recorder policy.
+func (c *RetainedContext) EmptyWithSameLimits() *RetainedContext {
+	if c == nil {
+		return &RetainedContext{}
+	}
+	return (&RetainedContext{}).WithRetention(c.messageRetention)
+}
+
+// FixedMessageView projects the message families for consumers using the Fixed
+// retention window (Rust #62828): eight records, the fixed record limit, and no
+// Elastic per-record policy. It returns the receiver when nothing changes.
+func (c *RetainedContext) FixedMessageView() *RetainedContext {
+	if c == nil {
+		return nil
+	}
+	if len(c.assistantMessages) <= MaxFamilyRecords && len(c.userMessages) <= MaxFamilyRecords &&
+		c.AssistantRecordBytes() <= MaxRecordBytes && c.UserRecordBytes() <= MaxRecordBytes {
+		return c
+	}
+	view := c.Clone()
+	view.messageRetention = nil
+	for i := range view.assistantMessages {
+		view.assistantMessages[i].Value.bound(MaxRecordBytes)
+	}
+	for i := range view.userMessages {
+		view.userMessages[i].Value.bound(MaxRecordBytes)
+	}
+	view.boundAssistantFamily()
+	view.boundUserFamily()
+	return view
 }
 
 func familyBytes[T any](items []T) int {
