@@ -52405,11 +52405,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1270: partial - Rust reconciles Cloud transcript items against their turns so a reply restored from a stale item page is completed when the turn is final. Go replays stream and history items as they arrive (tui/chatwidget cloud thread label handling) and reconciles session-input receipts on agent switches (tui/tea/agent.go reconcileConfirmedSessionInput), but has no rule that finishes an unfinished cloud reply when its turn completes."
    ],
    "kind": "runtime",
    "sha": "92745114438c038dee88263ac4a6a91405dd85af",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Reconcile unfinished Cloud replies in the TUI transcript (#62403)"
   },
   {
@@ -53782,11 +53782,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Round 1270: partial - Rust applies Cloud stream notifications so the Agents overview stays current when another client changes a thread, even with no conversation stream attached. Go has the pieces but not the wiring: agents_overview rows carry a Cloud marker resolved per owning backend (tui/agents_overview/render.go, cloud_label_like_rust_test.go) and the TUI handles cloud stream disconnected/reconnected notifications (app/remote_tui.go -> CloudStreamDisconnectedMsg/CloudStreamReconnectedMsg) to hold and release input, but rows are refreshed from thread list/discovery only; no cloud stream event updates a row's status or recency."
    ],
    "kind": "runtime",
    "sha": "beac2ef8fc1ccba3e6014c8d1009737fc1dfd378",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Keep Cloud threads current in the Agents overview (#62858)"
   },
   {
@@ -53854,11 +53854,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Round 1270: N/A (no TUI WebRTC call path) - the commit makes TUI-created WebRTC calls use runtime agent authentication. Go's TUI never creates WebRTC calls: the only WebRTC code is voicehost's pion transport for the host control plane (voicehost/transport.go) plus the realtime transport config, so there is no call request surface to authenticate with runtime credentials."
    ],
    "kind": "runtime",
    "sha": "e346540867efaa2b73a22ea96e044b5311ae9cf0",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Use runtime authentication for TUI WebRTC calls (#62870)"
   },
   {
@@ -53881,11 +53881,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Round 1270: partial - Rust prewarms MCP servers while a cloud catalog refresh runs, so a slow skill lookup does not delay MCP startup and a canceled refresh still gets its chance. Go has MCP catalog refresh and priority handling (mcp/catalog_priority.go, mcp/binding_test.go catalog refresh cases) but nothing prewarms a server during the refresh: there is no prewarm call anywhere in the mcp package."
    ],
    "kind": "runtime",
    "sha": "66618f0512ccd43ebd9784f3f0af3f9e93ca6d0c",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Prewarm MCP servers during cloud catalog refresh (#62876)"
   },
   {
@@ -54569,11 +54569,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Round 1270: partial - Rust reattaches the displayed cloud conversation after a dropped stream so replies saved while disconnected appear. Go's reconnect handling only releases held input (tui/tea/model.go CloudStreamReconnectedMsg -> applyCloudStreamReconnected, cloud_stream_hold_like_rust_test.go); it does not refetch or reattach the conversation being displayed."
    ],
    "kind": "runtime",
    "sha": "44848822b1a58fa40cdcd89ec3161c757735cfd0",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Automatically resume disconnected cloud conversations in the TUI (#63211)"
   },
   {
