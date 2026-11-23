@@ -54377,11 +54377,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Sidebar tab close targets widened: sidebarTabCloseWidth = 3 paints \" × \" across the last three columns of every tab cell (renderSidebarTabCell pads the title to width-3), sidebarTabGeometry spends spare columns on the extra close cells without dropping a tab (tabWidth = min(preferred+2, room_per_tab)), closeAt and sidebarTabStripTargetAt map all three columns onto sidebarTargetTabClose, and document titles truncate against the narrower label area. TestSidebarTabStripCloseCellClosesTabLikeRust now checks the three-column target and closes the tab from either neighbouring cell while the title cell still selects, and TestSidebarTabStripUsesFixedRustTabWidthLikeRust recomputes the widened geometry; go test ./tui/tea -count=1 and go build ./... pass."
    ],
    "kind": "runtime",
    "sha": "ba1c17f9600a44d7dadb0b867690a9d936150e8d",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Widen sidebar tab close targets in the TUI (#63189)"
   },
   {

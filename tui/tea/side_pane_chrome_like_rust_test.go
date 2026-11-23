@@ -131,8 +131,8 @@ func TestSideWorkspaceWidthsUseRustPercentMathLikeRust(t *testing.T) {
 	}
 }
 
-// Rust paints the close glyph in the last column of every tab cell
-// (sidebar_chooser::close_cell) and closes that tab when the cell is clicked.
+// Rust #63189 paints " × " across the last three columns of every tab cell and
+// closes the tab from any of those columns.
 func TestSidebarTabStripCloseCellClosesTabLikeRust(t *testing.T) {
 	model, _ := newSidebarTabsModel(t)
 	tabs := []*activeSideConversation{
@@ -153,8 +153,8 @@ func TestSidebarTabStripCloseCellClosesTabLikeRust(t *testing.T) {
 	strip := ansi.Strip(model.renderSidebarTabStrip(width))
 	for offset := 0; offset < window.count; offset++ {
 		start := offset * window.stride
-		if got := ansi.Cut(strip, start+window.tabWidth-1, start+window.tabWidth); got != sidebarTabCloseGlyph {
-			t.Fatalf("tab %d close cell = %q, want %q: %q", offset, got, sidebarTabCloseGlyph, strip)
+		if got := ansi.Cut(strip, start+window.tabWidth-sidebarTabCloseWidth, start+window.tabWidth); got != sidebarTabCloseCell {
+			t.Fatalf("tab %d close target = %q, want %q: %q", offset, got, sidebarTabCloseCell, strip)
 		}
 	}
 
@@ -162,7 +162,7 @@ func TestSidebarTabStripCloseCellClosesTabLikeRust(t *testing.T) {
 	if !ok {
 		t.Fatal("split layout unavailable")
 	}
-	closeColumn := left + sideWorkspaceDividerWidth + window.tabWidth - 1
+	closeColumn := left + sideWorkspaceDividerWidth + window.tabWidth - 2
 	handled, cmd := clickSidebarPane(t, model, mousemsg.MouseButtonLeft, closeColumn, model.sidebarTabStripTop)
 	if !handled {
 		t.Fatalf("press on the close cell at column %d was not handled", closeColumn)
@@ -176,7 +176,7 @@ func TestSidebarTabStripCloseCellClosesTabLikeRust(t *testing.T) {
 		t.Fatalf("notice = %q, want the closed-tab notice", model.notice)
 	}
 
-	// The cell next to the close glyph still selects the tab instead of closing.
+	// Either neighbouring column of the close glyph closes the same tab.
 	resetTabs := func() []*activeSideConversation {
 		fresh := []*activeSideConversation{
 			{ParentThreadID: "parent-a", SideThreadID: "side-a"},
@@ -188,9 +188,24 @@ func TestSidebarTabStripCloseCellClosesTabLikeRust(t *testing.T) {
 		model.refreshTranscript()
 		return fresh
 	}
+	for _, within := range []int{window.tabWidth - 3, window.tabWidth - 1} {
+		resetTabs()
+		_ = model.viewString()
+		handled, cmd = clickSidebarPane(t, model, mousemsg.MouseButtonLeft,
+			left+sideWorkspaceDividerWidth+within, model.sidebarTabStripTop)
+		if !handled {
+			t.Fatalf("press inside the close target at within=%d was not handled", within)
+		}
+		runTeaCmd(t, model, cmd)
+		if tabs := model.sidebarTabsFor("parent-a"); len(tabs) != 1 || tabs[0].SideThreadID != "side-b" {
+			t.Fatalf("tabs after close press at within=%d = %#v, want only side-b", within, tabs)
+		}
+	}
+
+	// The title cell before the close target still selects the tab.
 	resetTabs()
 	handled, cmd = clickSidebarPane(t, model, mousemsg.MouseButtonLeft,
-		left+sideWorkspaceDividerWidth+window.tabWidth-2, model.sidebarTabStripTop)
+		left+sideWorkspaceDividerWidth+window.tabWidth-4, model.sidebarTabStripTop)
 	if !handled {
 		t.Fatal("press on the tab title was not handled as a selection")
 	}

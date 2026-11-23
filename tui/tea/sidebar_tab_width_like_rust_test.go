@@ -44,6 +44,11 @@ func TestSidebarTabStripUsesFixedRustTabWidthLikeRust(t *testing.T) {
 		space := available - 2*gutter
 		wantWidth := min(sidebarTabWidth, space)
 		wantCount := (space + sidebarTabGap) / (wantWidth + sidebarTabGap)
+		if wantCount > 0 {
+			// Rust #63189 spends spare space on the wider close target.
+			roomPerTab := (space+sidebarTabGap)/wantCount - sidebarTabGap
+			wantWidth = min(wantWidth+sidebarTabCloseWidth-1, roomPerTab)
+		}
 		tabWidth, count := sidebarTabLayout(labels, width)
 		if count != wantCount {
 			t.Fatalf("width %d fits %d tabs, want %d (space %d / %d)",
@@ -67,8 +72,14 @@ func TestSidebarTabStripUsesFixedRustTabWidthLikeRust(t *testing.T) {
 	if want := window.first+window.count < len(tabs); window.rightArrow != want {
 		t.Fatalf("trailing arrow = %t, want %t", window.rightArrow, want)
 	}
-	if window.tabWidth != sidebarTabWidth {
-		t.Fatalf("strip tab cell = %d, want %d", window.tabWidth, sidebarTabWidth)
+	wantWidth := min(sidebarTabWidth, space)
+	if window.count > 0 {
+		// Rust #63189 widens each cell by the spare columns the close target needs.
+		roomPerTab := (space+sidebarTabGap)/window.count - sidebarTabGap
+		wantWidth = min(wantWidth+sidebarTabCloseWidth-1, roomPerTab)
+	}
+	if window.tabWidth != wantWidth {
+		t.Fatalf("strip tab cell = %d, want %d", window.tabWidth, wantWidth)
 	}
 	if window.addStart != available {
 		t.Fatalf("strip add button starts at %d, want %d", window.addStart, available)
@@ -86,18 +97,19 @@ func TestSidebarTabStripUsesFixedRustTabWidthLikeRust(t *testing.T) {
 	// wider than a cell so the clipping path is really exercised.
 	firstLabel := " Side " + strconv.Itoa(window.first+1) + " "
 	lastLabel := " Side " + strconv.Itoa(window.first+window.count) + " "
-	if len(lastLabel) <= window.tabWidth {
-		t.Fatalf("test setup: last label %q is not wider than the %d column cell", lastLabel, window.tabWidth)
+	if labelWidth := window.tabWidth - sidebarTabCloseWidth; len(lastLabel) <= labelWidth {
+		t.Fatalf("test setup: last label %q is not wider than the %d column label area", lastLabel, labelWidth)
 	}
 	for offset := 0; offset < window.count; offset++ {
 		label := " Side " + strconv.Itoa(window.first+offset+1) + " "
 		want := label
-		if len(want) > window.tabWidth-1 {
-			want = want[:window.tabWidth-1]
+		labelWidth := window.tabWidth - sidebarTabCloseWidth
+		if len(want) > labelWidth {
+			want = want[:labelWidth]
 		} else {
-			want += strings.Repeat(" ", window.tabWidth-1-len(want))
+			want += strings.Repeat(" ", labelWidth-len(want))
 		}
-		want += sidebarTabCloseGlyph
+		want += sidebarTabCloseCell
 		start := window.gutter + offset*window.stride
 		got := ansi.Cut(strip, start, start+window.tabWidth)
 		if got != want {
@@ -105,8 +117,8 @@ func TestSidebarTabStripUsesFixedRustTabWidthLikeRust(t *testing.T) {
 		}
 	}
 	firstTitle := firstLabel
-	if len(firstTitle) > window.tabWidth-1 {
-		firstTitle = firstTitle[:window.tabWidth-1]
+	if len(firstTitle) > window.tabWidth-sidebarTabCloseWidth {
+		firstTitle = firstTitle[:window.tabWidth-sidebarTabCloseWidth]
 	}
 	if !strings.HasPrefix(strip, sidebarTabOverflowLeft+strings.Repeat(" ", window.gutter-1)+firstTitle) {
 		t.Fatalf("strip starts with %q, want the first cell %q", strip[:min(len(firstLabel), len(strip))], firstLabel)

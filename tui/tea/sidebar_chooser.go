@@ -45,12 +45,14 @@ const (
 	// Rust #60319: adjacent tabs paint one noninteractive column between them.
 	sidebarTabGap   = 1
 	sidebarAddLabel = " + "
-	// Rust sidebar_chooser::close_cell paints a one-column close glyph in the
-	// last column of every tab cell, including the single " Side chat " tab.
+	// Rust #63189 CLOSE_WIDTH: the close target is " × " across three columns,
+	// so the glyph and the cells on either side all close the tab.
 	sidebarTabCloseGlyph = "×"
-	// sidebarSingleTabCell is the painted lone tab: the title fills every column
-	// but the last and the close glyph occupies the last one.
-	sidebarSingleTabCell = " Side chat" + sidebarTabCloseGlyph
+	sidebarTabCloseWidth = 3
+	sidebarTabCloseCell  = " " + sidebarTabCloseGlyph + " "
+	// sidebarSingleTabCell is the painted lone tab after the close target grew
+	// to three columns: the title fills the rest and " × " ends the cell.
+	sidebarSingleTabCell = " Side chat" + sidebarTabCloseCell
 	// Rust sidebar_tab_strip.rs reserves both gutter columns when the tabs
 	// overflow, so the tabs keep their place while the user switches between
 	// them; the arrows step to the neighbouring tab.
@@ -743,15 +745,15 @@ func (w sidebarTabStripWindow) tabCellAt(column int) (index int, within int, ok 
 	return index, within, true
 }
 
-// closeAt maps a strip column onto the close glyph painted in the last column
-// of a tab cell (Rust sidebar_chooser::close_cell). The close cell belongs to
-// the tab's click target in Rust, so it keeps the same hover highlight.
+// closeAt maps a strip column onto the three-column close target at the end of
+// a tab cell (Rust #63189 CLOSE_WIDTH). The close target belongs to the tab's
+// click target in Rust, so it keeps the same hover highlight.
 func (w sidebarTabStripWindow) closeAt(column int) int {
-	if w.tabWidth < 3 {
+	if w.tabWidth <= sidebarTabCloseWidth {
 		return -1
 	}
 	index, within, ok := w.tabCellAt(column)
-	if !ok || within != w.tabWidth-1 {
+	if !ok || within < w.tabWidth-sidebarTabCloseWidth {
 		return -1
 	}
 	return index
@@ -900,6 +902,12 @@ func sidebarTabGeometry(width int, tabCount int) (tabWidth int, count int, gutte
 	count = (space + sidebarTabGap) / (tabWidth + sidebarTabGap)
 	if count > tabCount {
 		count = tabCount
+	}
+	// Rust #63189 uses spare space for the extra close cells without reducing
+	// the number of visible tabs.
+	if count > 0 {
+		roomPerTab := (space+sidebarTabGap)/count - sidebarTabGap
+		tabWidth = min(tabWidth+sidebarTabCloseWidth-1, roomPerTab)
 	}
 	return tabWidth, count, gutter
 }
@@ -1054,7 +1062,7 @@ func (m *Model) renderSidebarTabStrip(width int) string {
 		if document := window.document(index); document != nil {
 			// Rust sidebar_chooser::tab_strip prefixes the document title with
 			// one space and resolves it against the cell's title column.
-			label = " " + m.sidebarDocumentTitle(document, max(window.tabWidth-2, 1))
+			label = " " + m.sidebarDocumentTitle(document, max(window.tabWidth-sidebarTabCloseWidth-1, 1))
 		} else if index < len(window.labels) {
 			label = window.labels[index]
 		}
@@ -1223,16 +1231,16 @@ func padSidebarCell(label string, width int) string {
 }
 
 // renderSidebarTabCell paints one tab like Rust's sidebar_chooser strip: the
-// title fills every column but the last, and the close glyph occupies that
-// trailing column (close_cell is tab.right()-1).
+// title fills the columns before the close target and " × " occupies the last
+// three (Rust #63189 close = CLOSE_WIDTH when width > CLOSE_WIDTH).
 func renderSidebarTabCell(label string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	if width < 3 {
+	if width <= sidebarTabCloseWidth {
 		return padSidebarCell(label, width)
 	}
-	return padSidebarCell(label, width-1) + sidebarTabCloseGlyph
+	return padSidebarCell(label, width-sidebarTabCloseWidth) + sidebarTabCloseCell
 }
 
 // renderSidebarChooser paints the chooser panel: the tab strip, discovery

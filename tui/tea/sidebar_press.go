@@ -108,11 +108,14 @@ func (m *Model) sidebarTabStripTargetAt(column int) (sidebarTarget, bool) {
 		return sidebarTarget{}, false
 	}
 	start := column - within
-	if within == window.tabWidth-1 && window.tabWidth >= 3 {
+	if window.tabWidth > sidebarTabCloseWidth && within >= window.tabWidth-sidebarTabCloseWidth {
+		// Rust #63189: the glyph and both neighbouring cells form one close
+		// target, so either edge of " × " closes the tab.
+		closeStart := start + window.tabWidth - sidebarTabCloseWidth
 		return sidebarTarget{
 			kind:  sidebarTargetTabClose,
 			index: index,
-			span:  sidebarSpan{start: column, end: column + 1},
+			span:  sidebarSpan{start: closeStart, end: start + window.tabWidth},
 		}, true
 	}
 	return sidebarTarget{
