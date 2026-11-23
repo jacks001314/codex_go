@@ -1852,6 +1852,9 @@ type Options struct {
 	// OnSidebarDocument loads a file preview for a chooser row; nil leaves file
 	// rows inert.
 	OnSidebarDocument SidebarDocumentFunc
+	// OnSidebarDocumentStat reports a preview's change stamp so the pane can
+	// refresh an edited file (Rust #62583 watch.rs). Nil stats the local path.
+	OnSidebarDocumentStat func(path string) (string, error)
 	// OnOpenSideChat attaches a saved side chat that is not retained in memory.
 	OnOpenSideChat       SideOpenFunc
 	OnReadReviewBranches ReviewBranchesReaderFunc
@@ -3162,6 +3165,10 @@ type Model struct {
 	onReadSideChatPrompts             SideChatPromptFunc
 	onSidebarFiles                    SidebarFilesFunc
 	onSidebarDocument                 SidebarDocumentFunc
+	onSidebarDocumentStat             func(path string) (string, error)
+	// sidebarDocumentWatchScheduled keeps at most one refresh sweep armed so a
+	// load never stacks a second timer chain.
+	sidebarDocumentWatchScheduled bool
 	onOpenSideChat                    SideOpenFunc
 	onReadReviewBranches              ReviewBranchesReaderFunc
 	onReadReviewCommits               ReviewCommitsReaderFunc
@@ -4022,6 +4029,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onReadSideChatPrompts:            options.OnReadSideChatPrompts,
 		onSidebarFiles:                   options.OnSidebarFiles,
 		onSidebarDocument:                options.OnSidebarDocument,
+		onSidebarDocumentStat:            options.OnSidebarDocumentStat,
 		onOpenSideChat:                   options.OnOpenSideChat,
 		onReadReviewBranches:             options.OnReadReviewBranches,
 		onReadReviewCommits:              options.OnReadReviewCommits,
@@ -5184,7 +5192,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case SidebarFilePromotedMsg:
 		return m, m.applySidebarFilePromoted(msg)
 	case SidebarDocumentLoadedMsg:
-		return m, m.applySidebarDocumentLoaded(msg)
+		return m, batchSideCommands(m.applySidebarDocumentLoaded(msg), m.sidebarDocumentWatchCmd())
+	case sidebarDocumentWatchTickMsg:
+		return m, m.applySidebarDocumentWatchTick()
 	case SideOpenResultMsg:
 		return m, m.applySideOpenResult(msg)
 	case WorkingDirectoryChangeResultMsg:

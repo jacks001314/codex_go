@@ -52988,11 +52988,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1269: partial - Rust watches each previewed file's parent directory and refreshes the open sidebar preview when the file changes. Go's sidebar inventory (tui/markdown/sidebar_file_links.go) and tab hover state (tui/tea/model.go sidebarTabHover) exist, but nothing in tui/app or tui/markdown watches a previewed path or reloads an open preview on a filesystem change."
+    "Batch 138: complete - open sidebar previews refresh when their file changes (Rust #62583). tui/tea/sidebar_document_watch.go adds the preview watch sweep: every three seconds (Rust's poll fallback cadence) the pane compares each loaded preview's file stamp (modification time and size, injectable via `Options.OnSidebarDocumentStat`) and re-reads only the changed files through the existing preview loader, so an editor's atomic replace shows the new content. `sidebarDocumentTab.watchStamp` records the stamp the current content came from, at most one sweep is armed at a time, and the reload reports through SidebarDocumentLoadedMsg, which keeps the tab's scroll position. A failed read parks the pane at the top but remembers the reading position in `readScroll`, so a deleted or unreadable file reports `File not found` and the position returns when the file does. A tab's coordinate target is stored on the tab and re-applied on refresh. tui/tea/sidebar_document_watch_like_rust_test.go covers the unchanged-file no-op, the refresh at the same reading position, the removed file, and recovery. Verified with go test ./tui/tea."
    ],
    "kind": "runtime",
    "sha": "81ef12b6174a0a04cb8f6ee337fcde61686a6ab8",
-   "status": "partial",
+   "status": "complete",
    "subject": "Refresh open sidebar file previews when files change (#62583)"
   },
   {

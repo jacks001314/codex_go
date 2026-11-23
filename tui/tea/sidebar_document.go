@@ -93,6 +93,15 @@ type sidebarDocumentTab struct {
 	// PathFeedback is the clipboard status the path footer shows (Rust
 	// CopyFeedback).
 	PathFeedback *sidebarDocumentPathFeedback
+	// Location is the coordinate the preview was opened at, so a refresh
+	// re-reads the same target (Rust Document::location).
+	Location *markdown.SidebarSourceLocation
+	// watchStamp is the file stamp the current content was read at, used to
+	// refresh a preview whose file changed (Rust watch.rs).
+	watchStamp string
+	// readScroll is the text reading position a reload restores, so a failed
+	// read does not lose the place the user was reading (Rust #62583).
+	readScroll int
 
 	renderWidth int
 	renderLines []string
@@ -196,6 +205,7 @@ func (m *Model) openSidebarDocumentAt(path string, linkIndex int, location *mark
 		Link:      -1,
 		HoverLink: -1,
 		Path:      path,
+		Location:  location,
 		Loading:   true,
 		Started:   time.Now(),
 	}
@@ -225,6 +235,7 @@ func (m *Model) reloadSidebarDocument(tab *sidebarDocumentTab, linkIndex int, lo
 	}
 	tab.Loading = true
 	tab.Started = time.Now()
+	tab.Location = location
 	tab.Link = -1
 	tab.HoverLink = -1
 	tab.Selection.clear()
@@ -263,6 +274,7 @@ func (m *Model) applySidebarDocumentLoaded(msg SidebarDocumentLoadedMsg) bubblet
 			continue
 		}
 		tab.Loading = false
+		previousErr := tab.View.Err
 		tab.View = msg.View
 		if path := strings.TrimSpace(msg.View.Path); path != "" {
 			tab.Path = path
@@ -270,6 +282,15 @@ func (m *Model) applySidebarDocumentLoaded(msg SidebarDocumentLoadedMsg) bubblet
 		tab.rendered = false
 		tab.renderLines = nil
 		tab.linkRowsSet = false
+		tab.watchStamp = m.sidebarDocumentStamp(tab.Path)
+		if msg.View.Err != "" {
+			// A failed read parks the pane at the top but remembers where the
+			// text was, so the position returns with the file (Rust #62583).
+			tab.readScroll = tab.Scroll
+			tab.Scroll = 0
+		} else if strings.TrimSpace(previousErr) != "" {
+			tab.Scroll = tab.readScroll
+		}
 		tab.HoverLink = -1
 		tab.Selection.clear()
 		// Rust loaded() dismisses the path view but keeps a finished copy
@@ -497,6 +518,7 @@ func (m *Model) sidebarDocumentRevealRow(tab *sidebarDocumentTab, row int) {
 		tab.Scroll = row - height + 1
 	}
 	tab.Scroll = clampModalInt(tab.Scroll, 0, m.sidebarDocumentMaxScroll(tab))
+	tab.readScroll = tab.Scroll
 }
 
 // followSidebarDocumentLink opens the selected link, resolving a relative
@@ -729,10 +751,12 @@ func (m *Model) updateSidebarDocumentKey(msg keymsg.KeyMsg) (bool, bubbletea.Cmd
 		return true, nil
 	case "jump_top":
 		tab.Scroll = 0
+		tab.readScroll = 0
 		m.refreshTranscript()
 		return true, nil
 	case "jump_bottom":
 		tab.Scroll = m.sidebarDocumentMaxScroll(tab)
+		tab.readScroll = tab.Scroll
 		m.refreshTranscript()
 		return true, nil
 	case "cancel":
@@ -781,6 +805,7 @@ func (m *Model) scrollSidebarDocument(tab *sidebarDocumentTab, delta int) {
 		return
 	}
 	tab.Scroll = clampModalInt(tab.Scroll+delta, 0, m.sidebarDocumentMaxScroll(tab))
+	tab.readScroll = tab.Scroll
 	m.refreshTranscript()
 }
 
