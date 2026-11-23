@@ -25,6 +25,9 @@ import (
 type pluginCLIContext struct {
 	codexHome string
 	service   *plugin.PluginService
+	// config is the command's effective configuration, including the managed
+	// cloud bundle when one applies (Rust #62837 cloud_config::config_builder).
+	config *config.Config
 }
 
 type pluginSelection struct {
@@ -82,7 +85,10 @@ type marketplaceListJSONEntry struct {
 }
 
 func runPlugin(opts *cli.PluginOptions, stdout io.Writer) error {
-	ctx := newPluginCLIContext(auth.DefaultCodexHome())
+	ctx, err := newPluginCLIContextForCommand(context.Background(), auth.DefaultCodexHome(), opts.ConfigOverrides)
+	if err != nil {
+		return err
+	}
 	switch opts.Action {
 	case "add":
 		return runPluginAdd(ctx, opts, stdout)
@@ -108,6 +114,65 @@ func newPluginCLIContext(codexHome string) *pluginCLIContext {
 		attachPluginRuntimeAuth(service, codexHome, cfg)
 	}
 	return &pluginCLIContext{codexHome: codexHome, service: service}
+}
+
+// newPluginCLIContextForCommand builds the plugin command context from the
+// fully merged configuration, so plugin add/list/remove honour managed cloud
+// configuration such as marketplace policy and product SKUs (Rust #62837).
+func newPluginCLIContextForCommand(ctx context.Context, codexHome string, overrides []string) (*pluginCLIContext, error) {
+	pluginCtx := newPluginCLIContext(codexHome)
+	cfg, err := loadPluginCommandConfig(ctx, codexHome, overrides)
+	if err != nil {
+		return nil, err
+	}
+	if cfg == nil {
+		return pluginCtx, nil
+	}
+	pluginCtx.config = cfg
+	if pluginCtx.service != nil {
+		var requirements *plugin.MarketplaceRequirements
+		if cfg.Requirements != nil {
+			requirements = cfg.Requirements.Marketplaces
+		}
+		pluginCtx.service.SetMarketplacePolicy(requirements, cfg.Values)
+	}
+	attachPluginRuntimeAuth(pluginCtx.service, codexHome, cfg)
+	return pluginCtx, nil
+}
+
+// loadPluginCommandConfig mirrors Rust's cloud_config::config_builder: load the
+// local layers first, fetch the managed bundle selected by the requirements
+// (a configuration server or the signed-in ChatGPT plan), and then load the
+// effective configuration with that bundle applied.
+func loadPluginCommandConfig(ctx context.Context, codexHome string, overrides []string) (*config.Config, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	loadOpts := &config.EffectiveOptions{
+		RawOverrides:         append([]string(nil), overrides...),
+		IncludeManagedConfig: true,
+		ManagedConfigPath:    filepath.Join(codexHome, "managed_config.toml"),
+	}
+	bootstrap, err := config.LoadEffectiveWithOptions(codexHome, loadOpts)
+	if err != nil {
+		return nil, err
+	}
+	var loader *config.CloudConfigLoader
+	if bootstrap != nil && bootstrap.RequiresRemoteConfig() {
+		loader, err = configServerCloudConfigBundleLoaderForRun(ctx, codexHome, bootstrap, bootstrap.Requirements.ConfigServer)
+	} else if bootstrap != nil {
+		if snapshot, loadErr := auth.NewStoreWithOptions(codexHome, authStoreOptionsFromLoadedConfig(bootstrap)).Load(); loadErr == nil && snapshot != nil {
+			loader, err = cloudConfigBundleLoaderForRun(ctx, codexHome, bootstrap, snapshot)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	if loader == nil {
+		return bootstrap, nil
+	}
+	loadOpts.CloudConfigBundle = loader
+	return loadEffectiveWithAppliedConfigServer(codexHome, loadOpts, loader)
 }
 
 // attachPluginRuntimeAuth installs the per-request runtime credential provider
@@ -156,9 +221,12 @@ func (ctx *pluginCLIContext) remoteOptionsForScope(scope string) (*plugin.Remote
 	if token == "" {
 		return nil, fmt.Errorf("ChatGPT auth is required to load remote plugins")
 	}
-	cfg, err := config.Load(ctx.codexHome)
-	if err != nil {
-		return nil, err
+	cfg := ctx.config
+	if cfg == nil {
+		cfg, err = config.Load(ctx.codexHome)
+		if err != nil {
+			return nil, err
+		}
 	}
 	baseURL := ""
 	productSKU := ""

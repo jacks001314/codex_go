@@ -107,6 +107,9 @@ func (r *RuntimeRouter) endMCPToolCallSpansForTurn(threadID string, turnID strin
 	}
 	r.mcpCallSpansMu.Unlock()
 	for _, span := range spans {
+		// Rust #62833: a call whose body was dropped before reporting a result
+		// records `interrupted` instead of leaving the outcome empty.
+		span.SetAttribute(telemetry.MCPCallOutcomeSpanAttr, telemetry.MCPCallOutcomeInterrupted)
 		span.End()
 	}
 }

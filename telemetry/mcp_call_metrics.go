@@ -40,6 +40,18 @@ const (
 	MCPCallErrorCodeSpanAttr        = "codex.mcp.error.code"
 	MCPResultTargetIDSpanAttr       = "codex.mcp.target.id"
 	MCPResultServerUserFlowSpanAttr = "codex.mcp.server_user_flow.triggered"
+	// MCPCallOutcomeSpanAttr always records the call outcome on the span, so a
+	// successful call is distinguishable from one whose span never closed
+	// (Rust #62833).
+	MCPCallOutcomeSpanAttr = "codex.mcp.call.outcome"
+	// MCPRPCErrorCodeSpanAttr carries only the numeric JSON-RPC error code.
+	MCPRPCErrorCodeSpanAttr = "rpc.jsonrpc.error_code"
+	// MCPOTelStatusCodeSpanAttr mirrors the outcome into the exported span
+	// status so a failed tool result is not reported as a successful exchange.
+	MCPOTelStatusCodeSpanAttr = "otel.status_code"
+	// MCPCallOutcomeInterrupted marks a span whose call never reported a result
+	// (Rust McpCallSpanOutcomeGuard::drop).
+	MCPCallOutcomeInterrupted = "interrupted"
 	// MCPResultTargetIDMaxChars caps the reported target id.
 	MCPResultTargetIDMaxChars = 256
 )
@@ -62,6 +74,9 @@ type MCPCallOutcome struct {
 	Status    string
 	ErrorType string
 	ErrorCode string
+	// RPCErrorCode is the numeric JSON-RPC error code of a failed MCP request,
+	// when the transport reported one (Rust #62833).
+	RPCErrorCode string
 	// ApprovalSource names the reviewer that resolved a cancelled approval
 	// (Rust #54046 `approval_source`): `guardian`, `user`, `hook` or `unknown`.
 	// It identifies the reviewer, not who caused the cancellation.
@@ -263,6 +278,17 @@ func emitMCPCallMetricsWithTags(sink TurnMetricSink, outcome MCPCallOutcome, tag
 // the outcome's error classification and the result's own span telemetry.
 func MCPCallSpanAttributes(outcome MCPCallOutcome, meta map[string]any) map[string]string {
 	attributes := map[string]string{}
+	if status := strings.TrimSpace(outcome.Status); status != "" {
+		attributes[MCPCallOutcomeSpanAttr] = status
+	}
+	if outcome.Status == "error" {
+		// Rust #62833: a successful JSON-RPC exchange can still carry a failed
+		// tool result, so the exported span status follows the outcome.
+		attributes[MCPOTelStatusCodeSpanAttr] = "ERROR"
+	}
+	if outcome.RPCErrorCode != "" && outcome.ErrorType == MCPCallErrorTypeMCPRequest {
+		attributes[MCPRPCErrorCodeSpanAttr] = outcome.RPCErrorCode
+	}
 	if outcome.ErrorType != "" && outcome.ErrorCode != "" {
 		attributes[MCPCallErrorTypeSpanAttr] = outcome.ErrorType
 		attributes[MCPCallErrorCodeSpanAttr] = outcome.ErrorCode
@@ -358,6 +384,9 @@ func MCPCallOutcomeForExecution(execution *turn.ToolExecutionResult) (MCPCallOut
 	// its bounded code (`request_timeout`, `transport_closed`, ...) instead of
 	// the `unknown` fallback.
 	outcome = outcome.WithRequestErrorCode(execution.TelemetryTags[tool.RequestErrorCodeTelemetryTag])
+	// Rust #62833: the numeric JSON-RPC code rides alongside the bounded
+	// request category and never replaces it.
+	outcome.RPCErrorCode = strings.TrimSpace(execution.TelemetryTags[tool.RPCErrorCodeTelemetryTag])
 	return outcome, true
 }
 

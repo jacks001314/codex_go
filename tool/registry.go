@@ -307,6 +307,17 @@ type RequestErrorCoder interface {
 	RequestErrorCode() string
 }
 
+// RPCErrorCodeTelemetryTag carries the numeric JSON-RPC error code of a failed
+// MCP request (Rust #62833 `rpc.jsonrpc.error_code`). Only the number is kept;
+// the server's message and data stay model-facing output and never reach spans.
+const RPCErrorCodeTelemetryTag = "rpc_error_code"
+
+// RPCErrorCoder lets an executor error expose its JSON-RPC error code without
+// flattening the structured error into a string.
+type RPCErrorCoder interface {
+	RPCErrorCode() (int64, bool)
+}
+
 // ModelVisibleError marks a readiness failure that belongs in the tool result
 // the model sees rather than in a turn-level failure (Rust's
 // FunctionCallError::RespondToModel). Cancellation and infrastructure errors

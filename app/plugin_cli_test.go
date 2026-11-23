@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"codex_go/cli"
+	"codex_go/config"
 	"codex_go/plugin"
 )
 
@@ -476,4 +477,34 @@ func writePluginCLITestMarketplace(t *testing.T, parent string, marketplaceName 
 		t.Fatalf("WriteFile plugin manifest error = %v", err)
 	}
 	return filepath.Clean(root)
+}
+
+// TestPluginCommandConfigLoadsManagedCloudConfigLikeRust pins Rust #62837:
+// plugin add/list/remove build their configuration through the cloud-aware
+// builder, so a managed_config.toml that supplies plugin policy and product
+// metadata is part of the command's effective values.
+func TestPluginCommandConfigLoadsManagedCloudConfigLikeRust(t *testing.T) {
+	home := t.TempDir()
+	managed := filepath.Join(home, "managed_config.toml")
+	if err := os.WriteFile(managed, []byte("apps_mcp_product_sku = \"managed-sku\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(managed_config.toml) error = %v", err)
+	}
+	plain, err := config.Load(home)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	if plain.Values["apps_mcp_product_sku"] != nil {
+		t.Fatalf("plain config unexpectedly included the managed layer: %#v", plain.Values["apps_mcp_product_sku"])
+	}
+
+	ctx, err := newPluginCLIContextForCommand(context.Background(), home, nil)
+	if err != nil {
+		t.Fatalf("newPluginCLIContextForCommand() error = %v", err)
+	}
+	if ctx.config == nil {
+		t.Fatal("plugin command context carries no effective configuration")
+	}
+	if got := ctx.config.Values["apps_mcp_product_sku"]; got != "managed-sku" {
+		t.Fatalf("managed product SKU = %#v, want managed-sku", got)
+	}
 }

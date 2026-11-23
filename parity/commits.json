@@ -53569,11 +53569,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "The MCP call span always records codex.mcp.call.outcome and mirrors an error outcome into otel.status_code=ERROR; a span left open at turn end records outcome=interrupted (Rust #62833 McpCallSpanOutcomeGuard). MCPRemoteError exposes its numeric JSON-RPC code through tool.RPCErrorCoder, the dispatcher copies it to the rpc_error_code telemetry tag, and MCPCallSpanAttributes exports it as rpc.jsonrpc.error_code without the server message or data. Tests: go test ./telemetry ./turn ./mcp -run 'MCP|RPC|RequestErrorCode' -count=1; go test ./appserver -run 'MCPToolCallSpan|MCP' -count=1"
    ],
    "kind": "runtime",
    "sha": "1c0c806028d5d585c574f85e5c8e979dbb2205be",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Record MCP tool call outcomes in traces (#62833)"
   },
   {
@@ -53581,11 +53581,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "app.newPluginCLIContextForCommand builds plugin add/list/remove from loadPluginCommandConfig, which loads the local layers, selects the configuration-server bundle when the requirements name one, otherwise the signed-in ChatGPT managed bundle, and then loads the effective configuration with that bundle (Rust #62837 cloud_config::config_builder). The context keeps the merged config for marketplace policy, runtime auth and remote catalog product SKUs. Tests: go test ./app -run 'TestPluginCommandConfigLoadsManagedCloudConfigLikeRust|TestPluginListRemoteCatalogLikeRust|PluginMarketplacePolicy' -count=1"
    ],
    "kind": "runtime",
    "sha": "df6064096ac6ccc1a2b13410bd7efbe30ad21bdd",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Load managed cloud config for plugin add and list (#62837)"
   },
   {

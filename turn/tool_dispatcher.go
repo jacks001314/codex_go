@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1380,6 +1381,13 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 			}
 			telemetryTags[tool.RequestErrorCodeTelemetryTag] = code
 		}
+		// Rust #62833: keep only the numeric JSON-RPC code for the MCP span.
+		if code, ok := toolRPCErrorCode(dispatchErr); ok {
+			if telemetryTags == nil {
+				telemetryTags = map[string]string{}
+			}
+			telemetryTags[tool.RPCErrorCodeTelemetryTag] = strconv.FormatInt(code, 10)
+		}
 		message := callErr.ModelMessage()
 		body := message
 		if d.router.DeclaresOutputSchema(invocation.ToolName) {
@@ -1491,6 +1499,14 @@ func toolRequestErrorCode(err error) string {
 		return strings.TrimSpace(coder.RequestErrorCode())
 	}
 	return ""
+}
+
+func toolRPCErrorCode(err error) (int64, bool) {
+	var coder tool.RPCErrorCoder
+	if err == nil || !errors.As(err, &coder) {
+		return 0, false
+	}
+	return coder.RPCErrorCode()
 }
 
 func toolCallErrorForModel(err error) *tool.FunctionCallError {

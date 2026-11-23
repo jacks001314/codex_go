@@ -56,6 +56,16 @@ func (e *MCPRemoteError) JSONRPCErrorData() map[string]any {
 	return data
 }
 
+// RPCErrorCode exposes the numeric JSON-RPC error code for span telemetry
+// (Rust #62833 records `rpc.jsonrpc.error_code` and nothing else from the
+// remote error).
+func (e *MCPRemoteError) RPCErrorCode() (int64, bool) {
+	if e == nil {
+		return 0, false
+	}
+	return e.Code, true
+}
+
 func newMCPRemoteError(method string, rpcErr *stdioRPCError) error {
 	if rpcErr == nil {
 		return nil

@@ -307,9 +307,16 @@ func TestMCPCallSpanAttributesLikeRust(t *testing.T) {
 		}
 	}
 
-	// A result without span telemetry and a successful outcome records nothing.
-	if attributes := MCPCallSpanAttributes(MCPCallOutcome{Status: "ok"}, nil); len(attributes) != 0 {
-		t.Fatalf("attributes = %#v", attributes)
+	// A successful outcome always records its status, without error attributes.
+	if attributes := MCPCallSpanAttributes(MCPCallOutcome{Status: "ok"}, nil); len(attributes) != 1 ||
+		attributes[MCPCallOutcomeSpanAttr] != "ok" || attributes[MCPOTelStatusCodeSpanAttr] != "" {
+		t.Fatalf("ok attributes = %#v", attributes)
+	}
+	// The error outcome also mirrors into otel.status_code, and only the numeric
+	// JSON-RPC code is exported (Rust #62833).
+	remote := MCPCallSpanAttributes(MCPCallOutcome{Status: "error", ErrorType: MCPCallErrorTypeMCPRequest, ErrorCode: "unknown", RPCErrorCode: "-32042"}, nil)
+	if remote[MCPCallOutcomeSpanAttr] != "error" || remote[MCPOTelStatusCodeSpanAttr] != "ERROR" || remote[MCPRPCErrorCodeSpanAttr] != "-32042" {
+		t.Fatalf("error attributes = %#v", remote)
 	}
 	// An empty target id is not reported, and the boolean is only present when the
 	// server sent one.
