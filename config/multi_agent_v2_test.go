@@ -147,3 +147,26 @@ func TestMultiAgentV2ConfigDisableDirectMessageLikeRust(t *testing.T) {
 		t.Fatalf("disable_direct_message changed unrelated settings: %#v", got)
 	}
 }
+
+// Mirrors Rust #63376: `expose_spawn_agent_service_tier` defaults to false and
+// is read from `features.multi_agent_v2`.
+func TestMultiAgentV2ExposeSpawnServiceTierLikeRust(t *testing.T) {
+	defaults, err := (&Config{Values: map[string]any{}}).MultiAgentV2Config(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaults.ExposeSpawnAgentServiceTier {
+		t.Fatal("expose_spawn_agent_service_tier must default to false")
+	}
+	configured, err := (&Config{Values: map[string]any{
+		"features": map[string]any{
+			"multi_agent_v2": map[string]any{"expose_spawn_agent_service_tier": true},
+		},
+	}}).MultiAgentV2Config(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !configured.ExposeSpawnAgentServiceTier {
+		t.Fatal("expose_spawn_agent_service_tier = false, want true")
+	}
+}

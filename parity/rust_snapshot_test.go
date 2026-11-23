@@ -397,7 +397,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// runtime authentication through ProviderAuthContext (#57607).
 		// Re-anchored to upstream 59ac39addb: the client gained the
 		// user-input snapshot path for tool outputs (#61962).
-		{Path: "core/src/client.rs", SHA256: "81d196c1887a085449deff9bc84979ea5596a6e47b4fd25bd89527e2aac6bd19"},
+		{Path: "core/src/client.rs", SHA256: "76325186e056ad8c53858462d38353c7869c829c89f8dcd34adc934072c4c142"},
 		// Re-pinned to upstream 8ae55c863d (#47207/#47248/#47377/#47648): the
 		// gateway OAuth, MCP resource-target, realtime reasoning-status and
 		// executor bearer-token requests.

@@ -122,6 +122,7 @@ type multiAgentV2ToolExecutor struct {
 	waitDefault               time.Duration
 	hideSpawnMetadata         bool
 	exposeSpawnModelOverrides bool
+	exposeSpawnServiceTier    bool
 	// guardianNativeMultiAgentReview opts state-changing MAv2 calls into
 	// synchronous Guardian review (Rust #57451).
 	guardianNativeMultiAgentReview bool
@@ -204,6 +205,7 @@ func registerMultiAgentV2Handlers(registry *tool.Registry, options *MultiAgentHa
 			usageHintText: options.UsageHintText,
 			waitMin:       waitMin, waitMax: waitMax, waitDefault: waitDefault, hideSpawnMetadata: options.HideSpawnMetadata,
 			exposeSpawnModelOverrides:      options.ExposeSpawnModelOverrides,
+			exposeSpawnServiceTier:         options.ExposeSpawnServiceTier,
 			guardianNativeMultiAgentReview: options.GuardianNativeMultiAgentReview,
 			toolOverrides:                  options.ToolOverrides,
 			overrideStore:                  options.ToolOverrideStore,
@@ -258,11 +260,12 @@ func (e *multiAgentV2ToolExecutor) Spec() tool.Spec {
 			"agent_type":       map[string]any{"type": "string", "description": "Agent type override for the new agent. Omit unless explicitly asked. The selected role applies regardless of how much parent history is inherited."},
 			"model":            map[string]any{"type": "string", "description": "Model override for the new agent. Omit to inherit the parent model."},
 			"reasoning_effort": map[string]any{"type": "string", "description": "Reasoning effort override for the new agent. Omit to inherit the parent effort."},
-			"service_tier":     map[string]any{"type": "string", "description": "Service tier override for the new agent."},
 			"fork_turns":       map[string]any{"type": "string", "description": "Parent history to inherit. Defaults to `all`; use `none` to start without parent history. Only `all` and `none` are supported."},
 		}
-		if e.hideSpawnMetadata {
-			delete(properties, "service_tier")
+		// Rust #63376: `service_tier` is opt-in and rides beside the model
+		// selection; hidden spawn metadata still removes it.
+		if e.exposeSpawnServiceTier && !e.hideSpawnMetadata {
+			properties["service_tier"] = spawnServiceTierSchema()
 		}
 		if !e.exposeSpawnModelOverrides {
 			delete(properties, "model")
@@ -334,8 +337,49 @@ func applyMultiAgentToolOverride(spec *tool.Spec, kind multiAgentV2ToolKind, ove
 		spec.Description = *override.Description
 	}
 	if parameters, ok := resolveMultiAgentParametersOverride(spec.InputSchema, override.Parameters); ok {
+		if kind == multiAgentV2Spawn {
+			parameters = spawnServiceTierInCatalogParameters(parameters, spec.InputSchema)
+		}
 		spec.InputSchema = parameters
 	}
+}
+
+// spawnServiceTierInCatalogParameters mirrors Rust #63376's spawn_agent
+// parameter-override rule: `service_tier` belongs beside `model`, so a catalog
+// schema that keeps `model` inherits the bundled tier property, and one that
+// drops model also drops the tier property (and any required entry for it).
+func spawnServiceTierInCatalogParameters(parameters, bundled map[string]any) map[string]any {
+	tier, ok := bundledProperties(bundled)["service_tier"]
+	if !ok {
+		return parameters
+	}
+	properties, ok := parameters["properties"].(map[string]any)
+	if !ok {
+		return parameters
+	}
+	if _, keepsModel := properties["model"]; keepsModel {
+		if _, present := properties["service_tier"]; !present {
+			properties["service_tier"] = tier
+		}
+		return parameters
+	}
+	delete(properties, "service_tier")
+	if required, ok := parameters["required"].([]any); ok {
+		kept := make([]any, 0, len(required))
+		for _, name := range required {
+			if stringValue, _ := name.(string); stringValue == "service_tier" {
+				continue
+			}
+			kept = append(kept, name)
+		}
+		parameters["required"] = kept
+	}
+	return parameters
+}
+
+func bundledProperties(schema map[string]any) map[string]any {
+	properties, _ := schema["properties"].(map[string]any)
+	return properties
 }
 
 // resolveMultiAgentParametersOverride mirrors Rust's parameter-override

@@ -49,6 +49,7 @@ type execMultiAgentTools struct {
 	waitMax                   time.Duration
 	hideSpawnMetadata         bool
 	exposeSpawnModelOverrides bool
+	exposeSpawnServiceTier    bool
 	omitUpdatePlan            bool
 	maxConcurrency            int
 	rootHint                  *string
@@ -138,6 +139,12 @@ func execAgentWaitConfigFromTools(options *execMultiAgentTools) (time.Duration, 
 		return 0, 0, 0, false, false
 	}
 	return options.waitDefault, options.waitMin, options.waitMax, options.hideSpawnMetadata, options.exposeSpawnModelOverrides
+}
+
+// execAgentExposeServiceTierFromTools reports whether the optional
+// `service_tier` spawn argument is exposed (Rust #63376).
+func execAgentExposeServiceTierFromTools(options *execMultiAgentTools) bool {
+	return options != nil && options.exposeSpawnServiceTier
 }
 
 func execSessionID(req *Request, fallback string) string {
@@ -294,11 +301,14 @@ func (r *Runner) multiAgentToolsForRun(ctx context.Context, req *Request, cfg *c
 		waitDefault:    execDefaultAgentWait,
 		maxConcurrency: agentsConfig.MaxConcurrentThreadsPerSession + 1,
 	}
+	// Rust #63376: the spawn service-tier argument is exposed through the same
+	// multi_agent_v2 setting for both protocol versions.
+	v2Config, err := cfg.MultiAgentV2Config(agentsConfig.MaxConcurrentThreadsPerSession)
+	if err != nil {
+		return nil, err
+	}
+	options.exposeSpawnServiceTier = v2Config.ExposeSpawnAgentServiceTier
 	if version == agent.VersionV2 {
-		v2Config, err := cfg.MultiAgentV2Config(agentsConfig.MaxConcurrentThreadsPerSession)
-		if err != nil {
-			return nil, err
-		}
 		maxAgents = v2Config.MaxConcurrentThreadsPerSession - 1
 		options.namespace = v2Config.ToolNamespace
 		options.disableWait = !v2Config.WaitAgentEnabled
@@ -341,11 +351,13 @@ func (r *Runner) multiAgentToolsForRun(ctx context.Context, req *Request, cfg *c
 		rootController.setActiveTurn(turnID)
 		rootController.multiAgentVersion = version
 		rootController.modelsManager = modelsManager
+		rootController.featureSettings = cfg.FeatureSettings()
 		rootController.parentModel = execMultiAgentModelForRun(req, cfg, modelsManager)
 		rootController.maxDepth = config.DefaultAgentMaxDepth
 		if agentsConfig.MaxDepth != nil {
 			rootController.maxDepth = *agentsConfig.MaxDepth
 		}
+		rootController.exposeSpawnServiceTier = v2Config.ExposeSpawnAgentServiceTier
 		rootController.defaultSubagentModel = strings.TrimSpace(agentsConfig.DefaultSubagentModel)
 		rootController.defaultSubagentReasoningEffort = strings.TrimSpace(agentsConfig.DefaultSubagentReasoningEffort)
 		rootController.waitDefault = options.waitDefault
@@ -482,6 +494,11 @@ type execAgentController struct {
 	parentModel       string
 	multiAgentVersion agent.MultiAgentVersion
 	modelsManager     model.ModelsManager
+	// featureSettings resolves service-tier policy for a spawn override
+	// (Rust #63376 `features.service_tier_enabled`).
+	featureSettings map[string]bool
+	// exposeSpawnServiceTier enables the per-spawn `service_tier` argument.
+	exposeSpawnServiceTier bool
 	// defaultSubagentModel / defaultSubagentReasoningEffort carry
 	// `agents.default_subagent_model` and
 	// `agents.default_subagent_reasoning_effort` (Rust
@@ -517,6 +534,9 @@ type execAgentTask struct {
 	activeTurnID    string
 	pendingMessages []execAgentCommunication
 	pendingFollowup []execAgentCommunication
+	// serviceTier is the child's per-spawn tier override, re-applied when an
+	// evicted child resumes (Rust #63376).
+	serviceTier string
 }
 
 type execAgentCommunication struct {
@@ -650,6 +670,9 @@ func (c *execAgentController) SpawnAgent(ctx context.Context, args *agent.SpawnA
 		id: id, taskName: taskName, path: path, nickname: nickname, role: strings.TrimSpace(args.ResolvedRole),
 		depth: c.depth + 1, status: agent.AgentMessageStatus{Kind: agent.AgentMessageStatusPendingInit},
 	}
+	if s.exposeSpawnServiceTier && args.ServiceTier != nil {
+		task.serviceTier = strings.TrimSpace(*args.ServiceTier)
+	}
 	s.tasks[id] = task
 	s.mu.Unlock()
 
@@ -715,6 +738,36 @@ func (c *execAgentController) resolveSpawnModelOverrides(args *agent.SpawnAgentA
 	if requestedModel != "" {
 		value := selectedModel
 		args.Model = &value
+	}
+	// Rust #63376: an explicit tier is validated against the child's model and
+	// the same feature gates a configured tier obeys. The argument is ignored
+	// unless the spawn tool exposes it.
+	if args.ServiceTier != nil && s.exposeSpawnServiceTier {
+		tier := strings.TrimSpace(*args.ServiceTier)
+		if tier == "" {
+			args.ServiceTier = nil
+		} else {
+			info := s.modelsManager.GetModelInfo(selectedModel, nil)
+			if err := validateSpawnServiceTier(selectedModel, &info, tier, s.featureSettings); err != nil {
+				return err
+			}
+			value := model.NormalizeServiceTierRequestValue(tier)
+			args.ServiceTier = &value
+		}
+	} else {
+		args.ServiceTier = nil
+	}
+	return nil
+}
+
+// validateSpawnServiceTier mirrors Rust #63376's explicit-tier rejection.
+func validateSpawnServiceTier(modelID string, info *model.ModelInfo, tier string, settings map[string]bool) error {
+	tier = model.NormalizeServiceTierRequestValue(tier)
+	if tier == model.ServiceTierDefaultRequestValue {
+		return nil
+	}
+	if !model.SupportsServiceTier(info, tier) || !features.ServiceTierEnabled(settings, tier) {
+		return fmt.Errorf("Service tier `%s` is unavailable for model `%s`. Omit service_tier to inherit the usual tier.", tier, modelID)
 	}
 	return nil
 }
@@ -900,6 +953,16 @@ func (c *execAgentController) startTask(task *execAgentTask, args *agent.SpawnAg
 		}
 		if args.ReasoningEffort != nil && strings.TrimSpace(*args.ReasoningEffort) != "" {
 			childReq.Exec.Shared.ModelReasoningEffort = strings.TrimSpace(*args.ReasoningEffort)
+		}
+		// Rust #63376: the child's explicit tier applies to its own run, and a
+		// resumed child reuses the tier recorded at spawn. Grandchildren inherit
+		// from the shared root request, never this value.
+		tier := strings.TrimSpace(task.serviceTier)
+		if tier == "" && args.ServiceTier != nil {
+			tier = strings.TrimSpace(*args.ServiceTier)
+		}
+		if tier != "" {
+			childReq.Exec.Shared.ServiceTier = tier
 		}
 		if args.ForkContext || execForkTurns(args.ForkTurns) != "none" {
 			childReq.AdditionalInputItems = append(c.parentInputItems(args.ForkTurns), childReq.AdditionalInputItems...)

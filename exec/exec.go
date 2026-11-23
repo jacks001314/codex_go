@@ -419,7 +419,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	includeTimingMetrics := effectiveIncludeTimingMetrics(cfg)
 	betaFeaturesHeader := features.ModelClientBetaFeaturesHeader(cfg.FeatureSettings())
 	itemIDsEnabled := cfg.FeatureSettings()["item_ids"]
-	serviceTier := effectiveServiceTier(cfg, modelID)
+	serviceTier := effectiveServiceTier(cfg, modelID, reqSharedValue(req, func(shared cli.SharedOptions) string { return shared.ServiceTier }))
 	providerID, err := effectiveProvider(req, cfg)
 	if err != nil {
 		return nil, err
@@ -699,6 +699,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		AgentWaitConfigured:               multiAgentTools != nil,
 		AgentHideSpawnMetadata:            agentHideSpawnMetadata,
 		AgentExposeSpawnModelOverrides:    agentExposeSpawnOverrides,
+		AgentExposeSpawnServiceTier:       execAgentExposeServiceTierFromTools(multiAgentTools),
 		AgentToolOverrides:                execAgentToolOverridesFromTools(multiAgentTools),
 		AgentRoles:                        execAgentRolesFromTools(multiAgentTools),
 		AgentDefaults:                     execAgentDefaultsFromTools(multiAgentTools),
@@ -1042,6 +1043,9 @@ type agentRunConfig struct {
 	AgentWaitConfigured               bool
 	AgentHideSpawnMetadata            bool
 	AgentExposeSpawnModelOverrides    bool
+	// AgentExposeSpawnServiceTier exposes the optional `service_tier` spawn
+	// argument (Rust #63376).
+	AgentExposeSpawnServiceTier bool
 	// AgentToolOverrides carries the model catalog's per-tool Multi-Agent V2
 	// overrides (Rust #46505).
 	AgentToolOverrides map[string]multiagent.MultiAgentToolOverride
@@ -1983,6 +1987,7 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		options.AgentWaitConfigured = run.AgentWaitConfigured
 		options.AgentHideSpawnMetadata = run.AgentHideSpawnMetadata
 		options.AgentExposeSpawnModelOverrides = run.AgentExposeSpawnModelOverrides
+		options.AgentExposeSpawnServiceTier = run.AgentExposeSpawnServiceTier
 		options.AgentToolOverrides = run.AgentToolOverrides
 		options.AgentRoles = run.AgentRoles
 		options.AgentDefaults = run.AgentDefaults
@@ -7855,17 +7860,23 @@ func effectiveModelVerbosity(cfg *config.Config) string {
 	)
 }
 
-func effectiveServiceTier(cfg *config.Config, modelID string) string {
+func effectiveServiceTier(cfg *config.Config, modelID string, requested string) string {
 	settings := map[string]bool{}
 	if cfg != nil {
 		settings = cfg.FeatureSettings()
 	}
 	value := firstNonEmpty(
+		strings.TrimSpace(requested),
 		stringConfigValue(cfg, "service_tier"),
 		stringConfigValue(cfg, "serviceTier"),
 	)
 	if value == "" {
 		return ""
+	}
+	// An explicit `default` asks the provider for its default tier (Rust
+	// #63376); the configured-tier resolver below drops that sentinel.
+	if model.NormalizeServiceTierRequestValue(value) == model.ServiceTierDefaultRequestValue {
+		return model.ServiceTierDefaultRequestValue
 	}
 	manager := model.NewBundledModelsManager()
 	info := manager.GetModelInfo(modelID, nil)

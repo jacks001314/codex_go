@@ -96,6 +96,10 @@ type SharedOptions struct {
 	Images               []string
 	Model                string
 	ModelReasoningEffort string
+	// ServiceTier overrides the configured tier for this run. It is set by
+	// sub-agent spawn rather than a CLI flag (Rust #63376), so it has no parser
+	// entry.
+	ServiceTier string
 	OSS                  bool
 	OSSProvider          string
 	Profile              string

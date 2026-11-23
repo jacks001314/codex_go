@@ -232,6 +232,13 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 	if args.DeveloperInstructions != nil {
 		developerInstructions = *args.DeveloperInstructions
 	}
+	// Rust #63376: the spawn's explicit tier applies to this child only. Its
+	// snapshot keeps the tier it would otherwise inherit so a later reload and
+	// the child's own spawns can fall back to the ordinary selection.
+	spawnServiceTier := ""
+	if args.ServiceTier != nil && c.spawnServiceTierExposed() {
+		spawnServiceTier = strings.TrimSpace(*args.ServiceTier)
+	}
 	// Rust #49075 `TurnEnvironmentSnapshot::inheritable_selections`: the child
 	// keeps the spawning step's ready and still-starting attachments and drops a
 	// failed one instead of inheriting it verbatim.
@@ -334,6 +341,13 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 	record.Metadata.AgentDepth = c.depth + 1
 	record.Metadata.Instructions = developerInstructions
 	record.Metadata.MultiAgentVersion = string(c.version)
+	if spawnServiceTier != "" {
+		record.Metadata.ServiceTier = spawnServiceTier
+		extra[spawnServiceTierOverrideExtraKey] = spawnServiceTier
+		if inherited := c.rootServiceTierForSpawn(); inherited != "" {
+			extra[spawnServiceTierInheritedExtraKey] = inherited
+		}
+	}
 	// Rust #50082: a fresh V2 subagent inherits the parent's client-defined
 	// dynamic tools when the disabled-by-default feature is enabled.
 	if c.version == agent.VersionV2 && forkTurns == "none" && len(parentDynamicTools) > 0 && c.multiAgentV2DynamicToolsEnabled() {
@@ -448,10 +462,14 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 			summary := capturedSummary
 			params.Summary = &summary
 		}
-		// Rust #41308: subagents follow the root thread's service tier, not a
-		// per-spawn override. appServiceTierForTurn drops the tier if the child
-		// model does not support it and is gated on fast_mode, mirroring Rust.
-		if rootTier := c.rootServiceTierForSpawn(); rootTier != "" {
+		// Rust #41308/#63376: a per-spawn override wins for this child's own
+		// turns; otherwise subagents follow the root thread's service tier.
+		// appServiceTierForTurn drops the tier if the child model does not
+		// support it and is gated on fast_mode, mirroring Rust.
+		if spawnServiceTier != "" {
+			params.ServiceTier = stringPtrIfNotEmpty(spawnServiceTier)
+			params.ServiceTierSet = true
+		} else if rootTier := c.rootServiceTierForSpawn(); rootTier != "" {
 			params.ServiceTier = stringPtrIfNotEmpty(rootTier)
 			params.ServiceTierSet = true
 		}
@@ -671,6 +689,72 @@ func (c *runtimeAgentController) resolveSpawnModelOverrides(args *agent.SpawnAge
 	} else if selectedPreset != nil && strings.TrimSpace(selectedPreset.DefaultReasoningLevel) != "" {
 		value := strings.TrimSpace(selectedPreset.DefaultReasoningLevel)
 		args.ReasoningEffort = &value
+	}
+	// Rust #63376: a per-spawn tier is honored only when the exposing setting is
+	// on, and an explicit tier must be available for the child's model.
+	if args.ServiceTier != nil && c.spawnServiceTierExposed() {
+		tier := strings.TrimSpace(*args.ServiceTier)
+		if tier == "" {
+			args.ServiceTier = nil
+		} else {
+			info := manager.GetModelInfo(selectedModel, nil)
+			if err := validateAgentSpawnServiceTier(selectedModel, &info, tier, c.spawnFeatureSettings()); err != nil {
+				return err
+			}
+			value := model.NormalizeServiceTierRequestValue(tier)
+			args.ServiceTier = &value
+		}
+	} else {
+		args.ServiceTier = nil
+	}
+	return nil
+}
+
+// spawnServiceTierExposed reports whether the invoking turn enables
+// `multi_agent_v2.expose_spawn_agent_service_tier` (Rust #63376).
+func (c *runtimeAgentController) spawnServiceTierExposed() bool {
+	if c == nil || c.router == nil {
+		return false
+	}
+	active := c.router.threads.ActiveTurn(c.parentID)
+	if active == nil || active.Params == nil {
+		return false
+	}
+	cfg, err := c.router.effectiveConfigForTurn(active.Params)
+	if err != nil || cfg == nil {
+		return false
+	}
+	v2, err := cfg.MultiAgentV2Config(0)
+	return err == nil && v2 != nil && v2.ExposeSpawnAgentServiceTier
+}
+
+// spawnFeatureSettings returns the invoking turn's feature enablement so an
+// explicit tier obeys the same policy as a configured one.
+func (c *runtimeAgentController) spawnFeatureSettings() map[string]bool {
+	if c == nil || c.router == nil {
+		return nil
+	}
+	active := c.router.threads.ActiveTurn(c.parentID)
+	if active == nil || active.Params == nil {
+		return nil
+	}
+	cfg, err := c.router.effectiveConfigForTurn(active.Params)
+	if err != nil || cfg == nil {
+		return nil
+	}
+	return cfg.FeatureSettings()
+}
+
+// validateAgentSpawnServiceTier mirrors Rust #63376's explicit-tier rejection:
+// `default` is always accepted, and every other tier needs model support and
+// the policy feature that owns it.
+func validateAgentSpawnServiceTier(modelID string, info *model.ModelInfo, tier string, settings map[string]bool) error {
+	tier = model.NormalizeServiceTierRequestValue(tier)
+	if tier == model.ServiceTierDefaultRequestValue {
+		return nil
+	}
+	if !model.SupportsServiceTier(info, tier) || !features.ServiceTierEnabled(settings, tier) {
+		return fmt.Errorf("Service tier `%s` is unavailable for model `%s`. Omit service_tier to inherit the usual tier.", tier, modelID)
 	}
 	return nil
 }
@@ -1868,6 +1952,14 @@ func (r *RuntimeRouter) runtimeAgentRegistry(rootID string) *agent.Registry {
 	return registry
 }
 
+// spawnServiceTierOverrideExtraKey marks a child spawned with an explicit
+// `service_tier`; spawnServiceTierInheritedExtraKey records the tier it would
+// otherwise have inherited (Rust #63376 SpawnServiceTierOverride).
+const (
+	spawnServiceTierOverrideExtraKey  = "spawn_service_tier_override"
+	spawnServiceTierInheritedExtraKey = "spawn_service_tier_inherited"
+)
+
 // rootServiceTierForSpawn returns the root thread's currently selected service
 // tier so a subagent follows the root agent tree's tier instead of a per-spawn
 // override (Rust #41308). An empty result leaves the subagent's tier to its own
@@ -1900,6 +1992,11 @@ func (r *RuntimeRouter) subagentRootServiceTier(threadID string) string {
 	}
 	if record.ParentThreadID == "" {
 		return ""
+	}
+	// Rust #63376: a child spawned with its own tier keeps that tier for every
+	// turn, instead of following the root again.
+	if override := strings.TrimSpace(stringFromMap(record.Metadata.Extra, spawnServiceTierOverrideExtraKey)); override != "" {
+		return override
 	}
 	for record.ParentThreadID != "" {
 		parent, parentErr := r.threadRecord(record.ParentThreadID, true, false)

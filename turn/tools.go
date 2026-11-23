@@ -156,6 +156,9 @@ type ToolRegistryOptions struct {
 	AgentWaitConfigured            bool
 	AgentHideSpawnMetadata         bool
 	AgentExposeSpawnModelOverrides bool
+	// AgentExposeSpawnServiceTier exposes the optional `service_tier` spawn
+	// argument (Rust #63376).
+	AgentExposeSpawnServiceTier bool
 	// AgentToolOverrides carries the model catalog's per-tool Multi-Agent V2
 	// overrides (Rust ModelMessages::multi_agent_tool_*, #46505).
 	AgentToolOverrides map[string]agent.MultiAgentToolOverride
@@ -743,6 +746,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			WaitConfigured:                 options.AgentWaitConfigured,
 			HideSpawnMetadata:              options.AgentHideSpawnMetadata,
 			ExposeSpawnModelOverrides:      options.AgentExposeSpawnModelOverrides,
+			ExposeSpawnServiceTier:         options.AgentExposeSpawnServiceTier,
 			Roles:                          options.AgentRoles,
 			Defaults:                       options.AgentDefaults,
 			DisableWaitAgent:               options.DisableWaitAgent,

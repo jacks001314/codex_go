@@ -19507,6 +19507,15 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			}
 		}
 		if options.EnableAgents {
+			// Rust #63376: `expose_spawn_agent_service_tier` gates the optional
+			// `service_tier` spawn argument for V1 and V2 alike.
+			spawnTierConfig := v2Config
+			if spawnTierConfig == nil && cfg != nil {
+				if resolved, configErr := cfg.MultiAgentV2Config(agentsConfig.MaxConcurrentThreadsPerSession); configErr == nil {
+					spawnTierConfig = resolved
+				}
+			}
+			options.AgentExposeSpawnServiceTier = spawnTierConfig != nil && spawnTierConfig.ExposeSpawnAgentServiceTier
 			maxThreads := agentsConfig.MaxConcurrentThreadsPerSession
 			defaults := agent.SpawnDefaults{Model: agentsConfig.DefaultSubagentModel, ReasoningEffort: agentsConfig.DefaultSubagentReasoningEffort}
 			if version == agent.VersionV2 {

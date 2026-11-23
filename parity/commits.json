@@ -55000,9 +55000,81 @@
    "sha": "177c406276b6757ffaf49da9de52cd7a64c97dd5",
    "status": "partial",
    "subject": "Include completed audio transcripts in Guardian review context (#63368)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 133: complete - per-subagent `service_tier` in `spawn_agent` (Rust #63376). config/multi_agent_v2.go parses `expose_spawn_agent_service_tier` (default false); agent/tools.go and agent/tools_v2.go expose the optional argument on V1 and V2 spawn schemas only when the setting is on and spawn metadata is visible, and move it beside `model` in catalog parameter overrides. exec/agent_controller.go validates the tier against the child model and the fast/ultrafast policy features, threads it into the child request through cli.SharedOptions.ServiceTier (grandchildren keep the shared root request), and re-applies the stored tier on resume. appserver/agent_controller.go applies the same validation, stores the choice in the child's thread metadata plus the `spawn_service_tier_override`/`spawn_service_tier_inherited` snapshot, starts the child's turns with it, and lets a child's own override win over the root tier while its own spawns still use the ordinary root tier. Tests: agent/spawn_service_tier_like_rust_test.go, exec/spawn_service_tier_like_rust_test.go, appserver/subagent_service_tier_like_rust_test.go, config/multi_agent_v2_test.go. Verified with go test ./agent ./config ./exec ./turn, the targeted appserver spawn/compact tests, go build ./... and go vet."
+   ],
+   "kind": "runtime",
+   "sha": "113e0c6d5e1559d7aa68caafc28203479f879788",
+   "status": "complete",
+   "subject": "Allow per-subagent service tiers in `spawn_agent` (#63376)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 131: complete - project config diagnostics keep the type error behind an unknown setting (Rust #63377). Go's validator is not a deny_unknown_fields serde derive: config/config_value_validation.go `ValidateConfigDocumentValues` skips keys outside `configTomlFields` and reports the first known field's serde error, so an unknown project key can never mask the invalid setting. The new config/project_diagnostic_unknown_setting_like_rust_test.go pins the Rust vector: `ignored_setting = true` before `[tui] status_line_provider = 42, vim_mode_default = 43` reports `invalid type: integer `43`, expected a boolean in `tui.vim_mode_default`` both with and without the unknown key, after the project layer's stripped provider key is removed. Verified with go test ./config."
+   ],
+   "kind": "runtime",
+   "sha": "1589e80b28536af91aef8c8c1671d4c3c428e571",
+   "status": "complete",
+   "subject": "Fix project config diagnostics after an unknown setting (#63377)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 132: complete - legacy remote compaction omits the final-answer schema (Rust #63381). appserver/compact_remote.go adds `legacyCompactionModel` (gpt-5/gpt-5.1/gpt-5.2 families excluding gpt-5.2-codex, gpt-5.4-nano, with Bedrock's `openai.` prefix stripped) and `compactionOutputSchemaForModel`, and the attempt resolves its model before both the request and the schema decision, so a previous-model retry uses the rules of the model handling that attempt. Other models keep the schema for a stable cached prefix. appserver/compact_output_schema_like_rust_test.go covers the model matrix, Bedrock spellings and the per-attempt request schema. Verified with the targeted appserver compact/output-schema tests."
+   ],
+   "kind": "runtime",
+   "sha": "ed02716c0911098c45d61e38634dad02dc15a548",
+   "status": "complete",
+   "subject": "Omit final-answer schemas from legacy remote compaction (#63381)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 134: not_applicable - Rust #63382 moves `thread.turns` into the fork response instead of cloning the thread. Go has no equivalent clone: `Router.forkThread` builds the response from the session record through `BuildThread(record, path, ...)` (appserver/router.go) and slices are shared by reference, while `threadStartedNotificationThread` already drops turns from the started notification. The observable fork response and notification are unchanged, so there is no Go copy to remove."
+   ],
+   "kind": "runtime",
+   "sha": "af81d2770f1dd1d4d10a75e3f5e51596df7a905d",
+   "status": "not_applicable",
+   "subject": "Avoid cloning turn history in `thread/fork` (#63382)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 130: complete - remote diffs preserve slashes in the default branch name (Rust #63386). appserver/misc.go `gitRemoteCandidates` resolves the remote head with `git symbolic-ref --quiet --short refs/remotes/<remote>/HEAD`, which already yields the full `origin/release/stable` branch, and merge-base/diff use that ref. The new appserver/git_diff_to_remote_like_rust_test.go replays the Rust regression (origin/stable and origin/release/stable, default branch release/stable) and asserts the diff base is the release commit and only the unpushed feature file appears. Verified with go test ./appserver -run TestGitDiffToRemote."
+   ],
+   "kind": "runtime",
+   "sha": "d916a952a73673f7f9c0c890606ab54f1bdb79a1",
+   "status": "complete",
+   "subject": "Preserve slashes in default branch names for remote diffs (#63386)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Round 1401: partial - Rust #63388 adds preview-local path actions: `p` opens a scrollable full-path view, `c` copies the path with clipboard feedback (including when the file failed to load), Esc returns to the preview, long paths wrap at directory separators in the preview and chooser, and preview footer hints wrap to two rows. Go's sidebar document pane (tui/tea sidebar_chooser.go/side.go with app/sidebar_document.go) shows the preview, its failure reason and the tab strip, but has no path view, no path copy or clipboard feedback, and no separator-aware path wrapping or wrapped footer hints. Remaining work: add the path-view mode and copy action to the document tab state, render the full path in a scrollable area, and wrap preview footer hints."
+   ],
+   "kind": "runtime",
+   "sha": "0c7efeb50d8d44511ee68dc788d550149a63656c",
+   "status": "partial",
+   "subject": "Show and copy file paths from TUI sidebar previews (#63388)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "177c406276b6757ffaf49da9de52cd7a64c97dd5",
+ "rustToInclusive": "0c7efeb50d8d44511ee68dc788d550149a63656c",
  "schemaVersion": 1
 }

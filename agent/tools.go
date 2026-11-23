@@ -72,7 +72,10 @@ type SpawnAgentArgs struct {
 	AgentType       *string `json:"agent_type,omitempty"`
 	Model           *string `json:"model,omitempty"`
 	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
-	ForkContext     bool    `json:"fork_context,omitempty"`
+	// ServiceTier selects the child's tier for this spawn only (Rust #63376).
+	// It is honored only when the exposing config enables the argument.
+	ServiceTier *string `json:"service_tier,omitempty"`
+	ForkContext bool    `json:"fork_context,omitempty"`
 	ForkTurns       *string `json:"fork_turns,omitempty"`
 
 	ResolvedRole          string   `json:"-"`
@@ -293,6 +296,10 @@ type MultiAgentToolExecutor struct {
 	controller       ToolController
 	exposure         tool.Exposure
 	spawnDescription string
+	// exposeServiceTier adds the optional `service_tier` spawn argument
+	// (Rust #63376). Off unless `multi_agent_v2.expose_spawn_agent_service_tier`
+	// is enabled.
+	exposeServiceTier bool
 }
 
 func NewMultiAgentToolExecutor(kind MultiAgentToolKind, controller ToolController) *MultiAgentToolExecutor {
@@ -324,6 +331,9 @@ type MultiAgentHandlerOptions struct {
 	WaitConfigured            bool
 	HideSpawnMetadata         bool
 	ExposeSpawnModelOverrides bool
+	// ExposeSpawnServiceTier exposes the optional `service_tier` spawn argument
+	// (Rust #63376 `multi_agent_v2.expose_spawn_agent_service_tier`).
+	ExposeSpawnServiceTier bool
 	// ToolOverrides carries the catalog's per-tool Multi-Agent V2 overrides
 	// (Rust ModelMessages::multi_agent_tool_*, #46505), keyed by the tool's
 	// stable name (`spawn_agent`, `send_message`, `followup_task`, `wait_agent`,
@@ -417,6 +427,7 @@ func RegisterMultiAgentHandlersWithOptions(registry *tool.Registry, options *Mul
 		}
 		executor := NewMultiAgentToolExecutor(kind, controller)
 		executor.exposure = options.Exposure
+		executor.exposeServiceTier = options.ExposeSpawnServiceTier
 		if kind == MultiAgentToolSpawn && len(options.Roles) > 0 {
 			executor.spawnDescription = NewRoleResolver(map[string]RoleConfig{}).SpawnToolDescription(options.Roles)
 		}
@@ -429,6 +440,11 @@ func RegisterMultiAgentHandlersWithOptions(registry *tool.Registry, options *Mul
 
 func (e *MultiAgentToolExecutor) Spec() tool.Spec {
 	spec := multiAgentToolSpec(e.kind)
+	if e.kind == MultiAgentToolSpawn && e.exposeServiceTier {
+		if properties, ok := spec.InputSchema["properties"].(map[string]any); ok {
+			properties["service_tier"] = spawnServiceTierSchema()
+		}
+	}
 	if e.kind == MultiAgentToolSpawn && strings.TrimSpace(e.spawnDescription) != "" {
 		spec.Description += "\n\n" + e.spawnDescription
 	}
@@ -607,6 +623,14 @@ func multiAgentToolSpec(kind MultiAgentToolKind) tool.Spec {
 		return spec
 	}
 	return spec
+}
+
+// spawnServiceTierSchema mirrors Rust #63376 `spawn_service_tier_schema`.
+func spawnServiceTierSchema() map[string]any {
+	return map[string]any{
+		"type":        "string",
+		"description": "Service tier override for this agent. Use `default` or a tier supported by its model. Omit unless explicitly requested.",
+	}
 }
 
 func multiAgentObjectSchema(properties map[string]any, required []string) map[string]any {

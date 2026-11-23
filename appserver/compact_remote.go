@@ -277,9 +277,41 @@ type agentCompactRunner struct {
 	// outputSchema preserves the turn's final-answer schema in the compaction
 	// request's text.format so the cached output-format prefix stays stable
 	// (Rust #63320). outputSchemaStrict is false for basic session sources,
-	// whose guardian verdict format is non-strict.
+	// whose guardian verdict format is non-strict. Legacy models that summarize
+	// on the final channel drop the schema (Rust #63381).
 	outputSchema       any
 	outputSchemaStrict *bool
+}
+
+// legacyCompactionModel reports whether a model family emits its compaction
+// summary on the final channel, where the turn's final-answer schema would
+// constrain the summary (Rust #63381). Bedrock serves the same models with an
+// `openai.` prefix. Other models, including future names, are assumed to have a
+// separate summary channel and keep the schema for a stable cached prefix.
+func legacyCompactionModel(slug string) bool {
+	slug = strings.TrimSpace(slug)
+	slug = strings.TrimPrefix(slug, "openai.")
+	switch {
+	case slug == "gpt-5" || strings.HasPrefix(slug, "gpt-5-"):
+		return true
+	case slug == "gpt-5.1" || strings.HasPrefix(slug, "gpt-5.1-"):
+		return true
+	case slug == "gpt-5.2" || strings.HasPrefix(slug, "gpt-5.2-"):
+		// GPT-5.2-Codex uses a separate summary channel.
+		return !strings.HasPrefix(slug, "gpt-5.2-codex")
+	case slug == "gpt-5.4-nano" || strings.HasPrefix(slug, "gpt-5.4-nano-"):
+		return true
+	}
+	return false
+}
+
+// compactionOutputSchemaForModel drops the final-answer schema for legacy
+// compaction models and keeps it for every other model.
+func compactionOutputSchemaForModel(modelSlug string, schema any) any {
+	if legacyCompactionModel(modelSlug) {
+		return nil
+	}
+	return schema
 }
 
 func (r *agentCompactRunner) Compact(ctx context.Context, request *compact.Request) (*compact.Result, error) {
@@ -306,12 +338,13 @@ func (r *agentCompactRunner) Compact(ctx context.Context, request *compact.Reque
 	if r.executedToolCalls != nil {
 		inputItems = r.executedToolCalls.AttachToCompactionPrompt(inputItems, r.executedToolCallMetadataEnabled)
 	}
+	requestModel := firstNonEmpty(r.model, defaultRemoteCompactModel)
 	response, err := r.agent.Run(ctx, &model.AgentRequest{
 		Prompt:       strings.TrimSpace(request.Prompt),
 		Instructions: remoteCompactInstructions(),
 		InputItems:   inputItems,
 		Tools:        append([]any(nil), r.hostedTools...),
-		Model:        firstNonEmpty(r.model, defaultRemoteCompactModel),
+		Model:        requestModel,
 		ProviderID:   strings.TrimSpace(r.providerID),
 		// Rust #59832: compaction only takes the history layout when the
 		// replacement prompt actually carries recorded declarations.
@@ -334,7 +367,7 @@ func (r *agentCompactRunner) Compact(ctx context.Context, request *compact.Reque
 		OnModelRequest:     r.onModelRequest,
 		// Rust #63320: Responses generates the summary independently of this
 		// schema, but sending it keeps the cached prefix aligned with sampling.
-		OutputSchema:       r.outputSchema,
+		OutputSchema:       compactionOutputSchemaForModel(requestModel, r.outputSchema),
 		OutputSchemaStrict: r.outputSchemaStrict,
 	})
 	if err != nil {

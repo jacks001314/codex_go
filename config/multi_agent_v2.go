@@ -26,7 +26,12 @@ type MultiAgentV2Config struct {
 	MultiAgentModeHintText         *string
 	HideSpawnAgentMetadata         bool
 	ExposeSpawnAgentModelOverrides bool
-	WaitAgentEnabled               bool
+	// ExposeSpawnAgentServiceTier mirrors
+	// `multi_agent_v2.expose_spawn_agent_service_tier` (Rust #63376): expose the
+	// optional `service_tier` argument on V1 and V2 `spawn_agent`. Off by
+	// default, so a caller cannot select a tier for one child unless configured.
+	ExposeSpawnAgentServiceTier bool
+	WaitAgentEnabled            bool
 	// DisableNativeTools mirrors `features.multi_agent_v2.disable_native_tools`
 	// (#53617): hide the native collaboration tools while keeping the V2 runtime
 	// and its instructions enabled for host-provided tools.
@@ -144,6 +149,7 @@ func (c *Config) MultiAgentV2Config(agentsMax int) (*MultiAgentV2Config, error) 
 	for key, target := range map[string]*bool{
 		"hide_spawn_agent_metadata":          &out.HideSpawnAgentMetadata,
 		"expose_spawn_agent_model_overrides": &out.ExposeSpawnAgentModelOverrides,
+		"expose_spawn_agent_service_tier":    &out.ExposeSpawnAgentServiceTier,
 		"wait_agent_enabled":                 &out.WaitAgentEnabled,
 		"disable_native_tools":               &out.DisableNativeTools,
 		"disable_direct_message":             &out.DisableDirectMessage,
