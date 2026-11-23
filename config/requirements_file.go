@@ -1500,6 +1500,13 @@ func hookHandlersAnyKey(values map[string]any, keys ...string) ([]ConfiguredHook
 		if value, ok := stringAnyKey(handlerMap, "status_message", "statusMessage"); ok {
 			handler.StatusMessage = &value
 		}
+		if value, ok := stringAnyKey(handlerMap, "onFailure", "on_failure"); ok {
+			// Rust's HookFailurePolicy enum accepts only these two values.
+			switch value {
+			case "continue", "block":
+				handler.OnFailure = &value
+			}
+		}
 		out = append(out, handler)
 	}
 	return out, true

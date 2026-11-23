@@ -105,6 +105,20 @@ func managedHookCommand(handler config.ConfiguredHookHandler) string {
 	return handler.Command
 }
 
+// managedHookFailurePolicy resolves a managed handler's failure policy. The
+// config layer keeps only valid values, and an absent policy means continue.
+func managedHookFailurePolicy(handler config.ConfiguredHookHandler) (HookFailurePolicy, *string, bool) {
+	if handler.OnFailure == nil {
+		return HookFailureContinue, nil, true
+	}
+	trimmed := strings.TrimSpace(*handler.OnFailure)
+	policy, ok := parseHookFailurePolicy(trimmed)
+	if !ok {
+		return "", nil, false
+	}
+	return policy, &trimmed, true
+}
+
 func (s *HookDiscoveryService) appendManagedRequirementHooks(entry *HookListEntry) {
 	if s == nil || s.Config == nil || entry == nil {
 		return
@@ -120,6 +134,16 @@ func (s *HookDiscoveryService) appendManagedRequirementHooks(entry *HookListEntr
 		for groupIndex, group := range event.groups {
 			for handlerIndex, handler := range group.Hooks {
 				key := hookDiscoveryKey("managed", event.name, groupIndex, handlerIndex)
+				failurePolicy, failurePolicyConfig, failurePolicyValid := managedHookFailurePolicy(handler)
+				if !failurePolicyValid {
+					entry.RequiredLoadErrors = append(entry.RequiredLoadErrors, fmt.Sprintf("invalid onFailure policy for managed hook in %s", event.name))
+					continue
+				}
+				if failurePolicy == HookFailureBlock &&
+					(event.name == HookEventSessionEnd || event.name == HookEventPreModelRequest || event.name == HookEventPostModelRequest || handler.Async) {
+					entry.RequiredLoadErrors = append(entry.RequiredLoadErrors, fmt.Sprintf("onFailure:block requires a synchronous hook that supports blocking in managed requirements for %s", event.name))
+					continue
+				}
 				switch handler.Type {
 				case string(HookHandlerCommand):
 					resolved := managedHookCommand(handler)
@@ -138,12 +162,13 @@ func (s *HookDiscoveryService) appendManagedRequirementHooks(entry *HookListEntr
 						Command:       &command,
 						TimeoutSec:    timeout,
 						StatusMessage: cloneStringPtrAppserver(handler.StatusMessage),
+						OnFailure:     failurePolicy,
 						SourcePath:    "managed",
 						Source:        HookSourceCloudRequirements,
 						DisplayOrder:  displayOrder,
 						Enabled:       true,
 						IsManaged:     true,
-						CurrentHash:   hookDiscoveryHash(event.name, group.Matcher, resolved, handler.Async, timeout, handler.StatusMessage, nil),
+						CurrentHash:   hookDiscoveryHash(event.name, group.Matcher, resolved, handler.Async, timeout, handler.StatusMessage, nil, failurePolicyConfig),
 						TrustStatus:   HookTrustManaged,
 					})
 					displayOrder++
@@ -412,6 +437,29 @@ type hookJSONHandlerConfigWire struct {
 	// this hook's additionalContext to disk. Unset uses 2,500 tokens; 0
 	// disables spilling.
 	AdditionalContextLimit *uint64 `json:"additionalContextLimit"`
+	// OnFailure is the configured failure policy (Rust #62831):
+	// continue (default) or block for a synchronous handler on a blocking event.
+	OnFailure    *string `json:"onFailure"`
+	OnFailureAlt *string `json:"on_failure"`
+}
+
+// onFailurePolicy resolves the configured failure policy and whether it was
+// set explicitly, so the trust hash can distinguish an omitted policy from an
+// explicit continue.
+func (h hookJSONHandlerConfigWire) onFailurePolicy() (HookFailurePolicy, *string, bool) {
+	value := h.OnFailure
+	if value == nil {
+		value = h.OnFailureAlt
+	}
+	if value == nil {
+		return HookFailureContinue, nil, true
+	}
+	trimmed := strings.TrimSpace(*value)
+	policy, ok := parseHookFailurePolicy(trimmed)
+	if !ok {
+		return "", nil, false
+	}
+	return policy, &trimmed, true
 }
 
 func appendHooksTOML(entry *HookListEntry, source *hookDiscoverySource) {
@@ -715,6 +763,19 @@ func applyHooksTOMLHandlerValue(handler *hookJSONHandlerConfigWire, key string, 
 			return fmt.Sprintf("skipping invalid hook additionalContextLimit %q in %s", rawValue, path)
 		}
 		handler.AdditionalContextLimit = &value
+	case "onFailure", "on_failure":
+		value, ok := parseHooksTOMLString(rawValue)
+		if !ok {
+			return fmt.Sprintf("skipping invalid hook onFailure %q in %s", rawValue, path)
+		}
+		if _, valid := parseHookFailurePolicy(value); !valid {
+			return fmt.Sprintf("skipping invalid hook onFailure %q in %s", rawValue, path)
+		}
+		if key == "onFailure" {
+			handler.OnFailure = &value
+		} else {
+			handler.OnFailureAlt = &value
+		}
 	}
 	return ""
 }
@@ -852,6 +913,18 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 	for handlerIndex := range group.Hooks {
 		handler := group.Hooks[handlerIndex]
 		handlerType := handler.hookHandlerType()
+		failurePolicy, failurePolicyConfig, failurePolicyValid := handler.onFailurePolicy()
+		if !failurePolicyValid {
+			entry.Warnings = append(entry.Warnings, fmt.Sprintf("skipping hook with invalid onFailure in %s", source.Path))
+			continue
+		}
+		if failurePolicy == HookFailureBlock &&
+			(event == HookEventSessionEnd || event == HookEventPreModelRequest || event == HookEventPostModelRequest || handler.Async) {
+			// Rust #62831: blocking requires a synchronous hook on an event with
+			// a blocking behavior.
+			entry.Warnings = append(entry.Warnings, "onFailure:block requires a synchronous hook that supports blocking in "+source.Path)
+			continue
+		}
 		// Rust #62112: the exact bundled Memory SessionStart declaration is a
 		// built-in hook, so it is trusted without a saved hash. Dispatch still
 		// verifies the registered connector before running it.
@@ -878,7 +951,7 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 			timeoutSec := handler.timeoutSecForEvent(event)
 			key := hookDiscoveryKey(source.KeySource, event, groupIndex, handlerIndex)
 			additionalContextLimit := handler.additionalContextLimit()
-			declarationHash := hookDiscoveryHash(event, group.Matcher, command, handler.Async, timeoutSec, handler.statusMessage(), additionalContextLimit)
+			declarationHash := hookDiscoveryHash(event, group.Matcher, command, handler.Async, timeoutSec, handler.statusMessage(), additionalContextLimit, failurePolicyConfig)
 			state := source.State(key)
 			displayCommand := expandHookEnvPlaceholders(command, source.Env)
 			pluginContentHash, ok := source.pluginContentHash(entry, builtin)
@@ -909,6 +982,7 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 				Command:                &displayCommand,
 				TimeoutSec:             timeoutSec,
 				StatusMessage:          handler.statusMessage(),
+				OnFailure:              failurePolicy,
 				AdditionalContextLimit: additionalContextLimit,
 				SourcePath:             source.Path,
 				Source:                 source.Source,
@@ -948,7 +1022,7 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 			timeoutSec := handler.timeoutSecForEvent(event)
 			key := hookDiscoveryKey(source.KeySource, event, groupIndex, handlerIndex)
 			inputTemplate := cloneHookInput(handler.Input)
-			declarationHash := hookDiscoveryHashHandler(event, group.Matcher, HookHandlerMCPTool, "", false, handler.Server, handler.Tool, inputTemplate, timeoutSec, handler.statusMessage(), nil)
+			declarationHash := hookDiscoveryHashHandler(event, group.Matcher, HookHandlerMCPTool, "", false, handler.Server, handler.Tool, inputTemplate, timeoutSec, handler.statusMessage(), nil, failurePolicyConfig)
 			state := source.State(key)
 			pluginContentHash, ok := source.pluginContentHash(entry, builtin)
 			if !ok {
@@ -980,6 +1054,7 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 				Input:                  inputTemplate,
 				TimeoutSec:             timeoutSec,
 				StatusMessage:          handler.statusMessage(),
+				OnFailure:              failurePolicy,
 				SourcePath:             source.Path,
 				compiledMatcher:        compiledMatcher,
 				Source:                 source.Source,
@@ -1298,8 +1373,8 @@ func hookHashAdditionalContextLimit(event HookEventName, limit *int64) *int64 {
 	return limit
 }
 
-func hookDiscoveryHash(event HookEventName, matcher *string, command string, async bool, timeoutSec int64, statusMessage *string, additionalContextLimit *int64) string {
-	return hookDiscoveryHashHandler(event, matcher, HookHandlerCommand, command, async, "", "", nil, timeoutSec, statusMessage, additionalContextLimit)
+func hookDiscoveryHash(event HookEventName, matcher *string, command string, async bool, timeoutSec int64, statusMessage *string, additionalContextLimit *int64, onFailure *string) string {
+	return hookDiscoveryHashHandler(event, matcher, HookHandlerCommand, command, async, "", "", nil, timeoutSec, statusMessage, additionalContextLimit, onFailure)
 }
 
 // hookDiscoveryHashHandler fingerprints one normalized hook identity, mirroring Rust
@@ -1316,7 +1391,7 @@ func hookDiscoveryHash(event HookEventName, matcher *string, command string, asy
 // options are dropped, and additionalContextLimit is skipped when unset. All inputs are
 // the raw config-derived values (untrimmed), so a Rust-written trusted_hash validates in
 // Go for the same hook definition.
-func hookDiscoveryHashHandler(event HookEventName, matcher *string, handlerType HookHandlerType, command string, async bool, server string, tool string, input map[string]any, timeoutSec int64, statusMessage *string, additionalContextLimit *int64) string {
+func hookDiscoveryHashHandler(event HookEventName, matcher *string, handlerType HookHandlerType, command string, async bool, server string, tool string, input map[string]any, timeoutSec int64, statusMessage *string, additionalContextLimit *int64, onFailure *string) string {
 	handler := map[string]any{
 		"type":    string(handlerType),
 		"timeout": timeoutSec,
@@ -1339,6 +1414,9 @@ func hookDiscoveryHashHandler(event HookEventName, matcher *string, handlerType 
 	}
 	if limit := hookHashAdditionalContextLimit(event, additionalContextLimit); limit != nil {
 		handler["additionalContextLimit"] = *limit
+	}
+	if onFailure != nil {
+		handler["onFailure"] = *onFailure
 	}
 	identity := map[string]any{
 		"event_name": hookEventKeyLabel(event),

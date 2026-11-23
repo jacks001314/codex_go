@@ -190,7 +190,19 @@ func (r *HookRunner) Run(ctx context.Context, request *HookRunRequest) (*HookRun
 		} else {
 			runResult = r.runHandlerCommand(ctx, metadata, request)
 		}
-		completed := completedHookSummary(metadata, runResult, hookRunStatus(request.EventName, runResult), hookOutputEntries(request.EventName, runResult))
+		status := hookRunStatus(request.EventName, runResult)
+		entries := hookOutputEntries(request.EventName, runResult)
+		failureReason := ""
+		if status == HookRunFailed {
+			if reason, ok := hookFailureBlockReason(metadata); ok {
+				// Rust #62831: keep the failure diagnostics, mark the run blocked,
+				// and apply the event's blocking behavior below.
+				status = HookRunBlocked
+				entries = append(entries, HookOutputEntry{Kind: HookOutputFeedback, Text: reason})
+				failureReason = reason
+			}
+		}
+		completed := completedHookSummary(metadata, runResult, status, entries)
 		completed = hookSummaryWithRunIDSuffix(completed, request.RunIDSuffix)
 		if request.BillableModelRequest && hookRunSucceeded(runResult) {
 			if price, priceErr := modelRequestHookPrice(runResult.StructuredContent); priceErr != "" {
@@ -204,6 +216,9 @@ func (r *HookRunner) Run(ctx context.Context, request *HookRunRequest) (*HookRun
 			}
 		}
 		effect := hookRunEffect(request.EventName, runResult)
+		if failureReason != "" {
+			effect = hookFailureBlockingEffect(request.EventName, effect, failureReason)
+		}
 		if request.EventName == HookEventPermissionRequest {
 			switch {
 			case !hookTrustAllowsExecution(&metadata):
@@ -1343,6 +1358,40 @@ func applyContextInjectingEffect(effect *hookRunEffectResult, universal *HookUni
 	} else if feedback != nil && strings.TrimSpace(*feedback) != "" {
 		effect.FeedbackMessages = append(effect.FeedbackMessages, strings.TrimSpace(*feedback))
 	}
+}
+
+// hookFailureBlockingEffect applies the event's blocking behavior when a
+// required synchronous hook failed (Rust #62831): PreToolUse prevents the tool
+// from running, PostToolUse withholds the result, Stop blocks completion,
+// prompt and session-start events stop the turn, and PermissionRequest denies.
+func hookFailureBlockingEffect(event HookEventName, effect *hookRunEffectResult, reason string) *hookRunEffectResult {
+	if effect == nil {
+		effect = &hookRunEffectResult{}
+	}
+	switch event {
+	case HookEventPreToolUse, HookEventPostToolUse, HookEventStop, HookEventSubagentStop:
+		effect.Blocked = true
+		if effect.BlockReason == "" {
+			effect.BlockReason = reason
+		}
+		effect.FeedbackMessages = append(effect.FeedbackMessages, reason)
+	case HookEventPermissionRequest:
+		// Rust #62831 applies the event's blocking behavior: a failed required
+		// permission hook denies the request with the failure reason.
+		effect.PermissionRequestAllow = false
+		message := reason
+		effect.PermissionRequestDeny = &HookPermissionRequestDecision{Kind: HookPermissionRequestDeny, Message: &message}
+	case HookEventUserPromptSubmit, HookEventSessionStart, HookEventPreCompact, HookEventPostCompact:
+		effect.Stopped = true
+		if effect.StopReason == "" {
+			effect.StopReason = reason
+		}
+		effect.FeedbackMessages = append(effect.FeedbackMessages, reason)
+	case HookEventInterrupt, HookEventSessionEnd, HookEventPreModelRequest, HookEventPostModelRequest:
+		// The turn is already interrupted or the event cannot block; the run's
+		// blocked status still reports the configured failure.
+	}
+	return effect
 }
 
 func mergeHookRunEffect(result *HookRunResult, effect *hookRunEffectResult) {

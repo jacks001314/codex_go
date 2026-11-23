@@ -22,7 +22,7 @@ func TestConfiguredMCPToolHookMarshalRustShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"type":"mcp_tool","server":"linear","tool":"get_issue","input":{"id":"ENG-1"},"timeoutSec":9,"statusMessage":"querying"}`
+	want := `{"type":"mcp_tool","server":"linear","tool":"get_issue","input":{"id":"ENG-1"},"timeoutSec":9,"statusMessage":"querying","onFailure":null}`
 	if string(encoded) != want {
 		t.Fatalf("MCP tool hook JSON = %s, want %s", encoded, want)
 	}

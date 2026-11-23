@@ -165,6 +165,7 @@ func cloneConfiguredHookHandler(handler config.ConfiguredHookHandler) config.Con
 	clone := handler
 	clone.CommandWindows = cloneStringPtrAppserver(handler.CommandWindows)
 	clone.StatusMessage = cloneStringPtrAppserver(handler.StatusMessage)
+	clone.OnFailure = cloneStringPtrAppserver(handler.OnFailure)
 	if handler.TimeoutSec != nil {
 		timeout := *handler.TimeoutSec
 		clone.TimeoutSec = &timeout

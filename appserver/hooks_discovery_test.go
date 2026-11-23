@@ -392,7 +392,7 @@ statusMessage = "running listed hook"
 	if hook.TimeoutSec != 5 || hook.StatusMessage == nil || *hook.StatusMessage != "running listed hook" {
 		t.Fatalf("hook timeout/status = %+v", hook)
 	}
-	if hook.CurrentHash != hookDiscoveryHash(HookEventPreToolUse, hook.Matcher, *hook.Command, false, 5, hook.StatusMessage, nil) {
+	if hook.CurrentHash != hookDiscoveryHash(HookEventPreToolUse, hook.Matcher, *hook.Command, false, 5, hook.StatusMessage, nil, nil) {
 		t.Fatalf("hash = %q, want normalized hook hash", hook.CurrentHash)
 	}
 }
@@ -883,9 +883,9 @@ func TestHookDiscoveryParsesAdditionalContextLimitFromJSON(t *testing.T) {
 	}
 	// The hash must include the limit (Rust NormalizedHookIdentity), so a hook
 	// with a different limit hashes differently.
-	withLimit := hookDiscoveryHash(HookEventPreToolUse, hook.Matcher, *hook.Command, false, hook.TimeoutSec, hook.StatusMessage, hook.AdditionalContextLimit)
+	withLimit := hookDiscoveryHash(HookEventPreToolUse, hook.Matcher, *hook.Command, false, hook.TimeoutSec, hook.StatusMessage, hook.AdditionalContextLimit, nil)
 	limit := int64(1)
-	otherLimit := hookDiscoveryHash(HookEventPreToolUse, hook.Matcher, *hook.Command, false, hook.TimeoutSec, hook.StatusMessage, &limit)
+	otherLimit := hookDiscoveryHash(HookEventPreToolUse, hook.Matcher, *hook.Command, false, hook.TimeoutSec, hook.StatusMessage, &limit, nil)
 	if withLimit == otherLimit {
 		t.Fatal("additionalContextLimit must participate in the hook identity hash")
 	}

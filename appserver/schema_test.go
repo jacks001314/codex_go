@@ -199,8 +199,13 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		// its two cancellation methods and the thread/search/partial
 		// notification changed both exports, so the pins below are again
 		// recomputed from the vendored bytes (byte-identical to the anchor).
-		{"stable", stablePrecomputedExports, "2307314c2b280e33c981a5226851cfe55f14402d454c0695b7a8c3ada57faa0a"},
-		{"experimental", experimentalPrecomputedExports, "fefa72be10828d16f66d9730c4814087fd921e4f02fe20eefd7503f3d2876589"},
+		// Re-vendored at upstream e0a6d0532d (the 2026-11-23 window through
+		// #63241): the exports gained ConfiguredHookFailurePolicy/onFailure
+		// (#62831) and the earlier window's protocol changes, and were copied
+		// byte-for-byte from app-server-protocol/schema/precomputed/ in the
+		// anchor checkout; the pins below are recomputed from those exact bytes.
+		{"stable", stablePrecomputedExports, "5c9aff41ddf8946cc7e991b86bd42538369d7d61528f1f0852b12d9f20b19bc1"},
+		{"experimental", experimentalPrecomputedExports, "674286fd8fcbb84d5b71cb221ae00015af725cf7036f6c9df741760748ee111f"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

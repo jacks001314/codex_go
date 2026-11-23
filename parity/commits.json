@@ -53557,11 +53557,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Rust #62831: command and MCP tool hooks accept onFailure continue|block (JSON and TOML); discovery keeps the policy on the handler, hashes it into the trust identity, rejects block for SessionEnd/PreModelRequest/PostModelRequest and async command handlers, and managed requirements report those as required load errors. A failed synchronous handler with block becomes a Blocked run that keeps its failure diagnostics and applies the event behavior: PreToolUse/PostToolUse/Stop/SubagentStop block (with feedback), UserPromptSubmit/SessionStart/PreCompact/PostCompact stop the turn, and PermissionRequest denies with the reason. configRequirements/read serializes a nullable onFailure on command and MCP tool handlers, and the precomputed protocol exports were re-vendored from upstream e0a6d053. Tests: go test ./appserver -run Hook -count=1; go test ./config -run 'Requirement|Hook|ConfigRead' -count=1; go test ./appserver -run 'PrecomputedExportArtifacts|BuildProtocolSchemaMatchesRustStableFixtures' -count=1; go build ./..."
    ],
    "kind": "runtime",
    "sha": "a1afa122738382adabe2dd1ccfc510a70ed381f0",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Let required hooks block continuation on failure (#62831)"
   },
   {

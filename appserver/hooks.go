@@ -41,6 +41,81 @@ const (
 	HookHandlerMCPTool HookHandlerType = "mcp_tool"
 )
 
+// HookFailurePolicy mirrors Rust's HookFailurePolicy (#62831): a synchronous
+// handler that supports blocking may turn its own failure into the event's
+// blocking outcome.
+type HookFailurePolicy string
+
+const (
+	HookFailureContinue HookFailurePolicy = "continue"
+	HookFailureBlock    HookFailurePolicy = "block"
+)
+
+// parseHookFailurePolicy decodes the configured policy; an unknown value is
+// rejected instead of silently continuing.
+func parseHookFailurePolicy(value string) (HookFailurePolicy, bool) {
+	switch HookFailurePolicy(value) {
+	case "", HookFailureContinue:
+		return HookFailureContinue, true
+	case HookFailureBlock:
+		return HookFailureBlock, true
+	default:
+		return "", false
+	}
+}
+
+// hookFailureBlockReason mirrors Rust's ConfiguredHandler::failure_block_reason:
+// only a synchronous handler on an event that supports blocking turns its
+// failure into a block, and SessionEnd never does.
+func hookFailureBlockReason(metadata HookMetadata) (string, bool) {
+	executionMode := metadata.ExecutionMode
+	if executionMode == "" {
+		// Metadata built outside discovery defaults to the synchronous mode.
+		executionMode = HookExecutionSync
+	}
+	if metadata.OnFailure != HookFailureBlock || executionMode != HookExecutionSync || metadata.EventName == HookEventSessionEnd {
+		return "", false
+	}
+	return fmt.Sprintf("%s hook failed. This hook is configured to block continuation on failure.", hookEventRustName(metadata.EventName)), true
+}
+
+// hookEventRustName renders the event the way Rust's Debug formatter does in
+// the failure reason.
+func hookEventRustName(event HookEventName) string {
+	switch event {
+	case HookEventPreModelRequest:
+		return "PreModelRequest"
+	case HookEventPostModelRequest:
+		return "PostModelRequest"
+	case HookEventPreToolUse:
+		return "PreToolUse"
+	case HookEventPermissionRequest:
+		return "PermissionRequest"
+	case HookEventPostToolUse:
+		return "PostToolUse"
+	case HookEventPreCompact:
+		return "PreCompact"
+	case HookEventPostCompact:
+		return "PostCompact"
+	case HookEventSessionStart:
+		return "SessionStart"
+	case HookEventSessionEnd:
+		return "SessionEnd"
+	case HookEventUserPromptSubmit:
+		return "UserPromptSubmit"
+	case HookEventSubagentStart:
+		return "SubagentStart"
+	case HookEventSubagentStop:
+		return "SubagentStop"
+	case HookEventStop:
+		return "Stop"
+	case HookEventInterrupt:
+		return "Interrupt"
+	default:
+		return string(event)
+	}
+}
+
 type HookExecutionMode string
 
 const (
@@ -191,6 +266,9 @@ type HookMetadata struct {
 	Input         map[string]any `json:"input,omitempty"`
 	TimeoutSec    int64          `json:"timeoutSec"`
 	StatusMessage *string        `json:"statusMessage"`
+	// OnFailure is the per-handler failure policy (Rust #62831). It is engine
+	// metadata: Rust's hooks/list contract does not expose it.
+	OnFailure HookFailurePolicy `json:"-"`
 	// EnvironmentID is the execution environment that owns this hook, when it
 	// came from that environment's requirements (Rust #56553). Nil means a
 	// host-local hook.

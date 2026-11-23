@@ -1305,6 +1305,9 @@ type ConfiguredHookHandler struct {
 	TimeoutSec     *uint64        `json:"timeoutSec,omitempty"`
 	Async          bool           `json:"async,omitempty"`
 	StatusMessage  *string        `json:"statusMessage,omitempty"`
+	// OnFailure is the per-handler failure policy (Rust #62831), serialized as
+	// a nullable `onFailure` on command and MCP tool handlers.
+	OnFailure *string `json:"onFailure"`
 }
 
 func (h *ConfiguredHookHandler) MarshalJSON() ([]byte, error) {
@@ -1317,6 +1320,7 @@ func (h *ConfiguredHookHandler) MarshalJSON() ([]byte, error) {
 			TimeoutSec     *uint64 `json:"timeoutSec"`
 			Async          bool    `json:"async"`
 			StatusMessage  *string `json:"statusMessage"`
+			OnFailure      *string `json:"onFailure"`
 		}{
 			Type:           h.Type,
 			Command:        h.Command,
@@ -1324,6 +1328,7 @@ func (h *ConfiguredHookHandler) MarshalJSON() ([]byte, error) {
 			TimeoutSec:     cloneUint64Ptr(h.TimeoutSec),
 			Async:          h.Async,
 			StatusMessage:  cloneStringPtr(h.StatusMessage),
+			OnFailure:      cloneStringPtr(h.OnFailure),
 		})
 	case "prompt", "agent":
 		return json.Marshal(struct {
@@ -1337,9 +1342,11 @@ func (h *ConfiguredHookHandler) MarshalJSON() ([]byte, error) {
 			Input         map[string]any `json:"input"`
 			TimeoutSec    *uint64        `json:"timeoutSec"`
 			StatusMessage *string        `json:"statusMessage"`
+			OnFailure     *string        `json:"onFailure"`
 		}{
 			Type: h.Type, Server: h.Server, Tool: h.Tool, Input: cloneMap(h.Input),
 			TimeoutSec: cloneUint64Ptr(h.TimeoutSec), StatusMessage: cloneStringPtr(h.StatusMessage),
+			OnFailure: cloneStringPtr(h.OnFailure),
 		})
 	default:
 		type configuredHookHandlerAlias ConfiguredHookHandler
