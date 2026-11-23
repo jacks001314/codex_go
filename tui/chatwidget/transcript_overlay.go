@@ -167,9 +167,14 @@ func (o *TranscriptOverlay) Resize(width int, height int) {
 	o.viewport.SetContent(o.viewContent())
 	if follow {
 		o.viewport.GotoBottom()
-		return
+	} else {
+		o.viewport.SetYOffset(offset)
 	}
-	o.viewport.SetYOffset(offset)
+	// Rust #63056: a resize can leave the selection caret offscreen, so the
+	// viewport reveals it again after the new height is applied.
+	if o.selectMode.active {
+		o.revealSelectionCursor()
+	}
 }
 
 // bodyHeightFor reports the content rows for a total overlay height. A pinned
@@ -207,9 +212,14 @@ func (o *TranscriptOverlay) SetPinnedHeader(line string) {
 	o.viewport.SetHeight(o.bodyHeightFor(firstPositive(o.height, defaultOverlayHeight)))
 	if follow {
 		o.viewport.GotoBottom()
-		return
+	} else {
+		o.viewport.SetYOffset(offset)
 	}
-	o.viewport.SetYOffset(offset)
+	// The header steals a content row; keep the selection caret visible
+	// (Rust #63056).
+	if o.selectMode.active {
+		o.revealSelectionCursor()
+	}
 }
 
 // PinnedHeader reports the installed header row, if any.
