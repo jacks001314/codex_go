@@ -96,6 +96,11 @@ func (e *SobekEngine) Execute(ctx context.Context, request EngineRequest) (*Engi
 	if err := installSobekHelpers(runtime, &items, state); err != nil {
 		return nil, err
 	}
+	// Rust #62430: trusted tool helpers run in this cell's context, after the
+	// built-in helpers and before the cell's own module.
+	if err := runToolPreloads(runtime, request.EnabledTools, request.Preloads); err != nil {
+		return nil, err
+	}
 	done := make(chan struct{})
 	defer close(done)
 	go func() {

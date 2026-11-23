@@ -52494,11 +52494,16 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Session API mirrors Rust: codemode.ToolPreload (tool/tool_name/tool_namespace/source) in codemode/tool_preload.go, EngineRequest.Preloads, and SessionRuntime.SetToolPreloads so each session selects its own helpers (Rust InProcessCodeModeSession::with_options_and_tool_preloads).",
+    "Evaluation order and matching mirror Rust #62430 install_globals: helpers run after the built-in globals and before the cell module in the same runtime; a helper runs only when the catalog has exactly one binding for its global name and that binding dispatches the exact tool name and namespace; more than one match fails with `ambiguous binding: tool preload #N for X`; compile and execution failures report `failed to compile/execute tool preload #N for X` with the binding truncated to 96 characters.",
+    "Both runtimes carry the feature: codemode/sobek_engine.go evaluates preloads after installSobekHelpers, and tool/code_mode_exec.go installs them after the lazy `tools`/`ALL_TOOLS` globals and before the cell script, reporting a failed helper as a bounded cell error instead of a raw diagnostic.",
+    "Hosts supply helpers like Rust code-mode-host: codemode/stdio_host.go adds RunStdioHostWithToolPreloads and a host-level preload table copied into every session (codemodeHostOptions.toolPreloads), which is the same configuration Rust applies through HostState::tool_preloads for stdio and gRPC hosts.",
+    "Tests: codemode/tool_preload_like_rust_test.go (session selection, exact dispatch identity, ambiguity, bounded compile/execute errors and 96-char truncation), codemode/tool_preload_stdio_like_rust_test.go (a failed helper leaves another session on the same connection usable), tool/code_mode_tool_preload_like_rust_test.go (nested-tool runtime ordering and bounded failures). `go test ./codemode ./tool -count=1` passes.",
+    "Known divergence: the in-process nested-tool executor dedupes catalog bindings that normalize to one identifier (tool/code_mode_exec.go nestedToolsOrdered), so the ambiguity error is reachable through the request catalog path but not through a duplicated executor registry; Rust counts the request catalog directly."
    ],
    "kind": "runtime",
    "sha": "d64451b049d6f8b75b747e339a7034d23ddc9466",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Support tool-specific JavaScript preloads in Code Mode (#62430)"
   },
   {

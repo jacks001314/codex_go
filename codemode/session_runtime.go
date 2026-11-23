@@ -33,6 +33,9 @@ type SessionRuntime struct {
 	// cellExecutionLimits caps each observation's yield time; it is captured
 	// when the session opens (Rust #37114).
 	cellExecutionLimits *CellExecutionLimits
+	// toolPreloads are the trusted host helpers every cell of this session
+	// installs when its catalog exposes the matching nested tool (Rust #62430).
+	toolPreloads []ToolPreload
 }
 
 func NewSessionRuntime() *SessionRuntime {
@@ -70,6 +73,18 @@ func (r *SessionRuntime) SetCellExecutionLimits(limits *CellExecutionLimits) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.cellExecutionLimits = limits
+}
+
+// SetToolPreloads installs the session's trusted tool helpers. Rust's host
+// selects them when a session opens (code-mode-host HostState::tool_preloads),
+// so a later change only affects sessions created afterwards.
+func (r *SessionRuntime) SetToolPreloads(preloads []ToolPreload) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.toolPreloads = cloneToolPreloads(preloads)
 }
 
 // yieldTimeout resolves one observation's timeout the way Rust's
@@ -138,8 +153,11 @@ func (r *SessionRuntime) Execute(ctx context.Context, request *ExecuteRequest, p
 	// preempt signal can end the observation while the cell keeps running
 	// (Rust's cell actor select).
 	engineState := r.registerEngine(cellID.String(), engine)
+	r.mu.Lock()
+	preloads := cloneToolPreloads(r.toolPreloads)
+	r.mu.Unlock()
 	go func() {
-		result, execErr := engine.Execute(ctx, EngineRequest{ToolCallID: request.ToolCallID, Source: request.Source, EnabledTools: request.EnabledTools})
+		result, execErr := engine.Execute(ctx, EngineRequest{ToolCallID: request.ToolCallID, Source: request.Source, EnabledTools: request.EnabledTools, Preloads: preloads})
 		_ = engine.Close()
 		r.publishEngineOutcome(cellID.String(), engineOutcome{result: result, execErr: execErr})
 	}()

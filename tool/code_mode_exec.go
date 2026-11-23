@@ -1799,6 +1799,12 @@ func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *In
 	if err := installLazyCodeModeCatalogGlobal(runtime, "ALL_TOOLS", buildAllTools); err != nil {
 		return nil, err
 	}
+	// Rust #62430: trusted tool helpers run in this cell's context, after the
+	// catalog globals and before the cell's script. A failed helper is reported
+	// as a bounded cell error so other sessions on the connection stay usable.
+	if err := installCodeModeToolPreloads(runtime, nestedTools, codeModeToolPreloadsForInvocation(invocation)); err != nil {
+		return codeModeScriptFailureOutput(invocation.CallID, err.Error(), nil, nil, nil, nil), nil
+	}
 
 	done := make(chan struct{})
 	defer close(done)

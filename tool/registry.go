@@ -185,6 +185,10 @@ const (
 	CodeModeCellIDContextKey       = "code_mode_cell_id"
 	CodeModeOutputCallIDContextKey = "code_mode_output_call_id"
 	CodeModeEnabledToolsContextKey = "code_mode_enabled_tools"
+	// CodeModeToolPreloadsContextKey carries the host's trusted tool helpers
+	// ([]CodeModeToolPreload) into a cell so the executor can install the ones
+	// whose binding the cell exposes (Rust #62430).
+	CodeModeToolPreloadsContextKey = "code_mode_tool_preloads"
 	// OriginItemIDContextKey carries the Responses item that requested this call
 	// (Rust `ToolInvocation::originating_call`'s item id, #40866). MCP requests
 	// report it as `_meta.itemId`; a nested Code Mode call inherits its cell's

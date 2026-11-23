@@ -32,12 +32,18 @@ type stdioHostServer struct {
 	enforceSessions bool
 	nextDelegate    atomic.Int64
 	wg              sync.WaitGroup
+	// toolPreloads are the trusted host helpers each cell installs when its
+	// catalog exposes the matching nested tool (Rust #62430 HostState).
+	toolPreloads []tool.CodeModeToolPreload
 }
 
 type codemodeHostOptions struct {
 	// enforceSessionDelegateLimits mirrors the structured gRPC service, where
 	// each session owns a callback budget in addition to the shared host budget.
 	enforceSessionDelegateLimits bool
+	// toolPreloads are the trusted helpers this host installs in every session
+	// (Rust #62430 run_stdio_with_tool_preloads).
+	toolPreloads []tool.CodeModeToolPreload
 }
 
 type activeCellKey struct {
@@ -61,13 +67,19 @@ type delegateHostResult struct {
 }
 
 func RunStdioHost(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
+	return RunStdioHostWithToolPreloads(ctx, stdin, stdout, nil)
+}
+
+// RunStdioHostWithToolPreloads serves the stdio protocol with the host's trusted
+// tool helpers, mirroring Rust #62430 run_stdio_with_tool_preloads.
+func RunStdioHostWithToolPreloads(ctx context.Context, stdin io.Reader, stdout io.Writer, preloads []ToolPreload) error {
 	reader := NewFramedReader(stdin)
 	writer := NewFramedWriter(stdout)
 	return runCodemodeHost(
 		ctx,
 		func(message *ClientToHost) (bool, error) { return reader.Read(message) },
 		func(message any) error { return writer.Write(message) },
-		codemodeHostOptions{},
+		codemodeHostOptions{toolPreloads: toolPreloadsForHost(preloads)},
 	)
 }
 
@@ -85,6 +97,7 @@ func runCodemodeHost(ctx context.Context, read func(*ClientToHost) (bool, error)
 		pendingSession: map[SessionID]int{}, activeCells: map[activeCellKey]struct{}{},
 		delegateLimit: LegacyMaxPendingDelegateCalls, activeCellLimit: MaxActiveCells,
 		enforceSessions: options.enforceSessionDelegateLimits,
+		toolPreloads:    options.toolPreloads,
 	}
 	if err := host.negotiate(); err != nil {
 		return err
@@ -512,6 +525,9 @@ func (s *stdioHostSession) execute(ctx context.Context, cellID CellID, request *
 	invocation.Context[tool.CodeModeCellClosedContextKey] = tool.CodeModeCellClosedFunc(func() {
 		s.host.releaseActiveCell(s.id, cellID)
 	})
+	if len(s.host.toolPreloads) > 0 {
+		invocation.Context[tool.CodeModeToolPreloadsContextKey] = s.host.toolPreloads
+	}
 	invocation.Context["code_mode_notify"] = tool.CodeModeNotifyFunc(func(callID, text string) {
 		_, _ = s.host.requestDelegate(ctx, s.id, NotifyRequest(callID, cellID, text))
 	})
