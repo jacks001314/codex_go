@@ -162,6 +162,10 @@ type httpClient struct {
 	// startupComplete mirrors `initialized` without the mutex so connection
 	// reuse can distinguish a ready client from a pending startup (Rust #40636).
 	startupComplete  atomic.Bool
+	// startupWarningEmitted gates the credential-free startup warning so one
+	// Streamable HTTP connection reports its first startup problem only once
+	// (Rust #62906 startup_warning_emitted).
+	startupWarningEmitted atomic.Bool
 	sessionID        string
 	serverName       string
 	threadID         string

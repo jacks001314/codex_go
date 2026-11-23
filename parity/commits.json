@@ -53941,11 +53941,14 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "mcp/startup_warning.go: Streamable HTTP startup failures log 'MCP server unavailable' with target codex_mcp_startup, the server name and a short reason; mcpStartupUnavailableReason maps auth-required, HTTP 403/404/other status, TLS certificate, DNS, connection refused, http/request failed, timeout and unknown failures without the raw transport text.",
+    "httpClient.startupWarningEmitted gates the warning once per connection; the pending-omission path in populateStatusInventories warns 'startup still pending; omitted from this turn' when the optional grace deadline drops a pending HTTP server. The lookup reads the cached connection under the service lock so a startup in progress cannot block the grace return.",
+    "stdio servers keep the existing per-attempt 'MCP server startup failed' log with the wrapped cause. Go has no rmcp transport worker log target, so the sanitized warning replaces the redundant raw transport lines the Rust exec filter removed; the exec stderr default filter itself has no Go counterpart.",
+    "mcp/startup_unavailable_warning_like_rust_test.go covers the reason table, the credential-free once-per-connection warning (endpoint query token never logged) and the pending-omission warning."
    ],
    "kind": "runtime",
    "sha": "ddfaef91b258da5a0217951ed5f6e0039add5e02",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Report HTTP MCP startup problems clearly in codex exec (#62906)"
   },
   {

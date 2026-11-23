@@ -2496,6 +2496,10 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 			if !deadline.After(now) {
 				delete(optionalDeadlines, index)
 				delete(pending, index)
+				// Rust #62906: a Streamable HTTP server still starting when the
+				// grace deadline passes is omitted from this turn; say so once
+				// per connection instead of leaving a bare missing tool.
+				s.warnMCPStartupUnavailable(servers[index].effectiveName(), "startup still pending; omitted from this turn")
 			}
 		}
 		if len(pending) == 0 {
@@ -2566,6 +2570,7 @@ func (s *MCPService) inventoryStatusForConfig(index int, name string, config *Se
 	} else if isRunnableMCPConfig(config) {
 		message := mcpStartupErrorMessage(err)
 		authStatus := s.authStatusForConfig(name, config)
+		authenticationRequired := mcpErrAuthenticationRequired(err)
 		if display, ok := mcpInitAuthErrorDisplay(name, config, authStatus, err); ok {
 			message = display
 			if authStatus == MCPAuthOAuth {
@@ -2580,7 +2585,14 @@ func (s *MCPService) inventoryStatusForConfig(index int, name string, config *Se
 			// Rust #42370: log exactly once per startup attempt, including
 			// attempts whose optional-startup result is dropped before any
 			// observer notification, and keep the wrapped causes visible.
-			slog.Warn("MCP server startup failed", "server_name", name, "error", message)
+			// Rust #62906: a Streamable HTTP server instead reports a short,
+			// credential-free reason once per connection, because transport
+			// errors can echo the endpoint URL, credentials included.
+			if isHTTPMCPConfig(config) {
+				s.warnMCPStartupUnavailable(name, mcpStartupUnavailableReason(err, authenticationRequired))
+			} else {
+				slog.Warn("MCP server startup failed", "server_name", name, "error", message)
+			}
 		}
 		// Rust #53672: startup recovery must not remove Codex Apps functions the
 		// model already discovered. The failed state still reports the error, but
