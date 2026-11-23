@@ -51693,11 +51693,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1263: partial - Rust renames the durable receipt to `SessionInputSaved` with a `ThreadRealtimeSessionInputReason` (`chunk` | `sessionEnd`) and derives realtime input receipts from thread history instead of the live event. Go models realtime items in realtime/history.go (`RealtimeItemKindSessionEndInput = \"sessionEndInputSaved\"`) and already supports `TurnInputAccepted` plus session-end receipts, but the item has no reason field and no receipt is derived from persisted history (realtime/realtime_frames_like_rust_test.go pins the pre-#62251 wire shape). Gap: the `sessionInputSaved` wire shape with `reason` and the chunk receipt derivation."
    ],
    "kind": "runtime",
    "sha": "4389a526d51a5a7600e0648436a7142a304f0188",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Derive realtime input receipts from thread history (#62251)"
   },
   {
@@ -51705,11 +51705,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1263: partial - Rust adds the off-by-default `features.realtime_frames_local` flag for paginated local threads backed by a state database, enrolls a thread once it has a persisted canonical session start, and adds thread-store APIs to recover a realtime session, look up the latest session id from durable history, and seal frame completion on the store write. Go registers the same feature key (features/features.go `realtime_frames_local`, StageUnderDevelopment, default off) and appserver/realtime_runtime.go `realtimeFramesEnabled` only requires a state runtime plus a thread store: it never consults the flag, never requires paginated history, and has no persisted-session-start enrollment or store-side recover/latest-session/seal APIs. Gap: flag and paginated gating plus the store session recovery surface."
    ],
    "kind": "runtime",
    "sha": "29cb67623c6c4360b29d09e66010ac71cef1a693",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Gate local realtime frame history on paginated storage (#62271)"
   },
   {
