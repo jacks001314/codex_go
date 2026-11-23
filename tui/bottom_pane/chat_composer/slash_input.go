@@ -240,7 +240,6 @@ func PreparedArgs(preparedText string) (string, int, bool) {
 	return parsed.Rest, parsed.RestOffset, true
 }
 
-
 func CommandPopupFilterText(firstLine string, cursor int) (string, bool) {
 	name, _, ok := commandUnderCursor(firstLine, cursor)
 	if !ok {
