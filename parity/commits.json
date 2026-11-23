@@ -54425,11 +54425,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "N/A by architecture: the commit repairs Rust's inline-history finalize path, where replace_agent_message rewrites the transcript range that was just printed into terminal scrollback so notices interleaved with the fragments would be duplicated or reordered. Go keeps streamed cells inside the Bubble Tea inline viewport and never writes history lines; the consolidation helpers (ConsolidateAgentMessageRun / ConsolidateInterruptedAgentMessage in tui/app) have no production caller in the tea model, so the finalize range that needs the fragment-count walk does not exist."
    ],
    "kind": "runtime",
    "sha": "b361a3323f2f09335561848ee40424533d7d94a7",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Keep streamed TUI answers intact when notices interrupt them (#63194)"
   },
   {
@@ -54437,11 +54437,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "N/A by architecture: the commit polls tmux's mouse state (tmux_mouse_disabled) and ends sidebar presses, divider drags, composer drags and rendered selections when tmux turns mouse reporting off while the TUI owns the alternate screen. Go never queries tmux mouse state - the tmux probes in tui/clipboard_tmux.go and tui/tea/tmux_image_probe.go only read set-clipboard and display-message image fields - and Bubble Tea owns mouse enablement, so there is no tmux_mouse_disabled signal to honor."
    ],
    "kind": "runtime",
    "sha": "988e85bd5590863186dde8bd147b3c322f6fbd42",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Honor tmux mouse changes while the TUI is in alternate screen (#63195)"
   },
   {
@@ -54449,11 +54449,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "N/A by architecture: the commit defers inline draws (defer_screen_size + frame requester) while chat_widget.has_pending_stream_consolidation is true so reflow and paint agree on width until the history insert completes. Go has no inline-history insert and no pending-stream-consolidation state in the tea model: the streamed cells live in the viewport and are repainted from the model, so there is no history rewrite window that could paint at a stale width."
    ],
    "kind": "runtime",
    "sha": "3cae922e10d2263c5207a28175768688c7d1fb6e",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Keep streamed output visible until inline history is repainted (#63196)"
   },
   {
