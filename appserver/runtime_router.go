@@ -15569,21 +15569,18 @@ func (r *RuntimeRouter) handleLoginAccount(request *Request) (*auth.LoginAccount
 		r.cancelAllAccountLoginRuntimes()
 		r.requireAccount().CancelActiveLogins()
 	}
-	if params.Type == "amazonBedrockAccessKeys" {
+	if params.Type == "amazonBedrockAccessKeys" || params.Type == auth.AccountAmazonBedrock {
+		// Rust #62222: an explicit providerId selects Bedrock Runtime; omitted
+		// or null keeps the Mantle default.
+		providerID, err := bedrockProviderConfigID(params.ProviderID)
+		if err != nil {
+			return nil, err
+		}
 		if err := r.ensureUserModelProviderCanBeBedrock(); err != nil {
 			return nil, err
 		}
 		region := strings.TrimSpace(params.Region)
-		if err := r.configureBedrockProvider(&region, nil); err != nil {
-			return nil, err
-		}
-	}
-	if params.Type == auth.AccountAmazonBedrock {
-		if err := r.ensureUserModelProviderCanBeBedrock(); err != nil {
-			return nil, err
-		}
-		region := strings.TrimSpace(params.Region)
-		if err := r.configureBedrockProvider(&region, nil); err != nil {
+		if err := r.configureBedrockProvider(providerID, &region, nil); err != nil {
 			return nil, err
 		}
 	}

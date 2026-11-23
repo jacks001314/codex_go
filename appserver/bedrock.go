@@ -77,6 +77,8 @@ type BedrockSetupParams struct {
 	Type    BedrockSetupType `json:"type"`
 	Profile string           `json:"profile"`
 	Region  string           `json:"region"`
+	// ProviderID is optional; null or absent selects Amazon Bedrock Mantle.
+	ProviderID *string `json:"providerId"`
 }
 
 // BedrockSetupResponse mirrors v2::BedrockSetupResponse (an empty object).
@@ -233,10 +235,39 @@ func (r *RuntimeRouter) handleBedrockDiscover(request *Request) (*BedrockDiscove
 	return &BedrockDiscoverResponse{Profiles: profiles, EnvironmentCredentials: credentials}, nil
 }
 
+// BedrockProviderId mirrors v2::BedrockProviderId (serde camelCase names).
+const (
+	BedrockProviderIDAmazonBedrock        = "amazonBedrock"
+	BedrockProviderIDAmazonBedrockRuntime = "amazonBedrockRuntime"
+)
+
+// bedrockProviderConfigID maps the optional request selection onto the provider
+// config id that receives the aws settings. Omitted or null keeps Mantle, the
+// same default Rust's BedrockProviderId::AmazonBedrock provides (#62222).
+func bedrockProviderConfigID(selection *string) (string, error) {
+	if selection == nil {
+		return model.AmazonBedrockProviderID, nil
+	}
+	switch value := strings.TrimSpace(*selection); value {
+	case "":
+		return "", jsonRPCInvalidRequest(fmt.Sprintf("unknown variant `%s`, expected `%s` or `%s`", *selection, BedrockProviderIDAmazonBedrock, BedrockProviderIDAmazonBedrockRuntime))
+	case BedrockProviderIDAmazonBedrock:
+		return model.AmazonBedrockProviderID, nil
+	case BedrockProviderIDAmazonBedrockRuntime:
+		return model.AmazonBedrockRuntimeProviderID, nil
+	default:
+		return "", jsonRPCInvalidRequest(fmt.Sprintf("unknown variant `%s`, expected `%s` or `%s`", value, BedrockProviderIDAmazonBedrock, BedrockProviderIDAmazonBedrockRuntime))
+	}
+}
+
 // handleBedrockSetup mirrors AccountRequestProcessor::bedrock_setup.
 func (r *RuntimeRouter) handleBedrockSetup(request *Request) (*BedrockSetupResponse, error) {
 	var params BedrockSetupParams
 	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	providerID, err := bedrockProviderConfigID(params.ProviderID)
+	if err != nil {
 		return nil, err
 	}
 	if err := r.ensureBedrockLoginAllowed(); err != nil {
@@ -279,7 +310,7 @@ func (r *RuntimeRouter) handleBedrockSetup(request *Request) (*BedrockSetupRespo
 	}
 	r.cancelAllAccountLoginRuntimes()
 	r.requireAccount().CancelActiveLogins()
-	if err := r.configureBedrockProvider(&region, profile); err != nil {
+	if err := r.configureBedrockProvider(providerID, &region, profile); err != nil {
 		return nil, err
 	}
 	return &BedrockSetupResponse{}, nil
@@ -294,15 +325,21 @@ func (r *RuntimeRouter) setupAuthSnapshot() *auth.AuthDotJSON {
 	return r.requireAccount().AuthSnapshot()
 }
 
-// configureBedrockProvider mirrors bedrock_auth::configure_bedrock_provider.
-func (r *RuntimeRouter) configureBedrockProvider(region *string, profile *string) error {
+// configureBedrockProvider mirrors bedrock_auth::configure_bedrock_provider. The
+// aws settings land under the selected provider id so a Runtime login does not
+// overwrite a Mantle table (#62222).
+func (r *RuntimeRouter) configureBedrockProvider(providerID string, region *string, profile *string) error {
+	if strings.TrimSpace(providerID) == "" {
+		providerID = model.AmazonBedrockProviderID
+	}
+	providerTable := "model_providers." + providerID
 	edits := []config.ConfigEdit{
-		{KeyPath: "model_provider", Value: model.AmazonBedrockProviderID, MergeStrategy: config.MergeReplace},
-		{KeyPath: "model_providers.amazon-bedrock.aws.profile", Value: configEditValue(profile), MergeStrategy: config.MergeReplace},
+		{KeyPath: "model_provider", Value: providerID, MergeStrategy: config.MergeReplace},
+		{KeyPath: providerTable + ".aws.profile", Value: configEditValue(profile), MergeStrategy: config.MergeReplace},
 	}
 	if region != nil {
 		edits = append(edits, config.ConfigEdit{
-			KeyPath:       "model_providers.amazon-bedrock.aws.region",
+			KeyPath:       providerTable + ".aws.region",
 			Value:         *region,
 			MergeStrategy: config.MergeReplace,
 		})
@@ -324,11 +361,17 @@ func (r *RuntimeRouter) clearManagedBedrockProviderConfig() error {
 	if r == nil || r.services.Config == nil {
 		return nil
 	}
-	_, err := r.services.Config.BatchWrite(&config.ConfigBatchWriteParams{Edits: []config.ConfigEdit{
+	edits := []config.ConfigEdit{
 		{KeyPath: "model_provider", Value: nil, MergeStrategy: config.MergeReplace},
-		{KeyPath: "model_providers.amazon-bedrock.aws.region", Value: nil, MergeStrategy: config.MergeReplace},
-		{KeyPath: "model_providers.amazon-bedrock.aws.profile", Value: nil, MergeStrategy: config.MergeReplace},
-	}})
+	}
+	// A managed login may have written either table, so clear both (#62222).
+	for _, id := range []string{model.AmazonBedrockProviderID, model.AmazonBedrockRuntimeProviderID} {
+		edits = append(edits,
+			config.ConfigEdit{KeyPath: "model_providers." + id + ".aws.region", Value: nil, MergeStrategy: config.MergeReplace},
+			config.ConfigEdit{KeyPath: "model_providers." + id + ".aws.profile", Value: nil, MergeStrategy: config.MergeReplace},
+		)
+	}
+	_, err := r.services.Config.BatchWrite(&config.ConfigBatchWriteParams{Edits: edits})
 	return err
 }
 
@@ -373,7 +416,7 @@ func (r *RuntimeRouter) ensureUserModelProviderCanBeBedrock() error {
 			continue
 		}
 		effective := strings.TrimSpace(stringValueFromAny(raw))
-		if effective == model.AmazonBedrockProviderID {
+		if effective == model.AmazonBedrockProviderID || effective == model.AmazonBedrockRuntimeProviderID {
 			break
 		}
 		source := bedrockFormatConfigLayerSource(layer.Name)

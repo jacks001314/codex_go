@@ -395,6 +395,9 @@ type LoginAccountParams struct {
 	SecretAccessKey       string      `json:"secretAccessKey,omitempty"`
 	SessionToken          string      `json:"sessionToken,omitempty"`
 	Region                string      `json:"region,omitempty"`
+	// ProviderID selects Amazon Bedrock Mantle (amazonBedrock, the default) or
+	// Amazon Bedrock Runtime (amazonBedrockRuntime). Rust #62222.
+	ProviderID *string `json:"providerId,omitempty"`
 }
 
 func (p *LoginAccountParams) MarshalJSON() ([]byte, error) {
@@ -436,13 +439,15 @@ func (p *LoginAccountParams) MarshalJSON() ([]byte, error) {
 		})
 	case AccountAmazonBedrock:
 		return json.Marshal(struct {
-			Type   AccountType `json:"type"`
-			APIKey string      `json:"apiKey"`
-			Region string      `json:"region"`
+			Type       AccountType `json:"type"`
+			APIKey     string      `json:"apiKey"`
+			Region     string      `json:"region"`
+			ProviderID *string     `json:"providerId,omitempty"`
 		}{
-			Type:   AccountAmazonBedrock,
-			APIKey: p.APIKey,
-			Region: p.Region,
+			Type:       AccountAmazonBedrock,
+			APIKey:     p.APIKey,
+			Region:     p.Region,
+			ProviderID: cloneStringPtr(p.ProviderID),
 		})
 	case "amazonBedrockAccessKeys":
 		return json.Marshal(struct {
@@ -451,12 +456,14 @@ func (p *LoginAccountParams) MarshalJSON() ([]byte, error) {
 			SecretAccessKey string      `json:"secretAccessKey"`
 			SessionToken    string      `json:"sessionToken,omitempty"`
 			Region          string      `json:"region"`
+			ProviderID      *string     `json:"providerId,omitempty"`
 		}{
 			Type:            p.Type,
 			AccessKeyID:     p.AccessKeyID,
 			SecretAccessKey: p.SecretAccessKey,
 			SessionToken:    p.SessionToken,
 			Region:          p.Region,
+			ProviderID:      cloneStringPtr(p.ProviderID),
 		})
 	default:
 		type loginAccountParamsAlias LoginAccountParams

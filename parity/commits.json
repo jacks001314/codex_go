@@ -51656,11 +51656,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1263: account/bedrock/setup (profile and environment variants) and account/login/start (amazonBedrock api key and amazonBedrockAccessKeys) now accept the optional providerId BedrockProviderId. An omitted or JSON-null value keeps Amazon Bedrock Mantle (`model_provider = \"amazon-bedrock\"`), while `amazonBedrockRuntime` writes `model_provider = \"amazon-bedrock-runtime\"` plus `model_providers.amazon-bedrock-runtime.aws.profile`/`aws.region`, leaving the Mantle table untouched (appserver/bedrock.go bedrockProviderConfigID/configureBedrockProvider, appserver/runtime_router.go handleLoginAccount, auth/account.go LoginAccountParams). Unknown values fail before any config write or login state change with Rust's serde wording: `unknown variant \\`x\\`, expected \\`amazonBedrock\\` or \\`amazonBedrockRuntime\\``.",
+    "Round 1263: the layered `model_provider` guard and managed-logout cleanup accept and clear both provider ids, so a Runtime login is not rejected by a higher-precedence Mantle layer and logout removes whichever table the login wrote (clearManagedBedrockProviderConfig). Tests: TestBedrockSetupSelectsRuntimeProviderLikeRust, TestBedrockSetupEnvironmentSelectionKeepsMantleByDefaultLikeRust, TestBedrockSetupRejectsUnknownProviderIDLikeRust, TestBedrockLoginSelectsRuntimeProviderLikeRust, TestBedrockLoginRejectsUnknownProviderIDLikeRust (appserver/bedrock_provider_selection_like_rust_test.go) plus the existing Bedrock suite; go build ./..., go vet ./appserver ./auth and go test ./parity pass."
    ],
    "kind": "runtime",
    "sha": "24e236514bebcef874c2d38ce5df26164aa50ca4",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Allow Bedrock Runtime selection during setup and login (#62222)"
   },
   {
