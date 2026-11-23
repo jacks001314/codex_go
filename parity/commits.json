@@ -51532,11 +51532,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Rust #62190 is a refactor: RolloutWorkGate moves into work_gate.rs and TurnWork/ResponseWork become pass-throughs (WorkCheckpoint::should_retry/is_finished/should_return all return false, ResponseWork::accept_charge/finish are no-ops, TurnWork::accept_response only calls policy.check_start()). The commit states retry, completion, compaction and charge behavior is unchanged.",
+    "Go already enforces the same admission point through CheckWorkBudget: turn/agent_loop.go:594 and :994 refuse new model work, turn/tool_dispatcher.go:514 aborts tool calls before the handler starts, turn/runtime.go:410/454 check before starting and after resuming, and appserver.rolloutBudgetCheck returns ErrSessionBudgetExceeded per thread.",
+    "Existing parity coverage: turn/rollout_budget_gate_like_rust_test.go (handler refused before start, buffered calls aborted) and turn/rollout_budget_order_like_rust_test.go (checkpoint ordering), plus appserver/rollout_budget_test.go for the per-thread gate. No Go change was needed to preserve the refactor's behavior."
    ],
    "kind": "runtime",
    "sha": "8e1fc8e0592c850d3adeeba7ba7355947540617e",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Route turn and response checkpoints through the rollout budget policy (#62190)"
   },
   {
@@ -51611,11 +51613,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Rust #62206 serializes publication of the initial context prefix between a first user turn and a concurrent raw response-item injection so only one publisher appends the initial prompt and world-state snapshot.",
+    "Go has no equivalent publication step to race: context.HistoryManager only stores a reference-context baseline (SetReferenceContextItem/ReferenceContextItem in context/history.go:78-91) and the only production reference to it is the rollback trim path clearing it (context/history.go:220). No non-test caller publishes an initial prefix or world-state baseline, so there is no second publisher.",
+    "thread/injectItems persists injected items through appserver/injected_items.go and steers them into an active turn; it does not build or publish initial context. Nothing to serialize."
    ],
    "kind": "runtime",
    "sha": "86d0e458e3cf6c8e8bd07d93fe7e35d565110c27",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Prevent duplicate initial context when injection races the first turn (#62206)"
   },
   {
@@ -51771,11 +51775,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Rust #62292 routes inject batches that consist only of single-text agent messages with valid agent paths through the native Multi-Agent v2 mailbox as queue-only mail, and holds a residency pin across the batch so eviction cannot interrupt delivery.",
+    "Go already has the mailbox and wake policy for child-to-parent mail: appserver/agent_controller.go enqueues through enqueueRuntimeAgentMessage, wakes an idle root in maybeWakeRootForPendingAgentMessages (feature wake_on_agent_messages, root-only, honoring plan mode and interrupted rollouts), and requeues on a failed wake.",
+    "Gap: appserver.handleThreadInjectItemsRuntime (appserver/guardian_reviewer.go:3726) persists injected items and, when a turn is active, enqueues them into the steer mailbox; for an idle thread it neither queues the mail nor wakes it, and Go has no residency pin API, so injected plaintext agent mail cannot wake a sleeping root the way Rust now allows. Mixed/encrypted batches and native-tools-disabled configurations keep Rust's raw-injection behavior in both implementations."
    ],
    "kind": "runtime",
    "sha": "bd3eaf7829187f18d05205222bf2f67c0af80fb4",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Route injected plaintext agent mail through the native mailbox (#62292)"
   },
   {
@@ -52027,11 +52033,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Rust #62350 splits the Seatbelt debug-sandbox startup from waiting: start_command_under_seatbelt(..., piped) returns StartedSandboxChild holding the private network proxy, while the CLI still inherits stdio, waits, reports denials and propagates the exit status.",
+    "Go has no equivalent startup helper to split. `codex sandbox` builds a run plan and executes the wrapped command directly with the caller's stdin/stdout/stderr (app/app.go runSandbox, `command.Run()` at app/app.go:456), which already supports pipes when the caller passes them; there is no separate proxy-owning handle.",
+    "The exec-server side that would use such a helper is unimplemented for non-Windows hosts: execserver/sandbox_process_stub.go returns (nil, false, nil) for startExecServerSandboxProcess, and only the Windows variant exists. The CLI-visible behavior Rust preserves is unchanged in Go."
    ],
    "kind": "runtime",
    "sha": "60fcb1649f0c3213d9d44c7c0caaca6459fb7c6c",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Support piped I/O when starting Seatbelt sandbox commands (#62350)"
   },
   {
@@ -53198,11 +53206,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Rust #62633 centralizes response item IDs, retained-context revisions and compaction window IDs in a new thread-context-ids crate and lets resumed threads reuse a valid window ID from their rollout.",
+    "Go has the same behavior without the crate split: compact.Window carries WindowIDs{FirstWindowID, PreviousWindowID, WindowID} and NewWindowWithIDs(ids) restores a persisted window instead of generating new IDs (compact/compact.go:2338-2380), exercised by compact.TestWindowLifecycle; response items use protocol ID helpers per call site.",
+    "The remaining Rust change (hook prompt IDs through the normal recording path) has no separate Go carrier: appserver builds hook prompts through the same session item recording helpers (appserver/approved_plan.go uses handleThreadInjectItemsRuntime with SessionItems), so IDs come from one path already."
    ],
    "kind": "runtime",
    "sha": "583ec348cf9007361d09513c716549c41d4d8128",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Centralize thread context ID allocation (#62633)"
   },
   {
@@ -53210,11 +53220,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Rust #62635 keeps base instructions and Responses Lite tool definitions on the same thread-scoped, content-derived UUID when a request is rebuilt, and lets the ordinary response item allocator handle newly rendered items.",
+    "Go derives those IDs in model.ResponsesLiteItemID (model/tool_declarations.go:118): uuid.NewSHA1(uuid.NameSpaceOID, threadID) forms a per-thread namespace and the serialized payload hashes into it, so rebuilding an unchanged prefix item reuses its ID and a different thread or payload yields a different one.",
+    "Added model/responses_lite_item_id_like_rust_test.go to pin stability, thread scoping, payload sensitivity and the exact UUIDv5 derivation; `go test ./model -run TestResponsesLiteItemIDIsThreadScopedAndContentDerivedLikeRust -count=1` passes."
    ],
    "kind": "runtime",
    "sha": "30607648d995f17baa93f23b6bc385f52158bbd4",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Centralize request and prefix ID handling in `ThreadContextIds` (#62635)"
   },
   {
@@ -53489,11 +53501,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-20 upstream window; awaiting per-commit audit."
+    "Rust #62742 repairs its custom Responses WebSocket pump so an idle socket still finishes flushing queued pongs when the write buffer is full, retrying pending flushes as the peer drains.",
+    "Go has no custom pong pump: the transport is github.com/coder/websocket, whose connection handles control frames (ping/pong) in its own read loop and answers pings independently of application writes (model/responses_agent.go writeResponsesWebsocketMessage only writes application messages). An idle Go connection therefore has no queue that can stall a pong behind application traffic."
    ],
    "kind": "runtime",
    "sha": "1c297f89974e35f6e326c3acad9bb83e472b60cb",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Flush idle Responses WebSocket pongs under backpressure (#62742)"
   },
   {
@@ -53501,11 +53514,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-20 upstream window; awaiting per-commit audit."
+    "Rust #62749 lets the Responses WebSocket pump recover a server reply that already arrived for a request whose write failed, instead of treating the request as lost.",
+    "Go reads and writes on independent paths: startResponsesWebsocketReader runs a dedicated goroutine over conn.Read, so a reply that arrives is buffered (channel capacity 64) even while the write is failing.",
+    "Gap: runWebSocket still treats the write error as a lost request. It closes the session and retries once on a fresh connection, then falls back to HTTP (model/responses_agent.go:1710-1719), so a reply that arrived for the failed write is not adopted as the request outcome, unlike Rust #62749."
    ],
    "kind": "runtime",
    "sha": "9f2b87495bf979f6c1953cf00c98143981664914",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Recover server replies after Responses WebSocket write failures (#62749)"
   },
   {
@@ -53513,11 +53528,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Rust #62771 keeps reading Responses WebSocket messages while an upload is blocked so server events and control traffic are not stalled behind a large request write.",
+    "Go satisfies this structurally: startResponsesWebsocketReader (model/responses_agent.go:1020) owns a goroutine that continuously calls conn.Read and forwards frames to a buffered channel, so the request loop still receives server messages during writeResponsesWebsocketMessage, including the fragmented large-payload path through conn.Writer.",
+    "Drain and preemption behavior that depends on reads continuing is covered by model/responses_websocket_drain_test.go (mailbox preemption drain, buffered completion without acknowledgement, early close, non-Lite preemption)."
    ],
    "kind": "runtime",
    "sha": "bb5b9c6240136de8ff4d30215e2341c44559aa04",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Read Responses WebSocket messages during blocked uploads (#62771)"
   },
   {
