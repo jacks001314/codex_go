@@ -76,10 +76,14 @@ type AgentRequest struct {
 	// PrewarmInputMode labels a Prewarm call as "base" (startup), "history"
 	// (idle-thread warmup, Rust #48812), or "restored_history" (cold-resume
 	// image warmup, Rust #61959). It only affects prewarm telemetry.
-	PrewarmInputMode  string
-	ParallelToolCalls bool
-	ReasoningEffort   string
-	ReasoningSummary  string
+	PrewarmInputMode string
+	// IncludeUsageAttribution keeps the backend's per-item usage attribution
+	// in the stream. Rust #63219 excludes it by default and retains it only for
+	// threads whose raw-event subscriptions need it for accounting.
+	IncludeUsageAttribution bool
+	ParallelToolCalls       bool
+	ReasoningEffort         string
+	ReasoningSummary        string
 	// DropReasoningEffortUpdates mirrors Rust ModelClient's request-time filter
 	// (#46530): when reasoning-effort updates are unsupported for the effective
 	// model or provider, saved configuration_update items are removed from the

@@ -217,6 +217,9 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 	providerID := ""
 	developerInstructions := ""
 	var parentDynamicTools []json.RawMessage
+	// Rust #63219: a subagent inherits its parent's usage-attribution policy, so
+	// a raw-event subscriber keeps per-item attribution on the child's requests.
+	parentKeepsUsageAttribution := false
 	if parent, readErr := c.router.threadRecord(session.ThreadID(c.parentID), false, false); readErr == nil && parent != nil {
 		if modelID == "" {
 			modelID = parent.Metadata.Model
@@ -224,6 +227,7 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 		providerID = parent.Metadata.ModelProvider
 		developerInstructions = parent.Metadata.Instructions
 		parentDynamicTools = parent.Metadata.DynamicTools
+		parentKeepsUsageAttribution = threadRecordExperimentalRawEvents(parent)
 	}
 	if args.DeveloperInstructions != nil {
 		developerInstructions = *args.DeveloperInstructions
@@ -235,6 +239,9 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 	// snapshot; the pre-#55331 configured-only mode and its feature flag are gone.
 	inheritedEnvironments := inheritableEnvironmentSelections(c.environments)
 	extra := map[string]any{}
+	if parentKeepsUsageAttribution {
+		extra[experimentalRawEventsExtraKey] = true
+	}
 	if len(inheritedEnvironments) > 0 {
 		extra[runtimeEnvironmentSelectionsExtraKey] = cloneMapSlice(inheritedEnvironments)
 	}

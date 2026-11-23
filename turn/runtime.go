@@ -50,6 +50,9 @@ type RuntimeOptions struct {
 	// UnifiedImageBudgetForModel refreshes the mode above when a
 	// step switches models.
 	UnifiedImageBudgetForModel func(model string) bool
+	// IncludeUsageAttribution keeps per-item usage attribution for threads
+	// whose raw-event subscriptions need it (Rust #63219).
+	IncludeUsageAttribution bool
 	// SafeImageDecoder mirrors the safe_image_decoder feature: request image
 	// preparation decodes and re-encodes images through the sanitizer.
 	SafeImageDecoder bool
@@ -164,6 +167,7 @@ type Runtime struct {
 	unifiedImageBudget           bool
 	unifiedImageBudgetFor        func(model string) bool
 	safeImageDecoder             bool
+	includeUsageAttribution      bool
 	dynamicToolMu                sync.Mutex
 	dynamicToolCaller            DynamicToolCaller
 	dynamicToolThreadID          string
@@ -236,6 +240,7 @@ func NewRuntime(options *RuntimeOptions) *Runtime {
 		unifiedImageBudget:           options.UnifiedImageBudget,
 		unifiedImageBudgetFor:        options.UnifiedImageBudgetForModel,
 		safeImageDecoder:             options.SafeImageDecoder,
+		includeUsageAttribution:      options.IncludeUsageAttribution,
 		dynamicToolCaller:            options.DynamicToolCaller,
 		dynamicToolThreadID:          strings.TrimSpace(options.DynamicToolThreadID),
 		dynamicToolTurnID:            strings.TrimSpace(options.DynamicToolTurnID),
@@ -509,6 +514,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			ReasoningSummary:             request.ReasoningSummary,
 			UnifiedImageBudget:           r.unifiedImageBudget,
 			SafeImageDecoder:             r.safeImageDecoder,
+			IncludeUsageAttribution:      r.includeUsageAttribution,
 			DropReasoningEffortUpdates:   request.DropReasoningEffortUpdates,
 			ConcurrentReasoningSummaries: request.ConcurrentReasoningSummaries,
 			ModelVerbosity:               request.ModelVerbosity,

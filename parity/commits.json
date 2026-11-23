@@ -54445,11 +54445,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "x-codex-exclude now defaults to `tools,usage.attribution`; model.AgentRequest.IncludeUsageAttribution keeps `tools` for threads that need per-item attribution. turn.RuntimeOptions and the agent loop carry the flag to every sampling request, and the app-server sets it from the thread's experimentalRawEvents state. Subagents inherit the parent's policy on fresh and forked spawns and a resumed child restores it from its own record (Rust #63219). Tests: go test ./model -run ExcludeHeader -count=1; go test ./appserver -run UsageAttribution -count=1; go test ./model ./turn ./appserver -run 'ExcludeHeader|ResponsesAgentRunnerPostsResponsesRequest|RunPrefersWebSocketLikeRust' -count=1; go build ./..."
    ],
    "kind": "runtime",
    "sha": "ae6c0c8ac164bdead234d8cdc794dbcdc5b37d28",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Exclude per-item usage attribution by default (#63219)"
   },
   {

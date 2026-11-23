@@ -186,6 +186,9 @@ type AgentLoopRequest struct {
 	// UnifiedImageBudgetForModel reports unified_image_budget_enabled for the
 	// model of the sampling step, so request image preparation follows it.
 	UnifiedImageBudgetForModel func(model string) bool
+	// IncludeUsageAttribution keeps per-item usage attribution in the stream
+	// (threads with raw-event subscriptions, Rust #63219).
+	IncludeUsageAttribution bool
 	// SafeImageDecoder carries the safe_image_decoder feature into every
 	// sampling request.
 	SafeImageDecoder   bool
@@ -729,6 +732,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			Model:                        stepModel,
 			UnifiedImageBudget:           unifiedImageBudget,
 			SafeImageDecoder:             request.SafeImageDecoder,
+			IncludeUsageAttribution:      request.IncludeUsageAttribution,
 			ProviderID:                   request.ProviderID,
 			TaskKind:                     request.TaskKind,
 			ThreadID:                     request.ThreadID,

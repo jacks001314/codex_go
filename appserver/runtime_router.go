@@ -18614,6 +18614,7 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 		CodeModeMessages:             codeModeMessages,
 		UnifiedImageBudget:           unifiedImageBudgetForTurn,
 		SafeImageDecoder:             safeImageDecoder,
+		IncludeUsageAttribution:      params != nil && params.ExperimentalRawEvents,
 		AllowedTools:                 allowedTools,
 		CodeModeMessagesForModel:     resolveCodeModeMessages,
 		UnifiedImageBudgetForModel:   resolveUnifiedImageBudget,

@@ -3135,7 +3135,7 @@ func (r *ResponsesAgentRunner) newResponsesHTTPRequestWithToolResults(ctx contex
 	addIncludeTimingMetricsHeader(httpRequest.Header, apiRequest.IncludeTimingMetrics)
 	addTurnStateHeader(httpRequest.Header, r.turnStateForRequest(request))
 	addBetaFeaturesHeader(httpRequest.Header, apiRequest.BetaFeaturesHeader)
-	addExcludeHeader(httpRequest.Header)
+	addExcludeHeader(httpRequest.Header, request != nil && request.IncludeUsageAttribution)
 	addOriginatorHeader(httpRequest.Header, requestOriginator(request))
 	addSessionIdentityHeaders(httpRequest.Header, request)
 	if guardianReviewer {
@@ -3402,15 +3402,19 @@ func addBetaFeaturesHeader(headers http.Header, betaFeaturesHeader string) {
 	headers.Set(codexapi.ClientCodexBetaFeaturesHeader, betaFeaturesHeader)
 }
 
-// addExcludeHeader asks the Responses API to omit the echoed tool catalog
-// (Rust build_responses_headers inserts x-codex-exclude: tools for every
-// Responses request, including the WebSocket handshake that reuses these
-// headers).
-func addExcludeHeader(headers http.Header) {
+// addExcludeHeader asks the Responses API to omit response fields the client
+// does not use (Rust build_responses_headers). The echoed tool catalog is
+// always excluded; per-item usage attribution is excluded by default and kept
+// only for threads whose raw-event subscriptions need it (#63219).
+func addExcludeHeader(headers http.Header, includeUsageAttribution bool) {
 	if headers == nil {
 		return
 	}
-	headers.Set(codexapi.ClientCodexExcludeHeader, "tools")
+	exclusions := "tools,usage.attribution"
+	if includeUsageAttribution {
+		exclusions = "tools"
+	}
+	headers.Set(codexapi.ClientCodexExcludeHeader, exclusions)
 }
 
 func (r *ResponsesAgentRunner) doResponsesHTTPRequest(httpRequest *http.Request) (*http.Response, error) {

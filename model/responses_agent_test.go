@@ -120,7 +120,7 @@ func TestResponsesAgentRunnerPostsResponsesRequest(t *testing.T) {
 	if recordedBetaFeaturesHeader != "memories,remote_compaction_v2" {
 		t.Fatalf("beta features header = %q", recordedBetaFeaturesHeader)
 	}
-	if recordedExcludeHeader != "tools" {
+	if recordedExcludeHeader != "tools,usage.attribution" {
 		t.Fatalf("exclude header = %q", recordedExcludeHeader)
 	}
 	if recordedBody["model"] != "gpt-test" || recordedBody["stream"] != false || recordedBody["store"] != false {
