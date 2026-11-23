@@ -280,6 +280,9 @@ var Registry = []Spec{
 	{Key: "in_app_chat", Stage: StageStable, DefaultEnabled: true},
 	{Key: "in_app_dictation", Stage: StageStable, DefaultEnabled: true},
 	{Key: "in_app_updates", Stage: StageStable, DefaultEnabled: true},
+	// Rust #62690: allow automatic and explicit daemon updates. A managed
+	// requirements-only gate; user config cannot set it.
+	{Key: "daemon_updates", Stage: StageStable, DefaultEnabled: true},
 	{Key: "browser_use", Stage: StageStable, DefaultEnabled: true},
 	{Key: "browser_use_full_cdp_access", Stage: StageStable, DefaultEnabled: true},
 	{Key: "browser_use_external", Stage: StageStable, DefaultEnabled: true},

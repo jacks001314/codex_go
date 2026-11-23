@@ -1766,6 +1766,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		DaemonCLIExecutable:        daemonCLIExecutable,
 		DaemonCLIVersion:           daemonCLIVersion,
 		DaemonCLIPackage:           daemonCLIPackage,
+		DaemonUpdatesBlockedReason: daemonUpdatesPolicyError(strings.TrimSpace(daemonCLIExecutable) != ""),
 		AnimationsEnabled:          settings.AnimationsEnabled,
 		Effects:                    settings.Effects,
 		StatusLineUseColors:        settings.StatusLineUseColors,

@@ -150,6 +150,9 @@ func nextUpdateDelay(daemon *Daemon) (time.Duration, bool) {
 	if !settings.AutoUpdateEnabled() {
 		return 0, false
 	}
+	if allowed, err := DaemonUpdatesAllowed(daemonCodexHome(daemon)); err != nil || !allowed {
+		return 0, false
+	}
 	return settings.UpdateInterval(), true
 }
 

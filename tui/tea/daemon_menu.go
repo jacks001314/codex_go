@@ -1,6 +1,8 @@
 package tea
 
 import (
+	"strings"
+
 	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
@@ -17,12 +19,13 @@ func (m *Model) openDaemonMenu() {
 		return
 	}
 	m.openSelectionViewModal(ModalKindGeneric, chatwidget.DaemonMenuView(chatwidget.DaemonMenuConfig{
-		LocalDaemon:   m.localDaemonSession,
-		DaemonVersion: m.daemonVersion,
-		Remote:        m.remoteAppServer,
-		CLIExecutable: m.daemonCLIExecutable,
-		HasPackage:    m.daemonCLIPackage,
-		ManagedDaemon: m.daemonManaged,
+		LocalDaemon:          m.localDaemonSession,
+		DaemonVersion:        m.daemonVersion,
+		Remote:               m.remoteAppServer,
+		CLIExecutable:        m.daemonCLIExecutable,
+		HasPackage:           m.daemonCLIPackage,
+		ManagedDaemon:        m.daemonManaged,
+		UpdatesBlockedReason: m.daemonUpdatesBlockedReason,
 	}))
 	if m.modal != nil {
 		// Rust opens this menu with SelectionViewParams::picker(), so it stays in
@@ -65,6 +68,10 @@ func (m *Model) confirmDaemonUpdate(source codextui.DaemonUpdateSource) bubblete
 	if m == nil || m.daemonCLIExecutable == "" || m.remoteAppServer {
 		return nil
 	}
+	// Rust #62690: managed policy blocks the confirmation as well as the menu.
+	if strings.TrimSpace(m.daemonUpdatesBlockedReason) != "" {
+		return nil
+	}
 	m.daemonConfirmSource = source
 	m.openSelectionViewModal(ModalKindGeneric, chatwidget.DaemonConfirmView(source, m.daemonCLIVersion, m.daemonCLIExecutable))
 	if m.modal != nil {
@@ -77,6 +84,10 @@ func (m *Model) confirmDaemonUpdate(source codextui.DaemonUpdateSource) bubblete
 // exits, then exits immediately (Rust AppEvent::RunDaemonUpdate).
 func (m *Model) runDaemonUpdate(source codextui.DaemonUpdateSource) bubbletea.Cmd {
 	if m == nil {
+		return bubbletea.Quit
+	}
+	if strings.TrimSpace(m.daemonUpdatesBlockedReason) != "" {
+		// Rust #62690: a blocked policy never hands an update to the CLI.
 		return bubbletea.Quit
 	}
 	m.pendingUpdateAction = codextui.DaemonUpdateAction(source)

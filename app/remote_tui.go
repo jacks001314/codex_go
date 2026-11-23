@@ -625,7 +625,12 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		ServerAddress:                interactiveAppServerDisplayAddress(endpoint),
 		ServerVersion:                interactiveAppServerDisplayVersion(daemonVersion),
 		DaemonManaged:                interactiveManagedDaemonForEndpoint(endpoint),
-		RemoteAppServer:              interactiveRemoteEndpointIsExplicitRemote(root),
+		DaemonUpdatesBlockedReason: daemonUpdatesPolicyError(
+			strings.TrimSpace(daemonCLIExecutable) != "" &&
+				interactiveRemoteEndpointIsLocal(endpoint) &&
+				paramsMode != ThreadParamsModeCloud,
+		),
+		RemoteAppServer: interactiveRemoteEndpointIsExplicitRemote(root),
 		// `/rc` manages the verified local background server; any other target
 		// leaves it nil so the menu reports that remote control needs that
 		// server (Rust remote_control::local_daemon).

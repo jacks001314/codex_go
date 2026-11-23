@@ -174,6 +174,17 @@ func RunPIDUpdateLoop(ctx context.Context, runner *LifecycleRunner, options *Upd
 				// The authorizing CLI may have exited before sending its request.
 				return nil
 			}
+			allowed, policyErr := DaemonUpdatesAllowed(daemonCodexHome(daemon))
+			if policyErr != nil {
+				// Rust #62690: an unreadable policy is retried instead of
+				// silently allowing or blocking the update.
+				daemon.Diagnostic("warning: daemon update policy is unavailable; retrying")
+				nextCheck = time.Now().Add(updaterSettingsRetryDelay)
+				continue
+			}
+			if !allowed {
+				return nil
+			}
 			enabled, err := readAutoUpdateEnabled(daemon)
 			if err != nil {
 				nextCheck = time.Now().Add(updaterSettingsRetryDelay)
@@ -295,6 +306,9 @@ func updateOnce(ctx context.Context, runner *LifecycleRunner, runningIdentity *i
 	if err != nil {
 		return UpdateLoopContinue, nil, "", err
 	}
+	if err := EnsureDaemonUpdatesAllowed(daemonCodexHome(daemon)); err != nil {
+		return UpdateLoopContinue, nil, "", err
+	}
 	if trigger.Kind == UpdateTriggerScheduled && !settings.AutoUpdateEnabled() {
 		return UpdateLoopStop, nil, "", nil
 	}
@@ -330,6 +344,11 @@ func updateOnce(ctx context.Context, runner *LifecycleRunner, runningIdentity *i
 		if !enabled {
 			return UpdateLoopStop, nil, "", nil
 		}
+	}
+	// Rust #62690 re-checks managed policy right before the package is
+	// replaced, so a policy change during the selection checks still blocks.
+	if err := EnsureDaemonUpdatesAllowed(daemonCodexHome(daemon)); err != nil {
+		return UpdateLoopContinue, nil, "", err
 	}
 	if err := options.Install(ctx, mode, root); err != nil {
 		return UpdateLoopContinue, nil, "", err

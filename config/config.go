@@ -2819,6 +2819,9 @@ func (c *Config) FeatureSettingsWithLegacyUsages() (map[string]bool, []featurefl
 			values[key] = value
 		}
 	}
+	// Rust #62690: daemon_updates is a requirements-only gate. User config
+	// cannot opt in or out of it; managed requirements below still can.
+	delete(values, "daemon_updates")
 	if enabled, ok := c.Values["experimental_use_unified_exec_tool"].(bool); ok {
 		values["experimental_use_unified_exec_tool"] = enabled
 	}

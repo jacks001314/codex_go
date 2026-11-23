@@ -57,6 +57,10 @@ type DaemonMenuConfig struct {
 	// ManagedDaemon reports whether Codex verified that it manages the local
 	// background server and can restart it.
 	ManagedDaemon bool
+	// UpdatesBlockedReason is the managed-policy error that disables daemon
+	// updates here (Rust #62690 open_daemon_menu's policy_error). When set,
+	// the menu explains the policy and offers no update actions.
+	UpdatesBlockedReason string
 }
 
 // DaemonMenuView builds the `/daemon` source menu (Rust
@@ -73,6 +77,10 @@ func DaemonMenuView(config DaemonMenuConfig) SelectionView {
 	// Rust's DaemonMenuHeader carries the status (and any guidance) only; the
 	// picker title supplies the bold "Daemon" line.
 	header := []string{status}
+	updatesBlocked := strings.TrimSpace(config.UpdatesBlockedReason)
+	if updatesBlocked != "" {
+		header = append(header, updatesBlocked)
+	}
 	unavailable := ""
 	switch {
 	case config.Remote:
@@ -93,33 +101,38 @@ func DaemonMenuView(config DaemonMenuConfig) SelectionView {
 	if unavailable == "" && config.LocalDaemon && !config.ManagedDaemon {
 		restartReason = daemonMenuRestartUnverified
 	}
-	return SelectionView{
-		ViewID:      DaemonMenuViewID,
-		Title:       "Daemon",
-		HeaderLines: header,
-		AllowCancel: true,
-		Items: []SelectionItem{
-			{
+	items := make([]SelectionItem, 0, 3)
+	if updatesBlocked == "" {
+		// Rust #62690 filters both update actions out under managed policy.
+		items = append(items,
+			SelectionItem{
 				ID:              DaemonMenuItemPublicStable,
 				Name:            "Install latest public stable",
 				Disabled:        unavailable != "",
 				DismissOnSelect: true,
 			},
-			{
+			SelectionItem{
 				ID:              DaemonMenuItemThisCli,
 				Name:            "Use this CLI build",
 				Disabled:        unavailable != "" || thisCliReason != "",
 				DisabledReason:  thisCliReason,
 				DismissOnSelect: true,
 			},
-			{
-				ID:              DaemonMenuItemRestart,
-				Name:            "Restart background server",
-				Disabled:        unavailable != "" || !config.ManagedDaemon,
-				DisabledReason:  restartReason,
-				DismissOnSelect: true,
-			},
-		},
+		)
+	}
+	items = append(items, SelectionItem{
+		ID:              DaemonMenuItemRestart,
+		Name:            "Restart background server",
+		Disabled:        unavailable != "" || !config.ManagedDaemon,
+		DisabledReason:  restartReason,
+		DismissOnSelect: true,
+	})
+	return SelectionView{
+		ViewID:      DaemonMenuViewID,
+		Title:       "Daemon",
+		HeaderLines: header,
+		AllowCancel: true,
+		Items:       items,
 	}
 }
 

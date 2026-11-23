@@ -137,3 +137,21 @@ func TestDaemonUpdateSourceCommandArgsLikeRust(t *testing.T) {
 		t.Fatalf("source = %q ok=%v", source, ok)
 	}
 }
+
+// Rust #62690: managed policy removes both update actions and explains why.
+func TestDaemonMenuHidesUpdatesUnderManagedPolicyLikeRust(t *testing.T) {
+	view := DaemonMenuView(DaemonMenuConfig{
+		LocalDaemon:          true,
+		DaemonVersion:        "1.2.3",
+		CLIExecutable:        "/usr/local/bin/codex",
+		HasPackage:           true,
+		ManagedDaemon:        true,
+		UpdatesBlockedReason: "Daemon updates are disabled by managed policy (features.daemon_updates = false).",
+	})
+	if got := strings.Join(view.HeaderLines, "\n"); !strings.Contains(got, "disabled by managed policy") {
+		t.Fatalf("header = %q", got)
+	}
+	if len(view.Items) != 1 || view.Items[0].ID != DaemonMenuItemRestart || view.Items[0].Disabled {
+		t.Fatalf("items = %#v, want only an enabled restart", view.Items)
+	}
+}

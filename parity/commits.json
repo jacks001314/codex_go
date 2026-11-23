@@ -53403,11 +53403,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-20 upstream window; awaiting per-commit audit."
+    "Managed policy can disable Codex daemon updates (Rust #62690, 0f3a4756f9). A `daemon_updates` feature (stable, default true) is requirements-only: user config and CLI feature toggles cannot set it, while local managed `requirements.toml` can, and fetched cloud requirements reject `features.daemon_updates`. `appserverdaemon.DaemonUpdatesAllowed` reads the managed requirements and defaults to allowing updates; an unreadable policy is reported instead of guessed. The policy gates the scheduled update loop (retiring the loop and the managed updater, plus the next delay), every `updateOnce` trigger at entry and again right before the package is replaced, and the manual `codex app-server daemon update` path. The `/daemon` menu shows the policy error and removes both update actions, and the TUI refuses to confirm or hand off an update while policy blocks it. Tests: go test ./features ./config ./appserverdaemon -count=1; go test ./tui/chatwidget ./tui/tea -run 'Daemon' -count=1; go build ./...; go vet ./appserverdaemon ./config ./features ./tui/chatwidget ./tui/tea ./app; go test ./parity -count=1"
    ],
    "kind": "runtime",
    "sha": "0f3a4756f9af47fb9ac6b4b9e1da55f354e4cad7",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Let administrators disable Codex daemon updates (#62690)"
   },
   {

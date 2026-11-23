@@ -1660,6 +1660,9 @@ type Options struct {
 	// DaemonManaged reports whether Codex verified that it manages the local
 	// background server and can restart it.
 	DaemonManaged bool
+	// DaemonUpdatesBlockedReason carries managed policy's daemon update error
+	// (Rust #62690). When set the /daemon menu offers no update actions.
+	DaemonUpdatesBlockedReason string
 	// DaemonVersion is the running local daemon's app-server version, when known.
 	DaemonVersion string
 	// RemoteControlRun performs `/rc` operations against the verified local
@@ -2777,25 +2780,26 @@ type Model struct {
 	petEnv          map[string]string
 	// tmuxImageProbe carries the tmux client fields for pane-local Kitty
 	// passthrough images (Rust #59579).
-	tmuxImageProbe        *pets.TmuxProbe
-	petFetch              pets.AssetFetchFunc
-	petLoadPending        string
-	onSubmit              SubmitFunc
-	onSubmitRequest       SubmitRequestFunc
-	onUserShellCommand    UserShellCommandFunc
-	onSteerRequest        SteerRequestFunc
-	onInterrupt           InterruptFunc
-	onInterruptMCPStartup InterruptFunc
-	localDaemonSession    bool
-	daemonCLIExecutable   string
-	daemonCLIVersion      string
-	daemonCLIPackage      bool
-	daemonVersion         string
-	daemonManaged         bool
-	pendingDaemonRestart  bool
-	remoteControlRun      RemoteControlRunFunc
-	remoteControlPending  bool
-	remoteAppServer       bool
+	tmuxImageProbe             *pets.TmuxProbe
+	petFetch                   pets.AssetFetchFunc
+	petLoadPending             string
+	onSubmit                   SubmitFunc
+	onSubmitRequest            SubmitRequestFunc
+	onUserShellCommand         UserShellCommandFunc
+	onSteerRequest             SteerRequestFunc
+	onInterrupt                InterruptFunc
+	onInterruptMCPStartup      InterruptFunc
+	localDaemonSession         bool
+	daemonCLIExecutable        string
+	daemonCLIVersion           string
+	daemonCLIPackage           bool
+	daemonVersion              string
+	daemonManaged              bool
+	daemonUpdatesBlockedReason string
+	pendingDaemonRestart       bool
+	remoteControlRun           RemoteControlRunFunc
+	remoteControlPending       bool
+	remoteAppServer            bool
 	// pendingUpdateAction records the update the TUI wants the CLI to run after
 	// it exits (Rust App::pending_update_action).
 	pendingUpdateAction codextui.UpdateAction
@@ -3810,6 +3814,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		daemonCLIPackage:                 options.DaemonCLIPackage,
 		daemonVersion:                    strings.TrimSpace(options.DaemonVersion),
 		daemonManaged:                    options.DaemonManaged,
+		daemonUpdatesBlockedReason:       strings.TrimSpace(options.DaemonUpdatesBlockedReason),
 		remoteControlRun:                 options.RemoteControlRun,
 		remoteAppServer:                  options.RemoteAppServer,
 		localSession:                     options.LocalSession,

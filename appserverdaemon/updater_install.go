@@ -69,6 +69,10 @@ func UpdateFromCLI(codexHome string, confirm func(*DaemonInstallRequest) (bool, 
 	if err := EnsureNonElevated(); err != nil {
 		return nil, err
 	}
+	// Rust #62690: managed policy covers manual package replacements too.
+	if err := EnsureDaemonUpdatesAllowed(codexHome); err != nil {
+		return nil, err
+	}
 	daemon := NewDaemonForCodexHome(codexHome, "")
 	daemon.refreshInstallation()
 	settings, err := daemon.LoadSettings()
@@ -201,6 +205,13 @@ func ensureManagedUpdater(daemon *Daemon, settings *DaemonSettings) (bool, error
 		return false, stopUpdater()
 	}
 	home := daemonCodexHome(daemon)
+	// Rust #62690: managed policy retires the updater even when the local
+	// preference still enables automatic updates.
+	if allowed, err := DaemonUpdatesAllowed(home); err != nil {
+		return false, err
+	} else if !allowed {
+		return false, stopUpdater()
+	}
 	managedBin := daemon.Paths.ManagedCodexBin
 	// An installer publishes `current` and the latest marker separately, so keep
 	// its updater alive while that publication may be in progress.

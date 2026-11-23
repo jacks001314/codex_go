@@ -693,6 +693,15 @@ func applyCloudConfigBundleWithFilesystemSource(values map[string]any, requireme
 				}
 			}
 		}
+		// Rust #62690: daemon updates are a machine-level policy, so fetched
+		// requirements may never set features.daemon_updates.
+		for _, key := range []string{"features", "feature_requirements"} {
+			if features, ok := parsed[key].(map[string]any); ok {
+				if _, ok := features["daemon_updates"]; ok {
+					return nil, false, fmt.Errorf("%w: invalid cloud requirements: features.daemon_updates may only be configured in local managed requirements", ErrInvalidCloudConfig)
+				}
+			}
+		}
 		// Rust #56055: config_server selects which server the local machine
 		// trusts, so a fetched policy may never supply it.
 		if _, ok := mapAnyKey(parsed, "config_server", "configServer"); ok {
