@@ -1,6 +1,7 @@
 package turn
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -38,7 +39,7 @@ func TestCriticalPathCapturePreservesPhasesAndFreezesMissingDependencies(t *test
 	}
 	stale := timing.BeginToolBlocking(at(70), nil)
 	stale.CloseAt(at(70))
-	if second := timing.CompleteProfile(at(80)); second != profile {
+	if second := timing.CompleteProfile(at(80)); !reflect.DeepEqual(second, profile) {
 		t.Fatalf("frozen profile changed: %+v != %+v", second, profile)
 	}
 }

@@ -59,11 +59,26 @@ type CriticalPathDurations struct {
 	UnknownMS            uint64
 }
 
+// CriticalPathIncompleteReason explains why a turn's critical path could not
+// be measured (Rust #62357 IncompleteReason). Reasons are deduplicated per turn
+// and reported in the order they were observed.
+const (
+	CriticalPathReasonCodeModeUnsupported  = "code_mode_unsupported"
+	CriticalPathReasonUnsupportedOperation = "unsupported_operation"
+	CriticalPathReasonMissingTurnStart     = "missing_turn_start"
+	CriticalPathReasonUnattributedReview   = "unattributed_review"
+	CriticalPathReasonUnattributedUserWait = "unattributed_user_wait"
+	CriticalPathReasonForcedTeardown       = "forced_teardown"
+	CriticalPathReasonUnclassified         = "unclassified"
+)
+
 // CriticalPathReport is one finalized turn's capture coverage. Missing capture
 // never becomes a zero-duration measurement.
 type CriticalPathReport struct {
 	Status    CriticalPathStatus
 	Durations *CriticalPathDurations
+	// IncompleteReasons is populated only for an incomplete capture.
+	IncompleteReasons []string
 }
 
 type profilePhase string
@@ -85,8 +100,11 @@ type TimingState struct {
 }
 
 type profileState struct {
-	captureEnabled           bool
-	path                     *criticalpath.Path
+	captureEnabled bool
+	path           *criticalpath.Path
+	// incompleteReasons deduplicates capture failures and keeps their first
+	// observation order (Rust #62357 TurnProfileState::incomplete_reasons).
+	incompleteReasons        []string
 	toolDependency           *criticalpath.Path
 	startedAt                time.Time
 	lastTransitionAt         time.Time
@@ -156,8 +174,8 @@ func (t *TimingState) CriticalPathCaptureEnabled() bool {
 
 // InvalidateCriticalPath drops the captured path without disabling the capture
 // policy, so the completed turn reports incomplete coverage instead of measured
-// zeroes.
-func (t *TimingState) InvalidateCriticalPath() {
+// zeroes. An unclassified invalidation reports `unclassified` (Rust #62357).
+func (t *TimingState) InvalidateCriticalPath(reasons ...string) {
 	if t == nil {
 		return
 	}
@@ -165,7 +183,45 @@ func (t *TimingState) InvalidateCriticalPath() {
 	defer t.mu.Unlock()
 	if t.profile.completed == nil {
 		t.profile.path = nil
+		if len(reasons) == 0 {
+			reasons = []string{CriticalPathReasonUnclassified}
+		}
+		for _, reason := range reasons {
+			t.profile.addIncompleteReason(reason)
+		}
 	}
+}
+
+func (p *profileState) addIncompleteReason(reason string) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = CriticalPathReasonUnclassified
+	}
+	for _, existing := range p.incompleteReasons {
+		if existing == reason {
+			return
+		}
+	}
+	p.incompleteReasons = append(p.incompleteReasons, reason)
+}
+
+func (p *profileState) incompleteReasonsReport(started bool, available bool) []string {
+	reasons := append([]string(nil), p.incompleteReasons...)
+	contains := func(reason string) bool {
+		for _, existing := range reasons {
+			if existing == reason {
+				return true
+			}
+		}
+		return false
+	}
+	if !started && !contains(CriticalPathReasonMissingTurnStart) {
+		reasons = append(reasons, CriticalPathReasonMissingTurnStart)
+	}
+	if !available && len(reasons) == 0 {
+		reasons = append(reasons, CriticalPathReasonUnclassified)
+	}
+	return reasons
 }
 
 // CriticalPathReportSnapshot reports capture coverage without freezing an
@@ -184,7 +240,10 @@ func (t *TimingState) CriticalPathReportSnapshot() CriticalPathReport {
 	if !t.profile.captureEnabled {
 		return CriticalPathReport{Status: CriticalPathStatusDisabled}
 	}
-	return CriticalPathReport{Status: CriticalPathStatusIncomplete}
+	return CriticalPathReport{
+		Status:            CriticalPathStatusIncomplete,
+		IncompleteReasons: t.profile.incompleteReasonsReport(!t.profile.startedAt.IsZero(), t.profile.path != nil),
+	}
 }
 
 // SnapshotPath reports the path observed through now. It returns nil when the
@@ -223,10 +282,11 @@ func (t *TimingState) MarkTurnStarted(now time.Time) int64 {
 	t.firstTokenAt = time.Time{}
 	t.firstMessageAt = time.Time{}
 	t.profile = profileState{
-		captureEnabled:   t.profile.captureEnabled,
-		path:             t.profile.path,
-		startedAt:        now,
-		lastTransitionAt: now,
+		captureEnabled:    t.profile.captureEnabled,
+		path:              t.profile.path,
+		incompleteReasons: append([]string(nil), t.profile.incompleteReasons...),
+		startedAt:         now,
+		lastTransitionAt:  now,
 	}
 	return t.startedUnixMS
 }
@@ -482,7 +542,10 @@ func (p *profileState) criticalPathReport(end time.Time) CriticalPathReport {
 		return CriticalPathReport{Status: CriticalPathStatusDisabled}
 	}
 	if p.path == nil || p.startedAt.IsZero() {
-		return CriticalPathReport{Status: CriticalPathStatusIncomplete}
+		return CriticalPathReport{
+			Status:            CriticalPathStatusIncomplete,
+			IncompleteReasons: p.incompleteReasonsReport(!p.startedAt.IsZero(), p.path != nil),
+		}
 	}
 	totals := p.path.Durations(p.startedAt, end)
 	var autoReviewOverhead *uint64

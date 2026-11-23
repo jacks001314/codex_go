@@ -52072,11 +52072,14 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "turn.CriticalPathReport gains deduplicated IncompleteReasons in first-observation order; InvalidateCriticalPath accepts classified reasons (empty becomes unclassified), a missing turn start adds missing_turn_start, and snapshots report the reasons before completion.",
+    "Call sites classify unsupported direct tools (code mode vs unsupported operation, with name collisions falling back to unsupported_operation), unattributed Guardian reviews, unattributed user waits, and a cancelled in-flight capture as forced_teardown.",
+    "telemetry turn events serialize critical_path_incomplete_reasons only for incomplete captures; appserver maps both the frozen profile and the pre-freeze snapshot.",
+    "go test ./turn ./telemetry -count=1; go test ./appserver -run 'CriticalPath|Guardian|Elicitation' -count=1"
    ],
    "kind": "runtime",
    "sha": "ed9becd2fcf37cd06a1af44e37e3c33d8493128e",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Report why turn critical path capture is incomplete (#62357)"
   },
   {

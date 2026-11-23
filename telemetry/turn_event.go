@@ -70,20 +70,21 @@ type CodexTurnEventParams struct {
 	// default-off `critical_path_timing` feature produced a frozen dependency
 	// path (Rust #57201/#57209). Missing capture never becomes a zero
 	// measurement.
-	CriticalPathStatus             string  `json:"critical_path_status"`
-	CriticalPathDurationMS         *uint64 `json:"critical_path_duration_ms"`
-	CriticalPathInferenceMS        *uint64 `json:"critical_path_inference_ms"`
-	CriticalPathSamplingMS         *uint64 `json:"critical_path_sampling_ms"`
-	CriticalPathCompactionMS       *uint64 `json:"critical_path_compaction_ms"`
-	CriticalPathAutoReview         *uint64 `json:"critical_path_auto_review_ms"`
-	CriticalPathAutoReviewOverhead *uint64 `json:"critical_path_auto_review_overhead_ms"`
-	CriticalPathUserWaitMS         *uint64 `json:"critical_path_user_wait_ms"`
-	CriticalPathToolsMS            *uint64 `json:"critical_path_tools_ms"`
-	CriticalPathOverheadMS         *uint64 `json:"critical_path_overhead_ms"`
-	CriticalPathUnknownMS          *uint64 `json:"critical_path_unknown_ms"`
-	ThreadID                       string  `json:"thread_id"`
-	SessionID                      string  `json:"session_id"`
-	TurnID                         string  `json:"turn_id"`
+	CriticalPathStatus             string   `json:"critical_path_status"`
+	CriticalPathDurationMS         *uint64  `json:"critical_path_duration_ms"`
+	CriticalPathInferenceMS        *uint64  `json:"critical_path_inference_ms"`
+	CriticalPathSamplingMS         *uint64  `json:"critical_path_sampling_ms"`
+	CriticalPathCompactionMS       *uint64  `json:"critical_path_compaction_ms"`
+	CriticalPathAutoReview         *uint64  `json:"critical_path_auto_review_ms"`
+	CriticalPathAutoReviewOverhead *uint64  `json:"critical_path_auto_review_overhead_ms"`
+	CriticalPathUserWaitMS         *uint64  `json:"critical_path_user_wait_ms"`
+	CriticalPathToolsMS            *uint64  `json:"critical_path_tools_ms"`
+	CriticalPathOverheadMS         *uint64  `json:"critical_path_overhead_ms"`
+	CriticalPathUnknownMS          *uint64  `json:"critical_path_unknown_ms"`
+	CriticalPathIncompleteReasons  []string `json:"critical_path_incomplete_reasons,omitempty"`
+	ThreadID                       string   `json:"thread_id"`
+	SessionID                      string   `json:"session_id"`
+	TurnID                         string   `json:"turn_id"`
 	// VoiceSessionID attributes this turn to a realtime voice session when the
 	// turn was started or steered by one (Rust #46058).
 	VoiceSessionID *string `json:"voice_session_id"`
@@ -260,6 +261,9 @@ type CodexTurnTimingProfile struct {
 type CodexTurnCriticalPath struct {
 	Status    string
 	Durations *CodexTurnCriticalPathDurations
+	// IncompleteReasons explains an incomplete capture (Rust #62357). It is
+	// empty for disabled or complete captures.
+	IncompleteReasons []string
 }
 
 // CodexTurnCriticalPathDurations holds exclusive category totals over the turn
@@ -377,6 +381,7 @@ func NewCodexTurnEvent(input CodexTurnEventInput) CodexTurnEventRequest {
 			CriticalPathToolsMS:                  criticalPathDuration(input.TimingProfile.CriticalPath, func(value CodexTurnCriticalPathDurations) uint64 { return value.ToolsMS }),
 			CriticalPathOverheadMS:               criticalPathDuration(input.TimingProfile.CriticalPath, func(value CodexTurnCriticalPathDurations) uint64 { return value.OverheadMS }),
 			CriticalPathUnknownMS:                criticalPathDuration(input.TimingProfile.CriticalPath, func(value CodexTurnCriticalPathDurations) uint64 { return value.UnknownMS }),
+			CriticalPathIncompleteReasons:        criticalPathIncompleteReasons(input.TimingProfile.CriticalPath),
 			DurationMS:                           input.DurationMS,
 			StartedAt:                            input.StartedAt,
 			CompletedAt:                          input.CompletedAt,
@@ -393,6 +398,15 @@ func criticalPathStatus(path CodexTurnCriticalPath) string {
 	default:
 		return CodexTurnCriticalPathStatusDisabled
 	}
+}
+
+// criticalPathIncompleteReasons reports deduplicated capture failures only for
+// an incomplete path (Rust #62357).
+func criticalPathIncompleteReasons(path CodexTurnCriticalPath) []string {
+	if path.Status != CodexTurnCriticalPathStatusIncomplete || len(path.IncompleteReasons) == 0 {
+		return nil
+	}
+	return append([]string(nil), path.IncompleteReasons...)
 }
 
 func criticalPathOptionalDuration(path CodexTurnCriticalPath, value func(CodexTurnCriticalPathDurations) *uint64) *uint64 {

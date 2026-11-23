@@ -1219,7 +1219,7 @@ func (r *modelGuardianReviewer) review(ctx context.Context, threadID, turnID, ta
 			reviewExecution = guard.ReviewExecution()
 			defer guard.End()
 		} else {
-			timing.InvalidateCriticalPath()
+			timing.InvalidateCriticalPath(turn.CriticalPathReasonUnattributedReview)
 		}
 	}
 	// Rust #39001: skip approval review when the latest risk score lags by more

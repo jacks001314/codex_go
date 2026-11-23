@@ -4490,6 +4490,11 @@ func (r *RuntimeRouter) cancelActiveRuntimeTurnTracked(threadID string, turnID s
 		return nil, false
 	}
 	if active.Cancel != nil {
+		// Rust #62357: a capture still in flight when its task is cancelled
+		// reports a forced teardown.
+		if active.Timing != nil {
+			active.Timing.InvalidateCriticalPath(turn.CriticalPathReasonForcedTeardown)
+		}
 		active.Cancel()
 	}
 	if r.networkApproval != nil {
@@ -10543,10 +10548,16 @@ func analyticsTurnTimingProfile(result *turn.AgentLoopResult, timing *turn.Timin
 		// reports its capture coverage. Missing capture stays null, never zero.
 		report := timing.CriticalPathReportSnapshot()
 		return telemetry.CodexTurnTimingProfile{
-			CriticalPath: telemetry.CodexTurnCriticalPath{Status: string(report.Status)},
+			CriticalPath: telemetry.CodexTurnCriticalPath{
+				Status:            string(report.Status),
+				IncompleteReasons: append([]string(nil), report.IncompleteReasons...),
+			},
 		}
 	}
-	criticalPath := telemetry.CodexTurnCriticalPath{Status: string(profile.CriticalPath.Status)}
+	criticalPath := telemetry.CodexTurnCriticalPath{
+		Status:            string(profile.CriticalPath.Status),
+		IncompleteReasons: append([]string(nil), profile.CriticalPath.IncompleteReasons...),
+	}
 	if profile.CriticalPath.Durations != nil {
 		criticalPath.Durations = &telemetry.CodexTurnCriticalPathDurations{
 			DurationMS:           profile.CriticalPath.Durations.DurationMS,
@@ -13402,7 +13413,7 @@ func (r *RuntimeRouter) maybePromptAndInstallSkillMCPDependencies(ctx context.Co
 		}
 		// Rust #57207: this prompt has no owning direct tool invocation, so its
 		// wait cannot be attributed and must invalidate the capture.
-		r.invalidateTurnCriticalPath(threadID, turnID)
+		r.invalidateTurnCriticalPath(threadID, turnID, turn.CriticalPathReasonUnattributedUserWait)
 		var response ToolRequestUserInputResponse
 		err := r.requireServerRequests().Request(ctx, ServerRequestToolUserInput, &ToolRequestUserInputParams{
 			ThreadID:  threadID,

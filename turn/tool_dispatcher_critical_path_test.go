@@ -2,6 +2,7 @@ package turn
 
 import (
 	"context"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -199,7 +200,7 @@ func TestToolDispatcherCancellationCompletesTimingOnce(t *testing.T) {
 		t.Fatal("batch.Completed() = nil after cancellation")
 	}
 	profile := timing.CompleteProfile(time.Now())
-	if second := timing.CompleteProfile(time.Now()); second != profile {
+	if second := timing.CompleteProfile(time.Now()); !reflect.DeepEqual(second, profile) {
 		t.Fatalf("profile changed after cancellation: %+v != %+v", second, profile)
 	}
 	if profile.CriticalPath.Status != CriticalPathStatusComplete {

@@ -17457,13 +17457,15 @@ func (r *RuntimeRouter) configureMCPService(service *mcp.MCPService) {
 		reviewer = r.ensureGuardianReviewer(r.services.Agent)
 	}
 	service.SetElicitationHandler(&appserverMCPElicitationHandler{
-		broker:                     r.requireServerRequests(),
-		service:                    service,
-		reviewer:                   reviewer,
-		authority:                  r.currentMCPElicitationAuthority,
-		persist:                    r.persistMCPToolApprovalAmendment,
-		record:                     r.recordMCPToolApprovalResolution,
-		invalidateTiming:           r.invalidateTurnCriticalPath,
+		broker:    r.requireServerRequests(),
+		service:   service,
+		reviewer:  reviewer,
+		authority: r.currentMCPElicitationAuthority,
+		persist:   r.persistMCPToolApprovalAmendment,
+		record:    r.recordMCPToolApprovalResolution,
+		invalidateTiming: func(threadID, turnID string) {
+			r.invalidateTurnCriticalPath(threadID, turnID, turn.CriticalPathReasonUnattributedUserWait)
+		},
 		userVerificationConnection: r.userVerificationConnection,
 	})
 	service.SetProgressHandler(&appserverMCPProgressHandler{notify: r.notify})
@@ -22384,13 +22386,14 @@ func (r *RuntimeRouter) userWaitTimingOwner(threadID string, turnID string, call
 }
 
 // invalidateTurnCriticalPath drops the turn's captured path when a wait cannot
-// be attributed to a direct tool invocation (Rust #57207).
-func (r *RuntimeRouter) invalidateTurnCriticalPath(threadID string, turnID string) {
+// be attributed to a direct tool invocation (Rust #57207) and records why
+// (Rust #62357).
+func (r *RuntimeRouter) invalidateTurnCriticalPath(threadID string, turnID string, reason string) {
 	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
 	if active == nil || active.Timing == nil || !active.Timing.CriticalPathCaptureEnabled() {
 		return
 	}
-	active.Timing.InvalidateCriticalPath()
+	active.Timing.InvalidateCriticalPath(reason)
 }
 
 // startUserWaitTiming brackets the user-facing wait. A wait whose owner cannot
@@ -22403,7 +22406,7 @@ func (r *RuntimeRouter) startUserWaitTiming(threadID string, turnID string, owne
 	}
 	guard := owner.StartUserWait()
 	if guard == nil {
-		active.Timing.InvalidateCriticalPath()
+		active.Timing.InvalidateCriticalPath(turn.CriticalPathReasonUnattributedUserWait)
 	}
 	return guard
 }

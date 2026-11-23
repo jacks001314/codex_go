@@ -996,12 +996,29 @@ func (d *ToolDispatcher) directPathSupported(invocation *tool.Invocation) bool {
 	return true
 }
 
+// directPathIncompleteReason classifies an unsupported direct-tool call for
+// critical-path analytics (Rust #62357). External tools that share a built-in
+// name fall through to the generic operation reason.
+func directPathIncompleteReason(invocation *tool.Invocation) string {
+	if invocation == nil {
+		return CriticalPathReasonUnsupportedOperation
+	}
+	if strings.TrimSpace(invocation.Source) == ToolTraceSourceCodeMode {
+		return CriticalPathReasonCodeModeUnsupported
+	}
+	name := invocation.ToolName
+	if name.Namespace == "" && (name.Name == tool.CodeModeExecToolName || name.Name == tool.CodeModeWaitToolName) {
+		return CriticalPathReasonCodeModeUnsupported
+	}
+	return CriticalPathReasonUnsupportedOperation
+}
+
 func (d *ToolDispatcher) beginDirectTiming(invocation *tool.Invocation, startedAt time.Time) *tooltiming.ToolGuard {
 	if d == nil || !d.criticalPathTiming || d.timingState == nil {
 		return nil
 	}
 	if !d.directPathSupported(invocation) {
-		d.timingState.InvalidateCriticalPath()
+		d.timingState.InvalidateCriticalPath(directPathIncompleteReason(invocation))
 		return nil
 	}
 	if d.stepBatch == nil {
