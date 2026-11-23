@@ -52573,11 +52573,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Go samples result bodies through one shared request builder: buildResponsesAgentRequest selects ToolResultsForInput only when connectorResultDestinationAllowed() passes (first-party ChatGPT credential, Codex gateway URL, no retargeting headers or query params) and passes the request owner, so HTTP and WebSocket attempts use the same destination and account checks. Tests: go test ./model -run 'SelectsToolResults|ConnectorResultDestination|ConnectorResultAuthOwner' -count=1",
+    "The WebSocket generation frame splices selected bodies into the encoded response.create payload through WithToolResults before writing, keeping them out of payload tracing (model/responses_agent.go runWebSocket). Tests: go test ./model -run 'WithToolResults' -count=1",
+    "Prewarm (generate=false) frames never receive connector result bodies: the warmup payload is assembled separately and skips the enrichment path. New regression: go test ./model -run 'PrewarmOmitsConnectorResultBodies' -count=1. Full package: go test ./model -count=1; go build ./...; go vet ./model."
    ],
    "kind": "runtime",
    "sha": "083bf59b6b01582f62171249f6a6ff0686928229",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Send authorized connector results over Responses WebSockets (#62474)"
   },
   {

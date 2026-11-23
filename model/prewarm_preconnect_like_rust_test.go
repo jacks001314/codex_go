@@ -190,3 +190,36 @@ func TestResponsesAgentRunnerPrewarmCarriesFinalizedToolMetadataLikeRust(t *test
 		t.Fatalf("prewarm input did not carry the finalized tool declarations: %s", encoded)
 	}
 }
+
+// Rust #62474 keeps prewarm (generate=false) requests free of private connector
+// result bodies. The warmup payload is assembled from the prepared request and
+// never runs the generation path's tool-result enrichment.
+func TestResponsesAgentRunnerPrewarmOmitsConnectorResultBodiesLikeRust(t *testing.T) {
+	var payload map[string]any
+	server := prewarmWebsocketServer(t, func(_ *http.Request, received map[string]any) {
+		payload = received
+	})
+	defer server.Close()
+
+	body := mustToolResultBody(t, ToolResultBodySource{Content: []any{map[string]any{"type": "text", "text": "private connector body"}}})
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider:                &APIProvider{Name: OpenAIProviderName, BaseURL: server.URL},
+		AuthSnapshot:            &auth.AuthDotJSON{AuthMode: "chatgpt"},
+		SupportsWebsockets:      true,
+		WebsocketConnectTimeout: time.Second,
+	})
+	_, err := runner.Prewarm(context.Background(), &AgentRequest{
+		Model:       "gpt-6.1-sol",
+		ToolResults: []ToolResultAttachment{{ItemIndex: 0, CallIndex: 0, Body: body}},
+	})
+	if err != nil {
+		t.Fatalf("Prewarm() error = %v", err)
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if _, ok := payload["tool_results"]; ok || strings.Contains(string(encoded), "tool_result") || strings.Contains(string(encoded), "private connector body") {
+		t.Fatalf("prewarm payload carried connector results: %s", encoded)
+	}
+}
