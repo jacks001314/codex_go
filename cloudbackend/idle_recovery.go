@@ -407,6 +407,7 @@ func (c *Client) cancelIdleRecovery() (string, bool) {
 // resetIdleRecovery forgets the previous conversation's recovery state, as a new
 // attachment does.
 func (c *Client) resetIdleRecovery() {
+	c.cancelHeldRecovery()
 	c.recovery.state = idleReconnectInactive
 	c.recovery.root = ""
 	c.recovery.pending = false

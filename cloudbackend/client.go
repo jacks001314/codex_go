@@ -151,6 +151,12 @@ type Client struct {
 	environment   *cloudclient.EnvironmentSelection
 
 	prepared chan *preparedRequest
+	resumes  chan *resumeDisconnectedRequest
+
+	// held is a reattached-but-not-yet-installed reply stream (Rust #62140).
+	held         *heldRecovery
+	heldOpened   chan heldOpened
+	heldFinished chan *heldRecovery
 
 	// Dispatch-goroutine state.
 	loaded               *appserver.ThreadResumeResponse
@@ -230,6 +236,9 @@ func ConnectWithOptions(ctx context.Context, source cloudSource, account json.Ra
 		titleGenerator:  options.TitleGenerator,
 		recoveryResults: make(chan idleRecoveryResult, 1),
 		prepared:        make(chan *preparedRequest, preparedChannelSize),
+		resumes:         make(chan *resumeDisconnectedRequest, commandBufferSize),
+		heldOpened:      make(chan heldOpened, 1),
+		heldFinished:    make(chan *heldRecovery, preparedChannelSize),
 	}
 	client.outCond = sync.NewCond(&client.outMu)
 	go client.pumpNotifications()
@@ -345,7 +354,10 @@ func (c *Client) run(ctx context.Context) {
 	defer close(c.done)
 	defer c.discardPrepared()
 	defer c.stopNotifications()
+	// Held replacements are dispatch-owned, so retire them from this goroutine.
+	defer c.cancelHeldRecovery()
 	for {
+		c.serviceHeldRecovery()
 		select {
 		case <-ctx.Done():
 			return
@@ -392,7 +404,7 @@ func (c *Client) run(ctx context.Context) {
 				requestCtx = ctx
 			}
 			unloads := c.pendingUnloadsPrepared(pending)
-			result, rpcErr := c.handleRequest(requestCtx, pending.method, pending.params, pending.mode, pending.typed)
+			result, rpcErr := c.handlePendingRequest(requestCtx, pending)
 			if unloads && rpcErr == nil {
 				// A successful archive or unsubscribe removes the provisional
 				// attachment the same way it removes a loaded conversation.
@@ -405,8 +417,35 @@ func (c *Client) run(ctx context.Context) {
 				c.reportStreamLoss(canceledRoot)
 			}
 			pending.reply <- requestReply{result: result, err: rpcErr}
+		case resume := <-c.resumes:
+			if resume == nil {
+				return
+			}
+			c.handleResumeDisconnectedThread(resume)
+			continue
+		case opened := <-c.heldOpened:
+			c.installHeldRecovery(opened)
+			continue
+		case held := <-c.heldFinished:
+			if c.held == held {
+				c.held = nil
+			}
+			continue
 		}
 	}
+}
+
+// handlePendingRequest binds recovery history reads to the held replacement so
+// they share its deadline and sign-in (Rust #62140).
+func (c *Client) handlePendingRequest(requestCtx context.Context, pending *pendingRequest) (json.RawMessage, *RPCError) {
+	if held := c.held; held != nil {
+		if threadID := heldHistoryThread(pending.method, pending.params); threadID != "" && threadID == held.threadID {
+			return c.handleHeldHistory(requestCtx, held, func(readCtx context.Context) (json.RawMessage, *RPCError) {
+				return c.handleRequest(readCtx, pending.method, pending.params, pending.mode, pending.typed)
+			})
+		}
+	}
+	return c.handleRequest(requestCtx, pending.method, pending.params, pending.mode, pending.typed)
 }
 
 // waitWhileListening runs op while continuing to forward the attached stream,
@@ -422,12 +461,21 @@ func waitWhileListening[T any](c *Client, ctx context.Context, op func() (T, err
 		finished <- outcome{value: value, err: err}
 	}()
 	for {
+		c.serviceHeldRecovery()
 		if active := c.active; active != nil {
 			select {
 			case result := <-finished:
 				return result.value, result.err
 			case recovered := <-c.recoveryResults:
 				c.handleIdleRecoveryResult(recovered)
+				continue
+			case opened := <-c.heldOpened:
+				c.installHeldRecovery(opened)
+				continue
+			case held := <-c.heldFinished:
+				if c.held == held {
+					c.held = nil
+				}
 				continue
 			case event, ok := <-active.events:
 				c.forwardStreamEvent(active, event, ok)
@@ -442,6 +490,14 @@ func waitWhileListening[T any](c *Client, ctx context.Context, op func() (T, err
 			return result.value, result.err
 		case recovered := <-c.recoveryResults:
 			c.handleIdleRecoveryResult(recovered)
+			continue
+		case opened := <-c.heldOpened:
+			c.installHeldRecovery(opened)
+			continue
+		case held := <-c.heldFinished:
+			if c.held == held {
+				c.held = nil
+			}
 			continue
 		case <-ctx.Done():
 			var zero T
@@ -678,7 +734,9 @@ func (c *Client) admitTurn(threadID string) error {
 
 func (c *Client) detach(threadID string) {
 	delete(c.status, threadID)
-	if c.recovery.pending && c.recovery.root == threadID || c.active != nil && c.active.threadID == threadID {
+	if c.held != nil && c.held.threadID == threadID ||
+		c.recovery.pending && c.recovery.root == threadID ||
+		c.active != nil && c.active.threadID == threadID {
 		c.resetIdleRecovery()
 	}
 	if c.active != nil && c.active.threadID == threadID {
