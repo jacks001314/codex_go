@@ -50822,11 +50822,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Audit: appserver/guardian_reviewer.go already carries guardianStaleAuthorizationInstructions mirroring Rust's STALE_AUTHORIZATION_INSTRUCTIONS, and guardianStaleAuthorizationFailureMessage replaces the generic review-failure text when repeated authorization changes exhaust the review budget.",
+    "appserver/guardian_retry_like_rust_test.go asserts the blocked tool output contains 'authorization changed before approval could be applied', 'The action did not run', 'this is not a policy denial', 'retry once through Guardian' and 'Do not bypass approval or repeatedly retry a failed review' for both repeated approvals and repeated denials."
    ],
    "kind": "runtime",
    "sha": "6d40c0ac9b99f4ccb8d432f354c042cd7649e00d",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Clarify recovery guidance for stale Guardian authorization (#62099)"
   },
   {
@@ -54169,11 +54170,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "appserver/hooks_discovery.go: hook config reads treat a NotADirectory path as missing instead of warning, through the new isMissingPathError helper (path_missing_unix.go reports ENOTDIR on non-Windows, path_missing_windows.go relies on IsNotExist because Windows surfaces the same shape as a missing path).",
+    "This covers the linked-worktree case where the root checkout's .gcode is a regular file: ProjectHooksDotCodexFolder maps the worktree folder to <root>/.gcode, and the mapped config.toml/hooks.json now read as absent so the worktree's own hooks and the matching nested folders still load.",
+    "appserver/hooks_discovery_not_directory_like_rust_test.go covers the non-directory base (no warnings) and keeps a real directory read failure as a warning."
    ],
    "kind": "runtime",
    "sha": "e1ecb5c8fce02d780e50b4cc8856f1f49ca0d26a",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Fix linked worktree hook loading when the root `.codex` is a file (#63088)"
   },
   {

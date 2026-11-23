@@ -468,7 +468,7 @@ func appendHooksTOML(entry *HookListEntry, source *hookDiscoverySource) {
 	}
 	info, err := os.Stat(source.Path)
 	if err != nil {
-		if !os.IsNotExist(err) {
+		if !isMissingPathError(err) {
 			entry.Warnings = append(entry.Warnings, fmt.Sprintf("failed to read hooks config %s: %v", source.Path, err))
 		}
 		return
@@ -520,7 +520,7 @@ func appendHooksJSONWithMessagePrefix(entry *HookListEntry, source *hookDiscover
 	}
 	info, err := os.Stat(source.Path)
 	if err != nil {
-		if !os.IsNotExist(err) {
+		if !isMissingPathError(err) {
 			entry.Warnings = append(entry.Warnings, fmt.Sprintf("failed to read %s %s: %v", label, source.Path, err))
 		}
 		return
