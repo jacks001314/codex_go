@@ -153,6 +153,8 @@ func (m *Model) applyAgentsCommand() bubbletea.Cmd {
 	m.agentsOverviewPendingDraft = nil
 	m.agentsOverviewPendingDraftShellMode = nil
 	m.agentsOverview = agentsoverview.New(nil, "", false)
+	// The inventory poll chain restarts with this dashboard (Rust #62858).
+	m.agentsOverviewPolling = false
 	// Rust #60271: Escape returns to the chat only when one exists; an initial
 	// agents overview without a thread keeps the dashboard open.
 	m.agentsOverview.ExitOnCancel = m.agentsOverviewCanReturnToChat()
@@ -427,7 +429,10 @@ func (m *Model) applyAgentsOverviewList(message agentsOverviewListMsg) bubbletea
 		m.agentsOverviewNotice = "Failed to load shared agents: " + strings.TrimSpace(message.err.Error())
 		m.agentsOverviewPending = false
 		m.syncAgentsOverviewBackendView()
-		return m.drainAgentsOverviewRefreshQueue()
+		cmds := make([]bubbletea.Cmd, 0, 2)
+		cmds = appendAgentsOverviewCmd(cmds, m.drainAgentsOverviewRefreshQueue())
+		cmds = appendAgentsOverviewCmd(cmds, m.startAgentsOverviewPoll())
+		return combineAgentsOverviewCmds(cmds)
 	}
 	message.rows = m.markAgentsOverviewCloudLabels(message.rows, owner)
 	if backendState != nil {
@@ -441,6 +446,11 @@ func (m *Model) applyAgentsOverviewList(message agentsOverviewListMsg) bubbletea
 	}
 	m.agentsOverview.SetShowMoreLoading(false)
 	m.agentsOverview.SetShowMoreFailed(false)
+	// Rust #62858: a fresh listing is authoritative for the rows it returns, so
+	// a task this client tombstoned while it missed the unarchive is restored
+	// when the listing shows it again. A task with an in-flight archive keeps
+	// its removal until that request lands.
+	recoveryCmds := m.recoverAgentsOverviewMissedUnarchives(m.agentsOverviewListedRows(message.rows))
 	if len(m.agentsOverviewRemoved) > 0 {
 		rows := make([]agentsoverview.Row, 0, len(message.rows))
 		for _, row := range message.rows {
@@ -492,11 +502,12 @@ func (m *Model) applyAgentsOverviewList(message agentsOverviewListMsg) bubbletea
 	m.syncAgentsOverviewBackendView()
 	usageCmd := m.refreshAgentsOverviewUsageCmd()
 	m.agentsOverviewPending = false
-	drainCmd := m.drainAgentsOverviewRefreshQueue()
-	if drainCmd == nil {
-		return usageCmd
-	}
-	return bubbletea.Batch(drainCmd, usageCmd)
+	cmds := append([]bubbletea.Cmd{}, recoveryCmds...)
+	cmds = appendAgentsOverviewCmd(cmds, usageCmd)
+	cmds = appendAgentsOverviewCmd(cmds, m.drainAgentsOverviewRefreshQueue())
+	// Rust #62858: the visible dashboard keeps polling its inventory.
+	cmds = appendAgentsOverviewCmd(cmds, m.startAgentsOverviewPoll())
+	return combineAgentsOverviewCmds(cmds)
 }
 
 // markAgentsOverviewCloudLabels resolves each task's display marker from its
@@ -510,6 +521,61 @@ func (m *Model) markAgentsOverviewCloudLabels(rows []agentsoverview.Row, owner c
 		rows[index].Cloud = m.threadLabelCloud(rows[index].ThreadID, owner)
 	}
 	return rows
+}
+
+// combineAgentsOverviewCmds folds a list of optional commands into one command.
+func combineAgentsOverviewCmds(cmds []bubbletea.Cmd) bubbletea.Cmd {
+	switch len(cmds) {
+	case 0:
+		return nil
+	case 1:
+		return cmds[0]
+	default:
+		return bubbletea.Batch(cmds...)
+	}
+}
+
+// agentsOverviewListedRows returns the root rows a listing reported, which is
+// the evidence a missed unarchive leaves behind (Rust #62858 fresh page ids).
+func (m *Model) agentsOverviewListedRows(rows []agentsoverview.Row) []agentsoverview.Row {
+	if m == nil || len(rows) == 0 {
+		return nil
+	}
+	listed := make([]agentsoverview.Row, 0, len(rows))
+	for _, row := range rows {
+		if strings.TrimSpace(row.ThreadID) == "" || row.IsSubagent {
+			continue
+		}
+		listed = append(listed, row)
+	}
+	return listed
+}
+
+// recoverAgentsOverviewMissedUnarchives restores rows a fresh listing returns
+// after this client had tombstoned them, reusing the unarchive path so the
+// picker and the retained membership agree (Rust #62858 removes such ids from
+// removed_threads when the inventory lists them again).
+func (m *Model) recoverAgentsOverviewMissedUnarchives(rows []agentsoverview.Row) []bubbletea.Cmd {
+	if m == nil || len(m.agentsOverviewRemoved) == 0 || len(rows) == 0 {
+		return nil
+	}
+	var cmds []bubbletea.Cmd
+	for _, row := range rows {
+		threadID := strings.TrimSpace(row.ThreadID)
+		if threadID == "" || !m.agentsOverviewRemoved[threadID] {
+			continue
+		}
+		// Rust #62858 recovers this only from a fresh Cloud inventory page; the
+		// tombstone of a local listing still wins over a stale row.
+		if !row.Cloud {
+			continue
+		}
+		if m.currentThreadArchivePending(threadID) {
+			continue
+		}
+		cmds = appendAgentsOverviewCmd(cmds, m.setAgentThreadVisibility(threadID, false, true))
+	}
+	return cmds
 }
 
 // mergeAgentsOverviewRows keeps the command center's session membership for
@@ -1600,6 +1666,7 @@ func (m *Model) closeAgentsOverview() {
 		m.agentsOverviewHidden = m.agentsOverview.HiddenThreads()
 	}
 	m.agentsOverview = nil
+	m.agentsOverviewPolling = false
 	m.agentsOverviewNotice = ""
 	m.agentsOverviewBusy = false
 	m.agentsOverviewRefresh++

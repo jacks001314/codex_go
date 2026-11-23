@@ -2250,6 +2250,10 @@ type Model struct {
 	agentsOverviewRefresh      int
 	agentsOverviewPending      bool
 	agentsOverviewInflight     bool
+	// agentsOverviewPolling records that the visible dashboard's 10-second
+	// inventory poll is scheduled, so a completed refresh does not start a
+	// second timer chain (Rust #62858 cloud_inventory_poll).
+	agentsOverviewPolling bool
 	// agentsOverviewInflightFor names the backend that owns the shared refresh
 	// slot, and agentsOverviewBackends keeps queued refreshes, Show more
 	// requests, refill counts, and failures per backend (Rust #61596).
@@ -5194,6 +5198,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, m.refreshAgentsOverviewCmd()
 	case agentsOverviewLifecycleMsg:
 		return m, m.applyAgentsOverviewLifecycleResult(msg)
+	case agentsOverviewPollMsg:
+		return m, m.applyAgentsOverviewPoll()
 	case KeyChordRevealMsg:
 		// The pending prefix is state; a message only forces the delayed redraw.
 		return m, nil
