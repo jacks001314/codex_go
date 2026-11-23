@@ -1736,8 +1736,8 @@ func remoteTUIAccountRequestContext(ctx context.Context) (context.Context, conte
 }
 
 // interactiveRemoteTaskMentionSearch mirrors Rust task_mentions::spawn_search
-// against the remote app server: thread/search and thread/list merged into the
-// mention popup's task candidates.
+// against the remote app server: a state-DB thread/list title filter merged with
+// the recent thread list for the mention popup's task candidates (#62691).
 func interactiveRemoteTaskMentionSearch(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.TaskMentionSearchFunc {
 	return func(searchCtx context.Context, query string, currentThreadID string, cwd string) ([]codextui.TaskMention, error) {
 		if searchCtx == nil {
@@ -1750,50 +1750,35 @@ func interactiveRemoteTaskMentionSearch(ctx context.Context, endpoint *appserver
 			return nil, err
 		}
 		cloud := endpointAppServerTransport(endpoint) == appServerTransportCloud
-		detached := false
-		run := remoteTaskMentionSearchRunner(client, cloud, func() { detached = true })
+		run := remoteTaskMentionSearchRunner(client, cloud)
 		matches := searchTaskMentionsWithRunner(reqCtx, run, query, strings.TrimSpace(currentThreadID), cwd)
-		if !detached {
-			client.close()
-		}
+		client.close()
 		return matches, nil
 	}
 }
 
-// remoteTaskMentionSearchRunner joins the task-mention search and title listing
-// on one connection. Both requests are sent before either reply is read so the
-// single reader can dispatch them by id, mirroring Rust's
-// AppServerRequestHandle. The hosted Cloud backend implements only the title
-// listing, so the search half is skipped there (Rust
-// AppServerRequestHandle::Cloud).
-func remoteTaskMentionSearchRunner(client *remoteAppServerTUIClient, cloud bool, detach func()) taskMentionSearchRunner {
-	return func(ctx context.Context, search appserver.ThreadSearchParams, listed appserver.ThreadListParams) (
-		appserver.ThreadSearchResponse, error, appserver.ThreadListResponse, error,
+// remoteTaskMentionSearchRunner joins the title-filtered page and the recent
+// thread list on one connection. Both requests are sent before either reply is
+// read so the single reader can dispatch them by id, mirroring Rust's
+// AppServerRequestHandle. The hosted Cloud backend has no title filter, so it
+// keeps the recent list (Rust #62691).
+func remoteTaskMentionSearchRunner(client *remoteAppServerTUIClient, cloud bool) taskMentionSearchRunner {
+	return func(ctx context.Context, recent appserver.ThreadListParams, filtered appserver.ThreadListParams) (
+		appserver.ThreadListResponse, error, appserver.ThreadListResponse, error,
 	) {
 		runCtx, cancel := context.WithTimeout(ctx, taskMentionSearchTimeout)
 		defer cancel()
-		var searchResponse appserver.ThreadSearchResponse
-		var listResponse appserver.ThreadListResponse
-		specs := []remoteRequestSpec{{method: appserver.MethodThreadList, params: listed, target: &listResponse}}
+		var recentResponse appserver.ThreadListResponse
+		var filteredResponse appserver.ThreadListResponse
+		specs := []remoteRequestSpec{{method: appserver.MethodThreadList, params: recent, target: &recentResponse}}
 		if !cloud {
-			specs = append([]remoteRequestSpec{{method: appserver.MethodThreadSearch, params: search, target: &searchResponse}}, specs...)
+			specs = append(specs, remoteRequestSpec{method: appserver.MethodThreadList, params: filtered, target: &filteredResponse})
 		}
 		outcomes := remoteSessionRequestBatch(runCtx, client, specs)
 		if cloud {
-			return searchResponse, errTaskMentionCloudSearchUnsupported, listResponse, outcomes[0].err
+			return recentResponse, outcomes[0].err, filteredResponse, errTaskMentionCloudTitleFilterUnsupported
 		}
-		searchOutcome, listOutcome := outcomes[0], outcomes[1]
-		if !searchOutcome.settled && searchOutcome.id > 0 {
-			// Rust cancels a superseded or timed-out remote search in the
-			// background so a slow cancellation reply cannot delay titles that
-			// are already available (#62132). The goroutine then owns the
-			// connection.
-			if detach != nil {
-				detach()
-			}
-			cancelRemoteThreadSearchAsync(client, searchOutcome.id)
-		}
-		return searchResponse, searchOutcome.err, listResponse, listOutcome.err
+		return recentResponse, outcomes[0].err, filteredResponse, outcomes[1].err
 	}
 }
 
@@ -4587,36 +4572,6 @@ func remoteSessionRequestBatch(ctx context.Context, client *remoteAppServerTUICl
 		}
 	}
 	return outcomes
-}
-
-// cancelRemoteThreadSearch asks the server to stop an abandoned thread/search.
-// Rust sends thread/search/cancel on a remote handle when a task-mention search
-// is superseded or times out (#62132); the acknowledgement is best-effort and
-// bounded by taskMentionCancelTimeout.
-func cancelRemoteThreadSearch(client *remoteAppServerTUIClient, requestID int64) {
-	if client == nil || requestID <= 0 {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), taskMentionCancelTimeout)
-	defer cancel()
-	remoteSessionRequestBatch(ctx, client, []remoteRequestSpec{{
-		method: appserver.MethodThreadSearchCancel,
-		params: appserver.ThreadSearchCancelParams{RequestID: appserver.IntID(requestID)},
-	}})
-}
-
-// cancelRemoteThreadSearchAsync cancels an abandoned thread/search without
-// delaying results that are already available. The goroutine owns the
-// connection and closes it once the cancellation finishes (Rust
-// task_mentions::search_with_cancellation spawns the cancel the same way).
-func cancelRemoteThreadSearchAsync(client *remoteAppServerTUIClient, requestID int64) {
-	if client == nil {
-		return
-	}
-	go func() {
-		defer client.close()
-		cancelRemoteThreadSearch(client, requestID)
-	}()
 }
 
 func (c *remoteAppServerTUIClient) readOne(ctx context.Context) error {

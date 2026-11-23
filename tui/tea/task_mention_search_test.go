@@ -1,8 +1,8 @@
 package tea
 
 import (
-	"context"
 	keymsg "codex_go/tui/keymsg"
+	"context"
 	"testing"
 
 	codextui "codex_go/tui"
@@ -25,7 +25,6 @@ func TestModelTaskMentionSearchPopulatesTaskCandidatesLikeRust(t *testing.T) {
 				ThreadID: "task-123",
 				Title:    "Review the migration",
 				CWD:      `D:\repo`,
-				Snippet:  "snippet",
 			}}, nil
 		},
 	})

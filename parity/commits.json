@@ -53238,11 +53238,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "tui/bottom_pane/warnings_view.go RenderLines hides the navigation footer item when the frozen warning set has a single entry, matching Rust #62642 (self.entries.len() > 1 && !navigation.is_empty()).",
+    "Tests: tui/bottom_pane/warnings_view_test.go TestWarningsViewHidesNavigationHintForSingleWarningLikeRust asserts a single-warning footer lacks the navigation hint while a two-warning page keeps it; go test ./tui/bottom_pane passes."
    ],
    "kind": "runtime",
    "sha": "64026788f3ad6021bac81fd484abf036b97903d1",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Hide the warning navigation hint for a single warning (#62642)"
   },
   {
@@ -53403,11 +53404,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-20 upstream window; awaiting per-commit audit."
+    "app/task_mentions.go now issues two state-DB thread/list requests (recent plus a title filter) instead of thread/search, merges the filtered page first and appends recent threads that it did not already contain (Rust #62691), keeps the recent list when the title filter is unavailable or abandoned, and skips the filter for the hosted Cloud transport.",
+    "tui/task_mentions.go drops TaskMention.Snippet and tui/bottom_pane/mentions_v2/search_catalog.go gives task candidates no extra search terms, so the picker fuzzy-matches the displayed title only while the working directory stays a description (Rust #62691).",
+    "Tests: app/task_mentions_test.go covers request shapes, filtered-first merge, full filtered page plus recent, Windows cwd ordering and the stalled title filter; app/task_mentions_streaming_like_rust_test.go covers out-of-order replies, recent fallback and the Cloud skip; mentions_v2 tests assert no directory-only match. go test ./app ./tui/... and go build ./... pass."
    ],
    "kind": "runtime",
    "sha": "0e8c7683c4a85f00667bd762265358a407124f2e",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Match TUI task mentions by displayed title (#62691)"
   },
   {

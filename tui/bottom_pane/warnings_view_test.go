@@ -215,6 +215,30 @@ func TestWarningsViewRenderLikeRust(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #62642: the navigation hint only appears when there are
+// several warnings to browse, so a single diagnostic keeps the shorter footer.
+func TestWarningsViewHidesNavigationHintForSingleWarningLikeRust(t *testing.T) {
+	entries := warningsEntriesForTest()
+	hints := WarningsHints{Keep: "k", Cancel: "ctrl+c", Navigation: "\u2190/\u2192"}
+
+	single := NewWarningsView(entries[:1])
+	singleRows := single.RenderLines(120, 12, hints)
+	singleFooter := singleRows[len(singleRows)-2]
+	if strings.Contains(singleFooter, "warning") {
+		t.Fatalf("single-warning footer = %q, want no navigation hint", singleFooter)
+	}
+	if !strings.Contains(singleFooter, "k keep & next") {
+		t.Fatalf("single-warning footer = %q, want the other hints", singleFooter)
+	}
+
+	multi := NewWarningsView(entries[:2])
+	multiRows := multi.RenderLines(120, 12, hints)
+	multiFooter := multiRows[len(multiRows)-2]
+	if !strings.Contains(multiFooter, "\u2190/\u2192 warning") {
+		t.Fatalf("multi-warning footer = %q, want the navigation hint", multiFooter)
+	}
+}
+
 // Mirrors `warning_pages_wrap_and_scroll_long_diagnostics`.
 func TestWarningsViewRenderScrollsLongDiagnosticsLikeRust(t *testing.T) {
 	entries := warningsEntriesForTest()

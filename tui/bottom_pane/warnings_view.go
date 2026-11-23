@@ -373,6 +373,11 @@ func (v *WarningsView) RenderLines(width int, height int, hints WarningsHints) [
 		v.bodyRows = append(v.bodyRows, "")
 	}
 	v.bodyLeft = bodyLeft
+	// Rust #62642: the navigation hint is only useful when there are several
+	// warnings to browse, so a single-warning page keeps the shorter footer.
+	if len(v.entries) <= 1 {
+		hints.Navigation = ""
+	}
 	rows = append(rows, strings.Repeat(" ", bodyLeft)+warningsFooterLine(hints, inner, offset, v.maxOffset))
 	rows = append(rows, "")
 	for len(rows) < height {

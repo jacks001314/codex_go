@@ -1,9 +1,10 @@
 package app
 
 // Rust parity: codex-rs/tui/src/task_mentions.rs (discovery half). Mirrors
-// task_mentions::spawn_search's server work: a thread/search + thread/list merge
-// filtered to same-host, non-ephemeral tasks, ordered so the current directory's
-// tasks come first.
+// task_mentions::spawn_search's server work: two state-DB thread/list requests
+// (a title filter plus the recent list) merged by thread id, filtered to
+// same-host, non-ephemeral tasks, and ordered so the current directory's tasks
+// come first (Rust #62691).
 
 import (
 	"context"
@@ -28,40 +29,30 @@ const taskMentionSearchLimit = 50
 // its connection) open (Rust #62132).
 const taskMentionSearchTimeout = 10 * time.Second
 
-// taskMentionCancelTimeout mirrors Rust task_mentions::CANCEL_TIMEOUT: the
-// cancellation message an abandoned remote search sends must not delay the
-// title matches that are already available (Rust #62132).
-const taskMentionCancelTimeout = time.Second
-
-// errTaskMentionCloudSearchUnsupported marks the content search the hosted
-// Cloud backend does not implement. Rust's search_with_cancellation returns
-// early for AppServerRequestHandle::Cloud and keeps the title listing (#62132).
-var errTaskMentionCloudSearchUnsupported = errors.New("cloud app server does not implement thread/search")
+// errTaskMentionCloudTitleFilterUnsupported marks the title filter the hosted
+// Cloud backend does not implement. Rust #62691 keeps the recent list for
+// AppServerRequestHandle::Cloud and skips the filtered request.
+var errTaskMentionCloudTitleFilterUnsupported = errors.New("cloud app server does not implement thread/list title filters")
 
 // taskMentionRequestFunc is the typed app-server request Rust performs through
 // AppServerRequestHandle::request_typed.
 type taskMentionRequestFunc func(ctx context.Context, method appserver.Method, params any, target any) error
 
-// taskMentionSearchRunner issues the content search and the title listing Rust
-// joins in task_mentions::spawn_search, each under taskMentionSearchTimeout.
+// taskMentionSearchRunner issues the title-filtered page and the recent page
+// Rust joins in task_mentions::spawn_search, each under taskMentionSearchTimeout.
 // The remote TUI supplies a runner that multiplexes both replies on one
 // connection; taskMentionRequestRunner backs test doubles and in-process
 // handles.
 type taskMentionSearchRunner func(
 	ctx context.Context,
-	search appserver.ThreadSearchParams,
-	listed appserver.ThreadListParams,
+	recent appserver.ThreadListParams,
+	filtered appserver.ThreadListParams,
 ) (
-	searchResponse appserver.ThreadSearchResponse,
-	searchErr error,
-	listResponse appserver.ThreadListResponse,
-	listErr error,
+	recentResponse appserver.ThreadListResponse,
+	recentErr error,
+	filteredResponse appserver.ThreadListResponse,
+	filteredErr error,
 )
-
-type taskMentionSearchResult struct {
-	thread  appserver.Thread
-	snippet string
-}
 
 // searchTaskMentions mirrors Rust task_mentions::spawn_search's discovery half.
 // A nil result means no tasks (both requests failed, or nothing matched).
@@ -72,38 +63,39 @@ func searchTaskMentions(ctx context.Context, request taskMentionRequestFunc, que
 	return searchTaskMentionsWithRunner(ctx, taskMentionRequestRunner(request), query, currentThreadID, cwd)
 }
 
-// taskMentionRequestRunner joins the two requests through request. The callback
-// must tolerate concurrent use: Rust issues both typed requests at once through
-// one app-server request handle.
+// taskMentionRequestRunner joins the two thread/list requests through request.
+// The callback must tolerate concurrent use: Rust issues both typed requests at
+// once through one app-server request handle.
 func taskMentionRequestRunner(request taskMentionRequestFunc) taskMentionSearchRunner {
-	return func(ctx context.Context, searchParams appserver.ThreadSearchParams, listParams appserver.ThreadListParams) (
-		appserver.ThreadSearchResponse, error, appserver.ThreadListResponse, error,
+	return func(ctx context.Context, recentParams appserver.ThreadListParams, filteredParams appserver.ThreadListParams) (
+		appserver.ThreadListResponse, error, appserver.ThreadListResponse, error,
 	) {
-		var searchResponse appserver.ThreadSearchResponse
-		var listResponse appserver.ThreadListResponse
-		var searchErr error
-		var listErr error
+		var recentResponse appserver.ThreadListResponse
+		var filteredResponse appserver.ThreadListResponse
+		var recentErr error
+		var filteredErr error
 		var wait sync.WaitGroup
 		wait.Add(2)
 		go func() {
 			defer wait.Done()
-			searchCtx, cancel := context.WithTimeout(ctx, taskMentionSearchTimeout)
+			recentCtx, cancel := context.WithTimeout(ctx, taskMentionSearchTimeout)
 			defer cancel()
-			searchErr = request(searchCtx, appserver.MethodThreadSearch, searchParams, &searchResponse)
+			recentErr = request(recentCtx, appserver.MethodThreadList, recentParams, &recentResponse)
 		}()
 		go func() {
 			defer wait.Done()
-			listCtx, cancel := context.WithTimeout(ctx, taskMentionSearchTimeout)
+			filteredCtx, cancel := context.WithTimeout(ctx, taskMentionSearchTimeout)
 			defer cancel()
-			listErr = request(listCtx, appserver.MethodThreadList, listParams, &listResponse)
+			filteredErr = request(filteredCtx, appserver.MethodThreadList, filteredParams, &filteredResponse)
 		}()
 		wait.Wait()
-		return searchResponse, searchErr, listResponse, listErr
+		return recentResponse, recentErr, filteredResponse, filteredErr
 	}
 }
 
-// searchTaskMentionsWithRunner builds Rust's search/listing pair, merges the
-// results, and keeps title-only matches when the content search is abandoned.
+// searchTaskMentionsWithRunner builds Rust #62691's title-filtered and recent
+// thread/list pair, merges them by thread id with the filtered page first, and
+// keeps the recent list when the title filter is unavailable or times out.
 func searchTaskMentionsWithRunner(ctx context.Context, run taskMentionSearchRunner, query string, currentThreadID string, cwd string) []codextui.TaskMention {
 	query = strings.TrimSpace(query)
 	if run == nil || query == "" {
@@ -114,48 +106,45 @@ func searchTaskMentionsWithRunner(ctx context.Context, run taskMentionSearchRunn
 	}
 	limit := taskMentionSearchLimit
 	archived := false
-	searchResponse, searchErr, listResponse, listErr := run(ctx,
-		appserver.ThreadSearchParams{
-			CurrentAccountOnly: true,
-			Limit:              &limit,
-			SortKey:            appserver.SortRecencyAt,
-			SortDirection:      appserver.SortDesc,
-			Archived:           &archived,
-			SearchTerm:         query,
-		},
-		appserver.ThreadListParams{
-			CurrentAccountOnly: true,
-			Limit:              &limit,
-			SortKey:            appserver.SortUpdatedAt,
-			SortDirection:      appserver.SortDesc,
-			Archived:           &archived,
-			UseStateDBOnly:     true,
-		})
-	if searchErr != nil && listErr != nil {
+	recentParams := appserver.ThreadListParams{
+		CurrentAccountOnly: true,
+		Limit:              &limit,
+		SortKey:            appserver.SortUpdatedAt,
+		SortDirection:      appserver.SortDesc,
+		Archived:           &archived,
+		UseStateDBOnly:     true,
+	}
+	filteredParams := recentParams
+	filteredParams.SearchTerm = &query
+	recentResponse, recentErr, filteredResponse, filteredErr := run(ctx, recentParams, filteredParams)
+	if recentErr != nil && filteredErr != nil {
 		return nil
 	}
-	results := make([]taskMentionSearchResult, 0, len(searchResponse.Data)+len(listResponse.Data))
+	// Rust #62691 starts from the filtered page and appends recent threads that
+	// it did not already contain, so a full filtered page cannot crowd out the
+	// recent candidates.
+	threads := make([]appserver.Thread, 0, len(filteredResponse.Data)+len(recentResponse.Data))
 	seen := map[string]bool{}
-	if searchErr == nil {
-		for _, result := range searchResponse.Data {
-			results = append(results, taskMentionSearchResult{thread: result.Thread, snippet: result.Snippet})
-			seen[result.Thread.ID] = true
-		}
-	}
-	if listErr == nil {
-		// Titled threads not already returned by the search contribute an empty
-		// snippet (Rust's second request is a title search).
-		for _, thread := range listResponse.Data {
+	if filteredErr == nil {
+		for _, thread := range filteredResponse.Data {
 			if seen[thread.ID] {
 				continue
 			}
 			seen[thread.ID] = true
-			results = append(results, taskMentionSearchResult{thread: thread})
+			threads = append(threads, thread)
 		}
 	}
-	matches := make([]codextui.TaskMention, 0, len(results))
-	for _, result := range results {
-		thread := result.thread
+	if recentErr == nil {
+		for _, thread := range recentResponse.Data {
+			if seen[thread.ID] {
+				continue
+			}
+			seen[thread.ID] = true
+			threads = append(threads, thread)
+		}
+	}
+	matches := make([]codextui.TaskMention, 0, len(threads))
+	for _, thread := range threads {
 		if thread.ID == currentThreadID || thread.Ephemeral {
 			continue
 		}
@@ -170,11 +159,7 @@ func searchTaskMentionsWithRunner(ctx context.Context, run taskMentionSearchRunn
 			ThreadID: thread.ID,
 			Title:    title,
 			CWD:      thread.CWD,
-			Snippet:  result.snippet,
 		})
-		if len(matches) == taskMentionSearchLimit {
-			break
-		}
 	}
 	return orderTaskMentionsByCWD(matches, cwd)
 }

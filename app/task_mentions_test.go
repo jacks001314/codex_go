@@ -26,73 +26,74 @@ func taskMentionTestThread(id string, name string, preview string, cwd string) a
 	return thread
 }
 
-// TestSearchTaskMentionsMatchesRust covers Rust task_mentions::spawn_search's
-// discovery half: request shape, merge/dedupe, filtering, title fallback,
-// snippet provenance, the 50-result bound, and current-cwd-first ordering.
+// TestSearchTaskMentionsMatchesRust covers Rust #62691's discovery half: the
+// state-DB title filter and recent thread/list request shape, merge/dedupe with
+// the filtered page first, filtering, title fallback, and current-cwd-first
+// ordering.
 func TestSearchTaskMentionsMatchesRust(t *testing.T) {
 	var mu sync.Mutex
-	var methods []appserver.Method
-	// The search and the title listing run concurrently, so the fake records
-	// problems instead of failing from a worker goroutine.
+	var searchTerms []string
+	// The two listings run concurrently, so the fake records problems instead
+	// of failing from a worker goroutine.
 	var problems []string
 	note := func(format string, args ...any) {
 		mu.Lock()
 		defer mu.Unlock()
 		problems = append(problems, fmtArgs(format, args...))
 	}
-	record := func(method appserver.Method) {
+	recordTerm := func(term string) {
 		mu.Lock()
 		defer mu.Unlock()
-		methods = append(methods, method)
+		searchTerms = append(searchTerms, term)
 	}
 	request := func(_ context.Context, method appserver.Method, params any, target any) error {
-		record(method)
-		switch method {
-		case appserver.MethodThreadSearch:
-			search := params.(appserver.ThreadSearchParams)
-			if search.SearchTerm != "query" || search.Limit == nil || *search.Limit != 50 ||
-				search.SortKey != appserver.SortRecencyAt || search.SortDirection != appserver.SortDesc ||
-				search.Archived == nil || *search.Archived {
-				note("thread/search params = %#v", search)
-			}
-			*(target.(*appserver.ThreadSearchResponse)) = appserver.ThreadSearchResponse{Data: []appserver.ThreadSearchResult{
-				{Thread: taskMentionTestThread("match", "Named task", "preview", `/repo`), Snippet: "snippet"},
-				{Thread: taskMentionTestThread("self", "Current", "preview", `/repo`)},
-				{Thread: taskMentionTestThread("ephemeral", "Ephemeral", "preview", `/repo`)},
-				{Thread: taskMentionTestThread("ambient", "Ambient", "preview", `/repo`)},
-				{Thread: taskMentionTestThread("descendant", "", "Descendant preview", `/repo/sub`)},
-				{Thread: taskMentionTestThread("elsewhere", "", "", `D:\other`)},
-			}}
-		case appserver.MethodThreadList:
-			list := params.(appserver.ThreadListParams)
-			if list.Limit == nil || *list.Limit != 50 || list.SortKey != appserver.SortUpdatedAt ||
-				list.SortDirection != appserver.SortDesc || list.Archived == nil || *list.Archived ||
-				!list.UseStateDBOnly {
-				note("thread/list params = %#v", list)
-			}
+		if method != appserver.MethodThreadList {
+			note("unexpected method %s", method)
+			return nil
+		}
+		list := params.(appserver.ThreadListParams)
+		if list.Limit == nil || *list.Limit != 50 || list.SortKey != appserver.SortUpdatedAt ||
+			list.SortDirection != appserver.SortDesc || list.Archived == nil || *list.Archived ||
+			!list.UseStateDBOnly || list.CWD != nil {
+			note("thread/list params = %#v", list)
+		}
+		if list.SearchTerm == nil {
+			recordTerm("")
 			*(target.(*appserver.ThreadListResponse)) = appserver.ThreadListResponse{Data: []appserver.Thread{
 				taskMentionTestThread("match", "Named task", "preview", `/repo`), // duplicate is skipped
 				taskMentionTestThread("listonly", "Listed task", "listed preview", `/repo`),
 			}}
-		default:
-			note("unexpected method %s", method)
+			return nil
 		}
+		recordTerm(*list.SearchTerm)
+		if *list.SearchTerm != "query" {
+			note("title filter = %q", *list.SearchTerm)
+		}
+		*(target.(*appserver.ThreadListResponse)) = appserver.ThreadListResponse{Data: []appserver.Thread{
+			taskMentionTestThread("match", "Named task", "preview", `/repo`),
+			taskMentionTestThread("self", "Current", "preview", `/repo`),
+			taskMentionTestThread("ephemeral", "Ephemeral", "preview", `/repo`),
+			taskMentionTestThread("ambient", "Ambient", "preview", `/repo`),
+			taskMentionTestThread("descendant", "", "Descendant preview", `/repo/sub`),
+			taskMentionTestThread("elsewhere", "", "", `D:\other`),
+		}}
 		return nil
 	}
 
-	// The ambient thread must carry the feature thread-source marker.
+	// The ambient thread must carry the feature thread-source marker; the
+	// ephemeral marker rides the same filtered page.
 	ambient := appserver.ThreadSource("ambient_suggestions")
 	ephemeral := true
 	requestWithMarkers := func(ctx context.Context, method appserver.Method, params any, target any) error {
 		err := request(ctx, method, params, target)
-		if method == appserver.MethodThreadSearch {
-			response := target.(*appserver.ThreadSearchResponse)
+		if err == nil && method == appserver.MethodThreadList {
+			response := target.(*appserver.ThreadListResponse)
 			for index := range response.Data {
-				switch response.Data[index].Thread.ID {
+				switch response.Data[index].ID {
 				case "ambient":
-					response.Data[index].Thread.ThreadSource = &ambient
+					response.Data[index].ThreadSource = &ambient
 				case "ephemeral":
-					response.Data[index].Thread.Ephemeral = ephemeral
+					response.Data[index].Ephemeral = ephemeral
 				}
 			}
 		}
@@ -101,15 +102,15 @@ func TestSearchTaskMentionsMatchesRust(t *testing.T) {
 
 	matches := searchTaskMentions(context.Background(), requestWithMarkers, " query ", "self", `/repo`)
 	mu.Lock()
-	issued := append([]appserver.Method(nil), methods...)
+	terms := append([]string(nil), searchTerms...)
 	recorded := append([]string(nil), problems...)
 	mu.Unlock()
 	if len(recorded) > 0 {
 		t.Fatalf("request problems: %s", strings.Join(recorded, "; "))
 	}
-	sort.Slice(issued, func(i, j int) bool { return issued[i] < issued[j] })
-	if len(issued) != 2 || issued[0] != appserver.MethodThreadList || issued[1] != appserver.MethodThreadSearch {
-		t.Fatalf("methods = %#v", issued)
+	sort.Strings(terms)
+	if strings.Join(terms, ",") != ",query" {
+		t.Fatalf("title filters = %#v, want one recent and one filtered request", terms)
 	}
 	gotIDs := make([]string, 0, len(matches))
 	for _, match := range matches {
@@ -119,14 +120,11 @@ func TestSearchTaskMentionsMatchesRust(t *testing.T) {
 	if strings.Join(gotIDs, ",") != strings.Join(wantIDs, ",") {
 		t.Fatalf("task ids = %#v, want %#v", gotIDs, wantIDs)
 	}
-	if matches[0].Title != "Named task" || matches[0].Snippet != "snippet" || matches[0].CWD != `/repo` {
-		t.Fatalf("search-backed match = %#v", matches[0])
+	if matches[0].Title != "Named task" || matches[0].CWD != `/repo` {
+		t.Fatalf("filtered match = %#v", matches[0])
 	}
 	if matches[1].Title != "Descendant preview" {
 		t.Fatalf("preview fallback = %#v", matches[1])
-	}
-	if matches[2].Title != "Listed task" || matches[2].Snippet != "" {
-		t.Fatalf("list-only match = %#v", matches[2])
 	}
 	if matches[3].Title != "elsewhere" {
 		t.Fatalf("id fallback = %#v", matches[3])
@@ -134,16 +132,16 @@ func TestSearchTaskMentionsMatchesRust(t *testing.T) {
 
 	// An empty query issues no requests.
 	mu.Lock()
-	methods = nil
+	searchTerms = nil
 	mu.Unlock()
 	if matches := searchTaskMentions(context.Background(), requestWithMarkers, "  ", "self", `/repo`); matches != nil {
 		t.Fatalf("empty query matches = %#v", matches)
 	}
 	mu.Lock()
-	issued = append([]appserver.Method(nil), methods...)
+	terms = append([]string(nil), searchTerms...)
 	mu.Unlock()
-	if len(issued) != 0 {
-		t.Fatalf("empty query issued requests: %#v", issued)
+	if len(terms) != 0 {
+		t.Fatalf("empty query issued requests: %#v", terms)
 	}
 	// Both requests failing yields no tasks instead of an error.
 	failing := func(context.Context, appserver.Method, any, any) error { return errors.New("offline") }
@@ -152,16 +150,53 @@ func TestSearchTaskMentionsMatchesRust(t *testing.T) {
 	}
 }
 
+// TestSearchTaskMentionsKeepsRecentWhenFilteredPageIsFullLikeRust covers Rust
+// #62691: a full title-filtered page cannot crowd out the recent candidates.
+func TestSearchTaskMentionsKeepsRecentWhenFilteredPageIsFullLikeRust(t *testing.T) {
+	filtered := make([]appserver.Thread, 0, taskMentionSearchLimit)
+	for index := 0; index < taskMentionSearchLimit; index++ {
+		filtered = append(filtered, taskMentionTestThread(fmtArgs("filtered-%d", index), fmtArgs("Filtered %d", index), "", "/repo"))
+	}
+	request := func(_ context.Context, method appserver.Method, params any, target any) error {
+		if method != appserver.MethodThreadList {
+			return errors.New("unexpected method")
+		}
+		list := params.(appserver.ThreadListParams)
+		response := target.(*appserver.ThreadListResponse)
+		if list.SearchTerm != nil {
+			response.Data = filtered
+			return nil
+		}
+		response.Data = []appserver.Thread{taskMentionTestThread("recent", "Recent task", "", "/repo")}
+		return nil
+	}
+	matches := searchTaskMentions(context.Background(), request, "query", "", "/repo")
+	if len(matches) != taskMentionSearchLimit+1 {
+		t.Fatalf("matches = %d, want the filtered page plus the recent task", len(matches))
+	}
+	found := false
+	for _, match := range matches {
+		if match.ThreadID == "recent" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("recent task missing from a full filtered page: %#v", matches[len(matches)-1])
+	}
+}
+
 // TestSearchTaskMentionsWindowsCWDFirstMatchesRust covers the Windows
 // case-insensitive current-directory prefix rule.
 func TestSearchTaskMentionsWindowsCWDFirstMatchesRust(t *testing.T) {
-	request := func(_ context.Context, method appserver.Method, _ any, target any) error {
-		if method == appserver.MethodThreadSearch {
-			*(target.(*appserver.ThreadSearchResponse)) = appserver.ThreadSearchResponse{Data: []appserver.ThreadSearchResult{
-				{Thread: taskMentionTestThread("other", "Other", "preview", `D:\Other`)},
-				{Thread: taskMentionTestThread("same", "Same", "preview", `d:\repo`)},
-			}}
+	request := func(_ context.Context, method appserver.Method, params any, target any) error {
+		list, ok := params.(appserver.ThreadListParams)
+		if method != appserver.MethodThreadList || !ok || list.SearchTerm == nil {
+			return nil
 		}
+		*(target.(*appserver.ThreadListResponse)) = appserver.ThreadListResponse{Data: []appserver.Thread{
+			taskMentionTestThread("other", "Other", "preview", `D:\Other`),
+			taskMentionTestThread("same", "Same", "preview", `d:\repo`),
+		}}
 		return nil
 	}
 	matches := searchTaskMentions(context.Background(), request, "query", "", `D:\repo`)
@@ -169,13 +204,15 @@ func TestSearchTaskMentionsWindowsCWDFirstMatchesRust(t *testing.T) {
 		t.Fatalf("windows ordering = %#v", matches)
 	}
 	// The descendant check requires a path separator boundary.
-	requestNear := func(_ context.Context, method appserver.Method, _ any, target any) error {
-		if method == appserver.MethodThreadSearch {
-			*(target.(*appserver.ThreadSearchResponse)) = appserver.ThreadSearchResponse{Data: []appserver.ThreadSearchResult{
-				{Thread: taskMentionTestThread("sibling", "Sibling", "preview", `D:\repository`)},
-				{Thread: taskMentionTestThread("child", "Child", "preview", `D:\repo\sub`)},
-			}}
+	requestNear := func(_ context.Context, method appserver.Method, params any, target any) error {
+		list, ok := params.(appserver.ThreadListParams)
+		if method != appserver.MethodThreadList || !ok || list.SearchTerm == nil {
+			return nil
 		}
+		*(target.(*appserver.ThreadListResponse)) = appserver.ThreadListResponse{Data: []appserver.Thread{
+			taskMentionTestThread("sibling", "Sibling", "preview", `D:\repository`),
+			taskMentionTestThread("child", "Child", "preview", `D:\repo\sub`),
+		}}
 		return nil
 	}
 	matches = searchTaskMentions(context.Background(), requestNear, "query", "", `D:\repo`)
@@ -228,27 +265,29 @@ func TestApplySubmitTaskReferencesEncodesTaskMentionsLikeRust(t *testing.T) {
 	}
 }
 
-// Rust #62132: a task search is bounded and never delays the title matches that
-// are already available.
-func TestSearchTaskMentionsBoundsTheSearchAndKeepsTitleMatchesLikeRust(t *testing.T) {
+// Rust #62691: a stalled title filter is bounded and never delays the recent
+// candidates that are already available.
+func TestSearchTaskMentionsBoundsTheTitleFilterAndKeepsRecentLikeRust(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var mu sync.Mutex
 	var bounded bool
-	request := func(requestCtx context.Context, method appserver.Method, _ any, target any) error {
-		switch method {
-		case appserver.MethodThreadSearch:
+	request := func(requestCtx context.Context, method appserver.Method, params any, target any) error {
+		if method != appserver.MethodThreadList {
+			return errors.New("unexpected method")
+		}
+		list := params.(appserver.ThreadListParams)
+		if list.SearchTerm != nil {
 			deadline, ok := requestCtx.Deadline()
 			mu.Lock()
 			bounded = ok && time.Until(deadline) <= taskMentionSearchTimeout+time.Second
 			mu.Unlock()
 			<-requestCtx.Done()
 			return requestCtx.Err()
-		case appserver.MethodThreadList:
-			*(target.(*appserver.ThreadListResponse)) = appserver.ThreadListResponse{Data: []appserver.Thread{
-				taskMentionTestThread("listed", "Listed task", "listed preview", `/repo`),
-			}}
 		}
+		*(target.(*appserver.ThreadListResponse)) = appserver.ThreadListResponse{Data: []appserver.Thread{
+			taskMentionTestThread("recent", "Recent task", "recent preview", `/repo`),
+		}}
 		return nil
 	}
 	go func() {
@@ -259,9 +298,9 @@ func TestSearchTaskMentionsBoundsTheSearchAndKeepsTitleMatchesLikeRust(t *testin
 	mu.Lock()
 	defer mu.Unlock()
 	if !bounded {
-		t.Fatal("thread/search was not bounded by the task-mention search timeout")
+		t.Fatal("the title filter was not bounded by the task-mention search timeout")
 	}
-	if len(matches) != 1 || matches[0].ThreadID != "listed" {
-		t.Fatalf("matches = %#v, want the title listing despite the abandoned search", matches)
+	if len(matches) != 1 || matches[0].ThreadID != "recent" {
+		t.Fatalf("matches = %#v, want the recent list despite the abandoned title filter", matches)
 	}
 }

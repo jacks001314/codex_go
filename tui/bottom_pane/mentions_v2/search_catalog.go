@@ -66,11 +66,9 @@ func TaskCandidate(task tui.TaskMention) Candidate {
 		Label:       title,
 		DisplayName: title,
 		Description: task.CWD,
-		SearchTerms: []string{
-			title,
-			truncateCatalogRunes(task.CWD, tui.MaxTaskTitleChars),
-			truncateCatalogRunes(task.Snippet, tui.MaxTaskTitleChars),
-		},
+		// Rust #62691: tasks match by the displayed title only; the working
+		// directory stays a description and never contributes a match.
+		SearchTerms: nil,
 		MentionType: MentionTypeTask,
 		Cloud:       task.Cloud,
 		Selection:   ToolSelection("@"+title, "thread://"+task.ThreadID),

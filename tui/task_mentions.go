@@ -29,7 +29,6 @@ type TaskMention struct {
 	ThreadID string
 	Title    string
 	CWD      string
-	Snippet  string
 	// Cloud marks a task served by the hosted Cloud backend. The marker is
 	// display-only and never enters the mention title or selection (Rust
 	// #61742 TaskMention::label_style).

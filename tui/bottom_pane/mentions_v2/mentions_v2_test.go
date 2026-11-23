@@ -553,7 +553,6 @@ func TestSearchCatalogTaskCandidatesMatchRust(t *testing.T) {
 		ThreadID: "task-123",
 		Title:    "  Fix   the\nparser  ",
 		CWD:      `D:\repo`,
-		Snippet:  "snippet",
 	}}
 	candidates := BuildSearchCatalogWithTasks(nil, nil, tasks)
 	if len(candidates) != 1 {
@@ -566,9 +565,13 @@ func TestSearchCatalogTaskCandidatesMatchRust(t *testing.T) {
 	if candidate.Description != `D:\repo` || candidate.MentionType != MentionTypeTask {
 		t.Fatalf("candidate = %#v", candidate)
 	}
-	wantTerms := []string{"Fix the parser", `D:\repo`, "snippet"}
-	if !reflect.DeepEqual(candidate.SearchTerms, wantTerms) {
-		t.Fatalf("search terms = %#v, want %#v", candidate.SearchTerms, wantTerms)
+	// Rust #62691: tasks match by the displayed title only, so the working
+	// directory never contributes search terms.
+	if len(candidate.SearchTerms) != 0 {
+		t.Fatalf("search terms = %#v, want none", candidate.SearchTerms)
+	}
+	if rows := FilteredCandidates([]Candidate{candidate}, nil, `D:\repo`, SearchModeResults, false); len(rows) != 0 {
+		t.Fatalf("directory-only match rows = %#v, want none", rows)
 	}
 	if candidate.Selection.Kind != SelectionTool || candidate.Selection.InsertText != "@Fix the parser" ||
 		candidate.Selection.Path != "thread://task-123" {

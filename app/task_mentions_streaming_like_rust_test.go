@@ -3,7 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"strconv"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -87,16 +87,18 @@ func (t *scriptedAppServerTransport) setAfterRead(after func(count int)) {
 	t.afterRead = after
 }
 
+func taskMentionStringPtr(value string) *string { return &value }
+
 func rpcResult(id json.RawMessage, result map[string]any) map[string]any {
 	return map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(id), "result": result}
 }
 
-// Rust #62132: task_mentions joins thread/search with thread/list on one
-// app-server request handle, so replies may arrive in either order.
+// Rust #62691: task_mentions issues two thread/list requests on one app-server
+// request handle, so replies may arrive in either order.
 func TestRemoteSessionRequestBatchDispatchesOutOfOrderRepliesLikeRust(t *testing.T) {
 	var transport *scriptedAppServerTransport
 	transport = newScriptedAppServerTransport(func(request scriptedAppServerRequest, reply func(map[string]any)) {
-		if request.Method != string(appserver.MethodThreadSearch) {
+		if request.Method != string(appserver.MethodThreadList) {
 			return
 		}
 		go func() {
@@ -109,24 +111,21 @@ func TestRemoteSessionRequestBatchDispatchesOutOfOrderRepliesLikeRust(t *testing
 			}
 			requests := transport.observed()
 			reply(rpcResult(requests[1].ID, map[string]any{
-				"data":       []any{map[string]any{"id": "listed", "name": "Listed task"}},
+				"data":       []any{map[string]any{"id": "filtered", "name": "Filtered task"}},
 				"nextCursor": nil,
 			}))
 			reply(rpcResult(requests[0].ID, map[string]any{
-				"data": []any{map[string]any{
-					"thread":  map[string]any{"id": "searched"},
-					"snippet": "hit",
-				}},
+				"data":       []any{map[string]any{"id": "recent", "name": "Recent task"}},
 				"nextCursor": nil,
 			}))
 		}()
 	})
 	client := &remoteAppServerTUIClient{transport: transport}
-	var search appserver.ThreadSearchResponse
-	var listed appserver.ThreadListResponse
+	var recent appserver.ThreadListResponse
+	var filtered appserver.ThreadListResponse
 	outcomes := remoteSessionRequestBatch(context.Background(), client, []remoteRequestSpec{
-		{method: appserver.MethodThreadSearch, params: appserver.ThreadSearchParams{SearchTerm: "q"}, target: &search},
-		{method: appserver.MethodThreadList, params: appserver.ThreadListParams{}, target: &listed},
+		{method: appserver.MethodThreadList, params: appserver.ThreadListParams{}, target: &recent},
+		{method: appserver.MethodThreadList, params: appserver.ThreadListParams{SearchTerm: taskMentionStringPtr("q")}, target: &filtered},
 	})
 	if len(outcomes) != 2 || !outcomes[0].settled || !outcomes[1].settled {
 		t.Fatalf("outcomes = %#v, want both settled", outcomes)
@@ -134,77 +133,74 @@ func TestRemoteSessionRequestBatchDispatchesOutOfOrderRepliesLikeRust(t *testing
 	if outcomes[0].err != nil || outcomes[1].err != nil {
 		t.Fatalf("outcome errors = %v / %v", outcomes[0].err, outcomes[1].err)
 	}
-	if len(search.Data) != 1 || search.Data[0].Thread.ID != "searched" || search.Data[0].Snippet != "hit" {
-		t.Fatalf("search response = %#v", search)
+	if len(recent.Data) != 1 || recent.Data[0].ID != "recent" {
+		t.Fatalf("recent response = %#v", recent)
 	}
-	if len(listed.Data) != 1 || listed.Data[0].ID != "listed" {
-		t.Fatalf("list response = %#v", listed)
+	if len(filtered.Data) != 1 || filtered.Data[0].ID != "filtered" {
+		t.Fatalf("filtered response = %#v", filtered)
 	}
 }
 
-// Rust #62132: a superseded or timed-out remote task search is cancelled
-// instead of being left to run out its own budget, and the title listing that
-// already arrived is still used.
-func TestRemoteTaskMentionSearchCancelsAbandonedSearchLikeRust(t *testing.T) {
+// Rust #62691: when the title-filtered request is abandoned, the recent list
+// that already arrived still feeds the mention popup.
+func TestRemoteTaskMentionSearchRunnerKeepsRecentWhenTitleFilterStallsLikeRust(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var mu sync.Mutex
-	var searchID int64
 	transport := newScriptedAppServerTransport(func(request scriptedAppServerRequest, reply func(map[string]any)) {
-		switch request.Method {
-		case string(appserver.MethodThreadList):
-			reply(rpcResult(request.ID, map[string]any{
-				"data":       []any{map[string]any{"id": "listed", "name": "Listed task", "cwd": "/repo"}},
-				"nextCursor": nil,
-			}))
-		case string(appserver.MethodThreadSearch):
-			id, _ := strconv.ParseInt(string(request.ID), 10, 64)
-			mu.Lock()
-			searchID = id
-			mu.Unlock()
-			// The search never answers: the caller abandons it.
-		case string(appserver.MethodThreadSearchCancel):
-			var params appserver.ThreadSearchCancelParams
-			if err := json.Unmarshal(request.Params, &params); err != nil {
-				t.Errorf("cancel params = %s: %v", request.Params, err)
-			}
-			mu.Lock()
-			want := searchID
-			mu.Unlock()
-			if params.RequestID.String() != strconv.FormatInt(want, 10) {
-				t.Errorf("cancel requestId = %q, want %d", params.RequestID.String(), want)
-			}
-			reply(rpcResult(request.ID, map[string]any{}))
+		if request.Method != string(appserver.MethodThreadList) {
+			return
 		}
+		var params appserver.ThreadListParams
+		if err := json.Unmarshal(request.Params, &params); err != nil {
+			t.Errorf("thread/list params = %s: %v", request.Params, err)
+			return
+		}
+		if params.SearchTerm != nil {
+			// The title-filtered page never answers: the caller abandons it.
+			return
+		}
+		reply(rpcResult(request.ID, map[string]any{
+			"data":       []any{map[string]any{"id": "recent", "name": "Recent task", "cwd": "/repo"}},
+			"nextCursor": nil,
+		}))
 	})
-	transport.setAfterRead(func(count int) {
-		if count == 1 {
-			cancel()
-		}
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	run := remoteTaskMentionSearchRunner(&remoteAppServerTUIClient{transport: transport}, false)
+	matches := searchTaskMentionsWithRunner(ctx, run, "query", "self", "/repo")
+	if len(matches) != 1 || matches[0].ThreadID != "recent" {
+		t.Fatalf("matches = %#v, want the recent list only", matches)
+	}
+}
+
+// Rust #62691: the hosted Cloud backend has no title filter, so only the recent
+// list is requested.
+func TestRemoteTaskMentionSearchRunnerSkipsTitleFilterOnCloudLikeRust(t *testing.T) {
+	var mu sync.Mutex
+	methods := []string{}
+	transport := newScriptedAppServerTransport(func(request scriptedAppServerRequest, reply func(map[string]any)) {
+		mu.Lock()
+		methods = append(methods, request.Method)
+		mu.Unlock()
+		reply(rpcResult(request.ID, map[string]any{
+			"data":       []any{map[string]any{"id": "recent", "name": "Recent task"}},
+			"nextCursor": nil,
+		}))
 	})
-	detached := false
-	run := remoteTaskMentionSearchRunner(&remoteAppServerTUIClient{transport: transport}, false, func() { detached = true })
-	_, searchErr, listed, listErr := run(ctx, appserver.ThreadSearchParams{SearchTerm: "q"}, appserver.ThreadListParams{})
-	if searchErr == nil {
-		t.Fatal("abandoned search reported success")
+	run := remoteTaskMentionSearchRunner(&remoteAppServerTUIClient{transport: transport}, true)
+	recent, recentErr, _, filteredErr := run(context.Background(), appserver.ThreadListParams{}, appserver.ThreadListParams{SearchTerm: taskMentionStringPtr("query")})
+	if recentErr != nil || len(recent.Data) != 1 {
+		t.Fatalf("cloud recent list = %#v / %v", recent, recentErr)
 	}
-	if listErr != nil {
-		t.Fatalf("title listing error = %v", listErr)
+	if !errors.Is(filteredErr, errTaskMentionCloudTitleFilterUnsupported) {
+		t.Fatalf("cloud filtered error = %v", filteredErr)
 	}
-	if len(listed.Data) != 1 || listed.Data[0].ID != "listed" {
-		t.Fatalf("title listing = %#v, want the already-available match", listed)
+	mu.Lock()
+	issued := append([]string(nil), methods...)
+	mu.Unlock()
+	if len(issued) != 1 || issued[0] != string(appserver.MethodThreadList) {
+		t.Fatalf("cloud requests = %#v, want one recent thread/list", issued)
 	}
-	if !detached {
-		t.Fatal("abandoned search kept the connection open")
-	}
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		for _, request := range transport.observed() {
-			if request.Method == string(appserver.MethodThreadSearchCancel) {
-				return
-			}
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatal("abandoned search was not cancelled")
 }
