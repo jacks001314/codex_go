@@ -2,6 +2,7 @@ package retainedctx
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -98,103 +99,51 @@ func TestHarnessMetadataWireNamesMatchRust(t *testing.T) {
 	}
 }
 
-// TestMcpAttributionCheckpointHandlesMissingOrUnknownIdentity mirrors Rust's
-// `mcp_checkpoint_handles_missing_or_unknown_identity`: an absent checkpoint
-// stays absent, while a source that carries an identity this build does not
-// know makes the whole checkpoint an attribution error with no sources.
-func TestMcpAttributionCheckpointHandlesMissingOrUnknownIdentity(t *testing.T) {
-	var empty HarnessMetadata
-	if err := json.Unmarshal([]byte(`{}`), &empty); err != nil {
-		t.Fatalf("Unmarshal empty: %v", err)
-	}
-	if empty.McpAttribution != nil {
-		t.Fatalf("absent mcp_attribution = %#v, want nil", empty.McpAttribution)
-	}
-
-	var restored HarnessMetadata
-	raw := `{"mcp_attribution":{"status":"complete","sources":[{
-		"server_name":"example","tool_name":"search","first_turn_id":"turn_1",
-		"future_identity":"unknown to this reader"}]}}`
-	if err := json.Unmarshal([]byte(raw), &restored); err != nil {
-		t.Fatalf("Unmarshal checkpoint: %v", err)
-	}
-	want := McpAttributionStatusAttributionError
-	if restored.McpAttribution == nil || restored.McpAttribution.Status != want {
-		t.Fatalf("mcp_attribution = %#v, want status %q", restored.McpAttribution, want)
-	}
-	if restored.McpAttribution.ErrorReason != nil || len(restored.McpAttribution.Sources) != 0 {
-		t.Fatalf("attribution error fallback = %#v, want no reason and no sources", restored.McpAttribution)
-	}
-}
-
-// TestMcpAttributionErrorDiagnosticsDoNotInvalidateCheckpoints mirrors Rust's
-// `mcp_error_diagnostics_do_not_invalidate_checkpoints`: a missing reason stays
-// missing, a future reason decodes as `unknown`, and a non-string reason is
-// dropped, all without failing the checkpoint.
-func TestMcpAttributionErrorDiagnosticsDoNotInvalidateCheckpoints(t *testing.T) {
-	historyMissing := McpAttributionErrorHistoryMissingCheckpoint
+// TestOldRolloutMetadataRestoresSearchMCPUseLikeRust mirrors Rust #62589's
+// `old_rollout_metadata_restores_search_mcp_use`: legacy attribution only
+// reports whether Search MCP may have been used, malformed values count as
+// possible use, and the member is never serialized again.
+func TestOldRolloutMetadataRestoresSearchMCPUseLikeRust(t *testing.T) {
 	cases := []struct {
-		name       string
-		reasonJSON string
-		want       *McpAttributionErrorReason
+		name string
+		raw  string
+		want *bool
 	}{
-		{"absent", "", nil},
-		{"future reason", `,"error_reason":"future_reason"`, reasonPointer(McpAttributionErrorUnknown)},
-		{"non-string reason", `,"error_reason":{"invalid":true}`, nil},
-		{"known reason", `,"error_reason":"history_missing_checkpoint"`, &historyMissing},
+		{"absent", `{}`, nil},
+		{"search connector", `{"mcp_attribution":{"status":"complete","sources":[{"connector_id":"connector_openai_search_service","server_name":"example","tool_name":"search","first_turn_id":"turn_1"}]}}`, boolPointer(true)},
+		{"attribution error", `{"mcp_attribution":{"status":"attribution_error","error_reason":"history_missing_checkpoint"}}`, boolPointer(true)},
+		{"unknown status", `{"mcp_attribution":{"status":"future_status"}}`, boolPointer(true)},
+		{"missing status", `{"mcp_attribution":{}}`, boolPointer(true)},
+		{"malformed value", `{"mcp_attribution":"unreadable"}`, boolPointer(true)},
+		{"null value", `{"mcp_attribution":null}`, boolPointer(true)},
+		{"clean report", `{"mcp_attribution":{"status":"none","sources":[]}}`, boolPointer(false)},
+		{"complete without search connector", `{"mcp_attribution":{"status":"complete","sources":[{"connector_id":"other","server_name":"s","tool_name":"t","first_turn_id":"turn"}]}}`, boolPointer(false)},
 	}
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			raw := `{"mcp_attribution":{"status":"attribution_error"` + testCase.reasonJSON + `}}`
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			var metadata HarnessMetadata
-			if err := json.Unmarshal([]byte(raw), &metadata); err != nil {
-				t.Fatalf("Unmarshal: %v", err)
+			if err := json.Unmarshal([]byte(tc.raw), &metadata); err != nil {
+				t.Fatalf("Unmarshal(%s): %v", tc.raw, err)
 			}
-			if metadata.McpAttribution == nil || metadata.McpAttribution.Status != McpAttributionStatusAttributionError {
-				t.Fatalf("mcp_attribution = %#v, want attribution_error", metadata.McpAttribution)
-			}
-			got := metadata.McpAttribution.ErrorReason
 			switch {
-			case testCase.want == nil && got != nil:
-				t.Fatalf("error_reason = %q, want nil", *got)
-			case testCase.want != nil && (got == nil || *got != *testCase.want):
-				t.Fatalf("error_reason = %v, want %q", got, *testCase.want)
+			case tc.want == nil && metadata.LegacySearchMCPUsed != nil:
+				t.Fatalf("legacy_search_mcp_used = %v, want absent", *metadata.LegacySearchMCPUsed)
+			case tc.want != nil && (metadata.LegacySearchMCPUsed == nil || *metadata.LegacySearchMCPUsed != *tc.want):
+				t.Fatalf("legacy_search_mcp_used = %v, want %v", metadata.LegacySearchMCPUsed, *tc.want)
+			}
+			encoded, err := json.Marshal(metadata)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			if strings.Contains(string(encoded), "mcp_attribution") || strings.Contains(string(encoded), "legacy_search_mcp_used") {
+				t.Fatalf("serialized metadata kept the legacy member: %s", encoded)
 			}
 		})
 	}
 }
 
-// TestMcpAttributionNullCheckpointIsAnError pins the Option-vs-null rule: Rust's
-// custom deserializer runs for a present `null`, so the field becomes an
-// attribution error rather than disappearing.
-func TestMcpAttributionNullCheckpointIsAnError(t *testing.T) {
-	var metadata HarnessMetadata
-	if err := json.Unmarshal([]byte(`{"mcp_attribution":null}`), &metadata); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	if metadata.McpAttribution == nil || metadata.McpAttribution.Status != McpAttributionStatusAttributionError {
-		t.Fatalf("null mcp_attribution = %#v, want attribution_error", metadata.McpAttribution)
-	}
-}
-
-// TestMcpAttributionRequiredFields pins the strict half of the checkpoint: a
-// missing status or a source without its required identity fails the checkpoint,
-// which the harness metadata turns into an attribution error.
-func TestMcpAttributionRequiredFields(t *testing.T) {
-	for _, raw := range []string{
-		`{"mcp_attribution":{}}`,
-		`{"mcp_attribution":{"status":"bogus"}}`,
-		`{"mcp_attribution":{"status":"complete","unexpected":true}}`,
-		`{"mcp_attribution":{"status":"complete","sources":[{"server_name":"s","tool_name":"t"}]}}`,
-	} {
-		var metadata HarnessMetadata
-		if err := json.Unmarshal([]byte(raw), &metadata); err != nil {
-			t.Fatalf("Unmarshal(%s): %v", raw, err)
-		}
-		if metadata.McpAttribution == nil || metadata.McpAttribution.Status != McpAttributionStatusAttributionError {
-			t.Fatalf("%s: mcp_attribution = %#v, want attribution_error", raw, metadata.McpAttribution)
-		}
-	}
+func boolPointer(value bool) *bool {
+	return &value
 }
 
 // TestMarkRetainedSourcesIncomplete mirrors
@@ -218,8 +167,4 @@ func TestMarkRetainedSourcesIncomplete(t *testing.T) {
 			t.Fatalf("guardian_sources[%d] still complete", i)
 		}
 	}
-}
-
-func reasonPointer(reason McpAttributionErrorReason) *McpAttributionErrorReason {
-	return &reason
 }

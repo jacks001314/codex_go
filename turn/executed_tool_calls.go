@@ -8,7 +8,6 @@ import (
 
 	"codex_go/model"
 	"codex_go/protocol"
-	"codex_go/retainedctx"
 	"codex_go/tool"
 )
 
@@ -80,14 +79,6 @@ type ExecutedToolCallRecorder struct {
 	// startedCells records cells whose runtime handle was already observed, so a
 	// later exec/wait registration for the same cell is not treated as reuse.
 	startedCells map[string]struct{}
-	// mcpAttribution is the cumulative MCP tools/call attribution, independent
-	// of the best-effort call recording above (Rust `ExecutedToolCalls`'s
-	// `mcp_attribution` member).
-	mcpAttribution *McpAttributionRecorder
-	// mcpAttributionSeeded records that the thread's initial history has already
-	// been folded into the attribution recorder, so a resume or fork cannot
-	// re-seed it mid-thread.
-	mcpAttributionSeeded bool
 	// includeGeneralMetadata reports that ordinary executed-tool metadata is
 	// enabled, so a request carries every observation rather than the
 	// connector-only projection (Rust
@@ -386,11 +377,6 @@ func NewExecutedToolCallRecorder() *ExecutedToolCallRecorder {
 		seenIDs:                newSeenIDs(),
 		seenNestedIDs:          newSeenIDs(),
 		canProveWaitCompletion: true,
-		// Rust's `ExecutedToolCalls::new` seeds from the session's initial
-		// history; Go creates the recorder before the thread's first sampling
-		// request, so it starts as an empty history and `SeedMcpAttribution`
-		// folds the supplied history in before the first checkpoint.
-		mcpAttribution: NewMcpAttributionRecorder(true, nil),
 	}
 }
 
@@ -404,66 +390,6 @@ func (r *ExecutedToolCallRecorder) SetToolMetadataMetrics(sink model.ToolMetadat
 	r.mu.Lock()
 	r.toolMetadataMetrics = sink
 	r.mu.Unlock()
-}
-
-// RecordMcpSource records one completed MCP tools/call attribution source
-// (Rust `ExecutedToolCalls::record_mcp_source`).
-func (r *ExecutedToolCallRecorder) RecordMcpSource(source retainedctx.McpAttributionSource) {
-	if r == nil {
-		return
-	}
-	r.mcpAttribution.Record(source)
-}
-
-// McpAttributionSnapshot returns the cumulative attribution without changing the
-// revision (Rust `ExecutedToolCalls::mcp_attribution_snapshot`).
-func (r *ExecutedToolCallRecorder) McpAttributionSnapshot() retainedctx.McpAttribution {
-	if r == nil {
-		return retainedctx.McpAttribution{}
-	}
-	return r.mcpAttribution.Snapshot()
-}
-
-// McpAttributionCheckpoint returns the checkpoint to persist with its revision
-// (Rust `ExecutedToolCalls::mcp_attribution_checkpoint`).
-func (r *ExecutedToolCallRecorder) McpAttributionCheckpoint(force bool) (retainedctx.McpAttribution, uint64, bool) {
-	if r == nil {
-		return retainedctx.McpAttribution{}, 0, false
-	}
-	return r.mcpAttribution.Checkpoint(force)
-}
-
-// MarkMcpAttributionPersisted acknowledges a persisted checkpoint revision
-// (Rust `ExecutedToolCalls::mark_mcp_attribution_persisted`).
-func (r *ExecutedToolCallRecorder) MarkMcpAttributionPersisted(revision uint64) {
-	if r == nil {
-		return
-	}
-	r.mcpAttribution.MarkPersisted(revision)
-}
-
-// SeedMcpAttribution folds the thread's initial history into the attribution
-// recorder the first time it is supplied, mirroring Rust's
-// `ExecutedToolCalls::new(features, history)` seeding. `fresh` marks an empty or
-// cleared history; `checkpoints` are the persisted metadata checkpoints in
-// rollout order. Later calls are ignored so a resumed record cannot be re-seeded
-// after it has begun recording.
-func (r *ExecutedToolCallRecorder) SeedMcpAttribution(fresh bool, checkpoints []retainedctx.McpAttribution) {
-	if r == nil {
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.mcpAttributionSeeded {
-		return
-	}
-	if !r.mcpAttribution.untouched() {
-		// Recording already began, so the history seed would lose evidence.
-		r.mcpAttributionSeeded = true
-		return
-	}
-	r.mcpAttribution = NewMcpAttributionRecorder(fresh, checkpoints)
-	r.mcpAttributionSeeded = true
 }
 
 func (r *ExecutedToolCallRecorder) RecordToolCall(invocation *tool.Invocation, toolMode string) {

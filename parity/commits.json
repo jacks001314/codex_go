@@ -52984,11 +52984,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Cumulative MCP tools/call attribution is no longer collected, sent in Responses request metadata, or checkpointed into rollout items (Rust #62589, 30c69e60a3). Old rollouts decode the removed mcp_attribution member only into legacy_search_mcp_used: an attribution_error or unrecognized status, a source on connector_openai_search_service, or an undecodable value counts as possible Search MCP use, while a clean report records no use; the member is never serialized again and new rollouts use model_search_state. Tests: go test ./retainedctx ./turn ./mcp -count=1; go test ./model -count=1; go test ./appserver -run 'McpAttribution|ModelSearch|Search|Rollout|Harness' -count=1; go test ./parity -count=1"
    ],
    "kind": "runtime",
    "sha": "30c69e60a36897a74dd5a5ca1c7747eb613ed0ad",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Remove cumulative MCP attribution from requests and rollouts (#62589)"
   },
   {

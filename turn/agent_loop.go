@@ -11,24 +11,18 @@ import (
 	"codex_go/eventmap"
 	"codex_go/model"
 	"codex_go/protocol"
-	"codex_go/retainedctx"
 	"codex_go/state"
 	"codex_go/tool"
 	"github.com/google/uuid"
 )
 
 type AgentLoopOptions struct {
-	Agent             model.AgentRunner
-	Dispatcher        *ToolDispatcher
-	SteerMailbox      *SteerMailbox
-	MaxTurns          int
-	Now               func() time.Time
-	ExecutedToolCalls *ExecutedToolCallRecorder
-	// MCPAttribution is the thread's cumulative MCP attribution recorder.
-	// Unlike ExecutedToolCalls it is not gated by the executed-tool-call
-	// metadata feature: Rust reports attribution on every request and only the
-	// provider's internal-metadata grant decides whether it reaches the body.
-	MCPAttribution          *ExecutedToolCallRecorder
+	Agent                   model.AgentRunner
+	Dispatcher              *ToolDispatcher
+	SteerMailbox            *SteerMailbox
+	MaxTurns                int
+	Now                     func() time.Time
+	ExecutedToolCalls       *ExecutedToolCallRecorder
 	ToolRegistrationMetrics ToolRegistrationMetricSink
 	ToolRegistrationCounts  func() tool.RegistrationCounts
 	// DeferMailboxPreemption mirrors the `features.defer_mailbox_preemption`
@@ -118,7 +112,6 @@ type AgentLoop struct {
 	steerMailbox            *SteerMailbox
 	now                     func() time.Time
 	executedToolCalls       *ExecutedToolCallRecorder
-	mcpAttribution          *ExecutedToolCallRecorder
 	toolRegistrationMetrics ToolRegistrationMetricSink
 	toolRegistrationCounts  func() tool.RegistrationCounts
 	deferMailboxPreemption  bool
@@ -469,7 +462,6 @@ func NewAgentLoop(options *AgentLoopOptions) *AgentLoop {
 		steerMailbox:            options.SteerMailbox,
 		now:                     now,
 		executedToolCalls:       options.ExecutedToolCalls,
-		mcpAttribution:          options.MCPAttribution,
 		toolRegistrationMetrics: options.ToolRegistrationMetrics,
 		toolRegistrationCounts:  options.ToolRegistrationCounts,
 		deferMailboxPreemption:  options.DeferMailboxPreemption,
@@ -765,7 +757,6 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			OnModelRequest:              bridgeModelRequestHook(request.OnModelRequest, request.ThreadID, request.TurnID, request.CWD),
 			RequiredCyberAccessPrograms: append([]string(nil), request.RequiredCyberAccessPrograms...),
 			ClientMetadata:              cloneStringMap(clientMetadata),
-			MCPAttribution:              l.mcpAttributionSnapshot(),
 			ToolResultsForInput: func(input []any, owner string) []model.ToolResultAttachment {
 				if l == nil || l.executedToolCalls == nil {
 					return nil
@@ -1149,18 +1140,6 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			}
 		}
 	}
-}
-
-// mcpAttributionSnapshot reports the thread's cumulative MCP attribution at the
-// sampling step about to issue a request (Rust
-// `ExecutedToolCalls::mcp_attribution_snapshot`). A loop without a recorder
-// reports nothing.
-func (l *AgentLoop) mcpAttributionSnapshot() *retainedctx.McpAttribution {
-	if l == nil || l.mcpAttribution == nil {
-		return nil
-	}
-	snapshot := l.mcpAttribution.McpAttributionSnapshot()
-	return &snapshot
 }
 
 // mailboxPreemptionEventName mirrors the tracing event name Rust emits when a

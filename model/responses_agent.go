@@ -33,7 +33,6 @@ import (
 	"codex_go/eventmap"
 	"codex_go/network"
 	"codex_go/protocol"
-	"codex_go/retainedctx"
 	"codex_go/utils"
 
 	"github.com/coder/websocket"
@@ -2668,7 +2667,7 @@ func (r *ResponsesAgentRunner) buildResponsesAgentRequest(request *AgentRequest,
 		PromptCacheKey:       strings.TrimSpace(request.PromptCacheKey),
 		PromptCacheOptions:   promptCacheOptionsForTTL(request.PromptCacheTTL),
 		AccessPrograms:       accessPrograms,
-		ClientMetadata:       responsesClientMetadataForRequest(request, r),
+		ClientMetadata:       responsesClientMetadataForRequest(request),
 		Text:                 responsesTextParamForRequest(request.OutputSchema, request.ModelVerbosity, &modelInfo),
 		UseResponsesLite:     modelInfo.UseResponsesLite,
 		IncludeTimingMetrics: request.IncludeTimingMetrics,
@@ -2700,45 +2699,14 @@ func (r *ResponsesAgentRunner) buildResponsesAgentRequest(request *AgentRequest,
 	return apiRequest, nil
 }
 
-// McpAttributionClientMetadataKey is the body-only client-metadata member that
-// carries the thread's cumulative MCP tools/call attribution (Rust
-// `MCP_ATTRIBUTION_CLIENT_METADATA_KEY`).
-const McpAttributionClientMetadataKey = "mcp_attribution"
-
-// MaxMcpAttributionBytes bounds the serialized attribution document (Rust
-// `MAX_MCP_ATTRIBUTION_BYTES`).
-const MaxMcpAttributionBytes = 16 * 1024
-
-// responsesClientMetadataForRequest copies the request's client metadata and
-// appends the MCP attribution document for providers granted internal metadata
-// (Rust #47899). The document never becomes a compatibility header.
-func responsesClientMetadataForRequest(request *AgentRequest, runner *ResponsesAgentRunner) map[string]string {
+// responsesClientMetadataForRequest copies the request's client metadata. Rust
+// #62589 removed the cumulative `mcp_attribution` document from Responses
+// requests, so nothing is appended here.
+func responsesClientMetadataForRequest(request *AgentRequest) map[string]string {
 	if request == nil {
 		return nil
 	}
-	clientMetadata := cloneStringMap(request.ClientMetadata)
-	if request.MCPAttribution == nil || !runner.includeInternalMetadata() {
-		return clientMetadata
-	}
-	if clientMetadata == nil {
-		clientMetadata = map[string]string{}
-	}
-	clientMetadata[McpAttributionClientMetadataKey] = serializeMcpAttributionBounded(*request.MCPAttribution)
-	return clientMetadata
-}
-
-// serializeMcpAttributionBounded mirrors Rust's `to_json_string_bounded`
-// fallback: an oversized document becomes `payload_too_large`, and any other
-// serialization failure becomes `serialization_failed`.
-func serializeMcpAttributionBounded(attribution retainedctx.McpAttribution) string {
-	encoded, err := json.Marshal(attribution)
-	if err != nil {
-		return `{"status":"attribution_error","error_reason":"serialization_failed"}`
-	}
-	if len(encoded) > MaxMcpAttributionBytes {
-		return `{"status":"attribution_error","error_reason":"payload_too_large"}`
-	}
-	return string(encoded)
+	return cloneStringMap(request.ClientMetadata)
 }
 
 func (r *ResponsesAgentRunner) runHTTP(ctx context.Context, request *AgentRequest) (response *AgentResponse, err error) {

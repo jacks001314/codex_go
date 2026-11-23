@@ -12982,15 +12982,8 @@ func (r *RuntimeRouter) runtimeAppendItems(threadID session.ThreadID, items []se
 	// carries that decision in trusted harness metadata so a resumed session
 	// cannot switch the same references back to hosted search.
 	r.annotateModelSearchMetadata(string(threadID), items)
-	// Rust checkpoints the thread's cumulative MCP attribution into the recorded
-	// items before they are persisted (session/mod.rs), then acknowledges the
-	// revision once the append succeeds.
-	mcpRevision, hasMcpCheckpoint := r.annotateMcpAttributionMetadata(string(threadID), items)
 	if liveThread := r.threads.LiveThread(threadID); liveThread != nil {
 		record, err := liveThread.AppendItems(items)
-		if err == nil && hasMcpCheckpoint {
-			r.markMcpAttributionPersisted(string(threadID), mcpRevision)
-		}
 		if err == nil {
 			r.recordGuardianReviewHistoryAppend(string(threadID), items)
 			r.emitRecordedRawResponseItems(threadID, items)
@@ -12998,9 +12991,6 @@ func (r *RuntimeRouter) runtimeAppendItems(threadID session.ThreadID, items []se
 		return record, err
 	}
 	record, err := r.services.ThreadRouter.store.AppendItems(threadID, items)
-	if err == nil && hasMcpCheckpoint {
-		r.markMcpAttributionPersisted(string(threadID), mcpRevision)
-	}
 	if err == nil {
 		r.recordGuardianReviewHistoryAppend(string(threadID), items)
 		r.emitRecordedRawResponseItems(threadID, items)
@@ -18788,13 +18778,8 @@ func (r *RuntimeRouter) executedToolCallRecorder(threadID string) *turn.Executed
 		recorder.SetToolMetadataMetrics(r.services.TurnMetrics)
 		return recorder
 	}
-	// Seed from the thread's persisted history outside the map lock so a resume
-	// or fork restores the cumulative MCP attribution before any new source is
-	// recorded (Rust `ExecutedToolCalls::new(features, history)`).
-	fresh, checkpoints := r.mcpAttributionHistory(threadID)
 	recorder = turn.NewExecutedToolCallRecorder()
 	recorder.SetToolMetadataMetrics(r.services.TurnMetrics)
-	recorder.SeedMcpAttribution(fresh, checkpoints)
 	r.executedToolCallsMu.Lock()
 	if existing := r.executedToolCalls[threadID]; existing != nil {
 		recorder = existing
@@ -18804,29 +18789,6 @@ func (r *RuntimeRouter) executedToolCallRecorder(threadID string) *turn.Executed
 	r.executedToolCallsMu.Unlock()
 	recorder.SetToolMetadataMetrics(r.services.TurnMetrics)
 	return recorder
-}
-
-// mcpAttributionHistory returns the thread's persisted attribution checkpoints
-// in rollout order, and whether the history is fresh (an empty thread, where a
-// missing checkpoint is expected rather than evidence of pre-attribution
-// history). Go's record already carries compaction replacement items with their
-// harness-metadata sidecar, so a single ordered pass is enough.
-func (r *RuntimeRouter) mcpAttributionHistory(threadID string) (bool, []retainedctx.McpAttribution) {
-	if r == nil {
-		return true, nil
-	}
-	record, err := r.threadRecord(session.ThreadID(threadID), false, true)
-	if err != nil || record == nil || len(record.Items) == 0 {
-		return true, nil
-	}
-	checkpoints := make([]retainedctx.McpAttribution, 0, 1)
-	for i := range record.Items {
-		metadata := harnessMetadataFromSessionItem(&record.Items[i])
-		if metadata != nil && metadata.McpAttribution != nil {
-			checkpoints = append(checkpoints, *metadata.McpAttribution)
-		}
-	}
-	return false, checkpoints
 }
 
 func (r *RuntimeRouter) deleteExecutedToolCallRecorder(threadID string) {
@@ -19660,22 +19622,6 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	// failure is classified for analytics, before the elicitation rewrites it.
 	options.MCPConnectorAuthFailureObserver = func(callID string) {
 		r.rememberMCPToolCallElicitation(threadID, strings.TrimSpace(turnID), callID, telemetry.ElicitationTypeAuthOrLink)
-	}
-	// Rust's cumulative MCP attribution: every completed tools/call is recorded on
-	// the thread's executed-tool-call recorder, which checkpoints it into harness
-	// metadata so a resume or fork restores the same attribution.
-	options.MCPSourceObserver = func(source mcp.McpCallSource) {
-		recorder := r.executedToolCallRecorder(threadID)
-		if recorder == nil {
-			return
-		}
-		recorder.RecordMcpSource(retainedctx.McpAttributionSource{
-			ConnectorID: source.ConnectorID,
-			PluginID:    source.PluginID,
-			ServerName:  source.ServerName,
-			ToolName:    source.ToolName,
-			FirstTurnID: source.FirstTurnID,
-		})
 	}
 	toolRouter, err := turn.BuildToolRouter(options)
 	if err != nil {

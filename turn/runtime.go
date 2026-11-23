@@ -12,7 +12,6 @@ import (
 	"codex_go/codemode"
 	"codex_go/codexapi"
 	"codex_go/model"
-	"codex_go/retainedctx"
 	"codex_go/tool"
 	"codex_go/utils"
 )
@@ -526,7 +525,6 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			PromptCacheTTL:               request.PromptCacheTTL,
 			CyberAccessProgram:           request.CyberAccessProgram,
 			ClientMetadata:               cloneStringMap(clientMetadata),
-			MCPAttribution:               r.mcpAttributionSnapshot(),
 			Trace:                        request.Trace,
 			AttestationProvider:          request.AttestationProvider,
 			OutputSchema:                 request.OutputSchema,
@@ -647,7 +645,6 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		Agent:                   r.agent,
 		SteerMailbox:            r.steerMailbox,
 		ExecutedToolCalls:       executedToolCalls,
-		MCPAttribution:          r.executedToolCalls,
 		ToolRegistrationMetrics: r.toolRegistrationMetrics,
 		ToolRegistrationCounts:  r.toolRegistrationCounts,
 		Dispatcher:              dispatcher,
@@ -688,18 +685,6 @@ func withoutModelWebSearchTools(tools []any) []any {
 // ToolNamespacesInfo returns the finalized tool inventory of the router that
 // issued the current step (Rust `StepContext::tool_router`). Remote compaction
 // reports it separately so its metadata matches the issuing request (#45248).
-// mcpAttributionSnapshot reports the thread's cumulative MCP attribution for a
-// sampling request (Rust `ExecutedToolCalls::mcp_attribution_snapshot`). Unlike
-// executed-tool-call capture the recorder is never feature-gated; only the
-// provider's internal-metadata grant decides whether the document is sent.
-func (r *Runtime) mcpAttributionSnapshot() *retainedctx.McpAttribution {
-	if r == nil || r.executedToolCalls == nil {
-		return nil
-	}
-	snapshot := r.executedToolCalls.McpAttributionSnapshot()
-	return &snapshot
-}
-
 func (r *Runtime) ToolNamespacesInfo() tool.ToolNamespacesInfo {
 	if r == nil || r.router == nil {
 		return nil

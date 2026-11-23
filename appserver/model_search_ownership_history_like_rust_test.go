@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"testing"
 
-	"codex_go/mcp"
 	"codex_go/retainedctx"
 	"codex_go/session"
 )
@@ -49,13 +48,25 @@ func TestModelSearchStateRestorePrecedenceLikeRust(t *testing.T) {
 		},
 		{
 			name:  "legacy attribution error claims search mcp",
-			items: []session.Item{modelSearchHarnessItem(t, map[string]any{"mcp_attribution": map[string]any{"status": string(retainedctx.McpAttributionStatusAttributionError)}})},
+			items: []session.Item{modelSearchHarnessItem(t, map[string]any{"mcp_attribution": map[string]any{"status": "attribution_error"}})},
 			want:  modelSearchClientMCP,
 		},
 		{
 			name:  "legacy search connector claims search mcp",
-			items: []session.Item{modelSearchHarnessItem(t, map[string]any{"mcp_attribution": map[string]any{"status": string(retainedctx.McpAttributionStatusComplete), "sources": []any{map[string]any{"connector_id": mcp.SearchConnector, "server_name": "s", "tool_name": "t", "first_turn_id": "turn"}}}})},
+			items: []session.Item{modelSearchHarnessItem(t, map[string]any{"mcp_attribution": map[string]any{"status": "complete", "sources": []any{map[string]any{"connector_id": "connector_openai_search_service", "server_name": "s", "tool_name": "t", "first_turn_id": "turn"}}}})},
 			want:  modelSearchClientMCP,
+		},
+		{
+			// Rust #62589: an unreadable legacy checkpoint counts as possible
+			// Search MCP use.
+			name:  "malformed legacy attribution claims search mcp",
+			items: []session.Item{modelSearchHarnessItem(t, map[string]any{"mcp_attribution": "unreadable"})},
+			want:  modelSearchClientMCP,
+		},
+		{
+			name:  "clean legacy attribution records no owner",
+			items: []session.Item{modelSearchHarnessItem(t, map[string]any{"mcp_attribution": map[string]any{"status": "none", "sources": []any{}}})},
+			want:  "",
 		},
 		{
 			name:  "legacy native marker restores standalone",

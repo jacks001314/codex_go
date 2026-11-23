@@ -592,18 +592,15 @@ func scanModelSearchHistory(items []session.Item) modelSearchHistoryScan {
 		if used, _ := fields["native_search_fallback_used"].(bool); used {
 			scan.legacyNative = true
 		}
-		if attribution, ok := fields["mcp_attribution"].(map[string]any); ok {
+		if _, ok := fields["mcp_attribution"]; ok {
+			// Rust #62589 decodes the removed checkpoint only to learn whether
+			// Search MCP may have been used; an undecodable value counts as use.
 			scan.hasCheckpoint = true
-			if status, _ := attribution["status"].(string); status == string(retainedctx.McpAttributionStatusAttributionError) {
+			var metadata retainedctx.HarnessMetadata
+			if err := json.Unmarshal(raw, &metadata); err != nil {
 				scan.legacySearchMCP = true
-			}
-			if sources, ok := attribution["sources"].([]any); ok {
-				for _, source := range sources {
-					entry, _ := source.(map[string]any)
-					if connector, _ := entry["connector_id"].(string); strings.TrimSpace(connector) == mcp.SearchConnector {
-						scan.legacySearchMCP = true
-					}
-				}
+			} else if metadata.LegacySearchMCPUsed != nil && *metadata.LegacySearchMCPUsed {
+				scan.legacySearchMCP = true
 			}
 		}
 	}

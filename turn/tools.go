@@ -114,12 +114,8 @@ type ToolRegistryOptions struct {
 	// result is a trusted connector authentication failure, so the caller can
 	// classify the call for analytics (Rust #45716). Nil leaves the report off.
 	MCPConnectorAuthFailureObserver func(callID string)
-	// MCPSourceObserver receives every completed MCP tools/call so the thread can
-	// accumulate its cumulative MCP attribution (Rust `record_mcp_source`). Nil
-	// leaves the report off.
-	MCPSourceObserver         func(source mcp.McpCallSource)
-	OrchestratorSkillsEnabled *bool
-	SkillProviders            *skillprovider.Registry
+	OrchestratorSkillsEnabled       *bool
+	SkillProviders                  *skillprovider.Registry
 	// CloudSkillProvider replaces MCP resource discovery for the cloud
 	// (orchestrator) catalog when the host supplies a frozen snapshot
 	// (Rust #55631). Nil keeps the MCP-backed path.
@@ -1268,7 +1264,6 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 			SessionID:                         options.SessionID,
 			WindowID:                          options.WindowID,
 			ConnectorAuthFailureObserver:      options.MCPConnectorAuthFailureObserver,
-			MCPSourceObserver:                 options.MCPSourceObserver,
 		})
 		spec := executor.Spec()
 		spec.ThirdParty = true

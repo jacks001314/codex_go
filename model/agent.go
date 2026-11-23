@@ -9,7 +9,6 @@ import (
 	"codex_go/codexapi"
 	"codex_go/network"
 	"codex_go/protocol"
-	"codex_go/retainedctx"
 	"codex_go/sandbox"
 )
 
@@ -150,11 +149,6 @@ type AgentRequest struct {
 	// endpoint, stay out of diagnostics, and are dropped for a redirect that
 	// preserves the body. Codex's default request construction supplies none.
 	ToolResults []ToolResultAttachment
-	// MCPAttribution is the thread's cumulative MCP tools/call attribution
-	// snapshot (Rust CodexResponsesMetadata::mcp_attribution). It is body-only
-	// and reaches the request only when the resolved provider is granted
-	// internal metadata (Rust #47899).
-	MCPAttribution *retainedctx.McpAttribution
 	// Trace is the W3C trace context of the request that started this turn
 	// (Rust's `request_trace`): the websocket payload carries it so the model
 	// call stays inside the caller's trace.

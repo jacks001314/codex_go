@@ -193,11 +193,11 @@ type HarnessMetadata struct {
 	// InheritedUserMessage marks copied parent user/assistant context, which must
 	// not become child-local authorization.
 	InheritedUserMessage bool `json:"inherited_user_message,omitempty"`
-	// McpAttribution is the cumulative MCP tools/call attribution checkpoint,
-	// never model-visible (Rust `CodexHarnessMetadata::mcp_attribution`). An
-	// unreadable checkpoint decodes as an attribution error rather than being
-	// dropped, so the loss stays visible to the host.
-	McpAttribution *McpAttribution `json:"mcp_attribution,omitempty"`
+	// LegacySearchMCPUsed records whether an old `mcp_attribution` value
+	// indicates Search MCP may have been used (Rust #62589
+	// `legacy_search_mcp_used`). It is decoded from older rollouts and never
+	// serialized; new rollouts use ModelSearchState.
+	LegacySearchMCPUsed *bool `json:"-"`
 	// ModelSearchState records which search provider owns this thread's
 	// provider-specific references (Rust #62144). Absent on older rollouts.
 	ModelSearchState   *ModelSearchState   `json:"model_search_state,omitempty"`
