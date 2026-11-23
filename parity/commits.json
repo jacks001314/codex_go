@@ -53554,11 +53554,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1271: partial - Rust clears pending thread-switch state when the app event queue is replaced on reconnect so a discarded switch cannot leave a pending reset counted. Go handles reconnect for the agents dashboard (escape closes it while reconnecting) and for cloud streams (CloudStreamDisconnectedMsg/CloudStreamReconnectedMsg), but there is no pending thread-switch queue or counter to clear on reconnect."
+    "Batch 144: not applicable - Rust #62807 clears App::pending_thread_switch_resets when reconnect replaces the app event queue, so a discarded switch cannot leave its reset counted and input blocked. Go has no equivalent state: tui/tea handles input in one synchronous update loop and runs switchThreadID (tui/tea/model.go) and resetThreadScopedState (tui/tea/thread_reset.go) inline, while handleAppServerDisconnect only retires the voice session. tui/app/session_lifecycle.go carries the reset decision as pure functions with no event queue or counter (rg 'pending_thread_switch|ResetTranscriptForThreadSwitch' finds only that contract and its tests), so the leak this commit fixes cannot occur. The reconnect_thread_id accessor and boxed dispatch future in the same commit are Rust-internal structure."
    ],
    "kind": "runtime",
    "sha": "d402acbebac03429169dec70eb977e3c1f5b6f40",
-   "status": "partial",
+   "status": "not_applicable",
    "subject": "Reset TUI thread-switch state on reconnect (#62807)"
   },
   {
