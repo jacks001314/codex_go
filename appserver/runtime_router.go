@@ -4233,6 +4233,12 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 			}
 		}
 		if request.Method == MethodThreadResume {
+			var resumeParams ThreadResumeParams
+			if err := request.DecodeParams(&resumeParams); err == nil {
+				if err := validateRuntimeWorkspaceRootsOnHost(resumeParams.RuntimeWorkspaceRoots); err != nil {
+					return nil, err
+				}
+			}
 			updated, resumeErr := r.prepareParentOwnedV2ChildResume(request)
 			if resumeErr != nil {
 				return nil, resumeErr
@@ -6264,6 +6270,9 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 		if err := threadLifecycleSandboxPermissionsError(params.Permissions, params.Sandbox); err != nil {
 			return nil, err
 		}
+		if err := validateRuntimeWorkspaceRootsOnHost(params.RuntimeWorkspaceRoots); err != nil {
+			return nil, err
+		}
 		if err := r.validateThreadStartEnvironments(&params); err != nil {
 			return nil, err
 		}
@@ -6303,6 +6312,12 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 			r.recordStartupPhase("thread_start_create_thread", time.Since(createThreadStartedAt), "ready")
 		}
 	} else if request.Method == MethodThreadFork {
+		var forkParams ThreadForkParams
+		if err := request.DecodeParams(&forkParams); err == nil {
+			if err := validateRuntimeWorkspaceRootsOnHost(forkParams.RuntimeWorkspaceRoots); err != nil {
+				return nil, err
+			}
+		}
 		var handled bool
 		result, handled, err = r.handleActiveThreadForkRuntime(request)
 		if err != nil {
@@ -21681,6 +21696,18 @@ func turnSandboxPolicyPermissionProfile(raw any) (string, *sandbox.PermissionPro
 		profile := sandbox.PermissionProfile{SandboxPolicy: policy, NetworkEnabled: policy.HasFullNetworkAccess()}
 		return string(policy.Kind), &profile, nil
 	}
+}
+
+// validateRuntimeWorkspaceRootsOnHost mirrors Rust #62377: thread start,
+// resume, and fork keep runtime workspace roots as native path strings on the
+// wire, and the server validates every root with its own path rules.
+func validateRuntimeWorkspaceRootsOnHost(roots []string) error {
+	for _, root := range roots {
+		if !filepath.IsAbs(strings.TrimSpace(root)) {
+			return jsonRPCInvalidRequest(fmt.Sprintf("invalid runtimeWorkspaceRoots: path is not absolute: %s", root))
+		}
+	}
+	return nil
 }
 
 // validateHostAbsoluteWritableRoots mirrors Rust #62376: a policy supplied

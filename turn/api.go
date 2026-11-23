@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -587,15 +588,11 @@ func validateRuntimeWorkspaceRoots(roots []string) error {
 	return nil
 }
 
+// isAbsoluteRuntimeWorkspaceRoot applies the host's path rules. Rust #62377
+// keeps the roots as native path strings on the wire and validates them on the
+// server, so a path from another platform is rejected here.
 func isAbsoluteRuntimeWorkspaceRoot(value string) bool {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return false
-	}
-	if strings.HasPrefix(value, "/") || strings.HasPrefix(value, `\`) {
-		return true
-	}
-	return len(value) >= 3 && asciiLetter(value[0]) && value[1] == ':' && (value[2] == '/' || value[2] == '\\')
+	return filepath.IsAbs(strings.TrimSpace(value))
 }
 
 func asciiLetter(value byte) bool {

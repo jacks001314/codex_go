@@ -3,6 +3,7 @@ package turn
 import (
 	"encoding/json"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -415,11 +416,25 @@ func TestTurnStartRejectsRelativeRuntimeWorkspaceRoots(t *testing.T) {
 		t.Fatalf("Start() error = %v, want runtimeWorkspaceRoots invalid turn request", err)
 	}
 
+	absolute := t.TempDir()
 	if _, err := service.Start(&TurnStartParams{
 		ThreadID:              "thread-2",
-		RuntimeWorkspaceRoots: []string{"/repo", `D:\repo`},
+		RuntimeWorkspaceRoots: []string{absolute},
 	}); err != nil {
-		t.Fatalf("Start() absolute roots error = %v", err)
+		t.Fatalf("Start() absolute root error = %v", err)
+	}
+
+	// Rust #62377 validates roots on the server host. A path from another
+	// platform is absolute there but relative here.
+	foreign := `D:\repo`
+	if runtime.GOOS == "windows" {
+		foreign = "/repo"
+	}
+	if _, err := service.Start(&TurnStartParams{
+		ThreadID:              "thread-3",
+		RuntimeWorkspaceRoots: []string{foreign},
+	}); !errors.Is(err, ErrInvalidTurnRequest) {
+		t.Fatalf("Start() foreign root error = %v, want ErrInvalidTurnRequest", err)
 	}
 }
 

@@ -52222,11 +52222,14 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Thread start, resume and fork keep runtimeWorkspaceRoots as path strings and now reject any root that is not absolute under the server host's path rules; turn start applies the same host rule to its runtime workspace roots.",
+    "Resume and fork continue to use the effective thread roots; existing tests for restored and effective roots pass.",
+    "Go's TUI has no PathUri-based thread-permission display, so the client-side path-URI display half of the change has no Go carrier.",
+    "go test ./turn -count=1; go test ./appserver -run 'Thread(Start|Resume|Fork)|RuntimeWorkspace' -count=1; go build ./...; go vet ./turn ./appserver"
    ],
    "kind": "runtime",
    "sha": "b967993f35239b86ee3c6a9c8f54b8146e31ddfa",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Preserve workspace roots across client and server platforms (#62377)"
   },
   {
