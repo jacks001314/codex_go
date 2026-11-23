@@ -53510,11 +53510,14 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "app/config_server_discovery.go: when config_server.oauth is omitted, resolveConfigServerOAuth discovers published authorization metadata through mcp.DiscoverAuthorizationMetadata under a 5s deadline, maps a timeout to 'OAuth discovery timed out' and other failures to 'OAuth discovery failed', and builds ConfigServerOAuth with client_id codex plus the device authorization endpoint. Explicit OAuth settings win without any request, and a server without metadata keeps the anonymous fetch.",
+    "app/config_server_bundle.go: configServerCloudConfigBundleLoaderForRunWithDeps resolves the server before building the loader, and anonymousConfigServerBundleLoader (used by the Git credential helper) refuses explicit or discovered OAuth with the protected-login error so Git never opens the OS keyring.",
+    "app/git_credential.go routes the remote-config branch through anonymousCloudConfigBundleLoaderForRun; app/config_server_login.go and app/app.go resolve OAuth during logout with the application network policy, so a denied discovery host blocks the request.",
+    "app/config_server_discovery_like_rust_test.go covers discovery (endpoints, client id, device endpoint), explicit OAuth skipping the network, anonymous-loader refusal for discovered and explicit OAuth, and logout discovery blocked by a deny policy."
    ],
    "kind": "runtime",
    "sha": "60fc55bb6950910be0bbcdd3e45552a29cf659b0",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Enable OAuth discovery by default for config servers (#62824)"
   },
   {

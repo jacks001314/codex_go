@@ -228,8 +228,14 @@ func gitTokenForOrigin(ctx context.Context, overrides []string, destination *url
 		return "", gitCredentialIgnore, errGitCredentialProtectedLogin
 	}
 	if loaded.RequiresRemoteConfig() {
-		bundle, err := cloudConfigBundleLoaderForRun(ctx, codexHome, loaded, snapshot)
+		// Rust #62824: Git resolves the config server anonymously so a
+		// protected (explicit or discovered) OAuth login refuses instead of
+		// opening the OS keyring.
+		bundle, err := anonymousCloudConfigBundleLoaderForRun(ctx, codexHome, loaded, snapshot)
 		if err != nil {
+			if errors.Is(err, errGitCredentialProtectedLogin) {
+				return "", gitCredentialIgnore, errGitCredentialProtectedLogin
+			}
 			return "", gitCredentialIgnore, errGitCredentialConfigUnavailable
 		}
 		managedOpts := &config.EffectiveOptions{

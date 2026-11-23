@@ -14,6 +14,7 @@ import (
 	"codex_go/auth"
 	"codex_go/config"
 	"codex_go/keyring"
+	codexnetwork "codex_go/network"
 )
 
 // newConfigServerAuthManager builds the OAuth manager that owns a config
@@ -86,17 +87,30 @@ func ensureConfigServerLoginWith(ctx context.Context, codexHome string, requirem
 }
 
 // logoutConfigServer removes the config server's stored grant and reports
-// whether one existed (Rust logout_config_server).
-func logoutConfigServer(ctx context.Context, codexHome string, requirements *config.ConfigRequirements) (bool, error) {
-	return logoutConfigServerWith(ctx, codexHome, requirements, nil, keyring.New())
+// whether one existed (Rust logout_config_server). Discovery during logout
+// honors the local application network policy (Rust #62824).
+func logoutConfigServer(ctx context.Context, codexHome string, loaded *config.Config) (bool, error) {
+	if loaded == nil || loaded.Requirements == nil {
+		return false, nil
+	}
+	policy := publishApplicationNetworkPolicy(loaded)
+	return logoutConfigServerWithPolicy(ctx, codexHome, loaded.Requirements, configServerHTTPClient(loaded, nil), keyring.New(), &policy)
 }
 
 // logoutConfigServerWith is the dependency-injected form used by tests.
 func logoutConfigServerWith(ctx context.Context, codexHome string, requirements *config.ConfigRequirements, client *http.Client, store keyring.Store) (bool, error) {
-	if requirements == nil {
+	return logoutConfigServerWithPolicy(ctx, codexHome, requirements, client, store, nil)
+}
+
+func logoutConfigServerWithPolicy(ctx context.Context, codexHome string, requirements *config.ConfigRequirements, client *http.Client, store keyring.Store, policy *codexnetwork.NetworkPolicy) (bool, error) {
+	if requirements == nil || requirements.ConfigServer == nil {
 		return false, nil
 	}
-	manager := newConfigServerAuthManager(codexHome, requirements.ConfigServer, client, store)
+	resolved, err := resolveConfigServerOAuth(ctx, requirements.ConfigServer, client, policy)
+	if err != nil {
+		return false, err
+	}
+	manager := newConfigServerAuthManager(codexHome, resolved, client, store)
 	if manager == nil {
 		return false, nil
 	}

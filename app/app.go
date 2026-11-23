@@ -841,6 +841,17 @@ func loadEffectiveWithAppliedConfigServer(codexHome string, opts *config.Effecti
 // for a configuration whose managed requirements are already included. It
 // leaves the loader unset for non-enterprise identities and limits bootstrap
 // requests with the configuration's application network policy.
+// anonymousCloudConfigBundleLoaderForRun is the Git-credential path: a
+// configured config server resolves without OAuth so workspace policy can be
+// applied without opening the OS keyring (Rust #62824), while any other remote
+// configuration keeps the shared loader.
+func anonymousCloudConfigBundleLoaderForRun(ctx context.Context, codexHome string, bootstrap *config.Config, snapshot *auth.AuthDotJSON) (*config.CloudConfigLoader, error) {
+	if bootstrap != nil && bootstrap.RequiresRemoteConfig() {
+		return anonymousConfigServerBundleLoader(ctx, codexHome, bootstrap, bootstrap.Requirements.ConfigServer)
+	}
+	return cloudConfigBundleLoaderForRun(ctx, codexHome, bootstrap, snapshot)
+}
+
 func cloudConfigBundleLoaderForRun(ctx context.Context, codexHome string, bootstrap *config.Config, snapshot *auth.AuthDotJSON) (*config.CloudConfigLoader, error) {
 	if bootstrap == nil {
 		return nil, nil
@@ -3022,7 +3033,7 @@ func runLogout(ctx context.Context, opts cli.LoginOptions, stderr io.Writer) err
 	// clears it alongside the OpenAI credentials.
 	configServerRemoved := false
 	if loadedConfig.RequiresRemoteConfig() {
-		configServerRemoved, err = logoutConfigServer(ctx, codexHome, loadedConfig.Requirements)
+		configServerRemoved, err = logoutConfigServer(ctx, codexHome, loadedConfig)
 		if err != nil {
 			return exitMessagef("Error logging out: %v", err)
 		}

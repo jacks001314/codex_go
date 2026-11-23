@@ -42,6 +42,47 @@ func configServerCloudConfigBundleLoaderForRunWithDeps(ctx context.Context, code
 	if bootstrap == nil || server == nil {
 		return nil, nil
 	}
+	// Rust #62824: discovery decides whether the bundle fetch signs in when the
+	// config server omits explicit OAuth settings.
+	policy := publishApplicationNetworkPolicy(bootstrap)
+	resolved, err := resolveConfigServerOAuth(ctx, server, configServerHTTPClient(bootstrap, client), &policy)
+	if err != nil {
+		return nil, err
+	}
+	return configServerBundleLoaderForResolved(ctx, codexHome, bootstrap, resolved, store, client)
+}
+
+// anonymousConfigServerBundleLoader mirrors Rust #62824
+// anonymous_config_server_bundle_loader: Git applies the same workspace policy
+// without opening the OS keyring, so explicit or discovered OAuth refuses the
+// load instead of starting a sign-in.
+func anonymousConfigServerBundleLoader(ctx context.Context, codexHome string, bootstrap *config.Config, server *config.ConfigServer) (*config.CloudConfigLoader, error) {
+	return anonymousConfigServerBundleLoaderWithClient(ctx, codexHome, bootstrap, server, nil)
+}
+
+// anonymousConfigServerBundleLoaderWithClient is the dependency-injected form
+// used by tests.
+func anonymousConfigServerBundleLoaderWithClient(ctx context.Context, codexHome string, bootstrap *config.Config, server *config.ConfigServer, client *http.Client) (*config.CloudConfigLoader, error) {
+	if bootstrap == nil || server == nil {
+		return nil, nil
+	}
+	policy := publishApplicationNetworkPolicy(bootstrap)
+	resolved, err := resolveConfigServerOAuth(ctx, server, configServerHTTPClient(bootstrap, client), &policy)
+	if err != nil {
+		return nil, err
+	}
+	if resolved != nil && resolved.OAuth != nil {
+		return nil, errGitCredentialProtectedLogin
+	}
+	return configServerBundleLoaderForResolved(ctx, codexHome, bootstrap, resolved, keyring.New(), client)
+}
+
+// configServerBundleLoaderForResolved builds the loader for a config server
+// whose OAuth resolution already happened.
+func configServerBundleLoaderForResolved(ctx context.Context, codexHome string, bootstrap *config.Config, server *config.ConfigServer, store keyring.Store, client *http.Client) (*config.CloudConfigLoader, error) {
+	if bootstrap == nil || server == nil {
+		return nil, nil
+	}
 	endpoint, err := server.BundleURL()
 	if err != nil {
 		return nil, err
