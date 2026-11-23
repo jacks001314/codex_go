@@ -53645,11 +53645,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Audit: appserver/guardian_denial_reconsideration.go already implements the invariant this upstream refactor protects. reconsiderGuardianDenial clones the original review request once (followup := *base, PreviousResponseID cleared, Store false), runs exactly one follow-up, and immediately accepts its assessment, including a second denial; nothing re-enters the reconsideration decision, so a retried response cannot schedule another model request.",
+    "The same decision as Rust's DenialResample: the feature gate guardian_denial_reconsideration is StageUnderDevelopment/default off in features/features.go, matching Rust's Feature::GuardianDenialReconsideration gate on DenialResample; a failed or timed-out retry keeps the first denial and cancellation aborts.",
+    "TestGuardianDenialReconsiderationLikeRust/valid_deny_replaces_the_denial asserts the two responses yield exactly two agent calls and the second denial is returned, and assertGuardianRetryReplaysRequest proves the retry reuses the unchanged request. Guardian spending has no Go carrier (the reviewer only keeps lastUsage for transcript budgeting), so the upstream usage-accounting detail has no separate implementation surface."
    ],
    "kind": "runtime",
    "sha": "63598243af3fa93ac670fb39da48b4b0967fb365",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Limit guardian response resampling to one retry (#62852)"
   },
   {
