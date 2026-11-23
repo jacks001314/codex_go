@@ -126,8 +126,11 @@ func TestPageNavigationUsesViewportAndStopsAtEndsLikeRust(t *testing.T) {
 	view := New(rows, "row-0", false)
 	view.pageHeight = 3
 	view.PageDown()
-	if got := view.SelectedThreadID(); got != "row-3" {
-		t.Fatalf("PageDown selected %q, want row-3", got)
+	// Rust #63145 pages by the rows the list paints: the group heading and the
+	// first two tasks fill this viewport, so the next page lands on the second
+	// task after the selection.
+	if got := view.SelectedThreadID(); got != "row-2" {
+		t.Fatalf("PageDown selected %q, want row-2", got)
 	}
 	view.PageDown()
 	view.PageDown()

@@ -54339,11 +54339,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1271: partial - Rust keeps task status visible in narrow task lists and pages by displayed rows rather than a fixed count so group headings and detail rows cannot hide tasks. Go's renderer already prefixes the status on narrow rows and reserves an 11-cell status column otherwise (tui/agents_overview/render.go), and paging uses the last render's visible page height (Rust #46837), but there is no docked pane to page within."
+    "Round 1266: Command Center paging counts the rows the list paints (Rust #63145). PageUp/PageDown build the same group-heading/gap/task sequence the renderer paints, derive the page size from the tasks visible in the current page, and move the selection by that many tasks (looking one page of rows ahead on the way down and leaving a row of overlap on the way up), so headings and gaps consume viewport rows instead of silently hiding tasks. The narrow-list status text and the 11-cell status column were already in place. Tests: go test ./tui/agents_overview -count=1 (displayed-row paging and single-group row-count paging); go test ./tui/tea -count=1."
    ],
    "kind": "runtime",
    "sha": "69ee78825e15772e065179dd5b91678be4f00ab3",
-   "status": "partial",
+   "status": "complete",
    "subject": "Keep task status visible and fix paging in the agent command center (#63145)"
   },
   {

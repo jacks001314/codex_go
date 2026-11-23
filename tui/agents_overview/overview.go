@@ -1339,23 +1339,146 @@ func (v *View) pageSelection(forward bool) {
 	if len(selectable) == 0 {
 		return
 	}
-	current := 0
-	for index, row := range selectable {
-		if row == v.Selected {
-			current = index
+	// Rust #63145: page by displayed rows, not by task count, so group
+	// headings and detail rows cannot scroll tasks out of the page.
+	height := v.pageHeight
+	if height < 1 {
+		height = 1
+	}
+	entries := v.displayedPageEntries(v.VisibleIndices())
+	if len(entries) == 0 {
+		return
+	}
+	selectedPos := -1
+	if v.hasMore && v.Selected == ShowMoreIndex {
+		selectedPos = len(entries)
+	} else {
+		for position, entry := range entries {
+			if entry.kind == pageEntryTask && entry.index == v.Selected {
+				selectedPos = position
+				break
+			}
+		}
+	}
+	if selectedPos < 0 {
+		selectedPos = 0
+	}
+	if v.hasMore && v.Selected == ShowMoreIndex {
+		if !forward {
+			for position := len(entries) - 1; position >= 0; position-- {
+				if entries[position].kind == pageEntryTask {
+					v.Selected = entries[position].index
+					return
+				}
+			}
+		}
+		return
+	}
+	start, accumulated := selectedPos, 1
+	for start > 0 {
+		added := 1
+		if entries[start-1].kind == pageEntryGroup {
+			added = 2 // heading and the gap that precedes it
+		}
+		if accumulated+added > height {
+			break
+		}
+		accumulated += added
+		start--
+	}
+	end := min(start+height, len(entries))
+	pageSize := 0
+	for _, entry := range entries[start:end] {
+		if entry.kind == pageEntryTask {
+			pageSize++
+		}
+	}
+	if pageSize < 1 {
+		pageSize = 1
+	}
+	if forward {
+		// Look one page of rows past the visible page, taking up to pageSize
+		// tasks so the destination keeps the selection visible after the move.
+		nextEnd := min(end+(end-start), len(entries))
+		next := -1
+		seen := 0
+		for position := selectedPos + 1; position < nextEnd; position++ {
+			if entries[position].kind != pageEntryTask {
+				continue
+			}
+			seen++
+			next = position
+			if seen == pageSize {
+				break
+			}
+		}
+		if next < 0 {
+			for position := nextEnd; position < len(entries); position++ {
+				if entries[position].kind == pageEntryTask {
+					next = position
+					break
+				}
+			}
+		}
+		if next >= 0 {
+			v.Selected = entries[next].index
+		}
+		return
+	}
+	// Leave one row of overlap in case the destination needs its heading.
+	next := -1
+	seen := 0
+	for position := selectedPos - 1; position >= 0; position-- {
+		if entries[position].kind != pageEntryTask {
+			continue
+		}
+		seen++
+		next = position
+		if seen == pageSize {
 			break
 		}
 	}
-	step := v.pageHeight
-	if step < 1 {
-		step = 1
+	if next >= 0 {
+		v.Selected = entries[next].index
 	}
-	if forward {
-		current = min(len(selectable)-1, current+step)
-	} else {
-		current = max(0, current-step)
+}
+
+// pageEntryKind identifies one rendered command-center row in the sequence the
+// list paints: group headings, the blank gap before a heading, and task rows.
+type pageEntryKind int
+
+const (
+	pageEntryTask pageEntryKind = iota
+	pageEntryGroup
+	pageEntryGap
+)
+
+type pageEntry struct {
+	kind  pageEntryKind
+	index int
+}
+
+// displayedPageEntries mirrors the row sequence renderRows paints, so paging
+// and scroll-to-selection count the same rows (Rust #63145 center_rows).
+func (v *View) displayedPageEntries(visible []int) []pageEntry {
+	if v == nil {
+		return nil
 	}
-	v.Selected = selectable[current]
+	entries := make([]pageEntry, 0, len(visible)*2)
+	hasPrevious := false
+	previous := 0
+	for _, index := range visible {
+		if hasPrevious && !v.sameGroup(v.State.Grouping, previous, index) {
+			entries = append(entries, pageEntry{kind: pageEntryGap})
+			entries = append(entries, pageEntry{kind: pageEntryGroup, index: index})
+		} else if !hasPrevious {
+			entries = append(entries, pageEntry{kind: pageEntryGroup, index: index})
+		}
+		entries = append(entries, pageEntry{kind: pageEntryTask, index: index})
+		previous = index
+		hasPrevious = true
+	}
+	return entries
 }
 
 // ToggleGrouping cycles project -> directory -> status -> model grouping
