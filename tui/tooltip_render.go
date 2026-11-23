@@ -116,6 +116,16 @@ func tooltipPrimaryHint(keymap *KeymapConfig, context string, action string) (st
 	if spec == "" {
 		return "", false
 	}
+	// Rust #63176: a `leader <key>` binding displays the configured leader
+	// prefix followed by the completion key; an unbound leader drops the tip
+	// instead of showing the literal alias.
+	if completion, ok := LeaderSpecCompletion(spec); ok {
+		prefixes, err := LeaderKeybindings(keymap)
+		if err != nil || len(prefixes) == 0 {
+			return "", false
+		}
+		return keybindingDisplayLabel(prefixes[0]) + " " + keybindingKeyLabel(completion), true
+	}
 	return keybindingDisplayLabel(spec), true
 }
 

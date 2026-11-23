@@ -54341,11 +54341,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Completed for the whole user-visible surface: tui/tooltips.txt already carries the refreshed catalog (inline mentions, steering a running turn, /copy, leader-key chord explanation, /agents and agent-archive shortcuts). The tip resolver now renders a `leader <key>` binding as the configured leader prefix plus the completion key (Rust #63176 render_tooltip), so the presets tip shows ctrl+x p by default, and an unbound leader drops the tip; the agent-center and archive tips follow a remapped keymap ({key:global.open_agents} f11, {key:agents.archive} f10). TestResolvedTooltipsRenderRustSnapshotLabels now pins the new Rust snapshot labels, TestResolvedTooltipsFollowRemappedShortcutsLikeRust covers the remapped keymap, and TestResolvedTooltipsSkipLeaderTipWhenLeaderIsUnboundLikeRust covers the unbound leader. The previously failing tui package test now passes: go test ./tui -count=1 is green."
    ],
    "kind": "runtime",
    "sha": "61cb947f057155b705dda922739663fe2c37cf65",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Refresh terminal tips and show configured leader and agent shortcuts (#63176)"
   },
   {

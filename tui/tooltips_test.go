@@ -66,10 +66,9 @@ func TestDesktopAppTooltipCopyMatchesRust(t *testing.T) {
 }
 
 // Mirrors the Rust snapshot `configured_shortcut_tips_render_at_narrow_width`
-// (tui/src/tooltips/snapshots): the default bindings resolve to `tab`,
-// `ctrl+o`, `ctrl+t`, `ctrl+g`, `ctrl+r`, and the two alt chords. Go does not
-// register `global.find_transcript`, so Rust's contract drops that tip rather
-// than showing a raw placeholder.
+// after #63176 refreshed the catalog: inline mentions, steering, `/copy`, the
+// configured leader key, and the agent-center shortcuts all carry the active
+// primary binding instead of a placeholder.
 func TestResolvedTooltipsRenderRustSnapshotLabels(t *testing.T) {
 	resolved := ResolvedTooltips(NewKeymapConfig())
 	alt := AltKeyLabel()
@@ -77,22 +76,19 @@ func TestResolvedTooltipsRenderRustSnapshotLabels(t *testing.T) {
 	// macOS), so the Rust snapshot labels are composed from the shared table.
 	ctrl := ModifierLabelPrefix(ControlKeyLabel())
 	want := []string{
-		"Press `` tab `` to queue a message when a task is running; otherwise it sends immediately (except `!`).",
-		"Use **/copy** or press `` " + ctrl + "o `` to copy the latest agent response as Markdown.",
+		"The leader key is `` " + ctrl + "x ``. Press it to begin common key chords.",
+		"Press `` tab `` to queue a message while Codex is working. It will be sent when Codex finishes its turn.",
+		"Press `` " + ctrl + "o `` to copy the latest agent response as Markdown.",
 		"Press `` " + ctrl + "t `` to open the full transcript.",
+		"Press `` f3 `` to search this conversation.",
 		"Press `` " + ctrl + "g `` to edit your current draft in an external editor.",
 		"Press `` " + ctrl + "r `` to search previously entered prompts.",
-		"For models with adjustable reasoning, press `` " + alt + "+. `` to increase reasoning effort or `` " + alt + "+, `` to decrease it.",
+		"Press `` " + alt + "+. `` to increase reasoning effort or `` " + alt + "+, `` to decrease it.",
+		"Use `` " + ctrl + "x p `` to open presets.",
+		"In the agent command center, use `` a `` to archive the selected thread.",
 	}
 	for _, expected := range want {
-		found := false
-		for _, tip := range resolved {
-			if tip == expected {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !tooltipPoolContains(resolved, expected) {
 			t.Fatalf("resolved pool missing %q:\n%#v", expected, resolved)
 		}
 	}
@@ -101,6 +97,58 @@ func TestResolvedTooltipsRenderRustSnapshotLabels(t *testing.T) {
 			t.Fatalf("unresolved placeholder in %q", tip)
 		}
 	}
+}
+
+// Rust #63176 renders the same catalog against a remapped keymap: the leader,
+// agent-center, and agent-archive tips follow the configured bindings.
+func TestResolvedTooltipsFollowRemappedShortcutsLikeRust(t *testing.T) {
+	config := NewKeymapConfig()
+	for _, binding := range []struct {
+		context string
+		action  string
+		specs   []string
+	}{
+		{"global", "leader", []string{"f9"}},
+		{"global", "open_agents", []string{"f11"}},
+		{"agents", "archive", []string{"f10"}},
+	} {
+		if err := config.Set(binding.context, binding.action, binding.specs); err != nil {
+			t.Fatalf("Set(%s.%s): %v", binding.context, binding.action, err)
+		}
+	}
+	resolved := ResolvedTooltips(config)
+	want := []string{
+		"The leader key is `` f9 ``. Press it to begin common key chords.",
+		"Use `` f11 `` to open the agent command center.",
+		"In the agent command center, use `` f10 `` to archive the selected thread.",
+	}
+	for _, expected := range want {
+		if !tooltipPoolContains(resolved, expected) {
+			t.Fatalf("remapped pool missing %q:\n%#v", expected, resolved)
+		}
+	}
+}
+
+// Rust #63176 skips the leader tip when the leader prefix is unbound.
+func TestResolvedTooltipsSkipLeaderTipWhenLeaderIsUnboundLikeRust(t *testing.T) {
+	config := NewKeymapConfig()
+	if err := config.Set("global", "leader", []string{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tip := range ResolvedTooltips(config) {
+		if strings.Contains(tip, "The leader key is") {
+			t.Fatalf("unbound leader kept the leader tip: %q", tip)
+		}
+	}
+}
+
+func tooltipPoolContains(pool []string, want string) bool {
+	for _, tip := range pool {
+		if tip == want {
+			return true
+		}
+	}
+	return false
 }
 
 // Rust's `tooltip_templates` returns `ALL_TOOLTIPS`: the catalog tips followed
