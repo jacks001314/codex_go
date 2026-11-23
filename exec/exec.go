@@ -363,6 +363,18 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if err != nil {
 		return nil, err
 	}
+	var resumePermissions *execResumePermissionState
+	if req.Exec.Subcommand == "resume" && resumeContext != nil && resumeContext.Record != nil {
+		// Rust #62194: a resume restores the saved working directory unless the
+		// caller passed an explicit one.
+		if strings.TrimSpace(req.Exec.Shared.CWD) == "" && strings.TrimSpace(req.Root.Shared.CWD) == "" {
+			if saved := strings.TrimSpace(resumeContext.Record.Metadata.CWD); filepath.IsAbs(saved) {
+				req.Exec.Shared.CWD = saved
+			}
+		}
+		state := r.execResumePermissionState(resumeContext.Record)
+		resumePermissions = &state
+	}
 	var outputSchema any
 	if !execForkOnlyRequest(req) {
 		outputSchema, err = loadOutputSchema(req.Exec.OutputSchema)
@@ -412,7 +424,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if err != nil {
 		return nil, err
 	}
-	permissionProfile, err := resolveExecSandboxPermissionProfile(cfg, req)
+	permissionProfile, err := r.resolveExecPermissionProfileForRun(cfg, req, resumePermissions)
 	if err != nil {
 		return nil, err
 	}
@@ -482,7 +494,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if warning, ok := fallbackModelMetadataWarning(modelID, modelInfo); ok {
 		streamCollector.Warning(warning)
 	}
-	emitStartupBwrapWarning(cfg, req, streamCollector)
+	emitStartupBwrapWarning(req, permissionProfile, streamCollector)
 	if req.OnTurnStarted != nil {
 		req.OnTurnStarted(threadID, turnID)
 	}
@@ -2209,15 +2221,11 @@ type warnSink interface {
 // emitStartupBwrapWarning mirrors Rust exec: outside JSON mode, an exec run
 // whose permission profile needs the platform sandbox reports why bubblewrap is
 // missing or unusable.
-func emitStartupBwrapWarning(cfg *config.Config, req *Request, sink warnSink) {
+func emitStartupBwrapWarning(req *Request, resolution *config.SandboxPermissionProfileResolution, sink warnSink) {
 	if req != nil && req.Exec.JSON {
 		return
 	}
-	if sink == nil {
-		return
-	}
-	resolution, err := resolveExecSandboxPermissionProfile(cfg, req)
-	if err != nil || resolution == nil {
+	if sink == nil || resolution == nil {
 		return
 	}
 	if warning := systemBwrapWarning(resolution.Profile, requestCWD(req)); warning != "" {
