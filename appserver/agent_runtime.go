@@ -183,6 +183,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithAgents(agent model.AgentRunner
 		modelReviewer.parentResponse = r.guardianLatestParentResponseForTurn
 		modelReviewer.trustedRootTurnID = r.guardianTrustedRootTurnIDForTurn
 		modelReviewer.servingAssessment = r.guardianServingAssessmentForReview
+		modelReviewer.probeAssessment = r.guardianServingAssessmentFor
 		modelReviewer.servingAuthorization = r.guardianServingAuthorization
 		modelReviewer.allowsInitialCUACall = r.guardianAllowsInitialCUACallForTurn
 		modelReviewer.nodeReplEvidence = r.guardianReviewNodeReplEvidence

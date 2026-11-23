@@ -299,6 +299,11 @@ type modelGuardianReviewer struct {
 	// invocation (Rust #58075). A matching low-risk value may replace the
 	// synchronous review; a missing or stale value falls back to it.
 	servingAssessment func(threadID, turnID, callID string) *state.ServingAssessment
+	// probeAssessment resolves the serving value recorded for one invocation
+	// without the provider-routing gate applied to review decisions. Rust #63327
+	// keeps that probe observational: it is logged while preparing the review and
+	// never decides the approval.
+	probeAssessment func(threadID, turnID, callID string) *state.ServingAssessment
 	// servingAuthorization captures the current authorization and policy the
 	// assessment is revalidated against.
 	servingAuthorization func(threadID, turnID string) state.ServingAuthorization
@@ -1464,6 +1469,14 @@ func (r *modelGuardianReviewer) review(ctx context.Context, threadID, turnID, ta
 			contextChanged = true
 		}
 	}
+	// Rust #63327: carry the serving probe from the tool step into the review
+	// preparation and log it with the tool call so the two can be correlated.
+	// The verdict still follows the review, never the probe.
+	slog.Info("Guardian V3 review preparation started",
+		"review_id", strings.TrimSpace(event.ID),
+		"tool_call_id", strings.TrimSpace(targetItemID),
+		"probe_review", guardianProbeReviewLabel(r.guardianProbeAssessment(threadID, turnID, targetItemID)),
+	)
 	feedbackCapture.model = plan.Selection.Model
 	feedbackCapture.instructions = plan.Instructions
 	historyCheckpoint := guardianReviewHistoryCheckpoint{}
@@ -2417,6 +2430,27 @@ func (r *modelGuardianReviewer) guardianActionExceedsReviewBudget(threadID, turn
 		tokens += session.lastUsageTokens()
 	}
 	return tokens > budget
+}
+
+// guardianProbeAssessment reports the serving value recorded for one invocation
+// without the provider-routing gate. Rust #63327 logs this probe while preparing
+// a review; it is an observation and never an approval decision.
+func (r *modelGuardianReviewer) guardianProbeAssessment(threadID, turnID, callID string) *state.ServingAssessment {
+	if r == nil || r.probeAssessment == nil {
+		return nil
+	}
+	return r.probeAssessment(threadID, turnID, callID)
+}
+
+// guardianProbeReviewLabel names the probe status for the preparation log.
+func guardianProbeReviewLabel(assessment *state.ServingAssessment) string {
+	if assessment == nil {
+		return "not_reported"
+	}
+	if assessment.RequiresReview {
+		return "required"
+	}
+	return "not_required"
 }
 
 func (r *modelGuardianReviewer) emit(threadID string, event *state.Event) {

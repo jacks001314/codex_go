@@ -54760,11 +54760,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Batch 122: partial - Rust carries the observational guardian_probe flag into GuardianReviewContext and logs it when V3 prepares a review. Go's Guardian review context has no guardian_probe field (guardian_serving_assessment.go/agent_runtime.go), so the probe observation is neither transported nor logged."
+    "Batch 124: complete - Guardian V3 review preparation logs the serving probe with the tool call. appserver/guardian_reviewer.go keeps an ungated probeAssessment lookup wired to RuntimeRouter.guardianServingAssessmentFor (the review decision keeps the #62607 provider-routing gate), and logs `Guardian V3 review preparation started` with review_id, tool_call_id and probe_review as required/not_required/not_reported once per review, before evidence preparation. The verdict still follows the review.",
+    "Tests: appserver/guardian_probe_log_like_rust_test.go runs a full review for a reported high, reported low and unreported probe, asserts the logged tool_call_id/review_id/probe_review for each, and keeps the approved verdict in all three cases."
    ],
    "kind": "runtime",
    "sha": "790ecc338ae78f85b20e61b935bd515b90aade4d",
-   "status": "partial",
+   "status": "complete",
    "subject": "Log probe results when Guardian V3 prepares a review (#63327)"
   },
   {
