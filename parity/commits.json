@@ -55246,9 +55246,21 @@
    "sha": "00696090d65a747848e0a40661e1da8badb1f146",
    "status": "complete",
    "subject": "Preserve slash command selection across TUI connection changes (#63419)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 150: not_applicable - Rust #63422 deletes the app-server's test-only `read_summary_from_rollout` helper and moves the subagent nickname/role assertions onto the StoredThread -> thread/summary conversions. Go has no test-only rollout summary reader: appserver summaries are built from the stored session record (appserver/router.go conversationSummaryFromRecord plus the SQLite row mapping that carries AgentNickname/AgentRole at router.go:4372), and the same conversions are already exercised by appserver/agent_controller_test.go, appserver/agent_send_request_like_rust_test.go, appserver/agent_suspend_like_rust_test.go and appserver/environment_subagents_test.go. There is no Go code path this refactor changes."
+   ],
+   "kind": "runtime",
+   "sha": "aae9db9f5fd0bc77eabf5ee7b3ad8c4809dcb7c5",
+   "status": "not_applicable",
+   "subject": "Test subagent metadata on stored thread conversions (#63422)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "00696090d65a747848e0a40661e1da8badb1f146",
+ "rustToInclusive": "aae9db9f5fd0bc77eabf5ee7b3ad8c4809dcb7c5",
  "schemaVersion": 1
 }
