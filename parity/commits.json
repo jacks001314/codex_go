@@ -51895,11 +51895,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1271: partial - Rust accepts inbound Noise connections in the remote exec-server. Go's execserver implements the outbound authenticated Noise client handshake and executor identity (execserver/client.go InitializeTimeout, noiseChannelSuite, CachedExecutorRegistrationID) but has no listener that accepts an inbound Noise connection, so a remote executor cannot dial into Go as a server."
    ],
    "kind": "runtime",
    "sha": "c1ed51ca2cd71cbbd4e6734f21cc3c9a9136d5d2",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Accept inbound Noise connections in remote exec-server (#62325)"
   },
   {
@@ -51960,11 +51960,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1271: partial - Rust lets a provider-error chat open the Agent Command Center with Left Arrow when agent navigation is available. Go tracks the provider admission failure on the model (tui/tea/model.go ProviderError, showProviderError/clearProviderError) but has no key that opens the agents dashboard from that screen."
    ],
    "kind": "runtime",
    "sha": "58ad62ce09dd7da5531cecb15fd69a21aa465332",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Let users open the command center from provider error screens (#62335)"
   },
   {
@@ -52933,11 +52933,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1271: partial - Rust keeps asynchronous Guardian scoring active while a serving probe runs. Go has the serving hooks (appserver/agent_runtime.go guardianServingAssessmentFor and servingAuthorization wired into the model reviewer) and the async scoring machinery, but no rule that keeps scoring active for a serving probe."
    ],
    "kind": "runtime",
    "sha": "3869f396aa6d748015b3636e8f97ed9d353371b9",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Keep async Guardian scoring active for serving probes (#62571)"
   },
   {
@@ -53553,11 +53553,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Round 1271: partial - Rust clears pending thread-switch state when the app event queue is replaced on reconnect so a discarded switch cannot leave a pending reset counted. Go handles reconnect for the agents dashboard (escape closes it while reconnecting) and for cloud streams (CloudStreamDisconnectedMsg/CloudStreamReconnectedMsg), but there is no pending thread-switch queue or counter to clear on reconnect."
    ],
    "kind": "runtime",
    "sha": "d402acbebac03429169dec70eb977e3c1f5b6f40",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Reset TUI thread-switch state on reconnect (#62807)"
   },
   {
@@ -54118,11 +54118,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Round 1271: partial - Rust docks the Agent Command Center beside the conversation. Go's command center is a full-screen dashboard (tui/tea/agents_overview.go, command_center_layout_like_rust_test.go) opened over the chat, not a pane docked beside it; there is no docked layout or split renderer."
    ],
    "kind": "runtime",
    "sha": "1731314b3b7ec68d6b831591107958da72d61101",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Dock the Agent Command Center beside the conversation (#62986)"
   },
   {
@@ -54130,11 +54130,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Round 1271: partial - Rust makes the docked command center navigable: a mouse click focuses the pane and can open a task, and focus moves between the task list and the conversation. Go's dashboard supports keyboard selection and mouse hover for chrome but nothing in tui/tea/agents_overview.go opens a task from a click or moves focus between a task list pane and a conversation pane."
    ],
    "kind": "runtime",
    "sha": "a0436d69ffd9a6d943d9b56175ba2968c5e698af",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Make Command Center easier to navigate in the TUI workspace (#62990)"
   },
   {
@@ -54338,11 +54338,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Round 1271: partial - Rust keeps task status visible in narrow task lists and pages by displayed rows rather than a fixed count so group headings and detail rows cannot hide tasks. Go's renderer already prefixes the status on narrow rows and reserves an 11-cell status column otherwise (tui/agents_overview/render.go), and paging uses the last render's visible page height (Rust #46837), but there is no docked pane to page within."
    ],
    "kind": "runtime",
    "sha": "69ee78825e15772e065179dd5b91678be4f00ab3",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Keep task status visible and fix paging in the agent command center (#63145)"
   },
   {
@@ -54350,11 +54350,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Round 1271: partial - Rust shows per-task loading progress in the docked command center. Go's dashboard has an empty-state 'Loading tasks…' row and a 'Loading more…' show-more row (tui/agents_overview/render.go, SetShowMoreLoading) but no per-task discovery progress and no docked pane."
    ],
    "kind": "runtime",
    "sha": "227fa4e805d44988b0888390f41afe1358e9d24d",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Show task loading progress in the docked agent command center (#63146)"
   },
   {
