@@ -54906,11 +54906,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Batch 122: partial - Rust delivers detached message-board notices to native agents. Go's message board host routes live agent messages and wake eligibility (appserver/agent_controller.go enqueueRuntimeAgentMessage/maybeWakeRootForPendingAgentMessages), but a detached notice path that reaches native agents without a live recipient has no Go carrier."
+    "Batch 127: complete - the detached message-board MCP can deliver notices to native agents. cmd/codex-message-board-mcp/app_server.go adds the optional --app-server flag (loopback ws:// only, no credentials/query/fragment), a cached JSON-RPC connection that initializes with experimentalApi, keeps the reply routing shared across concurrent notices, reconnects on timeout or transport failure without replaying the failed notice, keeps a matched rejection on the same transport, and enforces the 1024-byte notice budget over content plus both routing paths; notices are queued through thread/inject_items as an agent_message so no turn starts. registryBoardHost.Notify resolves the recipient path from the registry and reports accepted delivery; without the flag posts still store and notices stay skipped. agentboard.PostPreview.NotificationText ports the Rust preview text.",
+    "Tests: cmd/codex-message-board-mcp/app_server_like_rust_test.go covers concurrent notices sharing one connection, the payload shape, oversized rejection before the request leaves, reconnect after a timeout without replay, registry host delivery plus the unknown-recipient and unconfigured paths, and an end-to-end notice against a real app-server webSocket listener that lands in the native thread's persisted history."
    ],
    "kind": "runtime",
    "sha": "c983e8d1716d3aff20ecce3e96e40b907bd859f3",
-   "status": "partial",
+   "status": "complete",
    "subject": "Deliver detached message board notices to native agents (#63354)"
   },
   {

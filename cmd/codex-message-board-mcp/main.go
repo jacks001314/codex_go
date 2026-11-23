@@ -40,6 +40,7 @@ type messageBoardMCPOptions struct {
 	board        string
 	token        string
 	allowedHosts stringListFlag
+	appServer    string
 }
 
 type stringListFlag []string
@@ -64,6 +65,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags.StringVar(&options.board, "board", "codex", "message-board identity shared by participating threads")
 	flags.StringVar(&options.token, "token", "", "bearer token (defaults to CODEX_MESSAGE_BOARD_TOKEN)")
 	flags.Var(&options.allowedHosts, "allowed-host", "additional Host header value to accept (repeatable)")
+	flags.StringVar(&options.appServer, "app-server", "", "optional loopback ws:// app-server URL for queue-only agent notifications")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -97,7 +99,14 @@ func serve(ctx context.Context, options messageBoardMCPOptions, stdout io.Writer
 	}
 	defer registry.Close()
 	board := agentboard.NewLocalBoard(sqliteConfig, options.board)
-	host := &registryBoardHost{registry: registry, now: time.Now}
+	var appServer *messageBoardAppServer
+	if strings.TrimSpace(options.appServer) != "" {
+		appServer, err = newMessageBoardAppServer(ctx, options.appServer)
+		if err != nil {
+			return err
+		}
+	}
+	host := &registryBoardHost{registry: registry, now: time.Now, appServer: appServer}
 	binder := newMessageBoardMCPBinder(board, host)
 	defer binder.Close()
 	server, err := agentboard.NewMessageBoardMCPHTTP(agentboard.MessageBoardMCPHTTPConfig{
@@ -139,11 +148,13 @@ func defaultMessageBoardMCPCodexHome() string {
 }
 
 // registryBoardHost resolves membership and clocks from the persisted thread
-// registry. The standalone server has no live runtime, so notifications are
-// skipped instead of starting idle agents.
+// registry. Notifications travel through the optional app-server connection,
+// which queues them in a native agent's mailbox without starting a turn; without
+// one they are skipped instead of starting idle agents.
 type registryBoardHost struct {
-	registry *messageBoardMCPRegistry
-	now      func() time.Time
+	registry  *messageBoardMCPRegistry
+	now       func() time.Time
+	appServer *messageBoardAppServer
 }
 
 func (h *registryBoardHost) AgentPath(ctx context.Context, caller string) (agent.AgentPath, error) {
@@ -175,8 +186,26 @@ func (h *registryBoardHost) CurrentTime(context.Context, string) (time.Time, err
 	return h.now().UTC(), nil
 }
 
-func (h *registryBoardHost) Notify(context.Context, string, agentboard.PostPreview) (agentboard.NotificationDelivery, error) {
-	return agentboard.NotificationSkippedInactive, nil
+func (h *registryBoardHost) Notify(ctx context.Context, recipient string, post agentboard.PostPreview) (agentboard.NotificationDelivery, error) {
+	if h == nil || h.appServer == nil || h.registry == nil {
+		return agentboard.NotificationSkippedInactive, nil
+	}
+	path, ok, err := h.registry.AgentPath(ctx, recipient)
+	if err != nil {
+		return agentboard.NotificationSkippedInactive, err
+	}
+	if !ok {
+		return agentboard.NotificationSkippedInactive, agentboard.ErrUnknownBoardCaller
+	}
+	notice := messageBoardNotice{
+		author:    string(post.Author),
+		recipient: string(path),
+		content:   post.NotificationText(),
+	}
+	if err := h.appServer.inject(ctx, recipient, notice); err != nil {
+		return agentboard.NotificationSkippedInactive, err
+	}
+	return agentboard.NotificationAccepted, nil
 }
 
 // messageBoardMCPRegistry is the read-only view of persisted agent membership.

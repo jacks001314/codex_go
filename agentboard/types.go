@@ -31,6 +31,20 @@ type PostPreview struct {
 	Truncated   bool   `json:"truncated"`
 }
 
+// NotificationText renders the attributed notice delivered to a notified agent.
+// Rust parity: message-board types.rs PostPreview::notification_text.
+func (p PostPreview) NotificationText() string {
+	suffix := ""
+	if p.Truncated {
+		suffix = "\n[Use read_post for the rest.]"
+	}
+	return "Message Type: CHANNEL_POST\nSender: " + string(p.Author) +
+		"\nChannel: " + p.ChannelName +
+		"\nMessage ID: " + p.MessageID +
+		"\nThread ID: " + p.ThreadID +
+		"\nPayload:\n" + p.TextPreview + suffix
+}
+
 // PostContent is one bounded post read.
 type PostContent struct {
 	PostMetadata
