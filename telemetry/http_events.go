@@ -31,6 +31,14 @@ type TrackEventsRequest struct {
 	Events []json.RawMessage `json:"events"`
 }
 
+// AnalyticsEventTransport lets an embedding host deliver selected analytics
+// events itself (Rust #62684). It receives the complete wire payload and the
+// thread's product SKU, when known. Returning true reports the event as
+// handled and suppresses the HTTP send so it is never delivered twice.
+type AnalyticsEventTransport interface {
+	HandleAnalyticsEvent(ctx context.Context, event any, productSKU *string) bool
+}
+
 type AnalyticsEventsClientOptions struct {
 	BaseURL          string
 	AuthHeaders      http.Header
@@ -39,10 +47,14 @@ type AnalyticsEventsClientOptions struct {
 	AnalyticsEnabled *bool
 	QueueSize        int
 	Timeout          time.Duration
+	// EventTransport receives eligible events before HTTP delivery. Disabled
+	// analytics never constructs it.
+	EventTransport AnalyticsEventTransport
 }
 
 type AnalyticsEventsClient struct {
-	exporter *HTTPAnalyticsExporter
+	exporter  *HTTPAnalyticsExporter
+	transport AnalyticsEventTransport
 
 	mu      sync.RWMutex
 	queue   chan any
@@ -77,10 +89,11 @@ func NewAnalyticsEventsClient(options AnalyticsEventsClientOptions) *AnalyticsEv
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	client := &AnalyticsEventsClient{
-		exporter: exporter,
-		queue:    make(chan any, queueSize),
-		cancel:   cancel,
-		done:     make(chan struct{}),
+		exporter:  exporter,
+		transport: options.EventTransport,
+		queue:     make(chan any, queueSize),
+		cancel:    cancel,
+		done:      make(chan struct{}),
 	}
 	go client.run(ctx, client.queue)
 	return client
@@ -324,6 +337,11 @@ func (c *AnalyticsEventsClient) run(ctx context.Context, queue <-chan any) {
 		case event, ok := <-queue:
 			if !ok {
 				return
+			}
+			if c.transport != nil {
+				if c.transport.HandleAnalyticsEvent(ctx, event, c.exporter.productSKUForEvent(event)) {
+					continue
+				}
 			}
 			if err := c.exporter.SendTrackEvents(ctx, []any{event}); err != nil {
 				slog.Warn("failed to send analytics events request", "error", err)
@@ -589,6 +607,25 @@ func (e *HTTPAnalyticsExporter) SendTrackEvents(ctx context.Context, events []an
 type analyticsProductEventGroup struct {
 	productSKU *string
 	events     []any
+}
+
+// productSKUForEvent resolves the product attribution recorded for an event's
+// thread, mirroring the attribution the HTTP path would attach (Rust #62684).
+func (e *HTTPAnalyticsExporter) productSKUForEvent(event any) *string {
+	if e == nil {
+		return nil
+	}
+	threadID := analyticsEventThreadID(event)
+	if threadID == "" {
+		return nil
+	}
+	e.threadProductsMu.Lock()
+	product := e.threadProducts[threadID]
+	e.threadProductsMu.Unlock()
+	if strings.TrimSpace(product) == "" {
+		return nil
+	}
+	return &product
 }
 
 func (e *HTTPAnalyticsExporter) productEventGroups(events []any) []analyticsProductEventGroup {

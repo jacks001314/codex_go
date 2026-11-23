@@ -53388,11 +53388,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-20 upstream window; awaiting per-commit audit."
+    "AnalyticsEventsClientOptions.EventTransport installs a host-owned transport that receives each queued event's complete wire payload and the thread's product SKU before HTTP delivery; returning true suppresses the HTTP send.",
+    "Disabled analytics never constructs the client queue, so the transport is bypassed. Go's client has no auth-rebinding entry point (its headers and authorizer are fixed at construction), so Rust's rebind-resets-transport behavior has no Go carrier.",
+    "go test ./telemetry -run AnalyticsEventTransport -count=1; go test ./telemetry -count=1"
    ],
    "kind": "runtime",
    "sha": "b059ce11f971c0543a20e02755fb9bd69f87e2fb",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Allow hosts to route selected analytics events (#62684)"
   },
   {
