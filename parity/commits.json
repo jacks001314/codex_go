@@ -51601,11 +51601,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1264: N/A (Rust sandbox API restructuring) - the commit keeps a prepared `SandboxExecRequest` intact in core, lets command/exec borrow the prepared command for streaming, and moves runtime read-path selection into `SandboxManager`, including locating the generated proxy CA bundle from the command environment for managed process launches. Go has no SandboxExecRequest/SandboxManager type graph: the exec launcher prepares and runs one command together (exec/exec.go, app sandbox launch helpers), so there is no prepared request to carry or borrow and no wire surface to change."
    ],
    "kind": "runtime",
    "sha": "a4495dd5c9b99c528a73bba1a5d39d4048834db0",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Keep sandbox preparation with the command through launch (#62205)"
   },
   {
@@ -51865,11 +51865,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1264: N/A (Rust backend split) - the commit makes SandboxManager do backend selection and shared preparation, then delegates wrapping and session setup to the Linux, macOS Seatbelt, Windows token and Windows MXC backends, and centralizes Windows managed-proxy listener routing in codex-sandboxing. Go's sandbox backends are not modelled that way: Windows token/elevated handling lives in the exec launchers and `windows_sandbox` helpers, with no manager facade or shared backend interface to restructure."
    ],
    "kind": "runtime",
    "sha": "6257fbc4bd5339144e6ffb3398a011917d883a2e",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Move sandbox preparation into platform backends (#62317)"
   },
   {
@@ -51935,11 +51935,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1264: N/A (Rust MXC SDK dependency) - the commit migrates codex-rs/mxc-sandbox from the private appcontainer/MXC crates to the public V1 SDK (Cargo.toml/Cargo.lock and policy/native/availability rewrites). Go never links that SDK: it models only the config and feature surface (config.WindowsSandboxModeMxc, features `prefer_mxc`) and the doctor row, and its Windows sandbox execution uses its own launcher, so there is no dependency or crate API to migrate."
    ],
    "kind": "runtime",
    "sha": "c39f047d24e66521d0c538d153a857ed5c03910b",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Migrate the Windows MXC sandbox to the public V1 SDK (#62331)"
   },
   {
@@ -52050,11 +52050,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1264: N/A (no shared launcher binary) - the commit adds `cli/src/shared_sandbox_launcher.rs` and a `debug_sandbox` path that spawns it on Linux and macOS. The Go CLI has no debug-sandbox command and no shared sandbox launcher process (its `sandbox` subcommand only reports/configures sandbox state flags), so there is no binary to add or wire."
    ],
    "kind": "runtime",
    "sha": "097a8a7439e77c2858aab2d3772bcbb1980cbd10",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Add a shared sandbox launcher for Linux and macOS (#62353)"
   },
   {
