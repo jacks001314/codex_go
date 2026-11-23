@@ -47,6 +47,13 @@ func (r *pluginInstallRuntime) RequestPluginInstall(ctx context.Context, request
 			RequestedSchema: map[string]any{"type": "object", "properties": map[string]any{}},
 		}
 	}
+	// Rust #62610: record the plugin service scope the prompt was raised under.
+	// The client can switch accounts while the prompt is open, so accepting the
+	// install later invalidates both the install-time and current scopes.
+	installScope, installScoped := plugin.SuggestedPluginServiceScope{}, false
+	if r.plugins != nil && strings.TrimSpace(request.Tool.RemotePluginID) != "" {
+		installScope, installScoped = r.plugins.CurrentRecommendationScope()
+	}
 	// Rust #39143: hydrate the selected recommendation's metadata before
 	// presenting an install request. A plugin that is no longer available
 	// skips elicitation; an unverifiable plugin returns a retryable response.
@@ -95,6 +102,16 @@ func (r *pluginInstallRuntime) RequestPluginInstall(ctx context.Context, request
 	}
 	if r.plugins == nil {
 		return result, nil
+	}
+	if strings.TrimSpace(request.Tool.RemotePluginID) != "" {
+		// Rust #62610: a verified remote plugin install refreshes the
+		// recommendations for every account scope that may have observed it.
+		if installScoped {
+			r.plugins.InvalidateRecommendations(installScope.ChatGPTBaseURL, installScope.AccountID)
+		}
+		if currentScope, ok := r.plugins.CurrentRecommendationScope(); ok {
+			r.plugins.InvalidateRecommendations(currentScope.ChatGPTBaseURL, currentScope.AccountID)
+		}
 	}
 	outcome, err := r.plugins.InstallWithOutcome(&plugin.PluginInstallParams{PluginID: request.Tool.ID})
 	if err != nil || outcome == nil || outcome.Response == nil || strings.TrimSpace(outcome.Response.PluginID) == "" {

@@ -2,6 +2,9 @@ package appserver
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"codex_go/apps"
@@ -337,5 +340,67 @@ func TestPluginInstallCandidatesForTurnApplyDisabledAndLoadedConnectorConfig(t *
 	}
 	if ids["docs@market"] || ids["connector_docs"] || !ids["keep@market"] {
 		t.Fatalf("candidate ids = %#v, want only keep@market from filtered set", ids)
+	}
+}
+
+// Mirrors Rust #62610: accepting a recommended remote plugin install refreshes
+// the next recommendation lookup instead of waiting for a tooling-state poll.
+func TestPluginInstallRuntimeInvalidatesRecommendationsAfterRemoteInstallLikeRust(t *testing.T) {
+	var suggestedHits int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/ps/plugins/suggested/codex" {
+			t.Errorf("unexpected recommendation path %q", request.URL.Path)
+		}
+		atomic.AddInt32(&suggestedHits, 1)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"enabled": true, "plugins": []}`))
+	}))
+	defer server.Close()
+
+	plugins := plugin.NewPluginService()
+	plugins.AddPlugin(plugin.PluginDetail{
+		Summary: plugin.PluginSummary{
+			ID:              "linear@market",
+			Name:            "linear",
+			DisplayName:     "Linear",
+			MarketplaceName: "market",
+			RemotePluginID:  "plugins~Plugin_linear",
+			InstallPolicy:   plugin.InstallAllowed,
+		},
+	})
+	provider := plugins.NewRemotePluginProviderWithProductSKU(server.URL, "token", "account-1", "", server.Client())
+	plugins.SetSuggestedPluginProviderWithKey(provider, suggestedPluginProviderKey(server.URL, "", "account-1"))
+	plugins.PrewarmSuggestedPlugins(context.Background())
+	if hits := atomic.LoadInt32(&suggestedHits); hits != 1 {
+		t.Fatalf("suggested hits before install = %d, want 1", hits)
+	}
+	plugins.PrewarmSuggestedPlugins(context.Background())
+	if hits := atomic.LoadInt32(&suggestedHits); hits != 1 {
+		t.Fatalf("suggested hits after reuse = %d, want the catalog reused", hits)
+	}
+
+	broker := NewServerRequestBroker()
+	broker.SetSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		_, _ = broker.Resolve(OK(request.ID, &MCPElicitationRequestResponse{Action: MCPElicitationActionAccept}))
+	}))
+	runtime := &pluginInstallRuntime{broker: broker, plugins: plugins, threadID: "thread-1", turnID: "turn-1"}
+	result, err := runtime.RequestPluginInstall(context.Background(), &tool.PluginInstallRequest{
+		CallID:        "call-1",
+		SuggestionID:  "request_plugin_install_call-1",
+		ToolType:      "plugin",
+		Tool:          plugin.DiscoverableInfo{ID: "linear@market", Name: "Linear", RemotePluginID: "plugins~Plugin_linear"},
+		SuggestReason: "Use Linear",
+		Elicitation: &tool.PluginInstallElicitation{
+			Message:         "Use Linear",
+			Meta:            map[string]any{"tool_id": "linear@market"},
+			RequestedSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+		},
+	})
+	if err != nil || result == nil || !result.Completed {
+		t.Fatalf("RequestPluginInstall() = %#v, %v", result, err)
+	}
+	plugins.PrewarmSuggestedPlugins(context.Background())
+	if hits := atomic.LoadInt32(&suggestedHits); hits != 2 {
+		t.Fatalf("suggested hits after install = %d, want a refreshed catalog", hits)
 	}
 }

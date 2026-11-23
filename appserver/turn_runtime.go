@@ -11589,15 +11589,18 @@ func (r *RuntimeRouter) configureSuggestedPluginProviderForTurn(cfg *config.Conf
 	// created remote connection pool, while the configured product SKU stays
 	// current and participates in the cached-configuration comparison.
 	provider := r.services.Plugins.NewRemotePluginProviderWithProductSKU(baseURL, accessToken, accountID, productSKU, client)
-	r.services.Plugins.SetSuggestedPluginProviderWithKey(provider, suggestedPluginProviderKey(baseURL, productSKU))
+	r.services.Plugins.SetSuggestedPluginProviderWithKey(provider, suggestedPluginProviderKey(baseURL, productSKU, accountID))
 }
 
-func suggestedPluginProviderKey(baseURL string, productSKU string) string {
+// suggestedPluginProviderKey scopes the cached recommendation catalog to the
+// plugin service endpoint, product SKU and ChatGPT account (Rust #62610
+// PluginServiceCacheKey: product SKU plus PluginServiceScope).
+func suggestedPluginProviderKey(baseURL string, productSKU string, accountID string) string {
 	productSKU = strings.TrimSpace(productSKU)
 	if productSKU == "" {
 		productSKU = plugin.CODEXProductSKU
 	}
-	return strings.TrimRight(strings.TrimSpace(baseURL), "/") + "\x00" + productSKU
+	return strings.TrimRight(strings.TrimSpace(baseURL), "/") + "\x00" + productSKU + "\x00" + strings.TrimSpace(accountID)
 }
 
 func suggestedPluginAccessTokenFromAuth(snapshot *auth.AuthDotJSON) string {

@@ -20,9 +20,8 @@ const RemoteGlobalMarketplaceName = "openai-curated-remote"
 // recommendation load plus its two remote reads so a slow recommendation
 // endpoint is visible in the initial-context trace.
 const (
-	RecommendationsLoadSpanName              = "plugins.recommendations.load"
-	RecommendationsReadToolingMarkerSpanName = "plugins.recommendations.read_tooling_marker"
-	RecommendationsFetchCatalogSpanName      = "plugins.recommendations.fetch_catalog"
+	RecommendationsLoadSpanName         = "plugins.recommendations.load"
+	RecommendationsFetchCatalogSpanName = "plugins.recommendations.fetch_catalog"
 )
 
 // startRecommendationSpan opens one recommendation span under the span the
@@ -37,15 +36,6 @@ func startRecommendationSpan(ctx context.Context, name string) tracehook.Span {
 
 const suggestedPluginsTimeout = 5 * time.Second
 
-// suggestedToolingStateTimeout bounds the recommendation invalidation probe so
-// it never delays a turn (Rust #61387 TOOLING_STATE_TIMEOUT).
-const suggestedToolingStateTimeout = 250 * time.Millisecond
-
-// suggestedToolingStateReuseWindow reuses a freshly checked recommendation
-// catalog without polling the tooling-state endpoint again (Rust #61387
-// TOOLING_STATE_REUSE_WINDOW).
-const suggestedToolingStateReuseWindow = time.Second
-
 type HTTPDoer interface {
 	Do(*http.Request) (*http.Response, error)
 }
@@ -54,11 +44,20 @@ type SuggestedPluginProvider interface {
 	ListSuggestedPlugins(ctx context.Context) (*SuggestedPluginList, error)
 }
 
-// SuggestedPluginToolingStateProvider reports the endpoint marker that changes
-// whenever installed tooling changes. Providers that do not implement it keep
-// the catalog until it is explicitly invalidated.
-type SuggestedPluginToolingStateProvider interface {
-	SuggestedPluginsChangedAt(ctx context.Context) (marker string, known bool, err error)
+// SuggestedPluginServiceScope identifies the plugin service endpoint and
+// account a recommendation catalog was fetched for (Rust #62610
+// PluginServiceScope). Invalidation compares this scope instead of polling the
+// endpoint for a tooling marker.
+type SuggestedPluginServiceScope struct {
+	ChatGPTBaseURL string
+	AccountID      string
+}
+
+// SuggestedPluginScopeProvider reports the service scope its recommendation
+// catalog belongs to. Providers without it are treated as unscoped, and an
+// invalidation for any scope refreshes them.
+type SuggestedPluginScopeProvider interface {
+	SuggestedPluginServiceScope() SuggestedPluginServiceScope
 }
 
 type SuggestedPluginList struct {
@@ -156,32 +155,16 @@ func (p *HTTPSuggestedPluginProvider) ListSuggestedPlugins(ctx context.Context) 
 	return decodeSuggestedPluginResponse(body)
 }
 
-// SuggestedPluginsChangedAt polls the endpoint marker that changes when the
-// user's installed tooling changes (Rust #61387 fetch_tooling_changed_at). A
-// timeout or failure leaves the caller on its previous catalog.
-func (p *HTTPSuggestedPluginProvider) SuggestedPluginsChangedAt(ctx context.Context) (string, bool, error) {
+// SuggestedPluginServiceScope reports the endpoint and account this provider
+// reads recommendations for (Rust #62610 plugin_service_scope).
+func (p *HTTPSuggestedPluginProvider) SuggestedPluginServiceScope() SuggestedPluginServiceScope {
 	if p == nil {
-		return "", false, fmt.Errorf("suggested plugin provider is nil")
+		return SuggestedPluginServiceScope{}
 	}
-	if ctx == nil {
-		ctx = context.Background()
+	return SuggestedPluginServiceScope{
+		ChatGPTBaseURL: strings.TrimRight(strings.TrimSpace(p.BaseURL), "/"),
+		AccountID:      strings.TrimSpace(p.AccountID),
 	}
-	ctx, cancel := context.WithTimeout(ctx, suggestedToolingStateTimeout)
-	defer cancel()
-	body, err := p.getSuggestedResource(ctx, suggestedToolingStateURL(p.BaseURL))
-	if err != nil {
-		return "", false, err
-	}
-	var response struct {
-		ToolingChangedAt *string `json:"tooling_changed_at"`
-	}
-	if err := json.Unmarshal(body, &response); err != nil {
-		return "", false, err
-	}
-	if response.ToolingChangedAt == nil {
-		return "", false, nil
-	}
-	return strings.TrimSpace(*response.ToolingChangedAt), true, nil
 }
 
 func (p *HTTPSuggestedPluginProvider) getSuggestedResource(ctx context.Context, rawURL string) ([]byte, error) {
@@ -228,18 +211,16 @@ func (s *PluginService) SetSuggestedPluginProviderWithKey(provider SuggestedPlug
 		s.suggestedProvider = nil
 		s.suggestedProviderKey = ""
 		s.suggestedCache = nil
+		s.suggestedCacheValid = false
 		s.suggestedCheckedAt = time.Time{}
-		s.suggestedToolingChangedAt = ""
-		s.suggestedToolingMarkerKnown = false
 		s.suggestedGeneration++
 		s.suggestedFetch = nil
 		return
 	}
 	if s.suggestedProviderKey != key {
 		s.suggestedCache = nil
+		s.suggestedCacheValid = false
 		s.suggestedCheckedAt = time.Time{}
-		s.suggestedToolingChangedAt = ""
-		s.suggestedToolingMarkerKnown = false
 		s.suggestedGeneration++
 		s.suggestedFetch = nil
 	}
@@ -253,12 +234,93 @@ func (s *PluginService) ClearRecommendedPluginsCache() {
 	}
 	s.mu.Lock()
 	s.suggestedCache = nil
+	s.suggestedCacheValid = false
 	s.suggestedCheckedAt = time.Time{}
-	s.suggestedToolingChangedAt = ""
-	s.suggestedToolingMarkerKnown = false
 	s.suggestedGeneration++
 	s.suggestedFetch = nil
 	s.mu.Unlock()
+}
+
+// CurrentRecommendationScope reports the plugin service scope the configured
+// provider reads recommendations for.
+func (s *PluginService) CurrentRecommendationScope() (SuggestedPluginServiceScope, bool) {
+	if s == nil {
+		return SuggestedPluginServiceScope{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.currentRecommendationScopeLocked()
+}
+
+func (s *PluginService) currentRecommendationScopeLocked() (SuggestedPluginServiceScope, bool) {
+	if s.suggestedProvider == nil {
+		return SuggestedPluginServiceScope{}, false
+	}
+	scoped, ok := s.suggestedProvider.(SuggestedPluginScopeProvider)
+	if !ok {
+		return SuggestedPluginServiceScope{}, false
+	}
+	scope := scoped.SuggestedPluginServiceScope()
+	// Rust's plugin_service_scope normalizes the endpoint and account once, so
+	// invalidation compares canonical scopes.
+	return SuggestedPluginServiceScope{
+		ChatGPTBaseURL: strings.TrimRight(strings.TrimSpace(scope.ChatGPTBaseURL), "/"),
+		AccountID:      strings.TrimSpace(scope.AccountID),
+	}, true
+}
+
+// InvalidateRecommendations marks the cached recommendation catalog stale after
+// a known tooling change for the given plugin service endpoint and accounts
+// (Rust #62610 invalidate_recommendations_for_actors). Every product SKU for a
+// matching scope refreshes on its next lookup; the last successful catalog
+// keeps serving until then.
+func (s *PluginService) InvalidateRecommendations(chatGPTBaseURL string, accountIDs ...string) {
+	if s == nil {
+		return
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(chatGPTBaseURL), "/")
+	accounts := make(map[string]bool, len(accountIDs))
+	for _, accountID := range accountIDs {
+		if trimmed := strings.TrimSpace(accountID); trimmed != "" {
+			accounts[trimmed] = true
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.invalidateRecommendationsLocked(func(scope SuggestedPluginServiceScope) bool {
+		if scope.ChatGPTBaseURL != baseURL {
+			return false
+		}
+		return len(accounts) == 0 || accounts[scope.AccountID]
+	})
+}
+
+// invalidateCurrentRecommendations refreshes the configured scope after an
+// installed plugin inventory or enabled-state change.
+func (s *PluginService) invalidateCurrentRecommendations() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.invalidateRecommendationsLocked(nil)
+}
+
+// invalidateRecommendationsLocked keeps the last successful catalog as a
+// fallback, drops fetch validity so the next lookup refetches, and detaches an
+// in-flight fetch so its late completion cannot repopulate the cache.
+func (s *PluginService) invalidateRecommendationsLocked(match func(SuggestedPluginServiceScope) bool) {
+	if s.suggestedProvider == nil {
+		return
+	}
+	if match != nil {
+		if scope, ok := s.currentRecommendationScopeLocked(); ok && !match(scope) {
+			return
+		}
+	}
+	s.suggestedGeneration++
+	s.suggestedCacheValid = false
+	s.suggestedFetch = nil
 }
 
 func (s *PluginService) suggestedDiscoverableCandidates(ctx context.Context) ([]DiscoverableInfo, bool) {
@@ -286,11 +348,11 @@ func (s *PluginService) PrewarmSuggestedPlugins(ctx context.Context) {
 }
 
 // suggestedPluginList returns the published recommendation list or joins one
-// in-flight fetch. A fetch invalidated by ClearRecommendedPluginsCache or a
-// provider change returns its result to existing waiters without repopulating
-// the cache (Rust #41375). Rust #61387 polls the endpoint's tooling-state
-// marker before reusing a catalog older than one second, so installs from
-// another client refresh the recommendations on the next turn.
+// in-flight fetch (Rust #62610). A catalog stays valid until a known tooling
+// change invalidates it, so lookups no longer poll the endpoint. Concurrent
+// lookups share one fetch, a failed refresh keeps the last successful catalog
+// and retries on the next lookup, and a fetch that completes after an
+// invalidation only answers its own waiters.
 func (s *PluginService) suggestedPluginList(ctx context.Context) (*SuggestedPluginList, error) {
 	if s == nil {
 		return nil, nil
@@ -301,47 +363,15 @@ func (s *PluginService) suggestedPluginList(ctx context.Context) (*SuggestedPlug
 	s.mu.Lock()
 	provider := s.suggestedProvider
 	providerKey := s.suggestedProviderKey
-	cached := cloneSuggestedPluginList(s.suggestedCache)
-	cachedMarker := s.suggestedToolingChangedAt
-	cachedMarkerKnown := s.suggestedToolingMarkerKnown
-	if cached != nil && s.now().Sub(s.suggestedCheckedAt) < suggestedToolingStateReuseWindow {
-		s.mu.Unlock()
-		return cached, nil
-	}
 	if provider == nil {
 		s.mu.Unlock()
 		return nil, nil
 	}
-	if fetch := s.suggestedFetch; fetch != nil {
+	if s.suggestedCacheValid && s.suggestedCache != nil {
+		cached := cloneSuggestedPluginList(s.suggestedCache)
 		s.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-fetch.done:
-			return cloneSuggestedPluginList(fetch.list), fetch.err
-		}
+		return cached, nil
 	}
-	s.mu.Unlock()
-
-	markerSpan := startRecommendationSpan(ctx, RecommendationsReadToolingMarkerSpanName)
-	marker, markerKnown, markerErr := suggestedToolingChangedAtForProvider(ctx, provider)
-	if markerSpan != nil {
-		markerSpan.End()
-	}
-	if cached != nil {
-		// An absent, failed, or unchanged marker keeps the published catalog
-		// (Rust #61387). A changed marker falls through to a refresh.
-		if markerErr != nil || !markerKnown || (cachedMarkerKnown && marker == cachedMarker) {
-			s.mu.Lock()
-			if s.suggestedCache != nil && s.suggestedProvider == provider && s.suggestedProviderKey == providerKey {
-				s.suggestedCheckedAt = s.now()
-			}
-			s.mu.Unlock()
-			return cached, nil
-		}
-	}
-
-	s.mu.Lock()
 	if fetch := s.suggestedFetch; fetch != nil {
 		s.mu.Unlock()
 		select {
@@ -352,6 +382,9 @@ func (s *PluginService) suggestedPluginList(ctx context.Context) (*SuggestedPlug
 		}
 	}
 	fetch := &suggestedPluginFetch{done: make(chan struct{})}
+	// The invalidation keeps the previous catalog as the fallback for a failed
+	// refresh (Rust #62610 RecommendationCacheEntry::for_refresh).
+	fallback := cloneSuggestedPluginList(s.suggestedCache)
 	generation := s.suggestedGeneration
 	s.suggestedFetch = fetch
 	s.mu.Unlock()
@@ -361,40 +394,34 @@ func (s *PluginService) suggestedPluginList(ctx context.Context) (*SuggestedPlug
 	if catalogSpan != nil {
 		catalogSpan.End()
 	}
-	if err != nil && cached != nil {
-		// Keep the last successful catalog when a refresh fails, matching
-		// Rust #61387's refresh_recommendations.
-		fetched, err = cached, nil
+	if err == nil && fetched == nil {
+		// Rust RecommendedPluginsMode::Legacy is an endpoint that returned no
+		// recommendation catalog.
+		fetched = &SuggestedPluginList{}
+	}
+	if err != nil {
+		// Retry on the next lookup because the cache stays stale.
+		fetched = fallback
+		if fetched == nil {
+			fetched = &SuggestedPluginList{}
+		}
 	}
 	s.mu.Lock()
 	fetch.list = cloneSuggestedPluginList(fetched)
-	fetch.err = err
+	fetch.err = nil
 	if s.suggestedFetch == fetch {
 		s.suggestedFetch = nil
 	}
-	if err == nil && fetched != nil &&
-		s.suggestedGeneration == generation &&
+	if err == nil && s.suggestedGeneration == generation &&
 		s.suggestedProvider == provider &&
 		s.suggestedProviderKey == providerKey {
 		s.suggestedCache = cloneSuggestedPluginList(fetched)
+		s.suggestedCacheValid = true
 		s.suggestedCheckedAt = s.now()
-		s.suggestedToolingChangedAt = marker
-		s.suggestedToolingMarkerKnown = markerKnown && markerErr == nil
 	}
 	close(fetch.done)
 	s.mu.Unlock()
-	return cloneSuggestedPluginList(fetched), err
-}
-
-// suggestedToolingChangedAtForProvider probes the optional tooling-state
-// marker. Providers without the capability report an unknown marker, which
-// keeps the published catalog.
-func suggestedToolingChangedAtForProvider(ctx context.Context, provider SuggestedPluginProvider) (string, bool, error) {
-	stateProvider, ok := provider.(SuggestedPluginToolingStateProvider)
-	if !ok {
-		return "", false, nil
-	}
-	return stateProvider.SuggestedPluginsChangedAt(ctx)
+	return cloneSuggestedPluginList(fetched), nil
 }
 
 // discoverableCandidatesFromSuggested projects the endpoint's recommendation
@@ -489,14 +516,6 @@ func suggestedPluginsURL(baseURL string) string {
 	query.Set("includeInstalled", "false")
 	parsed.RawQuery = query.Encode()
 	return parsed.String()
-}
-
-func suggestedToolingStateURL(baseURL string) string {
-	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	if base == "" {
-		base = "https://chatgpt.com/backend-api"
-	}
-	return base + "/ps/plugins/tooling-state/turtle"
 }
 
 func cloneSuggestedPluginList(value *SuggestedPluginList) *SuggestedPluginList {

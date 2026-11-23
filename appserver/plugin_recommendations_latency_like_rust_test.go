@@ -60,8 +60,8 @@ func TestTurnPreparationRecordsPluginRecommendationsWaitLikeRust(t *testing.T) {
 	}
 }
 
-// Mirrors Rust #62326's span names: the load span and its two remote reads are
-// exported under the Rust names, nested so a slow endpoint is attributable.
+// Mirrors Rust #62326's span names: the load span and its remote catalog read
+// are exported under the Rust names, nested so a slow endpoint is attributable.
 func TestPluginRecommendationSpansUseRustNamesLikeRust(t *testing.T) {
 	received := make(chan map[string]any, 4)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -90,8 +90,6 @@ func TestPluginRecommendationSpansUseRustNamesLikeRust(t *testing.T) {
 	if span := tracehook.SpanFromContext(ctx); span == nil {
 		t.Fatal("the load context carries no tracehook span")
 	}
-	markerSpan := tracehook.SpanFromContext(ctx).StartChildSpan(plugin.RecommendationsReadToolingMarkerSpanName, nil)
-	markerSpan.End()
 	catalogSpan := tracehook.SpanFromContext(ctx).StartChildSpan(plugin.RecommendationsFetchCatalogSpanName, nil)
 	catalogSpan.End()
 	loadSpan.End()
@@ -100,7 +98,7 @@ func TestPluginRecommendationSpansUseRustNamesLikeRust(t *testing.T) {
 	}
 	names := map[string]bool{}
 	deadline := time.After(3 * time.Second)
-	for len(names) < 3 {
+	for len(names) < 2 {
 		select {
 		case body := <-received:
 			for _, name := range exportedSpanNames(body) {
@@ -112,7 +110,6 @@ func TestPluginRecommendationSpansUseRustNamesLikeRust(t *testing.T) {
 	}
 	for _, want := range []string{
 		plugin.RecommendationsLoadSpanName,
-		plugin.RecommendationsReadToolingMarkerSpanName,
 		plugin.RecommendationsFetchCatalogSpanName,
 	} {
 		if !names[want] {

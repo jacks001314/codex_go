@@ -53083,11 +53083,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Plugin recommendations refresh after installed-state changes instead of polling a tooling marker (Rust #62610, 6a8a81166a). The recommendation lookup no longer calls the tooling-state endpoint: a catalog stays valid until a known change invalidates it. `PluginService.InvalidateRecommendations(baseURL, accounts...)` marks the cached catalog stale for the plugin service endpoint and account scope, covering every product SKU for that scope; the provider key now includes the ChatGPT account so a different account never reuses another account's catalog. Publishing a changed installed remote inventory, installing, and uninstalling invalidate the catalog; the install runtime snapshots the prompt's scope and invalidates both the install-time and the current account scopes when a remote install is accepted. Concurrent lookups share one fetch, a failed refresh keeps serving the last successful catalog and retries on the next lookup, and a fetch that completes after invalidation only answers its own waiters. The tooling-marker span and endpoint helper are removed. Tests: go test ./plugin -count=1; go test ./tool ./plugin ./appserver -run 'Plugin|Install|Recommend|Suggested' -count=1; go build ./...; go vet ./plugin ./appserver; go test ./parity -count=1"
    ],
    "kind": "runtime",
    "sha": "6a8a81166aa243fe210382dfe988d94a70a4bef2",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Refresh plugin recommendations after installed state changes (#62610)"
   },
   {

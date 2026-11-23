@@ -15,7 +15,7 @@ type recordingSpan struct {
 }
 
 func (s recordingSpan) AddEvent(string, map[string]string) {}
-func (s recordingSpan) SetAttribute(string, string)   {}
+func (s recordingSpan) SetAttribute(string, string)        {}
 
 func (s recordingSpan) End() {
 	if s.ended != nil {
@@ -28,27 +28,21 @@ func (s recordingSpan) StartChildSpan(name string, _ map[string]string) tracehoo
 	return s
 }
 
-// countingStateSuggestedPluginProvider answers both recommendation reads so the
-// span assertions cover the marker probe and the catalog fetch.
-type countingStateSuggestedPluginProvider struct {
+// countingSuggestedPluginProvider answers the recommendation catalog read so
+// the span assertions cover the remote fetch.
+type countingSuggestedPluginProvider struct {
 	catalogCalls int
-	markerCalls  int
 }
 
-func (p *countingStateSuggestedPluginProvider) ListSuggestedPlugins(context.Context) (*SuggestedPluginList, error) {
+func (p *countingSuggestedPluginProvider) ListSuggestedPlugins(context.Context) (*SuggestedPluginList, error) {
 	p.catalogCalls++
 	return &SuggestedPluginList{Enabled: true}, nil
 }
 
-func (p *countingStateSuggestedPluginProvider) SuggestedPluginsChangedAt(context.Context) (string, bool, error) {
-	p.markerCalls++
-	return "marker-1", true, nil
-}
-
-// Mirrors Rust #62326: the recommendation load opens named info-level spans for
-// reading the tooling marker and fetching the catalog.
+// Mirrors Rust #62326 and #62610: the recommendation load opens a named
+// info-level span for the catalog fetch; polling for a tooling marker is gone.
 func TestSuggestedPluginListOpensRecommendationSpansLikeRust(t *testing.T) {
-	provider := &countingStateSuggestedPluginProvider{}
+	provider := &countingSuggestedPluginProvider{}
 	service := NewPluginService()
 	service.SetSuggestedPluginProviderWithKey(provider, "endpoint")
 	var names []string
@@ -57,10 +51,10 @@ func TestSuggestedPluginListOpensRecommendationSpansLikeRust(t *testing.T) {
 	if _, err := service.suggestedPluginList(ctx); err != nil {
 		t.Fatalf("suggestedPluginList() error = %v", err)
 	}
-	if provider.markerCalls != 1 || provider.catalogCalls != 1 {
-		t.Fatalf("recommendation reads = marker %d catalog %d, want one each", provider.markerCalls, provider.catalogCalls)
+	if provider.catalogCalls != 1 {
+		t.Fatalf("recommendation reads = catalog %d, want one", provider.catalogCalls)
 	}
-	want := []string{RecommendationsReadToolingMarkerSpanName, RecommendationsFetchCatalogSpanName}
+	want := []string{RecommendationsFetchCatalogSpanName}
 	if len(names) != len(want) {
 		t.Fatalf("recommendation spans = %#v, want %#v", names, want)
 	}

@@ -1418,9 +1418,8 @@ type PluginService struct {
 	suggestedProvider             SuggestedPluginProvider
 	suggestedProviderKey          string
 	suggestedCache                *SuggestedPluginList
+	suggestedCacheValid           bool
 	suggestedCheckedAt            time.Time
-	suggestedToolingChangedAt     string
-	suggestedToolingMarkerKnown   bool
 	suggestedGeneration           uint64
 	suggestedFetch                *suggestedPluginFetch
 	cloudCapabilities             []CapabilitySummary
@@ -2208,6 +2207,9 @@ func (s *PluginService) ReplaceInstalledRemotePluginsWithChanges(marketplaceName
 	if len(changes) == 0 {
 		return false, ""
 	}
+	// Rust #62610: publishing a changed installed inventory (additions,
+	// removals, or enabled-state changes) refreshes the recommendations.
+	s.invalidateCurrentRecommendations()
 	changeID := NewInstalledPluginMetadataChangeID()
 	// Rust logs field names only, never plugin values.
 	slog.Info("installed plugin runtime metadata invalidated",
@@ -3071,6 +3073,9 @@ func (s *PluginService) InstallWithOutcome(params *PluginInstallParams) (*Plugin
 	if response != nil {
 		outcome.Detail = s.detailByID(response.PluginID)
 	}
+	// Rust #62610: a known install event invalidates the recommendation
+	// catalog for this plugin service scope so the next lookup refetches it.
+	s.invalidateCurrentRecommendations()
 	return outcome, nil
 }
 
@@ -3434,6 +3439,9 @@ func (s *PluginService) UninstallWithOutcome(params *PluginUninstallParams) (*Pl
 	if err != nil {
 		return nil, err
 	}
+	// Rust #62610: uninstalling changes the installed inventory that the
+	// endpoint filters recommendations against.
+	s.invalidateCurrentRecommendations()
 	return &PluginUninstallOutcome{
 		Response:                response,
 		Detail:                  detail,
