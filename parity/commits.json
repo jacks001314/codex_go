@@ -52804,11 +52804,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Upstream only extends codex-rs/tui/styles.md, the Rust contributor style guide; the Go tree has no equivalent TUI styles document. Shortcut labels already come from the shared key-hint helpers (PlainKey/Label), so there is no code carrier."
    ],
    "kind": "runtime",
    "sha": "308ab1b895229dbd258167cdbc97f450fca3d741",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Document how to render TUI shortcut labels (#62560)"
   },
   {
@@ -52923,11 +52923,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "The change teaches Rust's scripts/install/install.sh to accept unrelated lsof mount warnings while cleaning standalone releases. Go's scripts/install.sh only builds/installs the binary and has no standalone release-in-use cleanup or lsof inspection, so the scenario cannot arise."
    ],
    "kind": "runtime",
    "sha": "40a848caf4b540e0d12d00c3e7c1b4de7dd7b4dc",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Allow macOS installer cleanup despite unrelated mount warnings (#62582)"
   },
   {
@@ -53133,11 +53133,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Go already routes slash submission and dispatch through chatwidget.SlashCommandArgsElements; the duplicate test-only bottom_pane.ArgsElements helper was removed so the tree keeps one shared range mapping (Rust #62624 moved the same helper into prompt_args).",
+    "Coverage moved to tui/chatwidget/slash_command_args_elements_like_rust_test.go; go test ./tui/chatwidget ./tui/bottom_pane/... passes."
    ],
    "kind": "runtime",
    "sha": "d0264b756e02078c16eb51e96556a2a494421887",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Share slash command argument range mapping in the TUI (#62624)"
   },
   {

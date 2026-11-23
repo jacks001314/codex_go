@@ -1,12 +1,10 @@
 package chatcomposer
 
 import (
-	"reflect"
 	"testing"
 
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
-	"codex_go/turn"
 )
 
 func slashInputForTest() SlashInput {
@@ -139,23 +137,4 @@ func TestSlashInputPreparedArgsQueuedActionAndElementsMatchRustCore(t *testing.T
 		t.Fatalf("deferred slash queued action = %s, want parse_slash", got)
 	}
 
-	first := "inspect"
-	second := "@file"
-	placeholder := "mention"
-	elements := []turn.TextElement{
-		{ByteRange: turn.ByteRange{Start: 0, End: 7}},
-		{ByteRange: turn.ByteRange{Start: uint(offset), End: uint(offset + len(first))}},
-		{ByteRange: turn.ByteRange{Start: uint(offset + len(first) + 1), End: uint(offset + len(first) + 1 + len(second) + 20)}, Placeholder: &placeholder},
-	}
-	got := ArgsElements(rest, offset, elements)
-	want := []turn.TextElement{
-		{ByteRange: turn.ByteRange{Start: 0, End: uint(len(first))}},
-		{ByteRange: turn.ByteRange{Start: uint(len(first) + 1), End: uint(len(rest))}, Placeholder: &placeholder},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("ArgsElements = %#v, want %#v", got, want)
-	}
-	if got := ArgsElements("", offset, elements); got != nil {
-		t.Fatalf("empty rest should produce nil elements, got %#v", got)
-	}
 }

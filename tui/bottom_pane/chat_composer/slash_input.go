@@ -7,7 +7,6 @@ import (
 
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
-	"codex_go/turn"
 )
 
 // Rust parity subset: codex-rs/tui/src/bottom_pane/chat_composer/slash_input.rs.
@@ -241,33 +240,6 @@ func PreparedArgs(preparedText string) (string, int, bool) {
 	return parsed.Rest, parsed.RestOffset, true
 }
 
-func ArgsElements(rest string, restOffset int, textElements []turn.TextElement) []turn.TextElement {
-	if rest == "" || len(textElements) == 0 {
-		return nil
-	}
-	out := make([]turn.TextElement, 0, len(textElements))
-	for _, elem := range textElements {
-		elemStart := int(elem.ByteRange.Start)
-		elemEnd := int(elem.ByteRange.End)
-		if elemEnd <= restOffset {
-			continue
-		}
-		start := elemStart - restOffset
-		if start < 0 {
-			start = 0
-		}
-		end := elemEnd - restOffset
-		if end > len(rest) {
-			end = len(rest)
-		}
-		if start >= len(rest) || start >= end {
-			continue
-		}
-		elem.ByteRange = turn.ByteRange{Start: uint(start), End: uint(end)}
-		out = append(out, elem)
-	}
-	return out
-}
 
 func CommandPopupFilterText(firstLine string, cursor int) (string, bool) {
 	name, _, ok := commandUnderCursor(firstLine, cursor)
