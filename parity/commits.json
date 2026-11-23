@@ -53617,11 +53617,15 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "appserver/thread_guardian_review.go: ThreadGuardianReviewResponse.Assessment is now a value, so every successful thread/guardianReview carries an assessment; threadGuardianAssessment returns the struct directly.",
+    "Exec and apply_patch recorded reviews no longer return early for an allowlisted command, a session-approved command, a writable patch or a session-approved file change; they always build the live action and assess it without executing anything.",
+    "MCP recorded reviews no longer skip review for an automatically approved tool or a remembered approval, and the review carries the server's owning environment permissions through withGuardianReviewOrigin(CWD, EnvironmentID, PermissionProfile, PermissionEvidenceOnly, MCPOwnerPermissions) taken from MCPService.PermissionSourceForServer; thread-owned servers keep the reviewed turn's evidence.",
+    "request_permissions no longer skips review under approval_policy never or a granular policy without AllowsRequestPermissions; like Rust's review_tool_call, only the shared PreToolUse hook handling runs for a recorded call and the review grants nothing.",
+    "appserver/guardian_recorded_review_assessment_like_rust_test.go covers the allowlisted-command assessment, the owning-environment permission context (and the thread-owned case), and the remembered-approval review; the retry and remembered-approval tests were updated. TestBuildProtocolSchemaMatchesRustStableFixtures and TestPrecomputedExportArtifactsMatchTargetRustCommit still match the e0a6d053 exports."
    ],
    "kind": "runtime",
    "sha": "9735367e18dcaeb02f5031460625b5f7f0f59e21",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Return an assessment for explicit Guardian reviews (#62846)"
   },
   {

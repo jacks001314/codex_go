@@ -7,10 +7,8 @@ import (
 	"strings"
 
 	"codex_go/apps"
-	"codex_go/execserver"
 	"codex_go/features"
 	"codex_go/mcp"
-	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/state"
 	"codex_go/tool"
@@ -19,8 +17,11 @@ import (
 
 // Direct Guardian review protocol types (Rust #58119). `thread/guardianReview`
 // reviews an idle thread's final injected exec_command or apply_patch call
-// without running it and returns Guardian's structured assessment, or a null
-// assessment when the approval policy skips review.
+// without running it and returns Guardian's structured assessment. Rust #62846
+// requires an assessment on every successful response, including recorded calls
+// whose live execution would skip approval: allowlisted commands, MCP tools
+// configured for automatic approval or carrying a remembered approval, and
+// policies that disable permission requests.
 
 // ThreadGuardianReviewParams identifies an idle thread's final recorded call.
 // Sequential direct reviews and live approvals can share Guardian history while
@@ -38,9 +39,8 @@ func (p ThreadGuardianReviewParams) Validate() error {
 }
 
 type ThreadGuardianReviewResponse struct {
-	CallID string `json:"callId"`
-	// Assessment is null when exec policy skips approval.
-	Assessment *ThreadGuardianAssessment `json:"assessment"`
+	CallID     string                   `json:"callId"`
+	Assessment ThreadGuardianAssessment `json:"assessment"`
 }
 
 type ThreadGuardianAssessment struct {
@@ -136,51 +136,34 @@ func (r *RuntimeRouter) handleThreadGuardianReviewRuntime(request *Request) (*Th
 		if err != nil {
 			return nil, err
 		}
-		if !prepared.Request.ApprovalRequired || r.commandApprovalForSession(threadID, prepared.Request) {
-			// Exec policy explicitly allows the command: nothing to assess, and
-			// nothing is executed.
-			return response, nil
-		}
+		// Rust #62846: an allowlisted or already approved command is still
+		// assessed. The review never runs the command or grants its approval.
 		action = commandApprovalAction(prepared.Request)
 	case guardianRecordedCallApplyPatch:
 		prepared, err := r.prepareRecordedApplyPatch(reviewCtx, threadID, turnID, record, call)
 		if err != nil {
 			return nil, err
 		}
-		if !prepared.ApprovalRequired || r.fileChangeApprovalForSession(threadID) {
-			// Writable files need no review, and preparing a patch never writes.
-			return response, nil
-		}
+		// Rust #62846: a patch the live policy would approve without prompting is
+		// still assessed; preparing it never writes.
 		action = applyPatchApprovalAction(prepared.Request)
 	case guardianRecordedCallMCP:
-		actionValue, reviewRequired, err := r.prepareRecordedMCPReview(reviewCtx, threadID, turnID, record, call)
+		actionValue, reviewOrigin, err := r.prepareRecordedMCPReview(reviewCtx, threadID, turnID, record, call)
 		if err != nil {
 			return nil, err
 		}
-		if !reviewRequired {
-			return response, nil
-		}
+		// Rust #62846 assesses the recorded MCP call even when the tool is
+		// configured for automatic approval or has a remembered approval.
 		action = actionValue
+		if reviewOrigin != nil {
+			reviewCtx = withGuardianReviewOrigin(reviewCtx, reviewOrigin)
+		}
 	case guardianRecordedCallRequestPermissions:
-		params := r.guardianReviewTurnParams(threadID, record)
-		cfg, _ := r.effectiveConfigForTurn(params)
-		approvalPolicy := turnApprovalPolicyForTurn(cfg, params)
-		if approvalPolicy == sandbox.ApprovalNever {
-			return response, nil
-		}
-		if approvalPolicy == sandbox.ApprovalGranular {
-			granular := granularApprovalConfigForTurn(cfg, params)
-			if granular == nil || !granular.AllowsRequestPermissions() {
-				return response, nil
-			}
-		}
+		// Rust #62846: a policy that disables permission requests or a hook that
+		// would answer the live prompt still gets an assessment here. The review
+		// grants nothing; only Rust's PreToolUse hooks run for a recorded call.
 		if _, err := additionalPermissionProfileFromJSONMap(call.Permissions); err != nil {
 			return nil, invalidParams(err.Error())
-		}
-		// Live review runs PermissionRequest hooks before Guardian; a hook
-		// decision replaces the assessment (Rust Session::request_approval).
-		if verdict, ok := r.permissionRequestHookVerdict(reviewCtx, threadID, turnID, call.CallID, "request_permissions", nil, requestPermissionsHookToolInput(call.Reason, call.Permissions), nil, firstNonEmpty(call.EnvironmentID, execserver.LocalEnvironmentID)); ok && verdict != nil {
-			return response, nil
 		}
 		action = state.Action{
 			Type:          "request_permissions",
@@ -231,9 +214,9 @@ func (r *RuntimeRouter) guardianReviewerForRequest() GuardianReviewer {
 // threadGuardianAssessment converts the reviewer's assessment, filling the
 // fields a fast or failed decision never produced (Rust's
 // parse_guardian_assessment defaults).
-func threadGuardianAssessment(decision state.ReviewDecision, assessment *state.Assessment, reason string) *ThreadGuardianAssessment {
+func threadGuardianAssessment(decision state.ReviewDecision, assessment *state.Assessment, reason string) ThreadGuardianAssessment {
 	if assessment != nil {
-		return &ThreadGuardianAssessment{
+		return ThreadGuardianAssessment{
 			Outcome:           assessment.Outcome,
 			RiskLevel:         assessment.RiskLevel,
 			UserAuthorization: assessment.UserAuthorization,
@@ -254,7 +237,7 @@ func threadGuardianAssessment(decision state.ReviewDecision, assessment *state.A
 			rationale = "Auto-review returned a deny decision without a rationale."
 		}
 	}
-	return &ThreadGuardianAssessment{
+	return ThreadGuardianAssessment{
 		Outcome:           out,
 		RiskLevel:         risk,
 		UserAuthorization: state.AuthorizationUnknown,
@@ -271,15 +254,15 @@ func (r *RuntimeRouter) prepareRecordedMCPReview(
 	turnID string,
 	record *session.Record,
 	call *guardianRecordedToolCall,
-) (state.Action, bool, error) {
+) (state.Action, *guardianReviewOrigin, error) {
 	params := r.guardianReviewTurnParams(threadID, record)
 	cfg, err := r.effectiveConfigForTurn(params)
 	if err != nil || cfg == nil {
-		return state.Action{}, false, invalidParams("MCP tool call is unavailable on this thread")
+		return state.Action{}, nil, invalidParams("MCP tool call is unavailable on this thread")
 	}
 	service := r.mcpServiceForThread(threadID, cfg)
 	if service == nil {
-		return state.Action{}, false, invalidParams("unsupported tool for direct review")
+		return state.Action{}, nil, invalidParams("unsupported tool for direct review")
 	}
 	response, err := service.ListStatusChecked(&mcp.MCPListServerStatusParams{
 		ThreadID:             stringPtrIfNotEmpty(threadID),
@@ -288,14 +271,14 @@ func (r *RuntimeRouter) prepareRecordedMCPReview(
 		OptionalStartupGrace: cfg.MCPOptionalStartupGrace(),
 	})
 	if err != nil {
-		return state.Action{}, false, invalidParams("MCP tool call is unavailable on this thread")
+		return state.Action{}, nil, invalidParams("MCP tool call is unavailable on this thread")
 	}
 	if response == nil {
-		return state.Action{}, false, invalidParams("unsupported tool for direct review")
+		return state.Action{}, nil, invalidParams("unsupported tool for direct review")
 	}
 	info, ok := guardianRecordedMCPToolInfo(mcp.RuntimeToolsFromStatuses(response.Data), call.Server, call.ToolName)
 	if !ok {
-		return state.Action{}, false, invalidParams("unsupported tool for direct review")
+		return state.Action{}, nil, invalidParams("unsupported tool for direct review")
 	}
 
 	arguments := cloneAnyMapAppserver(call.ArgumentsMap)
@@ -319,19 +302,18 @@ func (r *RuntimeRouter) prepareRecordedMCPReview(
 	})
 	effective, err := r.applyRecordedPreToolUse(ctx, params, turnID, executor, invocation)
 	if err != nil {
-		return state.Action{}, false, err
+		return state.Action{}, nil, err
 	}
 	if effective != nil {
 		if raw := strings.TrimSpace(effective.Payload.Arguments); raw != "" {
 			var rewritten map[string]any
 			if err := json.Unmarshal([]byte(raw), &rewritten); err != nil {
-				return state.Action{}, false, invalidParams("MCP tool arguments must be a JSON object")
+				return state.Action{}, nil, invalidParams("MCP tool arguments must be a JSON object")
 			}
 			arguments = rewritten
 		}
 	}
 
-	mode := service.ToolApprovalMode(info.ServerName, info.Tool.Name)
 	linkID := strings.TrimSpace(mcp.MCPToolCallLinkID(info.Meta))
 	if mcp.IsCodexAppsMCPServerName(info.ServerName) {
 		var destructiveHint, openWorldHint *bool
@@ -351,25 +333,25 @@ func (r *RuntimeRouter) prepareRecordedMCPReview(
 			OpenWorldHint:   openWorldHint,
 		})
 		if !policy.Enabled {
-			return state.Action{}, false, invalidParams(mcp.MCPToolCallBlockedByAppConfigurationMessage)
+			return state.Action{}, nil, invalidParams(mcp.MCPToolCallBlockedByAppConfigurationMessage)
 		}
-		mode = policy.Approval
 	}
-	profile := (*sandbox.PermissionProfile)(nil)
-	if current, ok := service.PermissionProfileForServer(info.ServerName); ok {
-		profile = current
-	}
-	approvalPolicy := turnApprovalPolicyForTurn(cfg, params)
-	if mcp.MCPPermissionPromptAutoApproved(approvalPolicy, profile, mode) ||
-		!mcp.RequiresMCPToolApprovalForMode(info.Tool.Annotations, mode) {
-		return state.Action{}, false, nil
-	}
-	if key, ok := mcp.MCPSessionToolApprovalKey(mode, info.ServerName, info.Tool.Name, info.ConnectorID, linkID); ok &&
-		r.mcpToolApprovalRemembered(threadID, key) {
-		return state.Action{}, false, nil
+	// Rust #62846: the recorded review carries the MCP server's owning
+	// environment permissions, matching the live review's prepared sandbox
+	// context. Thread-owned servers keep the reviewed turn's permission
+	// evidence.
+	var origin *guardianReviewOrigin
+	if source, ok := service.PermissionSourceForServer(info.ServerName); ok && !source.Thread && source.Profile != nil {
+		origin = &guardianReviewOrigin{
+			CWD:                    source.CWD,
+			EnvironmentID:          source.EnvironmentID,
+			PermissionProfile:      source.Profile,
+			PermissionEvidenceOnly: true,
+			MCPOwnerPermissions:    true,
+		}
 	}
 
-	return guardianRecordedMCPAction(info, arguments), true, nil
+	return guardianRecordedMCPAction(info, arguments), origin, nil
 }
 
 func guardianRecordedMCPToolInfo(tools []mcp.RuntimeToolInfo, namespace string, name string) (mcp.RuntimeToolInfo, bool) {

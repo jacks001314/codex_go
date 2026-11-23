@@ -271,8 +271,13 @@ func TestThreadGuardianReviewRecordedMCPLikeRust(t *testing.T) {
 		}
 	})
 
-	t.Run("uses a remembered session approval", func(t *testing.T) {
-		reviewer := &assessmentGuardianReviewer{decision: state.DecisionApproved}
+	t.Run("reviews despite a remembered session approval", func(t *testing.T) {
+		// Rust #62846: a remembered approval answers the live prompt; the
+		// explicit review still returns an assessment.
+		reviewer := &assessmentGuardianReviewer{
+			decision:   state.DecisionApproved,
+			assessment: &state.Assessment{RiskLevel: state.RiskLow, UserAuthorization: state.AuthorizationHigh, Rationale: "remembered"},
+		}
 		router, service := newMCPRouter(t, reviewer)
 		defer service.Close()
 		router.rememberMCPToolApproval("guardian-review-thread", mcp.MCPToolApprovalKey{Server: "docs", Tool: "search"})
@@ -280,11 +285,12 @@ func TestThreadGuardianReviewRecordedMCPLikeRust(t *testing.T) {
 		if response.Error != nil {
 			t.Fatalf("thread/guardianReview error = %+v", response.Error)
 		}
-		if got := guardianReviewResponseJSON(t, response); got != `{"callId":"mcp-review","assessment":null}` {
-			t.Fatalf("response = %s", got)
+		want := `{"callId":"mcp-review","assessment":{"outcome":"","riskLevel":"low","userAuthorization":"high","rationale":"remembered"}}`
+		if got := guardianReviewResponseJSON(t, response); got != want {
+			t.Fatalf("response = %s, want %s", got, want)
 		}
-		if called, _, _, _ := reviewer.snapshot(); called {
-			t.Fatal("a remembered MCP approval must skip review")
+		if called, _, _, _ := reviewer.snapshot(); !called {
+			t.Fatal("a remembered MCP approval must not skip the explicit review")
 		}
 	})
 
@@ -353,22 +359,27 @@ func TestThreadGuardianReviewRetryUsesCurrentApprovalPolicy(t *testing.T) {
 		if response.Error != nil {
 			t.Fatalf("policy %q: %+v", policy, response.Error)
 		}
+		// Rust #62846: a policy that disables permission requests still gets an
+		// assessment, so every retry reassesses the recorded call.
 		got := guardianReviewResponseJSON(t, response)
-		if policy == "never" {
-			if got != `{"callId":"grant","assessment":null}` || len(previous) != 1 {
-				t.Fatalf("never policy should skip current review: response=%s calls=%d", got, len(previous))
-			}
-		} else if !strings.Contains(got, `"rationale":"current policy"`) {
+		if !strings.Contains(got, `"rationale":"current policy"`) {
 			t.Fatalf("policy %q did not reassess: %s", policy, got)
 		}
 	}
-	if len(previous) != 2 || previous[0] != "" || previous[1] != "policy-1" {
-		t.Fatalf("review chain after policy change = %q, want empty then policy-1", previous)
+	// Rust #62846: the never policy still reassesses, so every request
+	// continues the shared review chain.
+	if len(previous) != 3 || previous[0] != "" || previous[1] != "policy-1" || previous[2] != "policy-2" {
+		t.Fatalf("review chain after policy change = %q, want empty, policy-1, policy-2", previous)
 	}
 }
 
-func TestThreadGuardianReviewSkipsAssessmentWhenPolicyAllowsLikeRust(t *testing.T) {
-	reviewer := &assessmentGuardianReviewer{decision: state.DecisionApproved}
+func TestThreadGuardianReviewAssessesAllowlistedCommandLikeRust(t *testing.T) {
+	// Rust #62846: exec policy may allow the command without prompting, but the
+	// explicit review still returns an assessment and still does not run it.
+	reviewer := &assessmentGuardianReviewer{
+		decision:   state.DecisionApproved,
+		assessment: &state.Assessment{RiskLevel: state.RiskLow, UserAuthorization: state.AuthorizationHigh, Rationale: "allowlisted"},
+	}
 	router := guardianReviewTestRouter(t, reviewer,
 		`{"type":"function_call","name":"exec_command","call_id":"recorded","arguments":"{\"cmd\":\"git init guardian-skipped\"}"}`,
 	)
@@ -376,11 +387,19 @@ func TestThreadGuardianReviewSkipsAssessmentWhenPolicyAllowsLikeRust(t *testing.
 	if response.Error != nil {
 		t.Fatalf("thread/guardianReview error = %+v", response.Error)
 	}
-	if got := guardianReviewResponseJSON(t, response); got != `{"callId":"recorded","assessment":null}` {
-		t.Fatalf("response = %s", got)
+	want := `{"callId":"recorded","assessment":{"outcome":"","riskLevel":"low","userAuthorization":"high","rationale":"allowlisted"}}`
+	if got := guardianReviewResponseJSON(t, response); got != want {
+		t.Fatalf("response = %s, want %s", got, want)
 	}
-	if called, _, _, _ := reviewer.snapshot(); called {
-		t.Fatal("a command the policy allows must not be assessed")
+	called, action, target, _ := reviewer.snapshot()
+	if !called || target != "recorded" {
+		t.Fatalf("allowlisted command was not assessed: called=%v target=%q", called, target)
+	}
+	if action.Type != "command" || !strings.Contains(action.Command, "git init guardian-skipped") {
+		t.Fatalf("action = %#v, want the recorded command", action)
+	}
+	if matches, err := filepath.Glob(filepath.Join(router.services.DefaultCWD, "guardian-skipped", ".git")); err != nil || len(matches) != 0 {
+		t.Fatalf("review ran the allowlisted command: matches=%v err=%v", matches, err)
 	}
 }
 
