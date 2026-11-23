@@ -5,8 +5,10 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"unicode"
 
@@ -14,37 +16,46 @@ import (
 	_ "golang.org/x/image/tiff"
 	_ "golang.org/x/image/webp"
 
+	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
 )
 
-// Rust parity: codex-rs/tui/src/bottom_pane/chat_composer.rs
-// `handle_paste_image_path` (#57774). A pasted single path that names a regular
-// image file is attached instead of inserted as text.
+// Rust parity: codex-rs/tui/src/bottom_pane/chat_composer.rs and
+// paste_input.rs (#57774, #62687). A pasted single path that names a regular
+// image file is copied into a private temporary attachment while the client can
+// still read it, then attached instead of inserted as text. A copy failure
+// (for example an image over the input limit) is reported and leaves the draft
+// untouched.
 //
 // Non-regular files are skipped: opening a FIFO, socket or device while probing
 // its dimensions can block the input loop.
-func (m *Model) handlePasteImagePath(pasted string) bool {
+func (m *Model) copyPastedImagePath(pasted string) (string, error) {
 	if m == nil {
-		return false
+		return "", nil
 	}
 	path, ok := normalizePastedPath(pasted)
 	if !ok {
-		return false
+		return "", nil
 	}
 	info, err := os.Stat(path)
 	if err != nil || !info.Mode().IsRegular() {
-		return false
+		return "", nil
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return false
+		return "", nil
 	}
 	defer file.Close()
 	if _, _, err := image.DecodeConfig(file); err != nil {
-		return false
+		return "", nil
 	}
-	m.attachComposerImagePath(path)
-	return true
+	if info.Size() > codextui.MaxPastedImageBytes {
+		return "", codextui.ErrPastedImageTooLarge
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return "", nil
+	}
+	return codextui.PersistPastedImage(file, strings.ToLower(filepath.Ext(path)))
 }
 
 // attachComposerImagePath inserts a fresh `[Image #N]` element at the caret and

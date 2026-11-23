@@ -54,8 +54,12 @@ func TestPastedImagePathAttachesRegularFileLikeRust(t *testing.T) {
 	pastedImagePNG(t, path)
 
 	model := pasteText(t, newPastedImageTestModel(t), path)
-	if len(model.attachments) != 1 || model.attachments[0].Kind != bottompane.AttachmentImage || model.attachments[0].Path != path {
-		t.Fatalf("attachments = %#v, want one local image for %s", model.attachments, path)
+	if len(model.attachments) != 1 || model.attachments[0].Kind != bottompane.AttachmentImage {
+		t.Fatalf("attachments = %#v, want one image for %s", model.attachments, path)
+	}
+	// Rust #62687 copies the image while the client can still read it.
+	if model.attachments[0].Path == path || !strings.HasSuffix(model.attachments[0].Path, ".png") {
+		t.Fatalf("attachment path = %q, want a private .png copy of %s", model.attachments[0].Path, path)
 	}
 	if got := model.composer.Value(); got != "[Image #1] " {
 		t.Fatalf("composer value = %q, want the placeholder and a trailing space", got)
@@ -75,8 +79,9 @@ func TestPastedImagePathKeepsQuotedAndFileURLFormsLikeRust(t *testing.T) {
 		"file URL": (&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String(),
 	} {
 		model := pasteText(t, newPastedImageTestModel(t), pasted)
-		if len(model.attachments) != 1 || filepath.Clean(model.attachments[0].Path) != filepath.Clean(path) {
-			t.Fatalf("%s: attachments = %#v, want %s", name, model.attachments, path)
+		// Rust #62687 stores a private copy for every accepted path form.
+		if len(model.attachments) != 1 || filepath.Clean(model.attachments[0].Path) == filepath.Clean(path) {
+			t.Fatalf("%s: attachments = %#v, want a private copy of %s", name, model.attachments, path)
 		}
 	}
 }

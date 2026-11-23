@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"codex_go/envutil"
+	codextui "codex_go/tui"
 )
 
 // pasteImageFromClipboardPlatform mirrors Rust's Windows path: read the system
@@ -33,6 +34,11 @@ func pasteImageFromClipboardWindows() (string, error) {
 	if output, runErr := cmd.CombinedOutput(); runErr != nil {
 		_ = os.RemoveAll(dir)
 		return "", fmt.Errorf("%v: %s", runErr, strings.TrimSpace(string(output)))
+	}
+	// Rust #62687 applies the pasted-image input limit to clipboard PNGs too.
+	if info, statErr := os.Stat(path); statErr == nil && info.Size() > codextui.MaxPastedImageBytes {
+		_ = os.RemoveAll(dir)
+		return "", codextui.ErrPastedImageTooLarge
 	}
 	return path, nil
 }

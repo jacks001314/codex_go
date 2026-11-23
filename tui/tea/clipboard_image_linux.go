@@ -243,6 +243,10 @@ func writeClipboardImagePNG(data []byte, mime string) (string, error) {
 }
 
 func writeClipboardPNG(data []byte) (string, error) {
+	// Rust #62687 applies the pasted-image input limit to clipboard PNGs too.
+	if int64(len(data)) > codextui.MaxPastedImageBytes {
+		return "", codextui.PasteImageError{Kind: codextui.PasteImageIOError, Message: codextui.ErrPastedImageTooLarge.Error()}
+	}
 	dir, err := os.MkdirTemp("", "codex-clipboard-")
 	if err != nil {
 		return "", codextui.PasteImageError{Kind: codextui.PasteImageIOError, Message: err.Error()}

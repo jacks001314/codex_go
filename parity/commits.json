@@ -53391,11 +53391,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-20 upstream window; awaiting per-commit audit."
+    "Pasted image files become private temporary attachments at paste time (Rust #62687, 45ace810b3). A pasted single path that resolves to a regular image is copied into a `codex-clipboard-*.png` temp file while the client can still read it, so moving or deleting the original leaves the attachment intact. The copy enforces Rust's 1 GiB input limit and reports `image exceeds the 1 GiB input limit`; a failed copy shows a `Failed to paste image: ...` error cell and leaves the draft unchanged. Clipboard PNG writers on Linux, macOS and Windows apply the same limit. Tests: go test ./tui/... -count=1; go test ./tui/tea -run 'PastedImage' -count=1; GOOS=darwin/linux go build ./tui/tea; go build ./...; go vet ./tui ./tui/tea; go test ./parity -count=1"
    ],
    "kind": "runtime",
    "sha": "45ace810b3d394f177fb6b1c8a10db9c698e6e05",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Copy pasted image files into temporary TUI attachments (#62687)"
   },
   {

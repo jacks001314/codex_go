@@ -11,6 +11,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 
 	bottompane "codex_go/tui/bottom_pane"
+	historycell "codex_go/tui/history_cell"
 )
 
 // insertComposerPaste integrates pasted text into the composer.
@@ -54,15 +55,28 @@ func (m *Model) insertComposerPaste(pasted string) {
 		}
 		return
 	}
-	// Rust #57774: a pasted single path that names a regular image file becomes
-	// an attachment, and the caret keeps a separating space after the placeholder.
-	if !blockquote && utf8.RuneCountInString(pasted) > 1 && m.handlePasteImagePath(pasted) {
-		m.composer.InsertString(" ")
-		m.syncComposerPrefixAfterEdit(composerBefore)
-		if m.modal == nil {
-			m.recordComposerActivityAt(m.currentTime())
+	// Rust #57774/#62687: a pasted single path that names a regular image file
+	// is copied into a private attachment, and the caret keeps a separating
+	// space after the placeholder. A failed copy reports an error cell and
+	// leaves the draft unchanged.
+	if !blockquote && utf8.RuneCountInString(pasted) > 1 {
+		copied, copyErr := m.copyPastedImagePath(pasted)
+		if copyErr != nil {
+			m.applyHistoryCell(historycell.NewErrorEvent("Failed to paste image: " + copyErr.Error()))
+			if m.modal == nil {
+				m.recordComposerActivityAt(m.currentTime())
+			}
+			return
 		}
-		return
+		if copied != "" {
+			m.attachComposerImagePath(copied)
+			m.composer.InsertString(" ")
+			m.syncComposerPrefixAfterEdit(composerBefore)
+			if m.modal == nil {
+				m.recordComposerActivityAt(m.currentTime())
+			}
+			return
+		}
 	}
 	m.composer.InsertString(text)
 	if blockquote {
