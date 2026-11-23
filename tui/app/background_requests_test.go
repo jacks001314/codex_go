@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"codex_go/mcp"
 	"codex_go/plugin"
 )
 
@@ -172,34 +171,3 @@ func TestBuildFeedbackUploadParamsMatchRust(t *testing.T) {
 	}
 }
 
-func TestMCPInventoryMapsFromStatusesMatchRust(t *testing.T) {
-	statuses := []mcp.MCPServerStatus{{
-		Name: "docs",
-		Tools: []mcp.MCPToolInfo{{
-			Name:        "search",
-			Description: "Search docs",
-		}},
-		Resources: []mcp.MCPResource{{
-			Name: "guide",
-			URI:  "file://guide",
-		}},
-		ResourceTemplates: []mcp.MCPResourceTemplate{{
-			Name:        "doc",
-			URITemplate: "file://{name}",
-		}},
-		AuthStatus: mcp.MCPAuthOAuth,
-	}}
-	maps := MCPInventoryMapsFromStatuses(statuses)
-	if maps.Tools["mcp__docs__search"].Description != "Search docs" {
-		t.Fatalf("tool map = %#v", maps.Tools)
-	}
-	if maps.AuthStatuses["docs"] != mcp.MCPAuthOAuth {
-		t.Fatalf("auth map = %#v", maps.AuthStatuses)
-	}
-	if len(maps.Resources["docs"]) != 1 || maps.Resources["docs"][0].URI != "file://guide" {
-		t.Fatalf("resources = %#v", maps.Resources)
-	}
-	if len(maps.ResourceTemplates["docs"]) != 1 || maps.ResourceTemplates["docs"][0].URITemplate != "file://{name}" {
-		t.Fatalf("templates = %#v", maps.ResourceTemplates)
-	}
-}

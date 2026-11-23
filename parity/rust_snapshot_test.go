@@ -297,6 +297,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"codex-client",
 		"codex-api",
 		"state",
+		"statsig",
 		"terminal-detection",
 		"test-binary-support",
 		"thread-manager-sample",
@@ -336,6 +337,9 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// agent-message-board-client workspace member.
 		// Round-91 re-anchor to head e16b631d08: Cargo.toml gained the
 		// ext/multi-env-copy-file workspace member (#54674).
+		// Round-92 re-anchor to head 598083ae58 (#63438): Cargo.toml gained the
+		// `statsig` workspace member, so its blob digest moved while the other
+		// pins stayed put.
 		// Round-106 re-anchor to head 3b8f43a06b: the zip dependency moved to
 		// 9.0.0 (#54761); every other pin below is unchanged at that head.
 		// Round-108 re-anchor to head ce0323f2f2 (#54776): Cargo.toml gained the
@@ -364,7 +368,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// digest of the new anchor checkout.
 		// Re-anchored to upstream 59ac39addb: Cargo.toml gained the
 		// user-input workspace member (#61949).
-		{Path: "Cargo.toml", SHA256: "fc907793a7ff03b1e08a81ac3b2f2fba357f388ab85028ccb726019f3d637da7"},
+		{Path: "Cargo.toml", SHA256: "fd60155350207fe3e6bbcc928b33c0e8f733adc90b13bddf589320455fa41453"},
 		{Path: "cli/src/lib.rs", SHA256: "4b67417ded45ae654415e1b46c18c2716810f5fc58be141766da64427e1522ed"},
 		// Re-pinned to upstream 8ae55c863d (#47411): the shared network policy
 		// runs through embedded Codex startup.

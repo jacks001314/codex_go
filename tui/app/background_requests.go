@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"codex_go/appserver"
-	"codex_go/mcp"
 	"codex_go/plugin"
 )
 
@@ -211,35 +210,6 @@ func FeedbackClassification(category string) string {
 	default:
 		return "other"
 	}
-}
-
-type MCPInventoryMaps struct {
-	Tools             map[string]mcp.MCPToolInfo
-	Resources         map[string][]mcp.MCPResource
-	ResourceTemplates map[string][]mcp.MCPResourceTemplate
-	AuthStatuses      map[string]mcp.MCPAuthStatus
-}
-
-func MCPInventoryMapsFromStatuses(statuses []mcp.MCPServerStatus) MCPInventoryMaps {
-	out := MCPInventoryMaps{
-		Tools:             map[string]mcp.MCPToolInfo{},
-		Resources:         map[string][]mcp.MCPResource{},
-		ResourceTemplates: map[string][]mcp.MCPResourceTemplate{},
-		AuthStatuses:      map[string]mcp.MCPAuthStatus{},
-	}
-	for _, status := range statuses {
-		serverName := status.Name
-		if serverName == "" {
-			serverName = status.Server.Name
-		}
-		out.AuthStatuses[serverName] = status.AuthStatus
-		out.Resources[serverName] = append([]mcp.MCPResource(nil), status.Resources...)
-		out.ResourceTemplates[serverName] = append([]mcp.MCPResourceTemplate(nil), status.ResourceTemplates...)
-		for _, tool := range status.Tools {
-			out.Tools["mcp__"+serverName+"__"+tool.Name] = tool
-		}
-	}
-	return out
 }
 
 func splitMarketplaceSourceSuffix(source string) (string, string) {

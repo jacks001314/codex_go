@@ -55294,9 +55294,33 @@
    "sha": "bfb5f7d83b4ee9ab2bfaf639c77d609d87ee468b",
    "status": "complete",
    "subject": "Keep active turns running when `/compact` is rejected (#63428)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 157: complete - Rust #63433 deletes the TUI's test-only `mcp_inventory_maps_from_statuses` conversion and the unit test that only exercised it; the TUI renders inventory straight from `McpServerStatus`. Go carried the same dead helper: `tui/app/background_requests.go` exported `MCPInventoryMaps` and `MCPInventoryMapsFromStatuses`, whose only caller was `TestMCPInventoryMapsFromStatusesMatchRust`, while the dashboard renders the live `McpServerStatus` listing (`app/interactive.go` -> `OnReadMCPInventory` -> `historycell.McpServerStatus`). The type, the conversion, its test and the now-unused `codex_go/mcp` imports are removed. Tests: go test ./tui/app -count=1; go build ./tui/app; go vet ./tui/app."
+   ],
+   "kind": "test",
+   "sha": "871559d9ceeffd887d715d3ba5b920b0d82f5f7a",
+   "status": "complete",
+   "subject": "Remove the TUI's test-only MCP inventory conversion (#63433)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 157: not_applicable - Rust #63438 adds a `codex-statsig` crate that adapts a caller-supplied `RouteAwareClientPool` to the Statsig SDK's `HttpClient` interface so Statsig requests honor proxy, TLS and network-policy settings. Go never links the Statsig SDK (`go.mod` has no statsig dependency and no Go file references the Statsig API): feature and policy values come from config and managed requirements, and the only Statsig surface is the OTLP metrics route in `telemetry/metrics_client.go`, whose exporter already takes a caller-supplied `HTTPClient` (`OTLPMetricsExporterOptions.HTTPClient`) and a `TLS` option, so there is no SDK HTTP interface to adapt."
+   ],
+   "kind": "runtime",
+   "sha": "598083ae586954aa11edc8e8224a33ea878445ed",
+   "status": "not_applicable",
+   "subject": "Route Statsig requests through Codex's HTTP client (#63438)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "bfb5f7d83b4ee9ab2bfaf639c77d609d87ee468b",
+ "rustToInclusive": "598083ae586954aa11edc8e8224a33ea878445ed",
  "schemaVersion": 1
 }

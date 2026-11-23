@@ -222,6 +222,7 @@ func rustTopLevelDirectoriesSnapshot() []string {
 		"shell-command",
 		"skills",
 		"state",
+		"statsig",
 		"tcp-tunnel",
 		"terminal-detection",
 		"test-binary-support",
