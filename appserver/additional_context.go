@@ -58,6 +58,24 @@ type additionalContextToolOutput struct {
 	rendered   string
 }
 
+// retainedAdditionalContext copies the thread's stored context when a
+// submission omits its context update (Rust #62602). Stored tool-output names
+// are preserved so re-merging the retained set stays a no-op.
+func (r *RuntimeRouter) retainedAdditionalContext(threadID string) map[string]storedAdditionalContext {
+	threadID = strings.TrimSpace(threadID)
+	if r == nil || threadID == "" {
+		return map[string]storedAdditionalContext{}
+	}
+	r.additionalContextMu.Lock()
+	stored := r.additionalContext[threadID]
+	retained := make(map[string]storedAdditionalContext, len(stored))
+	for key, value := range stored {
+		retained[key] = value
+	}
+	r.additionalContextMu.Unlock()
+	return retained
+}
+
 func (s storedAdditionalContext) equal(other storedAdditionalContext) bool {
 	if s.toolOutput != other.toolOutput {
 		return false
@@ -73,26 +91,34 @@ func (s storedAdditionalContext) equal(other storedAdditionalContext) bool {
 // / tool-output items that still need to reach the model (Rust
 // state::additional_context::AdditionalContextStore::merge).
 func (r *RuntimeRouter) mergeAdditionalContext(threadID string, values map[string]turn.AdditionalContextEntry, toolOutputs bool) ([]string, []any, []additionalContextToolOutput) {
-	next := make(map[string]storedAdditionalContext, len(values))
-	for key, entry := range values {
-		// Rust #58144: every submitted entry is measured, including entries
-		// that deduplication leaves unchanged and entries whose rendered
-		// fragment is dropped.
-		recordAdditionalContextMetrics(entry)
-		if toolOutputs && entry.Kind == turn.AdditionalContextUntrusted {
-			name := derivedAdditionalContextToolName(key)
-			if entry.Name != nil {
-				name = *entry.Name
+	var next map[string]storedAdditionalContext
+	if values == nil {
+		// Rust #62602: omitting the context update or sending `null` keeps the
+		// thread's current set. A supplied map replaces it, so `{}` clears the
+		// set while earlier rendered messages stay in conversation history.
+		next = r.retainedAdditionalContext(threadID)
+	} else {
+		next = make(map[string]storedAdditionalContext, len(values))
+		for key, entry := range values {
+			// Rust #58144: every submitted entry is measured, including entries
+			// that deduplication leaves unchanged and entries whose rendered
+			// fragment is dropped.
+			recordAdditionalContextMetrics(entry)
+			if toolOutputs && entry.Kind == turn.AdditionalContextUntrusted {
+				name := derivedAdditionalContextToolName(key)
+				if entry.Name != nil {
+					name = *entry.Name
+				}
+				next[key] = storedAdditionalContext{
+					toolOutput: true,
+					name:       name,
+					kind:       entry.Kind,
+					value:      truncateAdditionalContextValue(entry.Value),
+				}
+				continue
 			}
-			next[key] = storedAdditionalContext{
-				toolOutput: true,
-				name:       name,
-				kind:       entry.Kind,
-				value:      truncateAdditionalContextValue(entry.Value),
-			}
-			continue
+			next[key] = storedAdditionalContext{kind: entry.Kind, value: entry.Value}
 		}
-		next[key] = storedAdditionalContext{kind: entry.Kind, value: entry.Value}
 	}
 
 	threadID = strings.TrimSpace(threadID)

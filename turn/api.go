@@ -398,7 +398,7 @@ type TurnStartParams struct {
 	Config                 map[string]any                    `json:"config,omitempty"`
 	BaseInstructions       *string                           `json:"baseInstructions,omitempty"`
 	DeveloperInstructions  *string                           `json:"developerInstructions,omitempty"`
-	AdditionalContext      map[string]AdditionalContextEntry `json:"additionalContext,omitempty"`
+	AdditionalContext      map[string]AdditionalContextEntry `json:"additionalContext"`
 	DynamicTools           []DynamicToolSpec                 `json:"dynamicTools,omitempty"`
 	ExperimentalRawEvents  bool                              `json:"-"`
 	// ParentTurnID is the turn that caused this new turn to start; RootTurnID
@@ -634,12 +634,16 @@ func (p *TurnSteerParams) MarshalJSON() ([]byte, error) {
 		Input               []TurnUserInput `json:"input"`
 		ExpectedTurnID      string          `json:"expectedTurnId"`
 		ApprovalsReviewer   *string         `json:"approvalsReviewer,omitempty"`
+		// Rust #62602 keeps Option semantics on the wire: null keeps the current
+		// context set, an empty map clears it.
+		AdditionalContext map[string]AdditionalContextEntry `json:"additionalContext"`
 	}{
 		ThreadID:            p.ThreadID,
 		ClientUserMessageID: p.ClientUserMessageID,
 		Input:               userInputsForJSONWithPrompt(p.Input, p.Prompt),
 		ExpectedTurnID:      p.ExpectedTurnID,
 		ApprovalsReviewer:   p.ApprovalsReviewer,
+		AdditionalContext:   p.AdditionalContext,
 	})
 }
 

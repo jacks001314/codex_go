@@ -53035,11 +53035,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Turn start and turn/steer keep Rust's Option semantics on the wire: an omitted or null additionalContext keeps the current set, while an empty map is serialized and clears it.",
+    "mergeAdditionalContext retains the thread's stored set when a submission omits its update, replaces it with a supplied map (including an empty one), keeps recorded context items in history, and still carries steered context items with the queued input so they reach the model in delivery order.",
+    "go test ./turn -count=1; go test ./appserver -run AdditionalContext -count=1"
    ],
    "kind": "runtime",
    "sha": "b16fddf9d03f39cff7e21dea1af1ed0201f1100c",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Apply additional context when turn input is delivered (#62602)"
   },
   {

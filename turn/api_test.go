@@ -531,10 +531,15 @@ func TestTurnParamsMarshalRustStableRequestShape(t *testing.T) {
 	if err := json.Unmarshal(data, &steerPayload); err != nil {
 		t.Fatalf("Unmarshal steer error = %v", err)
 	}
-	for _, legacyKey := range []string{"prompt", "responsesapiClientMetadata", "additionalContext"} {
+	for _, legacyKey := range []string{"prompt", "responsesapiClientMetadata"} {
 		if _, ok := steerPayload[legacyKey]; ok {
 			t.Fatalf("steer payload leaked %q: %#v", legacyKey, steerPayload)
 		}
+	}
+	// Rust #62602: the context update keeps Option semantics on the wire so a
+	// supplied map replaces the set and null keeps it.
+	if context, ok := steerPayload["additionalContext"].(map[string]any); !ok || context["ctx"] == nil {
+		t.Fatalf("steer payload additionalContext = %#v", steerPayload["additionalContext"])
 	}
 	inputs, ok = steerPayload["input"].([]any)
 	if !ok || len(inputs) != 1 || inputs[0].(map[string]any)["text"] != "steer prompt" {
