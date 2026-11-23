@@ -1,6 +1,10 @@
 package chatwidget
 
-import "strings"
+import (
+	"strings"
+
+	execcell "codex_go/tui/exec_cell"
+)
 
 type ExecCommandSource string
 
@@ -22,6 +26,26 @@ type UnifiedExecProcessSummary struct {
 	CallID         string
 	CommandDisplay string
 	RecentChunks   []string
+	// Pending keeps the unfinished output row across deltas so the footer shows
+	// the latest progress redraw as plain text (Rust #63278).
+	Pending execcell.PendingLine
+}
+
+// MaxRecentChunks bounds the footer preview lines retained per process.
+const MaxRecentChunks = 3
+
+// RecentLines returns the retained output rows plus the unfinished row, matching
+// Rust UnifiedExecProcessSummary::recent_lines.
+func (s UnifiedExecProcessSummary) RecentLines() []string {
+	lines := append([]string(nil), s.RecentChunks...)
+	pending := execcell.PlainOutputText(s.Pending.Render())
+	if pending != "" {
+		if len(lines) == MaxRecentChunks {
+			lines = lines[1:]
+		}
+		lines = append(lines, pending)
+	}
+	return lines
 }
 
 type UnifiedExecWaitState struct {

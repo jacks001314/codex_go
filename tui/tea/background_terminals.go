@@ -129,7 +129,7 @@ func (m *Model) backgroundTerminalDetails() []historycell.UnifiedExecProcessDeta
 	for _, process := range m.commandLifecycle.UnifiedExecProcesses {
 		details = append(details, historycell.UnifiedExecProcessDetails{
 			CommandDisplay: process.CommandDisplay,
-			RecentChunks:   append([]string(nil), process.RecentChunks...),
+			RecentChunks:   process.RecentLines(),
 		})
 	}
 	return details

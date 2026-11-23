@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"codex_go/shell"
+	execcell "codex_go/tui/exec_cell"
 )
 
 type CommandLifecycleState struct {
@@ -64,6 +65,7 @@ func (s *CommandLifecycleState) TrackUnifiedExecProcessBegin(callID string, proc
 			s.UnifiedExecProcesses[i].CallID = callID
 			s.UnifiedExecProcesses[i].CommandDisplay = commandDisplay
 			s.UnifiedExecProcesses[i].RecentChunks = nil
+			s.UnifiedExecProcesses[i].Pending = execcell.PendingLine{}
 			return
 		}
 	}
@@ -101,16 +103,24 @@ func (s *CommandLifecycleState) TrackUnifiedExecOutputChunk(callID string, chunk
 		if s.UnifiedExecProcesses[i].CallID != callID {
 			continue
 		}
-		for _, line := range strings.Split(chunk, "\n") {
-			line = strings.TrimRight(line, "\r")
-			line = strings.TrimRight(line, " \t")
+		// Buffer partial rows across deltas and resolve redraws so /ps shows the
+		// latest visible text (Rust #63278).
+		process := &s.UnifiedExecProcesses[i]
+		insertAt := len(process.RecentChunks)
+		rows := process.Pending.PushLines(chunk)
+		added := 0
+		for index := len(rows) - 1; index >= 0 && added < maxChunks; index-- {
+			line := execcell.PlainOutputText(rows[index])
 			if line == "" {
 				continue
 			}
-			s.UnifiedExecProcesses[i].RecentChunks = append(s.UnifiedExecProcesses[i].RecentChunks, line)
+			process.RecentChunks = append(process.RecentChunks, "")
+			copy(process.RecentChunks[insertAt+1:], process.RecentChunks[insertAt:])
+			process.RecentChunks[insertAt] = line
+			added++
 		}
-		if over := len(s.UnifiedExecProcesses[i].RecentChunks) - maxChunks; over > 0 {
-			s.UnifiedExecProcesses[i].RecentChunks = s.UnifiedExecProcesses[i].RecentChunks[over:]
+		if over := len(process.RecentChunks) - maxChunks; over > 0 {
+			process.RecentChunks = process.RecentChunks[over:]
 		}
 		return
 	}

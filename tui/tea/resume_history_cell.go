@@ -392,7 +392,7 @@ func resumeCommandFallbackLines(item protocol.ThreadItem, source execcell.ExecCo
 		output := strings.TrimRight(*item.AggregatedOutput, "\n")
 		if output != "" {
 			for _, line := range strings.Split(output, "\n") {
-				lines = append(lines, "  "+strings.TrimRight(line, " \t"))
+				lines = append(lines, "  "+execcell.PlainOutputText(execcell.CommandOutputLine(line)))
 			}
 		}
 	}

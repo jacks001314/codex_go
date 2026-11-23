@@ -706,8 +706,9 @@ func splitCommandOutputLines(output string) []string {
 		return nil
 	}
 	lines := strings.Split(output, "\n")
+	// Resolve progress redraws inside each row before layout (Rust #63278).
 	for index := range lines {
-		lines[index] = strings.TrimSuffix(lines[index], "\r")
+		lines[index] = CommandOutputLine(lines[index])
 	}
 	return lines
 }

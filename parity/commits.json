@@ -54695,11 +54695,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Batch 122: partial - Rust resolves carriage-return progress redraws to the text after the last CR, across split deltas and for replayed/historical command output. Go's command-output splitter (tui/exec_cell/render.go splitCommandOutputLines) only trims a trailing CR from each line, so a progress line would keep all of its redraw segments; the delta state machine and the resolved historical fallback are missing."
+    "Batch 123: complete - TUI command output resolves carriage-return progress redraws before layout. tui/exec_cell/output_line.go ports command_output_line (OSC stripping, backwards write resolution with covered columns, ESC[K/ESC[0K erase-to-end, ESC[2K whole-line clear that blanks earlier columns, wide-glyph half overwrite padding, tab width 4, SGR prefixes retained only while they supply an attribute later codes leave alone, cursor style restored) and plain_output_text; splitCommandOutputLines applies it to every row so live and completed previews, activity disclosure and transcripts agree.",
+    "tui/chatwidget adds UnifiedExecProcessSummary.Pending (execcell.PendingLine) with RecentLines(); TrackUnifiedExecOutputChunk buffers unfinished rows across deltas, /ps (tea backgroundTerminalDetails) and the resume historical fallback (resumeCommandFallbackLines) render the resolved plain text, and restarting a process resets the pending row.",
+    "Tests: tui/exec_cell/output_line_like_rust_test.go replays the upstream progress table (split escapes and CRLF, styled and wide-character overwrites, 1 MiB prefix), the 1100 overwritten-color case, streamed/completed preview agreement, per-row splitting and cross-chunk pending rows; tui/chatwidget/unified_exec_pending_like_rust_test.go reproduces the exec_flow /ps expectations (Warning/100%/Done) and the pending reset."
    ],
    "kind": "runtime",
    "sha": "69a470755d1f59aa651a1aa2f31ac70f99031d58",
-   "status": "partial",
+   "status": "complete",
    "subject": "Render terminal progress redraws in TUI command output (#63278)"
   },
   {

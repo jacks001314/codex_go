@@ -22,7 +22,7 @@ func TestCommandLifecycleUnifiedExecProcessDisplayChunksAndFooterMatchRust(t *te
 	}
 
 	state.TrackUnifiedExecOutputChunk("call-1", "one\n\n two \r\nthree\nfour", 3)
-	if got := state.UnifiedExecProcesses[0].RecentChunks; !reflect.DeepEqual(got, []string{" two", "three", "four"}) {
+	if got := state.UnifiedExecProcesses[0].RecentLines(); !reflect.DeepEqual(got, []string{" two", "three", "four"}) {
 		t.Fatalf("recent chunks = %#v", got)
 	}
 
