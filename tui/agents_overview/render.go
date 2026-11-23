@@ -401,6 +401,11 @@ func (v *View) footerHints() [][]span {
 	if v != nil && (v.State.Searching || v.State.Renaming) {
 		hints = append(hints, []span{{text: "esc", style: spanBold}, {text: " cancel", style: spanDim}})
 	}
+	// Rust #63208 advertises the sort toggle only while searching and while no
+	// rename or connection notice owns the keyboard.
+	if v != nil && v.State.Searching && !v.State.Renaming && strings.TrimSpace(v.Notice) == "" {
+		hints = append(hints, []span{{text: "Tab", style: spanBold}, {text: " sort (" + v.State.SearchSort.Label() + ")", style: spanDim}})
+	}
 	hints = append(hints, []span{{text: "?", style: spanBold}, {text: " help", style: spanDim}})
 	hints = append(hints, []span{{text: "ctrl-c", style: spanBold}, {text: " quit", style: spanDim}})
 	return hints
@@ -718,7 +723,7 @@ func (v *View) renderRowSpans(index int, projectGrouping bool, width int) []span
 		if used := spansWidth(spans); used < width-updatedWidth {
 			spans = append(spans, span{text: strings.Repeat(" ", width-updatedWidth-used), style: spanPlain})
 		}
-		updated := relativeUpdateTime(row.UpdatedAt)
+		updated := relativeUpdateTime(v.searchTimestamp(index))
 		spans = append(spans, span{text: rightPadLeft(updated, updatedWidth), style: spanDim})
 		return spans
 	}

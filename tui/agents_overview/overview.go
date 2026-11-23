@@ -286,6 +286,9 @@ type Row struct {
 	GitBranch       string
 	// UpdatedAt is the thread's last-update Unix timestamp in seconds.
 	UpdatedAt int64
+	// CreatedAt is the thread's creation Unix timestamp in seconds. The command
+	// center's creation-time search ordering reads it (Rust #63208).
+	CreatedAt int64
 	// LastMessage is the latest agent message in the task's most recent turn,
 	// previewed for the details pane (Rust agents_overview_details
 	// last_message via thread/turns/list).
@@ -413,7 +416,11 @@ type State struct {
 	VimInsert bool
 	Search    string
 	Searching bool
-	Grouping  Grouping
+	// SearchSort is the ordering search results use while Searching is true
+	// (Rust #63208 AgentsOverviewViewState::search_sort). Browsing always uses
+	// the last-update order.
+	SearchSort SearchSort
+	Grouping   Grouping
 	// StatusFilter is the active command-center status tab (Rust #46839).
 	StatusFilter StatusFilter
 	Renaming     bool
@@ -429,6 +436,55 @@ type State struct {
 	// HiddenThreads is local visibility only; activity and metadata refreshes
 	// never reveal a hidden root (Rust #44424).
 	HiddenThreads map[string]struct{}
+}
+
+// SearchSort is the command center's search ordering (Rust #63208
+// HistorySort): newest-created or newest-updated first.
+type SearchSort int
+
+const (
+	SearchSortUpdated SearchSort = iota
+	SearchSortCreated
+)
+
+// Label is the column and hint wording for the ordering.
+func (s SearchSort) Label() string {
+	if s == SearchSortCreated {
+		return "Created"
+	}
+	return "Updated"
+}
+
+// Toggle cycles between the two orderings.
+func (s SearchSort) Toggle() SearchSort {
+	if s == SearchSortCreated {
+		return SearchSortUpdated
+	}
+	return SearchSortCreated
+}
+
+// Timestamp reports the ordering timestamp for a row. A row without a creation
+// time keeps its update time so the created ordering never drops it.
+func (s SearchSort) Timestamp(row Row) int64 {
+	if s == SearchSortCreated {
+		if row.CreatedAt > 0 {
+			return row.CreatedAt
+		}
+		return row.UpdatedAt
+	}
+	return row.UpdatedAt
+}
+
+// searchTimestamp is the timestamp the rendered list orders and labels rows by:
+// the search ordering while searching, the last-update time otherwise.
+func (v *View) searchTimestamp(index int) int64 {
+	if v == nil || index < 0 || index >= len(v.Rows) {
+		return 0
+	}
+	if v.State.Searching {
+		return v.State.SearchSort.Timestamp(v.Rows[index])
+	}
+	return v.Rows[index].UpdatedAt
 }
 
 // View is the dashboard model.
@@ -889,6 +945,10 @@ func (v *View) visibleIndicesUnbounded() []int {
 	case GroupingStatus:
 		// Rust #58714: pinned tasks stay in their status group, ordered by pin
 		// position, and the rest follow the caller's descending recency order.
+		// Rust #63208: a search reorders the rest by the selected search sort.
+		if v.State.Searching {
+			v.sortByDateDesc(visible)
+		}
 		visible = append(pinned, visible...)
 		sort.SliceStable(visible, func(a int, b int) bool {
 			return v.Rows[visible[a]].Group < v.Rows[visible[b]].Group
@@ -1019,7 +1079,24 @@ func (v *View) sortByGroupKeyThenRecency(indices []int, key func(index int) stri
 		if leftKey, rightKey := key(left), key(right); leftKey != rightKey {
 			return leftKey < rightKey
 		}
-		return v.Rows[left].UpdatedAt > v.Rows[right].UpdatedAt
+		return v.searchTimestamp(left) > v.searchTimestamp(right)
+	}
+	for i := 1; i < len(indices); i++ {
+		current := indices[i]
+		j := i - 1
+		for j >= 0 && less(current, indices[j]) {
+			indices[j+1] = indices[j]
+			j--
+		}
+		indices[j+1] = current
+	}
+}
+
+// sortByDateDesc orders rows newest first by the rendered timestamp, keeping
+// the host's order for equal stamps (Rust #63208 date_key).
+func (v *View) sortByDateDesc(indices []int) {
+	less := func(left int, right int) bool {
+		return v.searchTimestamp(left) > v.searchTimestamp(right)
 	}
 	for i := 1; i < len(indices); i++ {
 		current := indices[i]

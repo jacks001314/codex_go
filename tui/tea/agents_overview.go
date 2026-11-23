@@ -22,11 +22,13 @@ type AgentsOverviewRefreshFunc func(currentThreadID string) ([]agentsoverview.Ro
 
 // AgentsOverviewSearchFunc searches task history beyond the rows already
 // published by the dashboard (Rust #60286 agents_overview_discovery::HistorySearch).
-type AgentsOverviewSearchFunc func(query string) ([]agentsoverview.Row, error)
+// sort selects the result ordering the command center is showing (Rust #63208).
+type AgentsOverviewSearchFunc func(query string, sort agentsoverview.SearchSort) ([]agentsoverview.Row, error)
 
 type agentsOverviewSearchMsg struct {
 	requestID uint64
 	query     string
+	sort      agentsoverview.SearchSort
 	rows      []agentsoverview.Row
 	err       error
 }
@@ -353,11 +355,12 @@ func (m *Model) searchAgentsOverviewCmd() bubbletea.Cmd {
 	}
 	m.agentsOverviewSearchRequestID++
 	requestID := m.agentsOverviewSearchRequestID
+	sort := m.agentsOverview.State.SearchSort
 	return func() bubbletea.Msg {
 		// Rust debounces the first page so typing does not scan history per key.
 		time.Sleep(180 * time.Millisecond)
-		rows, err := m.onAgentsOverviewSearch(query)
-		return agentsOverviewSearchMsg{requestID: requestID, query: query, rows: rows, err: err}
+		rows, err := m.onAgentsOverviewSearch(query, sort)
+		return agentsOverviewSearchMsg{requestID: requestID, query: query, sort: sort, rows: rows, err: err}
 	}
 }
 
@@ -366,6 +369,11 @@ func (m *Model) applyAgentsOverviewSearch(message agentsOverviewSearchMsg) {
 		return
 	}
 	if !m.agentsOverview.State.Searching || strings.ToLower(strings.TrimSpace(m.agentsOverview.State.Search)) != message.query {
+		return
+	}
+	// Rust #63208: a page scanned under the other ordering cannot advance this
+	// scan, so the sort is part of the request identity.
+	if message.sort != m.agentsOverview.State.SearchSort {
 		return
 	}
 	if message.err != nil || len(message.rows) == 0 {
@@ -681,6 +689,16 @@ func (m *Model) updateAgentsOverviewKey(msg keymsg.KeyMsg) bubbletea.Cmd {
 	// Rust #45255: while the search or rename field owns the editor, plain
 	// characters edit it instead of triggering a dashboard shortcut.
 	if m.agentsOverview.State.Searching || m.agentsOverview.State.Renaming {
+		// Rust #63208: Tab switches the search between last-update and
+		// creation-time order once no rename or connection notice owns the
+		// keyboard and no action binds Tab.
+		if m.agentsOverview.State.Searching && !m.agentsOverview.State.Renaming &&
+			msg.Type == keymsg.KeyTab && strings.TrimSpace(m.agentsOverviewNotice) == "" &&
+			!m.agentsOverviewListKeyBound("tab") {
+			m.agentsOverview.State.SearchSort = m.agentsOverview.State.SearchSort.Toggle()
+			m.agentsOverview.Selected = 0
+			return m.searchAgentsOverviewCmd()
+		}
 		if msg.Type == keymsg.KeyRunes && !msg.Alt {
 			for _, r := range msg.Runes {
 				m.agentsOverview.TypeChar(r)

@@ -16,7 +16,7 @@ func TestAgentsOverviewSearchPublishesHistoryMatchesLikeRust(t *testing.T) {
 		OnAgentsOverviewRefresh: func(string) ([]agentsoverview.Row, error) {
 			return []agentsoverview.Row{{ThreadID: "recent", Name: "recent task"}}, nil
 		},
-		OnAgentsOverviewSearch: func(query string) ([]agentsoverview.Row, error) {
+		OnAgentsOverviewSearch: func(query string, _ agentsoverview.SearchSort) ([]agentsoverview.Row, error) {
 			queried = query
 			return []agentsoverview.Row{{
 				ThreadID: "history-1", Name: "needle task", Preview: "needle", CWD: "/work/needle",

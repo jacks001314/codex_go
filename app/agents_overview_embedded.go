@@ -236,7 +236,7 @@ func embeddedAgentsOverviewRefresh(store *session.Store, closeSideConversations 
 // fields the command center renders (Rust #60286 matches_query).
 func embeddedAgentsOverviewSearch(store *session.Store) codextea.AgentsOverviewSearchFunc {
 	source := newEmbeddedAgentsDashboardSource(store, nil)
-	return func(query string) ([]agentsoverview.Row, error) {
+	return func(query string, order agentsoverview.SearchSort) ([]agentsoverview.Row, error) {
 		query = strings.ToLower(strings.TrimSpace(query))
 		if query == "" {
 			return nil, nil
@@ -253,6 +253,9 @@ func embeddedAgentsOverviewSearch(store *session.Store) codextea.AgentsOverviewS
 				matches = append(matches, row)
 			}
 		}
+		// Rust #63208: history search honors the command center's selected
+		// creation/update ordering.
+		sortAgentsOverviewSearchRows(matches, order)
 		return matches, nil
 	}
 }

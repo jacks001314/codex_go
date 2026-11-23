@@ -111,6 +111,7 @@ func agentsOverviewRowsFromThreadsWithReadReceipts(threads []*appserver.Thread, 
 			ThreadID:  strings.TrimSpace(thread.ID),
 			Preview:   strings.TrimSpace(thread.Preview),
 			CWD:       strings.TrimSpace(thread.CWD),
+			CreatedAt: thread.CreatedAt,
 			UpdatedAt: thread.UpdatedAt,
 			// Rust #61709: the dashboard reads saved prompt/reply previews
 			// only for paginated threads.
@@ -204,6 +205,7 @@ func agentsOverviewRowsFromRecords(records []session.Record, currentThreadID str
 			Preview:   strings.TrimSpace(record.Preview),
 			CWD:       strings.TrimSpace(record.Metadata.CWD),
 			Model:     strings.TrimSpace(record.Metadata.Model),
+			CreatedAt: record.CreatedAt.Unix(),
 			UpdatedAt: record.UpdatedAt.Unix(),
 			// Local records carry the persisted history mode; the no-daemon
 			// fallback already reads stored items, so it never issues a

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"codex_go/session"
+	agentsoverview "codex_go/tui/agents_overview"
 )
 
 // Rust #61926: history search also matches case-insensitive substrings of
@@ -32,7 +33,7 @@ func TestEmbeddedAgentsOverviewSearchMatchesThreadIDAndBranchLikeRust(t *testing
 
 	search := embeddedAgentsOverviewSearch(store)
 	for _, query := range []string{"FIX/RES", "ABCDEF", "TASK TO FIND"} {
-		rows, err := search(query)
+		rows, err := search(query, agentsoverview.SearchSortUpdated)
 		if err != nil {
 			t.Fatalf("search %q error = %v", query, err)
 		}
@@ -40,7 +41,7 @@ func TestEmbeddedAgentsOverviewSearchMatchesThreadIDAndBranchLikeRust(t *testing
 			t.Fatalf("search %q rows = %#v", query, rows)
 		}
 	}
-	rows, err := search("no-such-task")
+	rows, err := search("no-such-task", agentsoverview.SearchSortUpdated)
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("non-matching search = %#v, %v", rows, err)
 	}

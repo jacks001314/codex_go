@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -38,7 +39,7 @@ func interactiveRemoteAgentsOverviewRefresh(ctx context.Context, endpoint *appse
 // matching the command center query (Rust #60286). It pages thread/list by
 // searchTerm so tasks outside the recent window remain discoverable.
 func interactiveRemoteAgentsOverviewSearch(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.AgentsOverviewSearchFunc {
-	return func(query string) ([]agentsoverview.Row, error) {
+	return func(query string, order agentsoverview.SearchSort) ([]agentsoverview.Row, error) {
 		query = strings.TrimSpace(query)
 		if query == "" {
 			return nil, nil
@@ -65,6 +66,10 @@ func interactiveRemoteAgentsOverviewSearch(ctx context.Context, endpoint *appser
 				ModelProviders: []string{},
 				UseStateDBOnly: true,
 				SearchTerm:     &query,
+				// Rust #63208 orders history search by the command center's
+				// selected sort so recent creations stay reachable.
+				SortKey:       agentsOverviewSearchSortKey(order),
+				SortDirection: appserver.SortDesc,
 			}
 			if cursor != nil {
 				params.Cursor = cursor
@@ -92,8 +97,27 @@ func interactiveRemoteAgentsOverviewSearch(ctx context.Context, endpoint *appser
 			next := strings.TrimSpace(*response.NextCursor)
 			cursor = &next
 		}
-		return agentsOverviewRowsFromThreadsWithReadReceipts(threads, "", receipts), nil
+		rows := agentsOverviewRowsFromThreadsWithReadReceipts(threads, "", receipts)
+		sortAgentsOverviewSearchRows(rows, order)
+		return rows, nil
 	}
+}
+
+// agentsOverviewSearchSortKey maps the command center ordering to the
+// app-server list sort (Rust #63208 HistorySort::sort_key).
+func agentsOverviewSearchSortKey(sort agentsoverview.SearchSort) appserver.SortKey {
+	if sort == agentsoverview.SearchSortCreated {
+		return appserver.SortCreatedAt
+	}
+	return appserver.SortUpdatedAt
+}
+
+// sortAgentsOverviewSearchRows keeps merged pages in the selected order even
+// when the backend paginates independently.
+func sortAgentsOverviewSearchRows(rows []agentsoverview.Row, order agentsoverview.SearchSort) {
+	sort.SliceStable(rows, func(i int, j int) bool {
+		return order.Timestamp(rows[i]) > order.Timestamp(rows[j])
+	})
 }
 
 // interactiveRemoteAgentsOverviewNewSession starts a blank session in the

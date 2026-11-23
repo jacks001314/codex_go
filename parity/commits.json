@@ -54558,11 +54558,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1268: partial - Rust adds a Tab-toggle creation-time sort to Command Center search so recently created tasks are findable ahead of last-update ordering. Go's agents overview sorts by group key then recency only (tui/agents_overview/overview.go sortByGroupKeyThenRecency, status_order_like_rust_test.go) and its Row model carries no creation timestamp, so there is no creation-time ordering or toggle."
+    "Round 1266: Command Center search gains creation-time ordering (Rust #63208). agentsoverview.Row carries CreatedAt, State.SearchSort toggles between Updated and Created, the visible order uses the search sort while searching (including the status grouping's pre-sort and the age column), a row without a creation time falls back to its update time, and the footer advertises `Tab sort (Created|Updated)`. Tab toggles the order once the search field owns the editor, no rename or connection notice is active and no action binds Tab; the toggle rescans history and the search message carries its sort so a page scanned under the other order cannot advance the new scan. The remote history search asks thread/list for created_at/updated_at descending and re-sorts merged pages, the embedded search sorts its matches, and the dashboard adapters populate CreatedAt from appserver.Thread.CreatedAt and session.Record.CreatedAt. Go's TUI has no column header row, so Rust's Updated->Created header label has no carrier. Tests: go test ./tui/agents_overview ./tui/tea -count=1; go test ./app -run 'AgentsOverview|AgentsDashboard|AgentTUI' -count=1."
    ],
    "kind": "runtime",
    "sha": "4ae20b9f28f72d46fcea7431381b88fb4c70514a",
-   "status": "partial",
+   "status": "complete",
    "subject": "Add creation-time sorting to Command Center search (#63208)"
   },
   {
