@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	featureflags "codex_go/features"
 )
 
 func ConfigPath(codexHome string) string {
@@ -57,9 +59,9 @@ func SetFeature(codexHome, feature string, enabled bool) error {
 	return writeFeatureConfig(path, lines)
 }
 
-// setStructuredFeatureEnabled writes `enabled` inside `[features.<feature>]` or
-// an inline `feature = { ... }` value under `[features]`, reporting whether
-// either form was found.
+// setStructuredFeatureEnabled writes the feature's toggle field inside
+// `[features.<feature>]` or an inline `feature = { ... }` value under
+// `[features]`, reporting whether either form was found.
 func setStructuredFeatureEnabled(lines []string, feature string, enabled bool) ([]string, bool) {
 	if lines, ok := setFeatureTableEnabled(lines, feature, enabled); ok {
 		return lines, true
@@ -69,20 +71,21 @@ func setStructuredFeatureEnabled(lines []string, feature string, enabled bool) (
 
 func setFeatureTableEnabled(lines []string, feature string, enabled bool) ([]string, bool) {
 	header := "[features." + feature + "]"
+	toggleField := featureflags.ToggleField(feature)
 	for i, line := range lines {
 		if strings.TrimSpace(stripComment(line)) != header {
 			continue
 		}
 		for j := i + 1; j <= len(lines); j++ {
 			if j == len(lines) {
-				return insertConfigLine(lines, j, enabledFeatureLine(enabled)), true
+				return insertConfigLine(lines, j, enabledFeatureLine(toggleField, enabled)), true
 			}
 			body := strings.TrimSpace(stripComment(lines[j]))
 			if strings.HasPrefix(body, "[") && strings.HasSuffix(body, "]") {
-				return insertConfigLine(lines, j, enabledFeatureLine(enabled)), true
+				return insertConfigLine(lines, j, enabledFeatureLine(toggleField, enabled)), true
 			}
-			if key, _, ok := strings.Cut(body, "="); ok && strings.TrimSpace(key) == "enabled" {
-				lines[j] = enabledFeatureLine(enabled)
+			if key, _, ok := strings.Cut(body, "="); ok && strings.TrimSpace(key) == toggleField {
+				lines[j] = enabledFeatureLine(toggleField, enabled)
 				return lines, true
 			}
 		}
@@ -109,7 +112,7 @@ func setInlineFeatureEnabled(lines []string, feature string, enabled bool) ([]st
 		if !ok || strings.TrimSpace(key) != feature {
 			continue
 		}
-		inline, ok := setInlineTableEnabled(strings.TrimSpace(rawValue), enabled)
+		inline, ok := setInlineTableEnabled(strings.TrimSpace(rawValue), featureflags.ToggleField(feature), enabled)
 		if !ok {
 			return lines, false
 		}
@@ -119,19 +122,19 @@ func setInlineFeatureEnabled(lines []string, feature string, enabled bool) ([]st
 	return lines, false
 }
 
-func setInlineTableEnabled(value string, enabled bool) (string, bool) {
+func setInlineTableEnabled(value string, toggleField string, enabled bool) (string, bool) {
 	inner := strings.TrimSpace(value)
 	if !strings.HasPrefix(inner, "{") || !strings.HasSuffix(inner, "}") {
 		return "", false
 	}
 	inner = strings.TrimSpace(inner[1 : len(inner)-1])
-	if updated, ok := replaceInlineTableKey(inner, "enabled", fmt.Sprintf("%t", enabled)); ok {
+	if updated, ok := replaceInlineTableKey(inner, toggleField, fmt.Sprintf("%t", enabled)); ok {
 		return "{ " + updated + " }", true
 	}
 	if inner == "" {
-		return fmt.Sprintf("{ enabled = %t }", enabled), true
+		return fmt.Sprintf("{ %s = %t }", toggleField, enabled), true
 	}
-	return fmt.Sprintf("{ enabled = %t, %s }", enabled, inner), true
+	return fmt.Sprintf("{ %s = %t, %s }", toggleField, enabled, inner), true
 }
 
 // replaceInlineTableKey replaces the `key = value` entry of a flat inline table
@@ -206,8 +209,8 @@ func insertConfigLine(lines []string, index int, line string) []string {
 	return lines
 }
 
-func enabledFeatureLine(enabled bool) string {
-	return fmt.Sprintf("enabled = %t", enabled)
+func enabledFeatureLine(toggleField string, enabled bool) string {
+	return fmt.Sprintf("%s = %t", toggleField, enabled)
 }
 
 func writeFeatureConfig(path string, lines []string) error {

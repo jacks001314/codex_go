@@ -54189,11 +54189,14 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "features.send_message_to_user_async accepts the boolean shorthand or the structured table: root_agent is the root feature flag and subagents is an independent opt-in exposed by Config.SendMessageToUserAsyncSubagents.",
+    "Config layer merges, CLI overrides, ConfigService edits and `codex features enable/disable` all write the root_agent field and preserve a nested subagents setting.",
+    "Turn-start and step tool plans offer the free-form send_message_to_user_async tool to a spawned subagent when the subagents opt-in is set, independently of the root flag and the model catalog; root availability still follows the catalog or root flag.",
+    "go test ./config ./features -count=1; go test ./appserver -run 'Async|PersistentMode|Subagent|Freeform' -count=1; go build ./...; go vet ./config ./features ./appserver"
    ],
    "kind": "runtime",
    "sha": "8653ca9e99b2c805107bde7b7d6f57a634c643d0",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Add an async user messaging opt-in for spawned subagents (#63069)"
   },
   {

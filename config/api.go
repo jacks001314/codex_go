@@ -16,6 +16,7 @@ import (
 
 	"codex_go/apps"
 	"codex_go/execpolicy"
+	featureflags "codex_go/features"
 	"codex_go/network"
 	"codex_go/plugin"
 	"codex_go/sandbox"
@@ -3629,13 +3630,23 @@ func applyEdit(root map[string]any, edit *ConfigEdit) {
 	}
 	value := edit.Value
 	// Mirrors Rust ConfigDocument::apply (core/config/edit.rs): writing a
-	// boolean toggle to an existing structured feature table stores it as
-	// `<feature>.enabled` instead of replacing the table, preserving nested
-	// configuration such as `features.sleep_tool.mode` (#41243).
-	if _, ok := value.(bool); ok {
-		if _, structured := structuredFeatureName(parts); structured {
+	// boolean toggle to an existing structured feature table stores it in the
+	// feature's toggle field instead of replacing the table, preserving nested
+	// configuration such as `features.sleep_tool.mode` (#41243) or
+	// `features.send_message_to_user_async.subagents` (#63069).
+	if feature, structured := structuredFeatureName(parts); structured {
+		toggleField := featureflags.ToggleField(feature)
+		switch typed := value.(type) {
+		case bool:
 			if _, isTable := getAtPath(root, parts).(map[string]any); isTable {
-				parts = append(parts, "enabled")
+				parts = append(parts, toggleField)
+			}
+		case map[string]any:
+			if len(typed) == 1 {
+				if toggleValue, ok := typed[toggleField]; ok {
+					parts = append(parts, toggleField)
+					value = toggleValue
+				}
 			}
 		}
 	}

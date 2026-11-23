@@ -97,6 +97,16 @@ func RequirementKey(key string) (canonical string, legacy bool, ok bool) {
 	return canonical, true, ok
 }
 
+// ToggleField returns the scalar field that stores a feature's root toggle
+// inside its structured table. Most features use `enabled`; the async user
+// messaging feature uses its independent `root_agent` switch (Rust #63069).
+func ToggleField(key string) string {
+	if key == "send_message_to_user_async" {
+		return "root_agent"
+	}
+	return "enabled"
+}
+
 func ResolveSettings(raw map[string]any) (map[string]bool, []LegacyFeatureUsage) {
 	settings := map[string]bool{}
 	if len(raw) == 0 {
@@ -109,7 +119,7 @@ func ResolveSettings(raw map[string]any) (map[string]bool, []LegacyFeatureUsage)
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		enabled, ok := featureEnabledValue(raw[key])
+		enabled, ok := featureEnabledValueForKey(key, raw[key])
 		if !ok {
 			continue
 		}
@@ -137,16 +147,26 @@ func ResolveSettings(raw map[string]any) (map[string]bool, []LegacyFeatureUsage)
 	return settings, sortedLegacyUsages(usages)
 }
 
-func featureEnabledValue(value any) (bool, bool) {
-	switch typed := value.(type) {
-	case bool:
-		return typed, true
-	case map[string]any:
-		enabled, ok := typed["enabled"].(bool)
-		return enabled, ok
-	default:
+func featureEnabledValueForKey(key string, value any) (bool, bool) {
+	if table, ok := value.(map[string]any); ok {
+		if enabled, ok := table[ToggleField(key)].(bool); ok {
+			return enabled, true
+		}
+		// Keep accepting the generic field for tables that predate a
+		// feature-specific toggle name.
+		if enabled, ok := table["enabled"].(bool); ok {
+			return enabled, true
+		}
 		return false, false
 	}
+	return featureEnabledValue(value)
+}
+
+func featureEnabledValue(value any) (bool, bool) {
+	if enabled, ok := value.(bool); ok {
+		return enabled, true
+	}
+	return false, false
 }
 
 func forcedLegacyUsageForKey(key string) (string, string, bool) {

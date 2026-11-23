@@ -6161,13 +6161,12 @@ func (r *RuntimeRouter) turnThreadIsSubagent(threadID string) bool {
 	return runtimeRecordIsSubagent(record)
 }
 
-// freeformAsyncToolAvailable mirrors Rust #45124's condition for registering
-// the free-form send_message_to_user_async tool: the turn must belong to a root
-// agent, and either the model catalog must advertise the tool or the
-// send_message_to_user_async feature must be enabled.
-func freeformAsyncToolAvailable(rootAgent bool, catalogTools []string, featureEnabled bool) bool {
+// freeformAsyncToolAvailable mirrors Rust #45124 and #63069: the root agent
+// opts in through either the model catalog or the send_message_to_user_async
+// feature, while a spawned subagent needs its own independent opt-in.
+func freeformAsyncToolAvailable(rootAgent bool, catalogTools []string, featureEnabled bool, subagentEnabled bool) bool {
 	if !rootAgent {
-		return false
+		return subagentEnabled
 	}
 	if featureEnabled {
 		return true
@@ -19171,7 +19170,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	if requestUserInputAsyncAvailable(freeformAsyncRootAgent, requestUserInputEnabled, catalogTools) {
 		options.ExperimentalSupportedTools = append(options.ExperimentalSupportedTools, tool.DefaultRequestUserInputAsyncToolName)
 	}
-	if freeformAsyncToolAvailable(freeformAsyncRootAgent, catalogTools, freeformAsyncFeature) {
+	if freeformAsyncToolAvailable(freeformAsyncRootAgent, catalogTools, freeformAsyncFeature, cfg != nil && cfg.SendMessageToUserAsyncSubagents()) {
 		options.ExperimentalSupportedTools = append(options.ExperimentalSupportedTools, tool.DefaultSendMessageToUserAsyncToolName)
 	}
 	// Rust omits the confirmation-policies request metadata for Guardian review

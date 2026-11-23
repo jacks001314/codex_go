@@ -2016,6 +2016,19 @@ func ProjectHooksDotCodexFolder(cwd string, dotCodexFolder string) string {
 	return filepath.Join(repoRoot, relative, ".gcode")
 }
 
+// SendMessageToUserAsyncSubagents reports the independent
+// [features.send_message_to_user_async].subagents opt-in for spawned
+// subagents (Rust #63069).
+func (c *Config) SendMessageToUserAsyncSubagents() bool {
+	if c == nil || c.Values == nil {
+		return false
+	}
+	featuresValue, _ := c.Values["features"].(map[string]any)
+	entry, _ := featuresValue["send_message_to_user_async"].(map[string]any)
+	enabled, _ := entry["subagents"].(bool)
+	return enabled
+}
+
 func (c *Config) FeatureSettings() map[string]bool {
 	settings, _ := c.FeatureSettingsWithLegacyUsages()
 	return settings
@@ -4238,18 +4251,19 @@ func mergeConfigMapsAt(dst map[string]any, src map[string]any, path []string) {
 			dst[key] = cloneConfigValue(value)
 			continue
 		}
-		if _, ok := structuredFeatureName(childPath); ok {
-			// Mirrors Rust merge_toml_values_at_path's multi_agent_v2 handling
-			// (config/src/merge.rs): a legacy boolean toggle converts to an
-			// `enabled` field when merged with a nested table, in either
-			// direction, without discarding nested configuration.
+		if feature, ok := structuredFeatureName(childPath); ok {
+			// Mirrors Rust merge_toml_values_at_path (config/src/merge.rs): a
+			// legacy boolean toggle converts to the feature's toggle field when
+			// merged with a nested table, in either direction, without
+			// discarding nested configuration.
+			toggleField := featureflags.ToggleField(feature)
 			if baseBool, ok := dst[key].(bool); ok {
 				if _, overlayIsMap := value.(map[string]any); overlayIsMap {
-					dst[key] = map[string]any{"enabled": baseBool}
+					dst[key] = map[string]any{toggleField: baseBool}
 				}
 			} else if baseTable, ok := dst[key].(map[string]any); ok {
 				if overlayBool, ok := value.(bool); ok {
-					baseTable["enabled"] = overlayBool
+					baseTable[toggleField] = overlayBool
 					continue
 				}
 			}
@@ -4306,7 +4320,7 @@ func structuredFeatureName(path []string) (string, bool) {
 		return "", false
 	}
 	switch feature {
-	case "code_mode", "multi_agent_v2", "network_proxy", "sleep_tool":
+	case "code_mode", "multi_agent_v2", "network_proxy", "send_message_to_user_async", "sleep_tool":
 		return feature, true
 	default:
 		return "", false

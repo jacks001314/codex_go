@@ -207,7 +207,7 @@ func (r *RuntimeRouter) stepToolRegistryOptions(inputs rememberedTurnToolInputs,
 	if requestUserInputAsyncAvailable(freeformAsyncRootAgent, requestUserInputEnabled, catalogTools) {
 		options.ExperimentalSupportedTools = append(options.ExperimentalSupportedTools, tool.DefaultRequestUserInputAsyncToolName)
 	}
-	if freeformAsyncToolAvailable(freeformAsyncRootAgent, catalogTools, freeformAsyncFeature) {
+	if freeformAsyncToolAvailable(freeformAsyncRootAgent, catalogTools, freeformAsyncFeature, inputs.cfg != nil && inputs.cfg.SendMessageToUserAsyncSubagents()) {
 		options.ExperimentalSupportedTools = append(options.ExperimentalSupportedTools, tool.DefaultSendMessageToUserAsyncToolName)
 	}
 	// Standalone web search and standalone image generation are model catalog

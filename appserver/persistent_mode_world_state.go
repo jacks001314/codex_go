@@ -119,7 +119,7 @@ func (r *RuntimeRouter) persistentModeSendUserMessageAsyncAvailable(threadID str
 	}
 	rootAgent := !r.turnThreadIsSubagent(threadID)
 	return requestUserInputAsyncAvailable(rootAgent, cfg.ExperimentalRequestUserInputEnabled(), modelInfo.ExperimentalSupportedTools) ||
-		freeformAsyncToolAvailable(rootAgent, modelInfo.ExperimentalSupportedTools, features.Enabled(cfg.FeatureSettings(), "send_message_to_user_async"))
+		freeformAsyncToolAvailable(rootAgent, modelInfo.ExperimentalSupportedTools, features.Enabled(cfg.FeatureSettings(), "send_message_to_user_async"), cfg != nil && cfg.SendMessageToUserAsyncSubagents())
 }
 
 func decodePersistentModeWorldStateSnapshot(raw json.RawMessage) (persistentModeSnapshot, string) {
