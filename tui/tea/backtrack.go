@@ -377,6 +377,9 @@ func (m *Model) applyBacktrackSelection(selection tuiapp.PromptEditSelection) bu
 		m.refreshTranscript()
 		return nil
 	}
+	// Rust #63193: the rewind occupies the keyboard until buffered input is
+	// drained; Go bounds that with a guard on Enter/Escape.
+	m.armThreadTransitionGuard()
 	if strings.TrimSpace(selection.ThreadID) != strings.TrimSpace(m.currentThreadID()) {
 		return nil
 	}

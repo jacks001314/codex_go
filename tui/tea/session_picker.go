@@ -612,6 +612,11 @@ func (m *Model) applyForkCurrentSessionResult(msg forkCurrentSessionMsg) bubblet
 	if msg.origin == forkOriginAgentsOverview {
 		m.agentsOverviewBusy = false
 	}
+	if locked || msg.origin == forkOriginAgentsOverview {
+		// Rust #63193: fork shortcuts from these surfaces discard buffered
+		// typeahead before the resulting view accepts input.
+		m.armThreadTransitionGuard()
+	}
 	restoreFailure := func() {
 		if locked {
 			// Rust #47185: a failed fork keeps the locked view and its draft.

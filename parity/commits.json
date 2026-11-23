@@ -54198,11 +54198,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Go has no transcript copy mode with source remapping: copy text is derived from the selected rendered rows (selection/table/block models), and there is no normalized-text matching that could assign a later fenced block's source to an earlier indented block or bare table.",
+    "The fenced-source preservation this change fixes therefore has no Go carrier; block copy reconstructs fences only when the layout carries them (raw output) and never substitutes a different block's source."
    ],
    "kind": "runtime",
    "sha": "618d501ea0403847ab0070a697cbda8c85054c89",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Preserve fenced code source in TUI transcript copy mode (#63085)"
   },
   {
@@ -54417,11 +54418,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "A prompt rewind now arms a bounded typeahead guard (model.go dispatch, transcript_select_main.go arm/consume) that consumes Enter/Escape buffered across the revert, so a held Enter cannot submit the restored prompt; locked-thread and agents-overview fork results arm the same guard (session_picker.go).",
+    "Bubble Tea owns stdin, so the model cannot drain the OS input queue the way Rust does; the guard covers the keys that submit or reopen browsing and expires after the same 500ms window as the existing selection-exit guard.",
+    "Coverage: tui/tea/thread_transition_guard_like_rust_test.go (buffered Enter does not submit, fresh Enter does, Escape consumed then expires, locked fork arms the guard); go test ./tui/tea passes."
    ],
    "kind": "runtime",
    "sha": "9f2cbb9c09daf36d60c3f110cd16dc46c8c225f1",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Discard TUI typeahead after prompt rewind and fork (#63193)"
   },
   {

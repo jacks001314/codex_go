@@ -266,6 +266,34 @@ func (m *Model) armSelectExitGuard(keySpec string) {
 	m.selectExitGuardUntil = m.currentTime().Add(selectExitGuardWindow)
 }
 
+// armThreadTransitionGuard consumes Enter/Escape that was already buffered when
+// a rewind or fork restored the composer. Bubble Tea owns stdin, so the model
+// cannot drain the typeahead the way Rust does; a short guard on the keys that
+// submit or reopen browsing gives the same protection for held repeats.
+func (m *Model) armThreadTransitionGuard() {
+	if m == nil {
+		return
+	}
+	m.threadTransitionGuardUntil = m.currentTime().Add(selectExitGuardWindow)
+}
+
+func (m *Model) consumeThreadTransitionGuard(msg keymsg.KeyMsg) bool {
+	if m == nil || m.threadTransitionGuardUntil.IsZero() {
+		return false
+	}
+	now := m.currentTime()
+	if !now.Before(m.threadTransitionGuardUntil) {
+		m.threadTransitionGuardUntil = time.Time{}
+		return false
+	}
+	switch msg.Type {
+	case keymsg.KeyEnter, keymsg.KeyEsc:
+		m.threadTransitionGuardUntil = now.Add(selectExitGuardWindow)
+		return true
+	}
+	return false
+}
+
 func (m *Model) consumeSelectExitGuard(keySpec string) bool {
 	if m == nil || m.selectExitGuardSpec == "" || strings.TrimSpace(keySpec) == "" {
 		return false

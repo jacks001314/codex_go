@@ -2184,9 +2184,12 @@ type Model struct {
 	// transcript selection so they cannot submit the composer draft (#57224).
 	selectExitGuardSpec  string
 	selectExitGuardUntil time.Time
-	overlay              *chatwidget.TranscriptOverlay
-	slashPopup           slashCommandPopup
-	agentsOverview       *agentsoverview.View
+	// threadTransitionGuardUntil consumes Enter/Escape buffered across a prompt
+	// rewind or a locked/agents-overview fork (Rust #63193 typeahead drain).
+	threadTransitionGuardUntil time.Time
+	overlay                    *chatwidget.TranscriptOverlay
+	slashPopup                 slashCommandPopup
+	agentsOverview             *agentsoverview.View
 	// analyticsDashboard is the retained /usage analytics view. It keeps its
 	// navigation state across open/close and cancels pending loads on close
 	// (Rust #45764 App::retained_analytics).
@@ -5293,6 +5296,13 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		// submit the preserved composer draft.
 		if !(msg.Type == keymsg.KeyRunes && msg.Paste) &&
 			m.consumeSelectExitGuard(keySpecFromKeyMsg(msg)) {
+			return m, nil
+		}
+		// Rust #63193: a rewind or fork restores the composer while earlier
+		// keystrokes may still be buffered, so a held Enter cannot submit the
+		// restored prompt and a trailing Escape cannot reopen browsing.
+		if !(msg.Type == keymsg.KeyRunes && msg.Paste) &&
+			m.consumeThreadTransitionGuard(msg) {
 			return m, nil
 		}
 		// Rust #54381: pasting dismisses the passive preset HUD and is then
