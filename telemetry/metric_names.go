@@ -13,8 +13,13 @@ import (
 var ReasoningItemsRemovedBoundaries = []float64{0, 1, 2, 4, 8, 16, 32, 64, 128, 256}
 
 const (
-	ToolCallCountMetric                        = "codex.tool.call"
-	ToolCallDurationMetric                     = "codex.tool.call.duration_ms"
+	ToolCallCountMetric    = "codex.tool.call"
+	ToolCallDurationMetric = "codex.tool.call.duration_ms"
+	// ExecCommandDurationTotalMetric and ExecCommandCountMetric are the paired
+	// Statsig-exported counters for the built-in exec_command handler interval,
+	// including shell setup through exit or the first yield (Rust #62507).
+	ExecCommandDurationTotalMetric             = "codex.exec_command.duration_total_ms"
+	ExecCommandCountMetric                     = "codex.exec_command.calls"
 	ToolCallUnifiedExecMetric                  = "codex.tool.unified_exec"
 	ArtifactOperationStartedMetric             = "codex.artifact.operation.started"
 	ArtifactOperationExpectedOutputCountMetric = "codex.artifact.operation.expected_output_count"

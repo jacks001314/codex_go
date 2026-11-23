@@ -153,6 +153,14 @@ func EmitTurnToolCallMetric(sink TurnMetricSink, toolCalls int, tmpMemoryEnabled
 // and the executor's telemetry tags. mcp_server/mcp_server_origin are trace-only
 // fields in Rust, so they stay out of the metric tags.
 func EmitToolCallMetric(sink TurnMetricSink, execution *turn.ToolExecutionResult) {
+	EmitToolCallMetricWithProductSKU(sink, execution, "")
+}
+
+// EmitToolCallMetricWithProductSKU is EmitToolCallMetric plus Rust #62507's
+// paired exec_command latency counters. The session's product SKU is attached
+// to those counters when the host knows it, matching SessionTelemetry's
+// metadata; the generic tool-call histogram never carries it.
+func EmitToolCallMetricWithProductSKU(sink TurnMetricSink, execution *turn.ToolExecutionResult, productSKU string) {
 	if sink == nil || execution == nil || execution.Invocation == nil {
 		return
 	}
@@ -173,6 +181,27 @@ func EmitToolCallMetric(sink TurnMetricSink, execution *turn.ToolExecutionResult
 		duration = 0
 	}
 	sink.RecordDuration(ToolCallDurationMetric, duration, tags)
+
+	// Rust #62507 only counts the built-in handler: plain (default-namespace)
+	// exec_command runs, including failures, measured from handler entry. The
+	// counters share the executor's tags plus success and product_sku, so a
+	// total divided by calls yields the per-call mean per tag set.
+	toolName := execution.Invocation.ToolName
+	if toolName.Namespace != "" || toolName.Name != "exec_command" {
+		return
+	}
+	execTags := make(map[string]string, len(tags)+1)
+	for key, value := range tags {
+		if key == "tool" {
+			continue
+		}
+		execTags[key] = value
+	}
+	if sku := strings.TrimSpace(productSKU); sku != "" {
+		execTags["product_sku"] = sku
+	}
+	sink.Counter(ExecCommandDurationTotalMetric, int(duration/time.Millisecond), execTags)
+	sink.Counter(ExecCommandCountMetric, 1, execTags)
 }
 
 // EmitTurnE2EDurationMetric mirrors Rust's TURN_E2E_DURATION_METRIC timer: the

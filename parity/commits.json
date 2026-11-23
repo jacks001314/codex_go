@@ -52634,11 +52634,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "telemetry/metric_names.go adds codex.exec_command.duration_total_ms and codex.exec_command.calls; telemetry.EmitToolCallMetricWithProductSKU emits both for plain (default-namespace) exec_command handler runs, including failures, alongside the existing tool-call counter and duration histogram.",
+    "The counters carry the executor's telemetry tags (e.g. shell_snapshot_mode), success, and product_sku when the host knows it, and omit the generic tool tag; namespaced, MCP, and other tools do not emit them.",
+    "Tests: TestExecCommandLatencyCountersLikeRust, TestExecCommandLatencyOmitsUnknownProductSKULikeRust, TestExecCommandLatencyCountersReachStatsigLikeRust; go test ./telemetry -count=1; go build ./..."
    ],
    "kind": "runtime",
    "sha": "39c29c3bb620f91e84a3bb266bb496dfb697c101",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Add Statsig counters for `exec_command` latency (#62507)"
   },
   {
