@@ -51960,11 +51960,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1271: partial - Rust lets a provider-error chat open the Agent Command Center with Left Arrow when agent navigation is available. Go tracks the provider admission failure on the model (tui/tea/model.go ProviderError, showProviderError/clearProviderError) but has no key that opens the agents dashboard from that screen."
+    "Round 1272: a chat blocked by a provider error now advertises and accepts the command-center shortcut exactly like a read-only chat. tui/tea/provider_error.go adds providerErrorCommandCenterAvailable (the target supports the dashboard and the composer keymap leaves a plain Left press free), handleProviderErrorKey returns to the dashboard on a plain Left press, and the notice footer lists `c continue in new chat · n start fresh · ← command center · Esc other chats` in Rust's order. Esc keeps opening the resume picker and every submission key stays blocked.",
+    "Round 1272: tests - TestProviderErrorOpensCommandCenterWithLeftLikeRust renders the hint and opens the dashboard on Left for a remote target, and TestProviderErrorWithoutCommandCenterOmitsHintLikeRust asserts the hint is absent and Left is ignored when no dashboard is available. go test ./tui/tea -count=1, go build ./... and go vet ./tui/tea pass."
    ],
    "kind": "runtime",
    "sha": "58ad62ce09dd7da5531cecb15fd69a21aa465332",
-   "status": "partial",
+   "status": "complete",
    "subject": "Let users open the command center from provider error screens (#62335)"
   },
   {

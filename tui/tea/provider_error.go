@@ -112,6 +112,11 @@ func (m *Model) handleProviderErrorKey(msg keymsg.KeyMsg, keySpec string) bubble
 	case keymsg.KeyCtrlC, keymsg.KeyCtrlD:
 		return bubbletea.Quit
 	}
+	// Rust #62335: a chat blocked by a provider error still returns to the
+	// command center with a plain Left press when the target supports one.
+	if PlainKey(keymsg.KeyLeft).IsPress(msg) && m.providerErrorCommandCenterAvailable() {
+		return m.applyAgentsCommand()
+	}
 	if m.keyMatches("global", "open_transcript", keySpec) {
 		return m.openTranscriptOverlay()
 	}
@@ -183,6 +188,14 @@ func (m *Model) startFreshFromProviderError() bubbletea.Cmd {
 	return nil
 }
 
+// providerErrorCommandCenterAvailable reports whether the blocked chat can
+// return to the command center (Rust #62335
+// ChatWidget::blocked_thread_command_center_key): the target must support the
+// dashboard and the composer keymap must leave a plain Left press free.
+func (m *Model) providerErrorCommandCenterAvailable() bool {
+	return m != nil && m.commandCenterAvailable() && m.agentsNavigationKeyAvailable()
+}
+
 // renderProviderErrorNotice renders the provider-error card in place of the
 // composer (Rust ProviderErrorNotice).
 func (m *Model) renderProviderErrorNotice() string {
@@ -219,6 +232,10 @@ func (m *Model) providerErrorFooterLine() string {
 	if m.providerErrorCanContinue() {
 		items = append(items, "c continue in new chat")
 	}
-	items = append(items, "n start fresh", "Esc other chats")
+	items = append(items, "n start fresh")
+	if m.providerErrorCommandCenterAvailable() {
+		items = append(items, "\u2190 command center")
+	}
+	items = append(items, "Esc other chats")
 	return " " + strings.Join(items, " \u00b7 ")
 }
