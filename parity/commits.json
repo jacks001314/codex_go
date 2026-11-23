@@ -53714,11 +53714,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "telemetry.NewHTTPTracesOtelProvider mirrors OtelProvider::try_new_http_traces: it builds only the trace pipeline, rejects configured log or metric exporters with 'configured exporter is not supported by this provider', and rejects an OTLP/gRPC trace exporter with 'this provider requires OTLP/HTTP for traces'. Tests: go test ./telemetry -run 'HTTPOnlyProviderConstructorsRejectUnsupportedSignals' -count=1",
+    "telemetry.NewHTTPMetricsOtelProvider mirrors try_new_http_metrics: it builds only the metrics pipeline, accepts the built-in Statsig route when the build enables it, and rejects log/trace exporters plus gRPC metric transports. The general NewOtelProvider keeps building all three pipelines. Tests: go test ./telemetry -run 'HTTPOnlyProvider' -count=1",
+    "go test ./telemetry -count=1; go build ./...; go vet ./telemetry. Go's binaries do not construct an OTel provider for the code-mode host or the Windows setup helper yet, so only the specialized constructor surface needed porting."
    ],
    "kind": "runtime",
    "sha": "548dd628df95e01dbaee503ca9cbb216242baaf1",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Specialize OpenTelemetry providers for HTTP traces and metrics (#62854)"
   },
   {

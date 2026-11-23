@@ -90,10 +90,65 @@ type OtelProvider struct {
 	shutdownOnce  sync.Once
 }
 
+// otelProviderSignals selects the pipelines a provider constructor may build
+// (Rust #62854's const exporter selection). A specialized constructor reaches
+// only its own signal's builders and rejects every other configured one.
+type otelProviderSignals struct {
+	logs      bool
+	traces    bool
+	metrics   bool
+	allowGRPC bool
+}
+
 // NewOtelProvider mirrors OtelProvider::try_new. It returns a nil provider
 // without error when no supported exporter is enabled, which is what Rust does
 // when every exporter is disabled.
 func NewOtelProvider(settings OtelSettings) (*OtelProvider, error) {
+	return newOtelProviderWithSignals(settings, otelProviderSignals{logs: true, traces: true, metrics: true, allowGRPC: true})
+}
+
+// NewHTTPTracesOtelProvider mirrors OtelProvider::try_new_http_traces: it
+// builds only the trace pipeline and rejects log or metric exporters and any
+// gRPC trace transport.
+func NewHTTPTracesOtelProvider(settings OtelSettings) (*OtelProvider, error) {
+	return newOtelProviderWithSignals(settings, otelProviderSignals{traces: true})
+}
+
+// NewHTTPMetricsOtelProvider mirrors OtelProvider::try_new_http_metrics: it
+// builds only the metrics pipeline, accepts the built-in Statsig route, and
+// rejects log or trace exporters and any gRPC metric transport.
+func NewHTTPMetricsOtelProvider(settings OtelSettings) (*OtelProvider, error) {
+	return newOtelProviderWithSignals(settings, otelProviderSignals{metrics: true})
+}
+
+// otelExporterConfigured reports whether a settings slot names an exporter.
+func otelExporterConfigured(exporter OtelExporter) bool {
+	return exporter.Kind != "" && exporter.Kind != OtelExporterNone
+}
+
+// validateOtelProviderSignals rejects a configuration a specialized provider
+// cannot honor before any process-global OTEL state is installed.
+func validateOtelProviderSignals(settings OtelSettings, allowed otelProviderSignals) error {
+	if (!allowed.logs && otelExporterConfigured(settings.Exporter)) ||
+		(!allowed.traces && otelExporterConfigured(settings.TraceExporter)) ||
+		(!allowed.metrics && otelExporterConfigured(settings.MetricsExporter)) {
+		return errors.New("configured exporter is not supported by this provider")
+	}
+	if !allowed.allowGRPC {
+		if allowed.traces && settings.TraceExporter.Kind == OtelExporterOtlpGRPC {
+			return errors.New("this provider requires OTLP/HTTP for traces")
+		}
+		if allowed.metrics && settings.MetricsExporter.Kind == OtelExporterOtlpGRPC {
+			return errors.New("this provider requires OTLP/HTTP for metrics")
+		}
+	}
+	return nil
+}
+
+func newOtelProviderWithSignals(settings OtelSettings, allowed otelProviderSignals) (*OtelProvider, error) {
+	if err := validateOtelProviderSignals(settings, allowed); err != nil {
+		return nil, err
+	}
 	// Every OTLP HTTP export client built below enforces this generation.
 	setOTLPExportPolicy(settings.NetworkPolicy)
 	// Rust resolves the settings, validates the trace metadata before any
@@ -127,7 +182,7 @@ func NewOtelProvider(settings OtelSettings) (*OtelProvider, error) {
 	}
 
 	var metrics *MetricsClient
-	if metricsExporter.Kind != OtelExporterNone {
+	if allowed.metrics && metricsExporter.Kind != OtelExporterNone {
 		if options, ok := metricsClientOptions(settings, metricsExporter); ok {
 			// Rust #53859: analytics consent gates only the built-in exporter.
 			// ResolveOtelExporter already mapped Statsig onto its OTLP endpoint,
@@ -141,7 +196,7 @@ func NewOtelProvider(settings OtelSettings) (*OtelProvider, error) {
 	// Rust's log pipeline uses the general `exporter` setting
 	// (provider.rs::try_new -> build_logger(&settings.exporter)).
 	var logs *LogsClient
-	if logsExporter.Kind != OtelExporterNone {
+	if allowed.logs && logsExporter.Kind != OtelExporterNone {
 		if options, ok := logsClientOptions(settings, logsExporter); ok {
 			if client := NewLogsClient(options); client.Enabled() {
 				logs = client
@@ -151,7 +206,7 @@ func NewOtelProvider(settings OtelSettings) (*OtelProvider, error) {
 	// Rust's trace pipeline uses the dedicated `trace_exporter` setting and
 	// applies the configured span attributes to every exported span.
 	var traces *TracesClient
-	if traceExporter.Kind != OtelExporterNone {
+	if allowed.traces && traceExporter.Kind != OtelExporterNone {
 		if options, ok := tracesClientOptions(settings, traceExporter); ok {
 			if client := NewTracesClient(options); client.Enabled() {
 				traces = client
