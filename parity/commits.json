@@ -52201,11 +52201,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1265: complete - Go's gated reconsideration path (appserver/guardian_denial_reconsideration.go, called from guardian_reviewer.go when the first assessment is Deny and features.guardian_denial_reconsideration is on) replays the unchanged request in the same review session under the original deadline, uses the configured prompt clipped at a UTF-8 boundary, and only a valid assessment replaces the first denial. Cancellation aborts the review, a deadline or other failure keeps the first denial and discards the reusable session, and the reconsideration never grants new authorization. Rust recovers the denial from an interrupted second sample; Go keeps the first denial instead, which yields the same deny decision because reconsideration only runs after a denial. Tests: appserver/guardian_denial_reconsideration_like_rust_test.go."
    ],
    "kind": "runtime",
    "sha": "fecf5cc672538029b3b1adc00204a78e416a19a3",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Reconsider denials in attached Guardian reviews (#62374)"
   },
   {
@@ -52637,11 +52637,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1265: complete - Go prepares the sync Guardian review from the configured budgeting policy: guardianReviewer reads GuardianContextBudgeting() and GuardianSyncElasticBudget() from the prepared config, marks the selected exec results with the elastic selection, and builds the prompt parts through BuildGuardianElasticPromptPartsWithSectionCosts with GuardianElasticRequestBudget{MaxInputTokens, ExistingContextTokens}, so a call that exceeds the fixed evidence limit is accepted only when the exact request fits. Missing elastic section policy fails closed. Tests: state/guardian_elastic_budget_like_rust_test.go, guardian_elastic_preparation_like_rust_test.go, guardian_elastic_allocation_like_rust_test.go, guardian_elastic_protected_like_rust_test.go."
    ],
    "kind": "runtime",
    "sha": "d52a39b307b77e81cd272d08189341d944542b82",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Honor elastic budgets for attached Guardian reviews (#62489)"
   },
   {
