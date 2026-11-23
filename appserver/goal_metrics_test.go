@@ -18,7 +18,9 @@ func TestRecordGoalStatusMetricsLikeRust(t *testing.T) {
 	metrics := state.NewTaskMetrics()
 	router := NewRuntimeRouter(RuntimeServices{TurnMetrics: metrics})
 
-	router.recordGoalCreatedMetric()
+	router.recordGoalCreatedMetric("high")
+	router.recordGoalCreatedMetric("")
+	router.recordGoalCreatedMetric("provider-level")
 	router.recordGoalStatusTransitionMetrics(nil, state.ThreadGoalActive, 0, 0)
 	router.recordGoalStatusTransitionMetrics(goalStatusPointer(state.ThreadGoalPaused), state.ThreadGoalActive, 0, 0)
 	router.recordGoalStatusTransitionMetrics(goalStatusPointer(state.ThreadGoalActive), state.ThreadGoalActive, 0, 0)
@@ -26,29 +28,35 @@ func TestRecordGoalStatusMetricsLikeRust(t *testing.T) {
 	router.recordGoalStatusTransitionMetrics(nil, state.ThreadGoalPaused, 0, 0)
 
 	records := metrics.Records()
-	if len(records) != 5 {
+	if len(records) != 7 {
 		t.Fatalf("records = %#v", records)
 	}
-	if records[0].Name != telemetry.GoalCreatedMetric || records[0].Inc != 1 || len(records[0].Tags) != 0 {
-		t.Fatalf("created record = %#v", records[0])
+	// Rust #63281: the created counter carries the invoking step's effort, with
+	// provider-defined levels labelled "custom" and unknown effort "unknown".
+	wantEfforts := []string{"high", "unknown", "custom"}
+	for index, want := range wantEfforts {
+		if records[index].Name != telemetry.GoalCreatedMetric || records[index].Inc != 1 ||
+			records[index].Tags["reasoning_effort"] != want {
+			t.Fatalf("created record %d = %#v, want effort %q", index, records[index], want)
+		}
 	}
-	if records[1].Name != telemetry.GoalResumedMetric || len(records[1].Tags) != 0 {
-		t.Fatalf("resumed record = %#v", records[1])
+	if records[3].Name != telemetry.GoalResumedMetric || len(records[3].Tags) != 0 {
+		t.Fatalf("resumed record = %#v", records[3])
 	}
-	if records[2].Name != telemetry.GoalCompletedMetric || records[2].Inc != 1 || len(records[2].Tags) != 0 {
-		t.Fatalf("completed counter = %#v", records[2])
+	if records[4].Name != telemetry.GoalCompletedMetric || records[4].Inc != 1 || len(records[4].Tags) != 0 {
+		t.Fatalf("completed counter = %#v", records[4])
 	}
-	if records[3].Name != telemetry.GoalTokenCountMetric || records[3].Value != 120 ||
-		records[3].Tags["status"] != string(state.ThreadGoalComplete) {
-		t.Fatalf("token histogram = %#v", records[3])
+	if records[5].Name != telemetry.GoalTokenCountMetric || records[5].Value != 120 ||
+		records[5].Tags["status"] != string(state.ThreadGoalComplete) {
+		t.Fatalf("token histogram = %#v", records[5])
 	}
-	if records[4].Name != telemetry.GoalDurationSecondsMetric || records[4].Value != 30 ||
-		records[4].Tags["status"] != string(state.ThreadGoalComplete) {
-		t.Fatalf("duration histogram = %#v", records[4])
+	if records[6].Name != telemetry.GoalDurationSecondsMetric || records[6].Value != 30 ||
+		records[6].Tags["status"] != string(state.ThreadGoalComplete) {
+		t.Fatalf("duration histogram = %#v", records[6])
 	}
 
 	// A nil sink records nothing.
-	NewRuntimeRouter(RuntimeServices{}).recordGoalCreatedMetric()
+	NewRuntimeRouter(RuntimeServices{}).recordGoalCreatedMetric("low")
 	NewRuntimeRouter(RuntimeServices{}).recordGoalStatusTransitionMetrics(nil, state.ThreadGoalComplete, 1, 1)
 }
 

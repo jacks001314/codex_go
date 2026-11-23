@@ -439,17 +439,90 @@ func guardianAdditionalContextToolOutput(item session.Item) bool {
 }
 
 func (r *RuntimeRouter) filterGuardianReviewHistoryItems(threadID string, items []session.Item) []session.Item {
-	if r.guardianIncludesAdditionalContext(threadID) {
-		return items
-	}
+	includeAdditional := r.guardianIncludesAdditionalContext(threadID)
 	filtered := make([]session.Item, 0, len(items))
 	for _, item := range items {
-		if guardianAdditionalContextToolOutput(item) {
+		if !includeAdditional && guardianAdditionalContextToolOutput(item) {
 			continue
 		}
-		filtered = append(filtered, item)
+		// Rust #63364: ordinary user images are outside the sync reviewer's
+		// evidence, but the caption text around them stays.
+		trimmed, keep := guardianItemWithoutUserImages(item)
+		if !keep {
+			continue
+		}
+		filtered = append(filtered, trimmed)
 	}
 	return filtered
+}
+
+// guardianItemWithoutUserImages strips user image attachments together with
+// their harness labels, and drops a message that held nothing else
+// (Rust guardian-v3 evidence.rs::without_image_attachments).
+func guardianItemWithoutUserImages(item session.Item) (session.Item, bool) {
+	if !strings.EqualFold(strings.TrimSpace(item.Role), "user") || len(item.Content) == 0 {
+		return item, true
+	}
+	hasImage := false
+	for _, part := range item.Content {
+		if guardianContentPartIsImage(part) {
+			hasImage = true
+			break
+		}
+	}
+	if !hasImage {
+		return item, true
+	}
+	retained := make([]session.ContentPart, 0, len(item.Content))
+	for index := 0; index < len(item.Content); index++ {
+		part := item.Content[index]
+		if guardianContentPartIsImage(part) {
+			continue
+		}
+		if guardianIsImageOpenLabel(part) && index+2 < len(item.Content) &&
+			guardianContentPartIsImage(item.Content[index+1]) && guardianIsImageCloseLabel(item.Content[index+2]) {
+			index += 2
+			continue
+		}
+		retained = append(retained, part)
+	}
+	for _, part := range retained {
+		switch strings.ToLower(strings.TrimSpace(part.Type)) {
+		case "input_text", "output_text", "text":
+			if strings.TrimSpace(part.Text) != "" {
+				item.Content = retained
+				return item, true
+			}
+		case "input_image", "image":
+			// A retained image would keep the message, but every image was
+			// removed above.
+		default:
+			// Audio and any other retained kind count as content.
+			item.Content = retained
+			return item, true
+		}
+	}
+	return item, false
+}
+
+func guardianContentPartIsImage(part session.ContentPart) bool {
+	switch strings.ToLower(strings.TrimSpace(part.Type)) {
+	case "input_image", "image":
+		return true
+	}
+	return false
+}
+
+func guardianIsImageOpenLabel(part session.ContentPart) bool {
+	if strings.ToLower(strings.TrimSpace(part.Type)) != "input_text" {
+		return false
+	}
+	text := strings.TrimSpace(part.Text)
+	return text == "<image>" || (strings.HasPrefix(text, "<image name=") && strings.HasSuffix(text, ">"))
+}
+
+func guardianIsImageCloseLabel(part session.ContentPart) bool {
+	return strings.ToLower(strings.TrimSpace(part.Type)) == "input_text" && strings.TrimSpace(part.Text) == "</image>"
 }
 
 // guardianReviewHistoryItems returns the original conversation evidence used

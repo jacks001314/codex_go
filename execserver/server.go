@@ -56,6 +56,7 @@ const (
 	MethodFSWriteFile             = "fs/writeFile"
 	MethodFSCreateDirectory       = "fs/createDirectory"
 	MethodFSGetMetadata           = "fs/getMetadata"
+	MethodFSGetMetadataBatch      = "fs/getMetadataBatch"
 	MethodFSWatchMissing          = "fs/watchMissing"
 	MethodFSMissingChanged        = "fs/missingChanged"
 	MethodFSCanonicalize          = "fs/canonicalize"
@@ -726,7 +727,10 @@ type EnvironmentCapabilities struct {
 	// configured provider rules (Rust #56049).
 	CredentialMaskingCustomProviders bool `json:"credentialMaskingCustomProviders,omitempty"`
 	CapabilityDiscoverySandbox       bool `json:"capabilityDiscoverySandbox"`
-	CapabilityDiscoveryV2            bool `json:"capabilityDiscoveryV2"`
+	// FSMetadataBatch advertises ordered per-path metadata results in one
+	// request (Rust #63266).
+	FSMetadataBatch       bool `json:"fsMetadataBatch,omitempty"`
+	CapabilityDiscoveryV2 bool `json:"capabilityDiscoveryV2"`
 	// FSWatchMissing advertises `fs/watchMissing` on this physical connection
 	// (Rust #57598). Only Linux executors can observe missing paths.
 	FSWatchMissing bool `json:"fsWatchMissing,omitempty"`
@@ -1965,6 +1969,19 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 		s.applyFSSandboxRuntimeOptions(params.Sandbox)
 		result, err := getMetadata(&params)
 		return result, mapFSRequestError(err)
+	case MethodFSGetMetadataBatch:
+		var params FSGetMetadataBatchParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		for _, path := range params.Paths {
+			if err := validateFSWirePath("paths", path, params.Sandbox); err != nil {
+				return nil, err
+			}
+		}
+		s.applyFSSandboxRuntimeOptions(params.Sandbox)
+		result, err := getMetadataBatch(&params)
+		return result, mapFSRequestError(err)
 	case MethodFSWatchMissing:
 		var params FSWatchMissingParams
 		if err := decodeParams(req.Params, &params); err != nil {
@@ -2065,7 +2082,7 @@ func execServerMethodFamily(method string) string {
 	case MethodHTTPRequest:
 		return "http"
 	case MethodFSReadFile, MethodFSOpen, MethodFSReadBlock, MethodFSWriteBlock, MethodFSClose, MethodFSWriteFile, MethodFSCreateDirectory,
-		MethodFSGetMetadata, MethodFSWatchMissing, MethodFSCanonicalize, MethodFSReadDirectory, MethodFSWalk, MethodFSRemove, MethodFSCopy:
+		MethodFSGetMetadata, MethodFSGetMetadataBatch, MethodFSWatchMissing, MethodFSCanonicalize, MethodFSReadDirectory, MethodFSWalk, MethodFSRemove, MethodFSCopy:
 		return "filesystem"
 	default:
 		return ""
@@ -3669,6 +3686,13 @@ func createDirectory(params *FSCreateDirectoryParams) (*FSCreateDirectoryRespons
 }
 
 func getMetadata(params *FSGetMetadataParams) (*FSGetMetadataResponse, error) {
+	return getMetadataFollow(params, true)
+}
+
+// getMetadataFollow resolves one path's metadata with Rust's
+// GetMetadataOptions.follow_symlinks: when false the link itself is reported
+// (Rust #63266 local_file_system::get_metadata).
+func getMetadataFollow(params *FSGetMetadataParams, followSymlinks bool) (*FSGetMetadataResponse, error) {
 	var sandboxed FSGetMetadataResponse
 	if ran, err := runSandboxedFSOperation(params.Sandbox, MethodFSGetMetadata, params, &sandboxed); ran {
 		if err != nil {
@@ -3683,6 +3707,16 @@ func getMetadata(params *FSGetMetadataParams) (*FSGetMetadataResponse, error) {
 	linkInfo, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
+	}
+	if !followSymlinks {
+		return &FSGetMetadataResponse{
+			IsDirectory:  linkInfo.IsDir(),
+			IsFile:       linkInfo.Mode().IsRegular(),
+			IsSymlink:    linkInfo.Mode()&os.ModeSymlink != 0,
+			Size:         linkInfo.Size(),
+			CreatedAtMS:  createdAtMillisForPath(linkInfo, path),
+			ModifiedAtMS: linkInfo.ModTime().UnixMilli(),
+		}, nil
 	}
 	info, statErr := os.Stat(path)
 	if statErr != nil {
@@ -4584,7 +4618,9 @@ func localEnvironmentInfo() *EnvironmentInfo {
 			CredentialMaskingCustomProviders: credentialMasking,
 			CapabilityDiscoverySandbox:       true,
 			CapabilityDiscoveryV2:            true,
-			FSWatchMissing:                   runtime.GOOS == "linux",
+			// Rust #63266: the executor serves ordered metadata batches.
+			FSMetadataBatch: true,
+			FSWatchMissing:  runtime.GOOS == "linux",
 			// Rust #40376: the local exec server advertises executor-managed
 			// shell snapshots on Unix and keeps reporting them unsupported
 			// elsewhere (EnvironmentInfo::local uses cfg!(unix)).

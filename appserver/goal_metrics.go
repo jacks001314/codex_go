@@ -1,6 +1,10 @@
 package appserver
 
 import (
+	"strings"
+
+	"codex_go/model"
+	"codex_go/session"
 	"codex_go/state"
 	"codex_go/telemetry"
 )
@@ -11,12 +15,48 @@ import (
 // the status tag. Every transition is driven by the previous status, which the
 // caller takes from the goal it read before mutating.
 
-// recordGoalCreatedMetric mirrors GoalMetrics::record_created.
-func (r *RuntimeRouter) recordGoalCreatedMetric() {
+// recordGoalCreatedMetric mirrors GoalMetrics::record_created (#63281): the
+// created counter carries the invoking step's reasoning effort so goal usage
+// can be split by effort.
+func (r *RuntimeRouter) recordGoalCreatedMetric(reasoningEffort string) {
 	if r == nil || r.services.TurnMetrics == nil {
 		return
 	}
-	r.services.TurnMetrics.Counter(telemetry.GoalCreatedMetric, 1, nil)
+	r.services.TurnMetrics.Counter(telemetry.GoalCreatedMetric, 1, map[string]string{
+		"reasoning_effort": goalCreatedReasoningEffortLabel(reasoningEffort),
+	})
+}
+
+// goalCreatedReasoningEffortLabel is Rust GoalMetrics::record_created's label:
+// a known effort passes through, a provider-defined level is "custom", and an
+// unresolved effort is "unknown".
+func goalCreatedReasoningEffortLabel(reasoningEffort string) string {
+	normalized := strings.ToLower(strings.TrimSpace(reasoningEffort))
+	switch normalized {
+	case "":
+		return "unknown"
+	case "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "persistent":
+		return normalized
+	default:
+		return "custom"
+	}
+}
+
+// threadGoalReasoningEffort resolves the effort a goal-creation metric carries
+// when the goal arrives outside a sampling step: the thread's turn context,
+// else the model's default reasoning level.
+func (r *RuntimeRouter) threadGoalReasoningEffort(record *session.Record) string {
+	if effort := threadRecordReasoningEffort(record); effort != "" {
+		return effort
+	}
+	if record == nil {
+		return ""
+	}
+	modelID := strings.TrimSpace(record.Metadata.Model)
+	if modelID == "" {
+		return ""
+	}
+	return strings.TrimSpace(model.NewBundledModelsManager().GetModelInfo(modelID, nil).DefaultReasoningLevel)
 }
 
 // recordGoalStatusTransitionMetrics mirrors
@@ -68,13 +108,13 @@ func (r *RuntimeRouter) recordGoalStatusTransitionForStateGoal(previous *state.T
 // recordGoalSetMetrics emits the goal metrics for an explicit thread/goal/set,
 // deriving the previous status from the goal that existed before the set (nil
 // when the set created the goal).
-func (r *RuntimeRouter) recordGoalSetMetrics(existing *Goal, goal *Goal) {
+func (r *RuntimeRouter) recordGoalSetMetrics(existing *Goal, goal *Goal, reasoningEffort string) {
 	if r == nil || goal == nil {
 		return
 	}
 	status := stateGoalStatus(goal.Status)
 	if existing == nil {
-		r.recordGoalCreatedMetric()
+		r.recordGoalCreatedMetric(reasoningEffort)
 		r.recordGoalStatusTransitionMetrics(nil, status, goal.TokensUsed, goal.TimeUsedSeconds)
 		return
 	}

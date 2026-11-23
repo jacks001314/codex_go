@@ -11733,7 +11733,7 @@ func (r *RuntimeRouter) setThreadGoal(request *Request, params *GoalSetParams) (
 		}
 		r.emitGoalNotification(notificationConnection, NotificationThreadGoalUpdated, &GoalUpdatedNotification{ThreadID: response.Goal.ThreadID, Goal: response.Goal})
 		r.emitGoalAnalyticsEvent(context.Background(), connectionID, record, &response.Goal, goalAnalyticsEventKindForSet(existing, &response.Goal), nil)
-		r.recordGoalSetMetrics(existing, &response.Goal)
+		r.recordGoalSetMetrics(existing, &response.Goal, r.threadGoalReasoningEffort(record))
 		return response, nil
 	}
 	if r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
@@ -11744,7 +11744,7 @@ func (r *RuntimeRouter) setThreadGoal(request *Request, params *GoalSetParams) (
 		response, err := r.requireThreadExtras().SetGoal(params)
 		if err == nil && response != nil {
 			r.emitGoalNotification(notificationConnection, NotificationThreadGoalUpdated, &GoalUpdatedNotification{ThreadID: response.Goal.ThreadID, Goal: response.Goal})
-			r.recordGoalSetMetrics(existingGoal, &response.Goal)
+			r.recordGoalSetMetrics(existingGoal, &response.Goal, "")
 		}
 		return response, err
 	}
@@ -11787,7 +11787,7 @@ func (r *RuntimeRouter) setThreadGoal(request *Request, params *GoalSetParams) (
 	}
 	r.emitGoalNotification(notificationConnection, NotificationThreadGoalUpdated, &GoalUpdatedNotification{ThreadID: goal.ThreadID, Goal: goal})
 	r.emitGoalAnalyticsEvent(context.Background(), connectionID, record, &goal, goalAnalyticsEventKindForSet(existing, &goal), nil)
-	r.recordGoalSetMetrics(existing, &goal)
+	r.recordGoalSetMetrics(existing, &goal, r.threadGoalReasoningEffort(record))
 	r.applyGoalActiveRuntimeEffects(goal.ThreadID, goal)
 	return &GoalSetResponse{Goal: goal}, nil
 }

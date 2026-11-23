@@ -274,6 +274,12 @@ type agentCompactRunner struct {
 	// hostedTools keeps hosted declarations that must stay top-level while the
 	// catalog lives in history; Rust #59832 only needs hosted web search here.
 	hostedTools []any
+	// outputSchema preserves the turn's final-answer schema in the compaction
+	// request's text.format so the cached output-format prefix stays stable
+	// (Rust #63320). outputSchemaStrict is false for basic session sources,
+	// whose guardian verdict format is non-strict.
+	outputSchema       any
+	outputSchemaStrict *bool
 }
 
 func (r *agentCompactRunner) Compact(ctx context.Context, request *compact.Request) (*compact.Result, error) {
@@ -326,6 +332,10 @@ func (r *agentCompactRunner) Compact(ctx context.Context, request *compact.Reque
 		RequestCountry:     r.requestCountry,
 		SamplingKind:       r.samplingKind,
 		OnModelRequest:     r.onModelRequest,
+		// Rust #63320: Responses generates the summary independently of this
+		// schema, but sending it keeps the cached prefix aligned with sampling.
+		OutputSchema:       r.outputSchema,
+		OutputSchemaStrict: r.outputSchemaStrict,
 	})
 	if err != nil {
 		return nil, err

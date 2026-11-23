@@ -8396,6 +8396,11 @@ func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *
 			requestEffortCompaction,
 		)
 	}
+	compactionOutputSchema := any(nil)
+	if active := r.threads.ActiveTurn(string(record.ID)); active != nil && active.Params != nil {
+		compactionOutputSchema = active.Params.OutputSchema
+	}
+	compactionOutputSchemaStrict := !r.guardianThreadIsBasicSessionSource(record)
 	return &agentCompactRunner{
 		agent:              agent,
 		model:              compactModel,
@@ -8416,6 +8421,10 @@ func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *
 		executedToolCallMetadataEnabled: compactionMetadataEnabled,
 		incrementalTools:                compactionIncrementalTools,
 		hostedTools:                     compactionHostedTools,
+		// Rust #63320: the compaction attempt inherits the turn's final-answer
+		// schema, sent non-strict for basic session sources.
+		outputSchema:       compactionOutputSchema,
+		outputSchemaStrict: &compactionOutputSchemaStrict,
 	}
 }
 

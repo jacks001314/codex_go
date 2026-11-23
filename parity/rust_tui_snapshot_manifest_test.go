@@ -58,8 +58,11 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	// Re-anchored to upstream 59ac39addb: the sidebar files/preview work
 	// (#61920/#61922) and the composer edit history (#61951) added seven
 	// goldens (1537 -> 1544).
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1579 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1579", got)
+	// Re-anchored to upstream 177c406276: the disconnected slash-command and
+	// terminal-progress redraw work (#63258/#63278) added two goldens
+	// (1579 -> 1581).
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1581 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1581", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -212,7 +215,9 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// layouts, a net gain of four.
 			// Re-anchored to upstream 59ac39addb: the shared composer edit
 			// history (#61951) added one golden.
-			Files:    40,
+			// Re-anchored to upstream 177c406276: the disconnected command-menu
+			// and disconnected-server command goldens (#63258) joined this dir.
+			Files:    42,
 			Owner:    "tui/bottom_pane/chat_composer",
 			Focus:    "draft and voice composer layout snapshots",
 			Priority: []string{"composer"},

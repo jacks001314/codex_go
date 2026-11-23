@@ -43,6 +43,7 @@ func TestRustExecServerProtocolSurfaceAgainstGo(t *testing.T) {
 		execserver.MethodFSWriteFile,
 		execserver.MethodFSCreateDirectory,
 		execserver.MethodFSGetMetadata,
+		execserver.MethodFSGetMetadataBatch,
 		execserver.MethodFSCanonicalize,
 		execserver.MethodFSReadDirectory,
 		execserver.MethodFSWalk,

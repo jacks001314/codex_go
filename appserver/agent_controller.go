@@ -1466,6 +1466,14 @@ func (r *RuntimeRouter) maybeWakeRootForPendingAgentMessages(threadID string) {
 		return
 	}
 
+	if err := r.startAutomaticWakeTurn(threadID, record, items); err != nil {
+		r.requeueRuntimeAgentMessages(threadID, items)
+	}
+}
+
+// startAutomaticWakeTurn reserves Rust's automatic wake turn with the previous
+// turn's settings and the given additional input.
+func (r *RuntimeRouter) startAutomaticWakeTurn(threadID string, record *session.Record, items []any) error {
 	params := &turn.TurnStartParams{
 		ThreadID:             threadID,
 		AdditionalInputItems: items,
@@ -1478,9 +1486,46 @@ func (r *RuntimeRouter) maybeWakeRootForPendingAgentMessages(threadID string) {
 		}
 		params.CoreCyberAccessProgram = strings.TrimSpace(previous.CyberAccessProgram)
 	}
-	if _, err := r.handleTurnStart(requestWithInternalParams(MethodTurnStart, params)); err != nil {
-		r.requeueRuntimeAgentMessages(threadID, items)
+	_, err := r.handleTurnStart(requestWithInternalParams(MethodTurnStart, params))
+	return err
+}
+
+// maybeWakeRootAfterRecordedAgentMail mirrors Rust #63312
+// (session/inject.rs::checkpoint_client_injection): plaintext agent mail
+// persisted onto an idle native multi-agent v2 root reaches the mailbox
+// scheduler's wake rules. The mail already sits in history, so the wake turn
+// reads it from there instead of receiving a second queued copy; a turn that
+// already started is left alone because it consumed the message.
+func (r *RuntimeRouter) maybeWakeRootAfterRecordedAgentMail(threadID string, items []injectedResponseItem) bool {
+	if r == nil || !injectedAgentMailBatch(items) {
+		return false
 	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return false
+	}
+	r.agentWakeMu.Lock()
+	defer r.agentWakeMu.Unlock()
+	if r.activeRuntimeTurnSnapshot(threadID) != nil {
+		return false
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil || !r.runtimeAgentMessageWakeEligible(threadID, record) {
+		return false
+	}
+	cfg, err := r.effectiveConfigForThreadRecord(threadID, record)
+	if err != nil || cfg == nil {
+		return false
+	}
+	// Rust gates on MultiAgentVersion::V2 with native tools enabled.
+	if !features.Enabled(cfg.FeatureSettings(), "multi_agent_v2") {
+		return false
+	}
+	v2, err := cfg.MultiAgentV2Config(0)
+	if err != nil || v2 == nil || v2.DisableNativeTools {
+		return false
+	}
+	return r.startAutomaticWakeTurn(threadID, record, nil) == nil
 }
 
 func (r *RuntimeRouter) runtimeAgentMessageWakeEligible(threadID string, record *session.Record) bool {
@@ -1499,13 +1544,22 @@ func (r *RuntimeRouter) runtimeAgentMessageWakeEligible(threadID string, record 
 		return false
 	}
 
+	cfg, err := r.effectiveConfigForThreadRecord(threadID, record)
+	return err == nil && cfg != nil && features.Enabled(cfg.FeatureSettings(), "wake_on_agent_messages")
+}
+
+// effectiveConfigForThreadRecord resolves the thread's configuration for wake
+// decisions, reusing the CWD and config overrides the thread settings carry.
+func (r *RuntimeRouter) effectiveConfigForThreadRecord(threadID string, record *session.Record) (*config.Config, error) {
+	if r == nil || record == nil {
+		return nil, errors.New("thread config requires a thread record")
+	}
 	params := &turn.TurnStartParams{ThreadID: threadID}
-	if settings != nil {
+	if settings := r.threadSettingsForTurn(threadID); settings != nil {
 		params.CWD = threadSettingsCWD(settings)
 	}
 	params.Config = threadRecordConfigOverrides(record)
-	cfg, err := r.effectiveConfigForTurn(params)
-	return err == nil && cfg != nil && features.Enabled(cfg.FeatureSettings(), "wake_on_agent_messages")
+	return r.effectiveConfigForTurn(params)
 }
 
 // routesInjectedAgentMail reports whether an injection batch takes the native

@@ -133,6 +133,16 @@ func runDirectFSHelperRequest(request *fsHelperRequest) (json.RawMessage, error)
 		params.Sandbox = nil
 		response, err := getMetadata(&params)
 		return marshalResponse(response, err)
+	case MethodFSGetMetadataBatch:
+		var params FSGetMetadataBatchParams
+		if err := json.Unmarshal(request.Params, &params); err != nil {
+			return nil, err
+		}
+		// The helper runs inside the sandbox, so the batch resolves without
+		// another helper launch (Rust #63266 run_direct_request).
+		params.Sandbox = nil
+		response, err := getMetadataBatch(&params)
+		return marshalResponse(response, err)
 	case MethodFSCanonicalize:
 		var params FSCanonicalizeParams
 		if err := json.Unmarshal(request.Params, &params); err != nil {
@@ -348,7 +358,7 @@ func fsOperationRequiresSandbox(operation string, profile *sandbox.PermissionPro
 	writeRestricted := !policy.HasFullDiskWriteAccess()
 	readRestricted := profile.HasDenyReadEntriesForConvention(convention) || !policy.HasFullDiskReadAccess()
 	switch strings.TrimSpace(operation) {
-	case MethodFSReadFile, MethodFSGetMetadata, MethodFSCanonicalize, MethodFSReadDirectory, MethodFSWalk:
+	case MethodFSReadFile, MethodFSGetMetadata, MethodFSGetMetadataBatch, MethodFSCanonicalize, MethodFSReadDirectory, MethodFSWalk:
 		return readRestricted
 	case MethodFSWriteFile, MethodFSCreateDirectory, MethodFSRemove, MethodFSCopy:
 		return writeRestricted

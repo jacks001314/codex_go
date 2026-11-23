@@ -54651,9 +54651,351 @@
    "sha": "e0a6d0532deefa65eb7e86287fffadebbfda7591",
    "status": "not_applicable",
    "subject": "Avoid eager copies of plugin startup HTTP response bodies (#63241)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: partial - Rust keeps the slash-command menu usable while the TUI is disconnected from its app server, enabling only locally handled commands (warnings, config, rc, feedback, quit/exit). Go has the restricted-input popup for an unavailable thread (tui/tea/slash_popup.go updateUnavailableThreadSlashPopupKey + unavailableThreadCommand allowlist, Rust #61710), but the tea model has no app-server-disconnected composer state, so there is no disconnected menu, no disabled search results and no offline `/q` handling."
+   ],
+   "kind": "runtime",
+   "sha": "326bac6ce0ad9e91fbe5db1d2be5534bed1b50b5",
+   "status": "partial",
+   "subject": "Show available slash commands in the disconnected TUI (#63258)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: not applicable - Rust cancels its onboarding folder-trust prompt when the app server disconnects. Go's TUI has no onboarding folder-trust prompt to cancel: folder trust is decided before the TUI starts (app/projectless_trust.go ProjectlessFolderTrustEligible/ProjectlessImplicitDefaults), and the onboarding package only implements auth flows (tui/onboarding/auth_flow.go)."
+   ],
+   "kind": "runtime",
+   "sha": "794584993ef069fbc65f2e05068b56aa112bedba",
+   "status": "not_applicable",
+   "subject": "Cancel folder trust prompts when the app server disconnects (#63262)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: complete - Rust bounds independent metadata probes (1024 paths / 1 MiB) behind fs/getMetadataBatch and has sandboxed helpers resolve a whole batch in one launch. Go now carries MethodFSGetMetadataBatch, FsGetMetadataBatch params/results (externally tagged Ok/Err), the fsMetadataBatch capability bit, LocalFileSystem/server dispatch with per-path error mapping, single-invocation helper handling, Client.FSGetMetadataBatch + SupportsMetadataBatch, and the request-metric/family/method-surface wiring (execserver/metadata_batch.go, server.go, fs_helper.go, client.go, request_metrics.go); the parity method-surface test pins the new method.",
+    "Tests: execserver/metadata_batch_like_rust_test.go covers the size bounds, Ok/Err wire shape, order-preserving per-path errors, follow_symlinks, server dispatch plus the oversized-batch rejection, and the advertised capability.",
+    "Residual: Go's own AGENTS.md and .agents/skills discovery is in-process os.Stat (prompt/instructions.go), so it has no remote round trips or helper launches to batch; the batching optimization itself has no Go caller."
+   ],
+   "kind": "runtime",
+   "sha": "5f645d732cc2905c0d7e02a5d1683631fe8a02e7",
+   "status": "complete",
+   "subject": "Batch filesystem metadata checks for instruction and skill discovery (#63266)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: partial - Rust resolves carriage-return progress redraws to the text after the last CR, across split deltas and for replayed/historical command output. Go's command-output splitter (tui/exec_cell/render.go splitCommandOutputLines) only trims a trailing CR from each line, so a progress line would keep all of its redraw segments; the delta state machine and the resolved historical fallback are missing."
+   ],
+   "kind": "runtime",
+   "sha": "69a470755d1f59aa651a1aa2f31ac70f99031d58",
+   "status": "partial",
+   "subject": "Render terminal progress redraws in TUI command output (#63278)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: complete - goal creation metrics now carry reasoning_effort. appserver/goal_metrics.go labels the counter (known effort pass-through, provider-defined levels as custom, unresolved as unknown), reads the invoking step's effort from invocation.StepAttribution on the tool path, and resolves the thread's turn-context effort with the model's default level for external thread/goal/set creations (threadGoalReasoningEffort).",
+    "Tests: appserver/goal_metrics_test.go asserts the high/unknown/custom labels and keeps the resumed/terminal/histogram expectations."
+   ],
+   "kind": "runtime",
+   "sha": "a1604a8c0554c09c1be45e5a121bb1889b4d9a50",
+   "status": "complete",
+   "subject": "Tag goal creation metrics with reasoning effort (#63281)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: complete - appserver/agent_controller.go adds maybeWakeRootAfterRecordedAgentMail (Rust #63312 checkpoint_client_injection) and shares startAutomaticWakeTurn with the queue-only wake path: plaintext agent mail persisted onto an idle native multi-agent v2 root starts an automatic wake turn that reads the recorded history instead of receiving a second queued copy, while an already-running turn is left alone.",
+    "Tests: appserver/agent_mail_wake_like_rust_test.go wakes the idle root through thread/inject_items and checks AutomaticWake, no additional input items, no queued mail, and the feature/v2/child boundaries."
+   ],
+   "kind": "runtime",
+   "sha": "ca891cecdc76347e58702b1e4237737b8db5b0ad",
+   "status": "complete",
+   "subject": "Wake idle root threads on persisted agent messages (#63312)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: not applicable - a Cargo/Bazel lockfile bump of the Rust `cookie` crate; the Go module graph has no cookie dependency to update."
+   ],
+   "kind": "runtime",
+   "sha": "3af06341bd6fe34b3e092dba4a1c5af1cb911ee0",
+   "status": "not_applicable",
+   "subject": "Bump `cookie` from 0.18.1 to 0.18.3 in Cargo and Bazel lockfiles (#63317)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: complete - remote compaction now sends the turn's final-answer schema in text.format (Rust #63320): model.AgentRequest gained OutputSchemaStrict, responsesTextParamForRequest honors it (default strict), agentCompactRunner carries outputSchema/outputSchemaStrict, and turn_runtime plumbs the active turn's OutputSchema with non-strict strictness for basic (Guardian) session sources.",
+    "Tests: appserver/compact_output_schema_like_rust_test.go asserts the schema and non-strict flag reach the compaction request and the strict default otherwise; model/output_schema_strict_like_rust_test.go pins the text.format strictness."
+   ],
+   "kind": "runtime",
+   "sha": "9ee45391627ee0930f404b6e48a3da4db291fbb7",
+   "status": "complete",
+   "subject": "Preserve structured output format during remote compaction (#63320)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: partial - Rust carries the observational guardian_probe flag into GuardianReviewContext and logs it when V3 prepares a review. Go's Guardian review context has no guardian_probe field (guardian_serving_assessment.go/agent_runtime.go), so the probe observation is neither transported nor logged."
+   ],
+   "kind": "runtime",
+   "sha": "790ecc338ae78f85b20e61b935bd515b90aade4d",
+   "status": "partial",
+   "subject": "Log probe results when Guardian V3 prepares a review (#63327)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: not applicable - boxes a Rust future to shrink a task type; Go has no futures or task sizes, and the equivalent registration path is an ordinary function call."
+   ],
+   "kind": "runtime",
+   "sha": "114c086d6decacf00f11bca606d20c57391d69e2",
+   "status": "not_applicable",
+   "subject": "Box the runtime registration future (#63329)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: not applicable - boxes the Rust SQLite pool-opening future; Go opens SQLite synchronously inside database/sql drivers and has no future type to box."
+   ],
+   "kind": "runtime",
+   "sha": "9819b5c869e346e484e04120a7a46a39b10122fc",
+   "status": "not_applicable",
+   "subject": "Box the shared SQLite pool-opening future (#63331)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: not applicable - type-erases the Rust ChatGPT token-refresh future; Go's token refresh is a plain function returning an error."
+   ],
+   "kind": "runtime",
+   "sha": "1cf4ea68b88a0827dd9bba8bc607cabdd77db37e",
+   "status": "not_applicable",
+   "subject": "Type-erase the ChatGPT token refresh future (#63332)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: not applicable - boxes the Rust session startup cleanup future; Go runs the cleanup inline with deferred calls."
+   ],
+   "kind": "runtime",
+   "sha": "00315bb12a7b3b2a5429e27a811739c3fa53bd6c",
+   "status": "not_applicable",
+   "subject": "Box the session startup cleanup future (#63333)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: not applicable - shares Rust config-loading future poll code across callers; Go loads configuration synchronously through one function."
+   ],
+   "kind": "runtime",
+   "sha": "2c77888b21ff592880f2a62cde607ba6772f0292",
+   "status": "not_applicable",
+   "subject": "Share config-loading future poll code across callers (#63336)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: complete - the bundled skill-creator sample scripts now read SKILL.md and write agents/openai.yaml as UTF-8 (systemskills/assets/samples/skill-creator/scripts/generate_openai_yaml.py and quick_validate.py), matching Rust #63343 byte for byte."
+   ],
+   "kind": "runtime",
+   "sha": "93f105d29b31e524facc32706993e76cad370b2f",
+   "status": "complete",
+   "subject": "Use UTF-8 for skill creator file I/O (#63343)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: not applicable - boxes the Rust MCP session-recovery future; Go performs recovery in one goroutine with a plain return value."
+   ],
+   "kind": "runtime",
+   "sha": "a52fdb3ba61dea9f0e62196bcf00157d7b9ab0fb",
+   "status": "not_applicable",
+   "subject": "Box the MCP session recovery future (#63344)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: not applicable - Rust refreshes managed MCP requirements in place on a retained ConfigLayerStack. appserver/mcp_config_refresh.go already records that Go resolves feature settings and managed requirements from the current configuration on every read (Config::FeatureSettingsWithLegacyUsages, ConfigService.Requirements), so nothing is cached to refresh."
+   ],
+   "kind": "runtime",
+   "sha": "02390c8d8e39a9b72d12e04e83987d5eb6801310",
+   "status": "not_applicable",
+   "subject": "Refresh managed MCP requirements in place (#63348)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: partial - Rust wraps the remote transport worker in AbortOnDropHandle so dropping the client or cancelling shutdown aborts the worker. Go's remote TUI client owns no task handle: app/remote_tui.go closes the transport explicitly in close(), which is the drop equivalent for every use site, but an abandoned client that is never closed is not aborted automatically."
+   ],
+   "kind": "runtime",
+   "sha": "108730843ae4303ae79e9b6b936343f0b7c483bb",
+   "status": "partial",
+   "subject": "Abort the remote app-server worker when its client is dropped (#63351)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: not applicable - a Rust #[inline(never)] attribute on TuiKeymap::clone; Go has no inline annotations and the keymap copy is an ordinary struct copy."
+   ],
+   "kind": "runtime",
+   "sha": "4889e4123a06da0c2dd9fe8d57857f315fae11f4",
+   "status": "not_applicable",
+   "subject": "Keep `TuiKeymap::clone` out of line (#63352)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: not applicable - shares Rust WebSocket dial future code between connection paths; Go's dial paths already call one net.Dialer/websocket dial helper synchronously."
+   ],
+   "kind": "runtime",
+   "sha": "7c116ba81f516cfd5de35ce9e10ac0c2783b6022",
+   "status": "not_applicable",
+   "subject": "Share WebSocket dial future code across connection paths (#63353)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: partial - Rust delivers detached message-board notices to native agents. Go's message board host routes live agent messages and wake eligibility (appserver/agent_controller.go enqueueRuntimeAgentMessage/maybeWakeRootForPendingAgentMessages), but a detached notice path that reaches native agents without a live recipient has no Go carrier."
+   ],
+   "kind": "runtime",
+   "sha": "c983e8d1716d3aff20ecce3e96e40b907bd859f3",
+   "status": "partial",
+   "subject": "Deliver detached message board notices to native agents (#63354)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: not applicable - boxes Rust MCP transport setup and initialization retry futures; Go has no future types there."
+   ],
+   "kind": "runtime",
+   "sha": "a4ae34320c182b675bfaa44dffa51cc42eb22cfd",
+   "status": "not_applicable",
+   "subject": "Box MCP transport setup and initialization retry futures (#63356)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: partial - Rust scopes Guardian v3 evidence subscriptions to live reviewers. Go's guardian v3 support is limited to configuration/guidance plus review retrieval (appserver/guardian_review_retrieval.go), without the reviewer-session subscription registry this commit narrows."
+   ],
+   "kind": "runtime",
+   "sha": "e00c64fb683b74e0b27dd082db1cf1745f44f82f",
+   "status": "partial",
+   "subject": "Scope Guardian subscriptions to live reviewers (#63357)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: partial - Rust preserves Guardian v3 evidence delivery across root thread reloads. Go clears/rebuilds guardian review history per thread (appserver/guardian_review_history.go) and has no v3 evidence delivery queue that survives a root reload."
+   ],
+   "kind": "runtime",
+   "sha": "8b02797a2ea1feaca69242db7e13581553c0da70",
+   "status": "partial",
+   "subject": "Preserve Guardian v3 evidence delivery across root reloads (#63361)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: partial - Rust refreshes Guardian v3 evidence before retrying an approval review. Go's Guardian retry path re-reads the review history through guardianReviewHistoryItems, but there is no v3 evidence-refresh step before the retry."
+   ],
+   "kind": "runtime",
+   "sha": "223b61a9a80241cd200853e79f112657466bc0b9",
+   "status": "partial",
+   "subject": "Refresh Guardian v3 evidence before retrying an approval review (#63363)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: complete - Guardian review evidence drops ordinary user image attachments before budgeting (Rust #63364): filterGuardianReviewHistoryItems now runs guardianItemWithoutUserImages, which removes image parts together with their <image>/</image> harness labels, keeps surrounding caption text, and drops a message that held only media.",
+    "Tests: appserver/guardian_evidence_images_like_rust_test.go covers a captioned message, an image-only message, a labelled image-only message, and later text staying in the evidence."
+   ],
+   "kind": "runtime",
+   "sha": "6dbb6330a437e39b93d4e71914647fb07838ddc8",
+   "status": "complete",
+   "subject": "Exclude user image attachments from Guardian review evidence (#63364)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: partial - Rust ties network-approval registration to the command's approval handle and caches the outcome for deferred completion observers when startup is interrupted. Go removes call/execution registrations when the tool call ends and refuses to resurrect a cancelled process (appserver/network_approval.go delete(s.calls/executions), isCancelled), but it has no startup-handle registration with a shared cached outcome for deferred observers."
+   ],
+   "kind": "runtime",
+   "sha": "22c1681aec46de3667e4b03786e9d2c9ae6e1066",
+   "status": "partial",
+   "subject": "Clean up network approvals when command startup is interrupted (#63365)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 122: partial - Rust collects completed user and tool audio transcripts into Guardian review evidence with their own elastic budget and delta participation. Go's guardiancontext package has no audio-transcript entry kind or transcript_audio budget, so recorded speech never reaches Guardian context."
+   ],
+   "kind": "runtime",
+   "sha": "177c406276b6757ffaf49da9de52cd7a64c97dd5",
+   "status": "partial",
+   "subject": "Include completed audio transcripts in Guardian review context (#63368)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "e0a6d0532deefa65eb7e86287fffadebbfda7591",
+ "rustToInclusive": "177c406276b6757ffaf49da9de52cd7a64c97dd5",
  "schemaVersion": 1
 }

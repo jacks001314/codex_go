@@ -46,6 +46,7 @@ var execServerRequestMethods = []string{
 	MethodFSWriteFile,
 	MethodFSCreateDirectory,
 	MethodFSGetMetadata,
+	MethodFSGetMetadataBatch,
 	MethodFSWatchMissing,
 	MethodFSMissingChanged,
 	MethodFSCanonicalize,

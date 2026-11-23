@@ -2668,7 +2668,7 @@ func (r *ResponsesAgentRunner) buildResponsesAgentRequest(request *AgentRequest,
 		PromptCacheOptions:   promptCacheOptionsForTTL(request.PromptCacheTTL),
 		AccessPrograms:       accessPrograms,
 		ClientMetadata:       responsesClientMetadataForRequest(request),
-		Text:                 responsesTextParamForRequest(request.OutputSchema, request.ModelVerbosity, &modelInfo),
+		Text:                 responsesTextParamForRequest(request.OutputSchema, request.ModelVerbosity, &modelInfo, request.OutputSchemaStrict),
 		UseResponsesLite:     modelInfo.UseResponsesLite,
 		IncludeTimingMetrics: request.IncludeTimingMetrics,
 		BetaFeaturesHeader:   strings.TrimSpace(request.BetaFeaturesHeader),
@@ -2837,7 +2837,7 @@ func (r *ResponsesAgentRunner) modelInfoForRequest(modelID string) ModelInfo {
 	return manager.GetModelInfo(strings.TrimSpace(modelID), nil)
 }
 
-func responsesTextParamForRequest(schema any, verbosity string, info *ModelInfo) *responsesTextParam {
+func responsesTextParamForRequest(schema any, verbosity string, info *ModelInfo, strict *bool) *responsesTextParam {
 	text := &responsesTextParam{}
 	if info != nil && info.SupportVerbosity {
 		text.Verbosity = strings.TrimSpace(verbosity)
@@ -2851,10 +2851,14 @@ func responsesTextParamForRequest(schema any, verbosity string, info *ModelInfo)
 		}
 		return text
 	}
+	strictSchema := true
+	if strict != nil {
+		strictSchema = *strict
+	}
 	text.Format = &responsesTextFormat{
 		Name:   "codex_output_schema",
 		Type:   "json_schema",
-		Strict: true,
+		Strict: strictSchema,
 		Schema: cloneAny(schema),
 	}
 	return text
@@ -2864,7 +2868,7 @@ func responsesTextParamForOutputSchema(schema any) *responsesTextParam {
 	if schema == nil {
 		return nil
 	}
-	return responsesTextParamForRequest(schema, "", nil)
+	return responsesTextParamForRequest(schema, "", nil, nil)
 }
 
 func (r *ResponsesAgentRunner) withHostedToolsForRequest(tools []any, info *ModelInfo) []any {

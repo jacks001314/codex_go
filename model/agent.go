@@ -152,9 +152,13 @@ type AgentRequest struct {
 	// Trace is the W3C trace context of the request that started this turn
 	// (Rust's `request_trace`): the websocket payload carries it so the model
 	// call stays inside the caller's trace.
-	Trace                        *protocol.W3CTraceContext
-	AttestationProvider          codexapi.AttestationProvider
-	OutputSchema                 any
+	Trace               *protocol.W3CTraceContext
+	AttestationProvider codexapi.AttestationProvider
+	OutputSchema        any
+	// OutputSchemaStrict carries Rust's `output_schema_strict` (#63320): nil
+	// keeps the strict default, while a compaction on a basic session source
+	// sends the guardian verdict format non-strict.
+	OutputSchemaStrict           *bool
 	StreamHandler                ResponsesStreamHandler
 	DisableHostedImageGeneration bool
 	PermissionProfile            *sandbox.PermissionProfile

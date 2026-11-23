@@ -1949,6 +1949,51 @@ func (c *Client) FSGetMetadata(ctx context.Context, params *FSGetMetadataParams)
 	return c.fsGetMetadataCoalesced(ctx, &normalized)
 }
 
+// SupportsMetadataBatch reports whether the executor advertised ordered
+// per-path metadata results in one request (Rust #63266
+// ExecServerClient::supports_metadata_batch).
+func (c *Client) SupportsMetadataBatch(ctx context.Context) (bool, error) {
+	info, err := c.cachedEnvironmentInfo(ctx)
+	if err != nil {
+		return false, err
+	}
+	return info != nil && info.Capabilities.FSMetadataBatch, nil
+}
+
+// FSGetMetadataBatch resolves one metadata result per path in a single
+// request. Results keep the request order and each entry carries its own
+// error (Rust ExecServerClient::fs_get_metadata_batch).
+func (c *Client) FSGetMetadataBatch(ctx context.Context, params *FSGetMetadataBatchParams) (*FSGetMetadataBatchResponse, error) {
+	if params == nil {
+		return nil, errors.New("fs/getMetadataBatch params are required")
+	}
+	normalized := FSGetMetadataBatchParams{FollowSymlinks: params.FollowSymlinks}
+	normalized.Paths = make([]string, 0, len(params.Paths))
+	for _, raw := range params.Paths {
+		path, err := normalizeFSPathForWire(raw)
+		if err != nil {
+			return nil, fmt.Errorf("fs/getMetadataBatch path: %w", err)
+		}
+		normalized.Paths = append(normalized.Paths, path)
+	}
+	sandbox, err := normalizeFSSandboxForWire(params.Sandbox)
+	if err != nil {
+		return nil, fmt.Errorf("fs/getMetadataBatch: %w", err)
+	}
+	normalized.Sandbox = sandbox
+	if len(normalized.Paths) == 0 {
+		return &FSGetMetadataBatchResponse{}, nil
+	}
+	var response FSGetMetadataBatchResponse
+	if err := c.call(ctx, MethodFSGetMetadataBatch, &normalized, &response); err != nil {
+		return nil, err
+	}
+	if len(response.Results) != len(normalized.Paths) {
+		return nil, errors.New("fs/getMetadataBatch returned a mismatched result count")
+	}
+	return &response, nil
+}
+
 // WatchMissing registers an unsandboxed observation over the executor's own
 // filesystem (Rust #57598). When the executor acknowledges coverage, the
 // returned channel closes on the first relevant change, connection loss or

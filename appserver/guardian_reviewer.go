@@ -3804,6 +3804,11 @@ func (r *RuntimeRouter) handleThreadInjectItemsRuntime(request *Request) (*Threa
 	}
 	active := r.activeRuntimeTurnSnapshot(params.ThreadID)
 	if active == nil || strings.TrimSpace(active.ID) == "" || len(params.Items) == 0 {
+		if len(params.Items) > 0 {
+			// Rust #63312: persisted plaintext agent mail wakes an idle native
+			// v2 root from history; an active turn already consumed it.
+			r.maybeWakeRootAfterRecordedAgentMail(params.ThreadID, parsedItems)
+		}
 		return response, nil
 	}
 	inputItems := make([]any, 0, len(parsedItems))

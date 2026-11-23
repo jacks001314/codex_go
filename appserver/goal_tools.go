@@ -121,7 +121,13 @@ func (r *RuntimeRouter) executeGoalToolCreate(ctx context.Context, invocation *t
 	// external edit, clear or injected context makes attribution ambiguous.
 	r.setGoalTurnLineage(threadID, r.activeTurnRootTurnID(threadID, turnID), turnID)
 	r.emitStateThreadGoalUpdate(goal, turnID, "", telemetry.GoalEventKindCreated)
-	r.recordGoalCreatedMetric()
+	effort := ""
+	if invocation != nil && invocation.StepAttribution != nil {
+		// Rust #63281 reads the invoking step's metadata, which can differ from
+		// the thread's current selection.
+		effort = strings.TrimSpace(invocation.StepAttribution.ReasoningEffort)
+	}
+	r.recordGoalCreatedMetric(effort)
 	r.recordGoalStatusTransitionForStateGoal(nil, goal)
 	return goalToolOutput(goalToolResponseForState(goal, false)), nil
 }
