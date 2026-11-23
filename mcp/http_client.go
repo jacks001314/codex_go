@@ -161,22 +161,26 @@ type httpClient struct {
 	initialized    bool
 	// startupComplete mirrors `initialized` without the mutex so connection
 	// reuse can distinguish a ready client from a pending startup (Rust #40636).
-	startupComplete  atomic.Bool
+	startupComplete atomic.Bool
+	// modernVersionOffered records that this connection's server/discover
+	// answered with the unsupported-protocol-version error, so a later rejected
+	// probe is a discovery failure instead of a legacy fallback (Rust #62893).
+	modernVersionOffered atomic.Bool
 	// startupWarningEmitted gates the credential-free startup warning so one
 	// Streamable HTTP connection reports its first startup problem only once
 	// (Rust #62906 startup_warning_emitted).
 	startupWarningEmitted atomic.Bool
-	sessionID        string
-	serverName       string
-	threadID         string
-	turnID           string
-	itemID           string
-	roots            []MCPRoot
-	elicitation      MCPElicitationHandler
-	progress         MCPProgressHandler
-	openAIForm       bool
-	userVerification bool
-	emaAuth          bool
+	sessionID             string
+	serverName            string
+	threadID              string
+	turnID                string
+	itemID                string
+	roots                 []MCPRoot
+	elicitation           MCPElicitationHandler
+	progress              MCPProgressHandler
+	openAIForm            bool
+	userVerification      bool
+	emaAuth               bool
 	// networkPolicy advertises the experimental call-scoped network policy
 	// capability to a trusted ChatGPT origin (Rust #56278).
 	networkPolicy                      bool
@@ -913,6 +917,15 @@ func (c *httpClient) discover(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if rpc.Error != nil {
+		if rpc.Error.Code == mcpJSONRPCUnsupportedProtocolVersionCode {
+			// Rust #62893: remember the modern-version offer so a rejected
+			// follow-up probe surfaces as a discovery failure.
+			c.modernVersionOffered.Store(true)
+		}
+		if rpc.Error.Code == mcpJSONRPCMethodNotFoundCode && c.modernVersionOffered.Load() {
+			recordProtocolDiscoveryMetrics("auto", "failure", time.Since(started))
+			return "", fmt.Errorf("server rejected discovery after offering a modern protocol: %s", rpc.Error.Message)
+		}
 		recordProtocolDiscoveryMetrics("auto", "failure", time.Since(started))
 		return "", newMCPRemoteError("server/discover", rpc.Error)
 	}
@@ -1195,9 +1208,20 @@ func (c *httpClient) doRPC(ctx context.Context, method string, params any, sessi
 		}
 		body, _ := io.ReadAll(io.LimitReader(response.Body, readLimit))
 		_ = response.Body.Close()
+		sessionlessDiscover := method == "server/discover" && strings.TrimSpace(sessionID) == ""
+		challenge := ""
+		if sessionlessDiscover {
+			challenge = strings.TrimSpace(response.Header.Get("WWW-Authenticate"))
+		}
 		if method == "server/discover" {
 			var rpc httpRPCResponse
 			if json.Unmarshal(body, &rpc) == nil && rpc.ID == id && rpc.Error != nil && rpc.Error.Code == mcpJSONRPCMethodNotFoundCode {
+				if c.modernVersionOffered.Load() {
+					// Rust #62893: once the server offered a modern protocol version,
+					// a rejected follow-up probe is a discovery failure. Falling back
+					// would silently downgrade a server that already negotiated.
+					return nil, 0, fmt.Errorf("server rejected discovery after offering a modern protocol: %s", rpc.Error.Message)
+				}
 				return nil, id, newMCPRemoteError(method, rpc.Error)
 			}
 			if response.StatusCode == http.StatusBadRequest && strings.TrimSpace(response.Header.Get(mcpHTTPSessionIDHeader)) == "" {
@@ -1215,8 +1239,25 @@ func (c *httpClient) doRPC(ctx context.Context, method string, params any, sessi
 					return nil, id, errMCPModernProtocolUnsupported
 				}
 			}
+			// Rust #62893: a legacy server can reject server/discover before
+			// JSON-RPC dispatch, so the 400 body may be empty, malformed or carry
+			// an unrelated error. Without an authentication challenge or a
+			// rejection code that requires validation, retry with a sessionless
+			// initialize instead of reporting the HTTP failure.
+			if sessionlessDiscover && response.StatusCode == http.StatusBadRequest && challenge == "" &&
+				!requiresMCPRPCDiscoveryValidation(body) {
+				return nil, id, errMCPModernProtocolUnsupported
+			}
+			if sessionlessDiscover &&
+				(response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusMethodNotAllowed) &&
+				!strings.HasPrefix(strings.ToLower(strings.TrimSpace(response.Header.Get("Content-Type"))), "application/json") {
+				return nil, id, errMCPModernProtocolUnsupported
+			}
 		}
 		detail := strings.TrimSpace(string(body))
+		if sessionlessDiscover && challenge != "" {
+			detail += " (WWW-Authenticate: " + mcpLogPreview(challenge) + ")"
+		}
 		return nil, 0, &mcpHTTPStatusError{Method: method, Status: response.Status, StatusCode: response.StatusCode, Detail: detail, WWWAuthenticate: response.Header.Values("WWW-Authenticate")}
 	}
 	return response, id, nil

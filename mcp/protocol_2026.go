@@ -26,7 +26,12 @@ const (
 	mcpJSONRPCMethodNotFoundCode     = int64(-32601)
 	mcpJSONRPCInvalidParamsCode      = int64(-32602)
 	mcpLegacyPrevalidationErrorCode  = int64(-32000)
-	maxMCPInputRequiredRounds        = 1000
+	// Streamable HTTP rejection codes a sessionless server/discover reply can
+	// carry; they require validation before any legacy fallback (Rust #62893).
+	mcpJSONRPCHeaderMismatchCode             = int64(-32001)
+	mcpJSONRPCMissingClientCapabilityCode    = int64(-32002)
+	mcpJSONRPCUnsupportedProtocolVersionCode = int64(-32022)
+	maxMCPInputRequiredRounds                = 1000
 )
 
 var knownLegacyMCPProtocols = map[string]struct{}{
@@ -270,6 +275,32 @@ func isEmptyMCPDiscoveryResult(result *json.RawMessage) bool {
 	}
 	trimmed := bytes.TrimSpace(*result)
 	return len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) || bytes.Equal(trimmed, []byte("{}"))
+}
+
+// requiresMCPRPCDiscoveryValidation reports whether a sessionless
+// server/discover rejection carries a structured JSON-RPC code whose meaning
+// has to be honored before any legacy fallback: method not found, header
+// mismatch, missing required client capability, or an unsupported protocol
+// version (Rust #62893). Any other body, including an empty or malformed one,
+// is treated as a legacy pre-dispatch rejection.
+func requiresMCPRPCDiscoveryValidation(body []byte) bool {
+	var rejection struct {
+		Error *struct {
+			Code int64 `json:"code"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &rejection) != nil || rejection.Error == nil {
+		return false
+	}
+	switch rejection.Error.Code {
+	case mcpJSONRPCMethodNotFoundCode,
+		mcpJSONRPCHeaderMismatchCode,
+		mcpJSONRPCMissingClientCapabilityCode,
+		mcpJSONRPCUnsupportedProtocolVersionCode:
+		return true
+	default:
+		return false
+	}
 }
 
 func isMCPDiscoveryFallbackError(err error) bool {

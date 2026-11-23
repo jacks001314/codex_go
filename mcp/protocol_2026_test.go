@@ -321,37 +321,107 @@ func TestMCP2026HTTPFallsBackForLegacyPrevalidationErrors(t *testing.T) {
 	}
 }
 
-func TestMCP2026HTTPRejectsUnprovenLegacyPrevalidationErrors(t *testing.T) {
+// Rust #62893: a legacy server can reject a sessionless server/discover before
+// JSON-RPC dispatch, so an HTTP 400 without an authentication challenge or a
+// validation-only error code must retry the handshake as a sessionless
+// initialize. Empty, malformed and unrelated bodies all qualify, as do
+// non-JSON 404/405 rejections.
+func TestMCP2026HTTPBroadLegacyFallbackLikeRust(t *testing.T) {
 	tests := []struct {
-		name       string
-		status     int
-		code       int64
-		responseID any
-		message    string
-		sessionID  string
+		name        string
+		status      int
+		contentType string
+		body        string
 	}{
-		{name: "unrelated code", status: http.StatusBadRequest, code: -32602, message: "Bad Request: No valid session ID provided"},
-		{name: "correlated response", status: http.StatusBadRequest, code: mcpLegacyPrevalidationErrorCode, responseID: int64(1), message: "Bad Request: No valid session ID provided"},
-		{name: "unauthorized", status: http.StatusUnauthorized, code: mcpLegacyPrevalidationErrorCode, message: "Bad Request: No valid session ID provided"},
-		{name: "session already assigned", status: http.StatusBadRequest, code: mcpLegacyPrevalidationErrorCode, message: "Bad Request: No valid session ID provided", sessionID: "session-1"},
-		{name: "unknown version only", status: http.StatusBadRequest, code: mcpLegacyPrevalidationErrorCode, message: "Bad Request: Unsupported protocol version (supported versions: 2024-10-07)"},
-		{name: "modern version included", status: http.StatusBadRequest, code: mcpLegacyPrevalidationErrorCode, message: "Bad Request: Unsupported protocol version (supported versions: 2025-06-18, 2026-07-28)"},
-		{name: "future version included", status: http.StatusBadRequest, code: mcpLegacyPrevalidationErrorCode, message: "Bad Request: Unsupported protocol version (supported versions: 2025-06-18, 2099-01-01)"},
+		{name: "empty bad request", status: http.StatusBadRequest, contentType: "text/plain", body: ""},
+		{name: "malformed bad request", status: http.StatusBadRequest, contentType: "text/plain", body: "not json"},
+		{name: "unrelated error code", status: http.StatusBadRequest, contentType: "application/json", body: `{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"invalid params"}}`},
+		{name: "uncorrelated legacy prevalidation", status: http.StatusBadRequest, contentType: "application/json", body: `{"jsonrpc":"2.0","id":null,"error":{"code":-32000,"message":"Bad Request: No valid session ID provided"}}`},
+		{name: "not found without json", status: http.StatusNotFound, contentType: "text/html", body: "<html>gone</html>"},
+		{name: "method not allowed without json", status: http.StatusMethodNotAllowed, contentType: "text/plain", body: "method not allowed"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var methods []string
+			var versions []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request struct {
+					ID     int64  `json:"id"`
+					Method string `json:"method"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatalf("Decode() error = %v", err)
+				}
+				methods = append(methods, request.Method)
+				versions = append(versions, r.Header.Get(mcpHTTPProtocolVersionHeader))
+				switch request.Method {
+				case "server/discover":
+					w.Header().Set("Content-Type", test.contentType)
+					w.WriteHeader(test.status)
+					if test.body != "" {
+						_, _ = w.Write([]byte(test.body))
+					}
+				case "initialize":
+					if got := r.Header.Get(mcpHTTPSessionIDHeader); got != "" {
+						t.Fatalf("fallback initialize carried session id %q", got)
+					}
+					writeHTTPMCPResponse(t, w, request.ID, map[string]any{"protocolVersion": defaultMCPProtocol, "capabilities": map[string]any{}})
+				case "notifications/initialized":
+					w.WriteHeader(http.StatusAccepted)
+				case "tools/list":
+					writeHTTPMCPResponse(t, w, request.ID, map[string]any{"tools": []any{}})
+				default:
+					t.Fatalf("unexpected method %q", request.Method)
+				}
+			}))
+			defer server.Close()
+
+			client := newMCPHTTPClient(&ServerConfig{URL: server.URL, ProtocolMode: MCPProtocol20260728})
+			var result struct {
+				Tools []any `json:"tools"`
+			}
+			if err := client.Call("tools/list", map[string]any{}, &result); err != nil {
+				t.Fatalf("Call() error = %v", err)
+			}
+			if got := strings.Join(methods, ","); got != "server/discover,initialize,notifications/initialized,tools/list" {
+				t.Fatalf("methods = %q", got)
+			}
+			if versions[0] != modernMCPProtocol || versions[1] != defaultMCPProtocol {
+				t.Fatalf("protocol headers = %q", versions)
+			}
+		})
+	}
+}
+
+// Rust #62893: an authentication challenge or a rejection that requires RPC
+// validation still stops the speculative legacy fallback.
+func TestMCP2026HTTPDiscoveryStopsForChallengesAndValidationCodesLikeRust(t *testing.T) {
+	tests := []struct {
+		name      string
+		status    int
+		code      int64
+		challenge string
+	}{
+		{name: "unauthorized", status: http.StatusUnauthorized, code: mcpLegacyPrevalidationErrorCode},
+		{name: "auth challenge", status: http.StatusBadRequest, code: mcpLegacyPrevalidationErrorCode, challenge: `Bearer realm="mcp"`},
+		{name: "header mismatch", status: http.StatusBadRequest, code: mcpJSONRPCHeaderMismatchCode},
+		{name: "missing client capability", status: http.StatusBadRequest, code: mcpJSONRPCMissingClientCapabilityCode},
+		{name: "unsupported protocol version", status: http.StatusBadRequest, code: mcpJSONRPCUnsupportedProtocolVersionCode},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			requests := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests++
-				if test.sessionID != "" {
-					w.Header().Set(mcpHTTPSessionIDHeader, test.sessionID)
+				if test.challenge != "" {
+					w.Header().Set("WWW-Authenticate", test.challenge)
 				}
-				w.Header().Set("Content-Type", "text/plain")
+				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(test.status)
 				_ = json.NewEncoder(w).Encode(map[string]any{
 					"jsonrpc": "2.0",
-					"id":      test.responseID,
-					"error":   map[string]any{"code": test.code, "message": test.message},
+					"id":      nil,
+					"error":   map[string]any{"code": test.code, "message": "rejected"},
 				})
 			}))
 			defer server.Close()
@@ -360,13 +430,48 @@ func TestMCP2026HTTPRejectsUnprovenLegacyPrevalidationErrors(t *testing.T) {
 			var result struct {
 				Tools []any `json:"tools"`
 			}
-			if err := client.Call("tools/list", map[string]any{}, &result); err == nil {
+			err := client.Call("tools/list", map[string]any{}, &result)
+			if err == nil {
 				t.Fatal("Call() error = nil, want discovery rejection")
+			}
+			if test.challenge != "" && !strings.Contains(err.Error(), "WWW-Authenticate: "+test.challenge) {
+				t.Fatalf("error = %v, want the authentication challenge", err)
 			}
 			if requests != 1 {
 				t.Fatalf("requests = %d, want discovery only", requests)
 			}
 		})
+	}
+}
+
+// Rust #62893: once the server offered a modern protocol version, a rejected
+// follow-up probe is a discovery failure, not another legacy fallback.
+func TestMCP2026HTTPRejectedProbeAfterModernOfferFailsDiscoveryLikeRust(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var request struct {
+			ID int64 `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      request.ID,
+			"error":   map[string]any{"code": mcpJSONRPCMethodNotFoundCode, "message": "method not found"},
+		})
+	}))
+	defer server.Close()
+
+	client := newMCPHTTPClient(&ServerConfig{URL: server.URL, ProtocolMode: MCPProtocol20260728})
+	client.modernVersionOffered.Store(true)
+	if _, err := client.discover(context.Background()); err == nil || !strings.Contains(err.Error(), "rejected discovery after offering a modern protocol") {
+		t.Fatalf("discover() error = %v, want the rejected-probe failure", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want one probe", requests)
 	}
 }
 

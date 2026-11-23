@@ -53863,11 +53863,14 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "mcp/http_client.go: a sessionless server/discover that answers HTTP 400 without a WWW-Authenticate challenge and without a validation-required JSON-RPC code now falls back to a sessionless initialize; empty, malformed, unrelated and uncorrelated bodies all qualify, and sessionless 404/405 replies with non-JSON content fall back too. The fallback initialize carries no session ID.",
+    "mcp/protocol_2026.go adds requiresMCPRPCDiscoveryValidation and the Streamable HTTP rejection codes (method not found, header mismatch, missing required client capability, unsupported protocol version) so a structured code still wins over the generic HTTP fallback; an authentication challenge is appended to the HTTP status error.",
+    "httpClient.modernVersionOffered records a correlated unsupported-protocol-version reply, and both discover() and the HTTP error path turn a later correlated method-not-found into 'server rejected discovery after offering a modern protocol' instead of a legacy fallback.",
+    "Tests: TestMCP2026HTTPBroadLegacyFallbackLikeRust (empty/malformed/unrelated/uncorrelated/404/405 fallback with a sessionless initialize and legacy tools/list), TestMCP2026HTTPDiscoveryStopsForChallengesAndValidationCodesLikeRust (401, auth challenge, header mismatch, missing capability, unsupported version) and TestMCP2026HTTPRejectedProbeAfterModernOfferFailsDiscoveryLikeRust."
    ],
    "kind": "runtime",
    "sha": "bfe3c825702e9235a631a1db58f291bed7a44cfe",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Broaden legacy fallback for MCP discovery over HTTP (#62893)"
   },
   {
