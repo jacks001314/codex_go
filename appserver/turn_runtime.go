@@ -7953,6 +7953,9 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	record.Items = compactedItems
 	compactionItem.CreatedAt = now
 	record.Items = append(record.Items, compactionItem)
+	// Rust #62883: Session::replace_history clears the stored reasoning-removal
+	// report, so a successful compaction waits for a new sample.
+	r.clearSamplingCOTRemoved(request.ThreadID)
 	record.UpdatedAt = now
 	record.RecencyAt = now
 	extra := cloneAnyMap(record.Metadata.Extra)

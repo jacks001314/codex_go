@@ -81,6 +81,10 @@ type SessionTelemetry struct {
 	Tracer *Tracer
 	// Clock overrides the record timestamp (tests).
 	Clock func() time.Time
+	// OnSSECompleted observes every completed model response, including one
+	// without a usage block. The app server uses it to retain the latest
+	// reasoning-removal report per live thread for feedback tags (Rust #62883).
+	OnSSECompleted func(model.SSECompletedRecord)
 }
 
 // NewSessionTelemetry builds an emitter for one conversation's metadata.

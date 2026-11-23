@@ -1382,7 +1382,15 @@ func (r *RuntimeRouter) installSessionTelemetry(agent *model.ResponsesAgentRunne
 	if r == nil || agent == nil {
 		return
 	}
-	agent.Telemetry = r.sessionTelemetryForThread(threadID)
+	session := r.sessionTelemetryForThread(threadID)
+	if session != nil {
+		// Rust #62883: the live session remembers the latest completed sampling
+		// request's reasoning-removal report for feedback tags.
+		session.OnSSECompleted = func(record model.SSECompletedRecord) {
+			r.recordSamplingCOTRemoved(threadID, record.ReasoningRemovals)
+		}
+	}
+	agent.Telemetry = session
 }
 
 func managedResidencyForConfig(cfg *config.Config) string {

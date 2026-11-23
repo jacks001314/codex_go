@@ -53841,11 +53841,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Feedback reports carry cot_removed from the latest completed sampling request on the live thread (Rust #62883, 619d36f810). The app server's session telemetry observes every completed response and stores whether its input_transformations report contained removals (true), an explicitly empty report (false), or no report at all (no tag); caller-supplied cot_removed values are discarded when the upload tags are built. The stored value is cleared when a successful compaction replaces thread history and a cold resume starts without one, while a failed compaction preserves the last sampling result. Tests: go test ./appserver -run 'COTRemoval|FeedbackTags|FeedbackSave|FeedbackUpload|InstallSessionTelemetry' -count=1; go test ./telemetry -count=1; go test ./model -count=1"
    ],
    "kind": "runtime",
    "sha": "619d36f810f89fcbf0fd91c1fd8dce23d3851d0a",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Tag user reports with the latest reasoning removal status (#62883)"
   },
   {

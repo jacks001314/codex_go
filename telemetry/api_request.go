@@ -91,6 +91,9 @@ func (t *SessionTelemetry) RecordSSEEventCompleted(ctx context.Context, record m
 	if t == nil {
 		return
 	}
+	if t.OnSSECompleted != nil {
+		t.OnSSECompleted(record)
+	}
 	// The reasoning-replay metrics report every completed response, including
 	// one without a usage block (Rust #61017 record_responses).
 	t.recordReasoningReplayMetrics(record.ReasoningRemovals)

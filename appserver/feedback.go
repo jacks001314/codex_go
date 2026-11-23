@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -284,8 +285,11 @@ func (d *FeedbackDiagnostics) AttachmentText() *string {
 }
 
 type FeedbackSnapshot struct {
-	Logs         []byte
-	Tags         map[string]string
+	Logs []byte
+	Tags map[string]string
+	// COTRemoved is the latest completed sampling request's reasoning-removal
+	// status for the live thread (Rust #62883). Nil omits the `cot_removed` tag.
+	COTRemoved   *bool
 	Diagnostics  *FeedbackDiagnostics
 	ThreadID     string
 	LastPrepared *PreparedFeedbackUpload
@@ -302,6 +306,10 @@ func (s *FeedbackSnapshot) Clone() *FeedbackSnapshot {
 		Logs:     append([]byte(nil), s.Logs...),
 		Tags:     cloneStringMap(s.Tags),
 		ThreadID: s.ThreadID,
+	}
+	if s.COTRemoved != nil {
+		removed := *s.COTRemoved
+		clone.COTRemoved = &removed
 	}
 	if s.Diagnostics != nil {
 		clone.Diagnostics = NewFeedbackDiagnostics(s.Diagnostics.diagnostics)
@@ -340,6 +348,12 @@ func (s *FeedbackSnapshot) UploadTags(classification string, reason *string, cli
 				tags[key] = value
 			}
 		}
+	}
+	// Rust #62883: the latest completed sampling request on the live thread owns
+	// `cot_removed`, and any caller-supplied value is discarded.
+	delete(tags, "cot_removed")
+	if s.COTRemoved != nil {
+		tags["cot_removed"] = strconv.FormatBool(*s.COTRemoved)
 	}
 	return tags
 }

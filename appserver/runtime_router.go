@@ -408,6 +408,12 @@ type RuntimeRouter struct {
 	// calls run after the lock is released.
 	turnLifecycleMu           sync.RWMutex
 	turnLifecycleContributors []TurnLifecycleContributor
+	// samplingCOTMu guards samplingCOTRemoved, the reasoning-removal report of
+	// the latest completed sampling request per live thread (Rust #62883
+	// SessionState::last_sampling_cot_removed). The value is runtime-only, so a
+	// resumed thread starts without one.
+	samplingCOTMu      sync.Mutex
+	samplingCOTRemoved map[string]bool
 	// feedbackUploads bounds concurrent feedback uploads to Rust #42096's three
 	// permits. A permit stays held until the upload itself finishes, not until the
 	// RPC waiter is cancelled.
@@ -4280,6 +4286,9 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 				// which Rust treats as a destructive history replacement; the
 				// Guardian reviewer must start a new trunk (Rust #45413).
 				r.resetGuardianAfterParentHistoryReset(response.Thread.ID)
+				// Rust #62883: a resumed session starts without a stored
+				// reasoning-removal report.
+				r.clearSamplingCOTRemoved(response.Thread.ID)
 				cfg, configErr := r.effectiveMCPConfigForThreadResume(response, request)
 				if configErr != nil {
 					r.rollbackThreadResumeInitialization(response.Thread.ID, request)
@@ -22971,6 +22980,10 @@ func (r *RuntimeRouter) feedbackSnapshotForRequest(threadID string) *FeedbackSna
 	snapshot := r.requireFeedback().Clone()
 	r.feedbackMu.Unlock()
 	snapshot.ThreadID = threadID
+	if removed, ok := r.lastSamplingCOTRemoved(threadID); ok {
+		value := removed
+		snapshot.COTRemoved = &value
+	}
 	return snapshot
 }
 
