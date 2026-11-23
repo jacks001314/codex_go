@@ -474,29 +474,19 @@ type RuntimeRouter struct {
 	// #44242's built_tools plans every step from that step's captured model).
 	// The store keeps the newest turn per thread, so it stays bounded by the
 	// live threads without hooking the turn lifecycle.
-	stepToolPlansMu sync.Mutex
-	stepToolPlans   map[string]rememberedTurnToolInputs
-	// modelSearchMu guards per-thread provider ownership and step-scoped
-	// discovery reuse. Ownership is claimed only by a call that actually runs;
-	// an unused native fallback offer remains available to recover next step.
-	modelSearchMu             sync.Mutex
-	modelSearchOwners         map[string]modelSearchProvider
-	modelSearchRestored       map[string]bool
-	modelSearchTurnUsage      map[string]uint8
-	modelSearchDiscoveryCache map[string]modelSearchDiscoveryCacheEntry
-	modelSearchReservations   map[string]map[uint64]*modelSearchReservation
-	modelSearchReservationSeq uint64
-	sink                      NotificationSink
-	requests                  ServerRequestSink
-	turnsMu                   *sync.Mutex
-	active                    map[string]*activeRuntimeTurn
-	diffs                     map[string]*runtimeutil.DiffTracker
-	ephemeralMu               *sync.RWMutex
-	ephemeralThreads          map[string]*session.Record
-	subscriptionsMu           *sync.Mutex
-	threadSubscriptions       map[string]map[string]struct{}
-	clientInfoMu              sync.RWMutex
-	clientInfo                map[string]ClientInfo
+	stepToolPlansMu     sync.Mutex
+	stepToolPlans       map[string]rememberedTurnToolInputs
+	sink                NotificationSink
+	requests            ServerRequestSink
+	turnsMu             *sync.Mutex
+	active              map[string]*activeRuntimeTurn
+	diffs               map[string]*runtimeutil.DiffTracker
+	ephemeralMu         *sync.RWMutex
+	ephemeralThreads    map[string]*session.Record
+	subscriptionsMu     *sync.Mutex
+	threadSubscriptions map[string]map[string]struct{}
+	clientInfoMu        sync.RWMutex
+	clientInfo          map[string]ClientInfo
 	// closedConnections records transports that already reported closure, so a
 	// request that outlived its connection cannot re-subscribe it after slow
 	// startup (Rust #50380).
@@ -7956,7 +7946,6 @@ func (r *RuntimeRouter) markThreadUnloaded(threadID string) {
 	r.cloudCatalogs.dropThread(threadID)
 	r.forgetCatalogMetrics(threadID)
 	r.closeThreadShellSnapshots(threadID)
-	r.deleteModelSearchThreadState(threadID)
 	if err := r.deleteCodeModeRuntime(threadID); err != nil {
 		slog.Warn("failed to close thread code-mode runtime", "thread_id", threadID, "error", err)
 	}
@@ -12978,10 +12967,6 @@ func (r *RuntimeRouter) runtimeAppendItems(threadID session.ThreadID, items []se
 	// item (ContextManager::record_annotated_items), so a resumed thread restores
 	// the same delivery proof instead of minting a new revision.
 	r.annotateRetainedHarnessMetadata(threadID, items)
-	// Native fallback owns the thread's browsing references. The search item
-	// carries that decision in trusted harness metadata so a resumed session
-	// cannot switch the same references back to hosted search.
-	r.annotateModelSearchMetadata(string(threadID), items)
 	if liveThread := r.threads.LiveThread(threadID); liveThread != nil {
 		record, err := liveThread.AppendItems(items)
 		if err == nil {
@@ -18680,9 +18665,6 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 		// step's captured settings instead of the turn-start plan.
 		StepToolPlan:       r.stepToolPlanForTurn(params.ThreadID, turnID),
 		InvocationRegistry: invocationRegistry,
-		SearchReservation: func() (func(), error) {
-			return r.reserveModelSearchForSampling(params.ThreadID, turnID)
-		},
 	})
 	// A replacement accepted while this turn is running publishes onto this
 	// runtime, which refreshes the tool list before the next sampling step.
@@ -18937,41 +18919,10 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	disableWaitAgent := cfg != nil && !cfg.WaitAgentEnabled()
 	mcpService := r.mcpServiceForThread(threadID, cfg)
 	requiredMCPServers := r.requiredMCPServersForTurn(threadID, cfg, params)
-	if modelSearchMayUseApps(turnModelInfo, cfg) {
-		requiredMCPServers = append(requiredMCPServers, mcp.CodexAppsServerName)
-	}
 	requiredPlugins := r.requiredPluginsForTurn(threadID, cfg, params)
-	candidates, mcpTools, mcpConnectors, mcpBinding, err := r.prepareTurnToolInputs(ctx, threadID, cfg, mcpService, requiredMCPServers, requiredPlugins)
+	candidates, mcpTools, mcpConnectors, _, err := r.prepareTurnToolInputs(ctx, threadID, cfg, mcpService, requiredMCPServers, requiredPlugins)
 	if err != nil {
 		return nil, err
-	}
-	baseMCPTools := append([]mcp.RuntimeToolInfo(nil), mcpTools...)
-	turnMetadata := modelSearchRequestDocument(r.mcpTurnMetadataProvider(threadID, strings.TrimSpace(turnID)))
-	searchSelection := r.resolveModelSearchForTurn(ctx, threadID, strings.TrimSpace(turnID), cfg, turnModelInfo, mcpTools, mcpBinding, webSearchOptions, turnMetadata)
-	searchSelection, searchReservationID := r.reserveModelSearchSelection(threadID, searchSelection)
-	switch searchSelection.provider {
-	case modelSearchNative:
-		if searchSelection.mode != "" {
-			mode := searchSelection.mode
-			webSearchOptions, err = r.webSearchOptionsForTurnWithMode(cfg, params, &mode)
-			if err != nil {
-				return nil, err
-			}
-			webSearchOptions = r.nativeModelSearchOptions(webSearchOptions, threadID, strings.TrimSpace(turnID))
-		}
-	case modelSearchUnmanaged:
-		// No model search decision exists; preserve the configured native tool.
-	default:
-		webSearchOptions = nil
-	}
-	mcpTools = applyModelSearchTools(mcpTools, searchSelection)
-	if threadID != "" && strings.TrimSpace(turnID) != "" {
-		r.threads.UpdateTurn(threadID, strings.TrimSpace(turnID), func(active *activeRuntimeTurn) {
-			active.ModelSearchProvider = searchSelection.provider
-			active.ModelSearchMode = searchSelection.mode
-			active.ModelSearchFallback = searchSelection.fallback
-			active.ModelSearchReservationID = searchReservationID
-		})
 	}
 	permissionProfile, err := turnSandboxPermissionProfile(cfg, cwd, params)
 	if err != nil {
@@ -19550,18 +19501,12 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	// Rust #62392: the turn captures eligible Apps result bodies for its own
 	// credential instance only, behind the passthrough feature.
 	options.MCPResultBodyCapture = r.mcpResultBodyCaptureForTurn(cfg, threadID, strings.TrimSpace(turnID))
-	if searchSelection.provider == modelSearchHosted {
-		options.MCPTurnMetadata = searchCallTurnMetadata(options.MCPTurnMetadata, searchSelection.context)
-	}
 	options.MCPTurnRootTurnID = r.mcpTurnRootTurnIDProvider(threadID, strings.TrimSpace(turnID))
 	// Rust #58378: private agent attribution is scoped to the host-selected
 	// plugin registration installed on this thread.
 	options.MCPAgentMetadataRecipient = r.threadAgentMCPMetadataRecipient(threadID)
 	options.MCPToolRequestMetaHook = r.threadMCPToolRequestMetaHook(threadID)
 	options.MCPWorkBudgetCheck = r.rolloutBudgetCheck(threadID)
-	if searchSelection.provider == modelSearchHosted || searchSelection.provider == modelSearchClientMCP {
-		options.MCPToolAdmissionHook = r.modelSearchMCPAdmission(threadID, strings.TrimSpace(turnID), searchSelection)
-	}
 	options.MCPCyberAccessProgram = r.mcpCyberAccessProgramProvider(threadID, strings.TrimSpace(turnID))
 	options.RequestUserInputAvailableModes = requestUserInputModes
 	options.EnableCurrentTimeTool = enableCurrentTimeTool
@@ -19630,7 +19575,6 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	// Rust #44242: a later sampling step plans its tools from that step's
 	// captured settings, so keep the assembled options for the step rebuild.
 	r.rememberTurnToolOptions(threadID, strings.TrimSpace(turnID), cwd, params, cfg, options)
-	r.rememberModelSearchToolInputs(threadID, strings.TrimSpace(turnID), baseMCPTools, mcpBinding, turnMetadata, searchSelection)
 	// Rust #53369: an unavailable message board must not reject turn
 	// construction. Calls to the missing board tools reach the model as ordinary
 	// unsupported-call errors while the rest of the turn continues.

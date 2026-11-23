@@ -269,7 +269,6 @@ var configRequiredNullableKeys = []string{
 	"forced_chatgpt_workspace_id",
 	"forced_login_method",
 	"web_search",
-	"client_search_provider",
 	"tools",
 	"instructions",
 	"developer_instructions",
@@ -294,13 +293,6 @@ func configValuesForJSON(values map[string]any) map[string]any {
 	}
 	normalizeSandboxWorkspaceWriteConfig(out)
 	normalizeToolsConfig(out)
-	// Rust #59033: the effective tools.client_search_provider hint is exposed
-	// at the top level; a model-selected provider takes precedence over it.
-	if tools, ok := out["tools"].(map[string]any); ok {
-		out["client_search_provider"] = tools["client_search_provider"]
-	} else {
-		out["client_search_provider"] = nil
-	}
 	normalizeAnalyticsConfig(out)
 	normalizeAppsConfig(out)
 	return out

@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"codex_go/auth"
-	"codex_go/codexapi"
 	"codex_go/config"
 	"codex_go/features"
 	"codex_go/model"
@@ -138,30 +137,14 @@ func (r *RuntimeRouter) hostedToolsForTurn(params *turn.TurnStartParams, turnRun
 	modelInfo := r.modelInfoForRuntimeWithConfig(modelProviderConfig.Model, cfg)
 	capabilities := runtimeProvider.Capabilities()
 	tools := []any{}
-	nativeSearchAllowed := true
-	activeSearchMode := codexapi.WebSearchMode("")
-	if r != nil && r.threads != nil && params != nil {
-		if active := r.threads.ActiveTurn(strings.TrimSpace(params.ThreadID)); active != nil {
-			if active.ModelSearchProvider != "" && active.ModelSearchProvider != modelSearchNative && active.ModelSearchProvider != modelSearchUnmanaged {
-				nativeSearchAllowed = false
-			}
-			activeSearchMode = active.ModelSearchMode
-		}
-	}
 	standaloneWebSearchRegistered := standaloneWebSearch != nil
 	if len(turnRuntimes) > 0 && turnRuntimes[0] != nil {
 		standaloneWebSearchRegistered = turnRuntimes[0].StandaloneWebSearchRegistered()
 	}
-	if nativeSearchAllowed && !standaloneWebSearchRegistered && modelInfo != nil && !modelInfo.UseResponsesLite && capabilities.WebSearch {
-		// A model-selected search mode is already a restriction; the configured
-		// mode instead follows the turn's permission profile (Rust #62894), and a
-		// provider that disallows external web access pins hosted search to cached.
-		mode := webSearchModeFromConfig(cfg)
-		if activeSearchMode != "" {
-			mode = activeSearchMode.RestrictToProviderWebAccess(capabilities.ExternalWebAccess)
-		} else {
-			mode = webSearchModeForTurn(cfg, params, mode, webSearchModeWasExplicit(cfg, params), capabilities.ExternalWebAccess)
-		}
+	if !standaloneWebSearchRegistered && modelInfo != nil && !modelInfo.UseResponsesLite && capabilities.WebSearch {
+		// Rust #62808: hosted search uses the turn's effective web_search mode;
+		// the permission profile and provider capability resolve it (#62894).
+		mode := webSearchModeForTurn(cfg, params, webSearchModeFromConfig(cfg), webSearchModeWasExplicit(cfg, params), capabilities.ExternalWebAccess)
 		if hosted := turn.HostedWebSearchTool(mode, webSearchSettingsFromConfig(cfg, mode), modelInfo.WebSearchToolType); hosted != nil {
 			tools = append(tools, hosted)
 		}

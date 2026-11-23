@@ -182,7 +182,6 @@ var modelInfoRustOnlyAllowlist = map[string]string{}
 var modelInfoGoOnlyAllowlist = map[string]string{
 	"base_instructions":            "Go extension carrying the model base instructions template",
 	"supports_parallel_tool_calls": "Go extension for parallel tool call support",
-	"web_search_provider":          "Rust #62808 removed model-selected Search MCP routing; Go's routing removal is tracked by that audit entry",
 }
 
 // TestRustModelInfoFieldSurfaceAgainstGo is the L0 enum-inventory check for
@@ -213,14 +212,13 @@ func TestRustModelInfoFieldSurfaceAgainstGo(t *testing.T) {
 	}
 
 	// Re-anchored to upstream e0a6d053: #62808 removed the model-selected
-	// `web_search_provider` routing field, taking the wire count from 48 to
-	// 47. Go still carries the field until #62808 lands and is tracked as a
-	// Go-only remainder by that audit entry.
+	// `web_search_provider` routing field from both trees, taking the Rust wire
+	// count from 48 to 47 (Go dropped it as well).
 	if len(rustSet) != 47 {
 		t.Fatalf("Rust ModelInfo wire field count = %d, want 47 (pinned baseline)", len(rustSet))
 	}
-	if len(goSet) != 50 {
-		t.Fatalf("Go ModelInfo JSON field count = %d, want 50 (pinned baseline)", len(goSet))
+	if len(goSet) != 49 {
+		t.Fatalf("Go ModelInfo JSON field count = %d, want 49 (pinned baseline)", len(goSet))
 	}
 
 	for field := range rustSet {

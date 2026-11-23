@@ -99,54 +99,43 @@ func TestHarnessMetadataWireNamesMatchRust(t *testing.T) {
 	}
 }
 
-// TestOldRolloutMetadataRestoresSearchMCPUseLikeRust mirrors Rust #62589's
-// `old_rollout_metadata_restores_search_mcp_use`: legacy attribution only
-// reports whether Search MCP may have been used, malformed values count as
-// possible use, and the member is never serialized again.
-func TestOldRolloutMetadataRestoresSearchMCPUseLikeRust(t *testing.T) {
+// TestRemovedSearchOwnershipMetadataIsIgnoredLikeRust mirrors Rust #62808:
+// older rollouts may still carry `mcp_attribution`, `model_search_state` or
+// `native_search_fallback_used`. The metadata model no longer interprets them,
+// and a re-encoded item does not carry them again.
+func TestRemovedSearchOwnershipMetadataIsIgnoredLikeRust(t *testing.T) {
 	cases := []struct {
 		name string
 		raw  string
-		want *bool
 	}{
-		{"absent", `{}`, nil},
-		{"search connector", `{"mcp_attribution":{"status":"complete","sources":[{"connector_id":"connector_openai_search_service","server_name":"example","tool_name":"search","first_turn_id":"turn_1"}]}}`, boolPointer(true)},
-		{"attribution error", `{"mcp_attribution":{"status":"attribution_error","error_reason":"history_missing_checkpoint"}}`, boolPointer(true)},
-		{"unknown status", `{"mcp_attribution":{"status":"future_status"}}`, boolPointer(true)},
-		{"missing status", `{"mcp_attribution":{}}`, boolPointer(true)},
-		{"malformed value", `{"mcp_attribution":"unreadable"}`, boolPointer(true)},
-		{"null value", `{"mcp_attribution":null}`, boolPointer(true)},
-		{"clean report", `{"mcp_attribution":{"status":"none","sources":[]}}`, boolPointer(false)},
-		{"complete without search connector", `{"mcp_attribution":{"status":"complete","sources":[{"connector_id":"other","server_name":"s","tool_name":"t","first_turn_id":"turn"}]}}`, boolPointer(false)},
+		{"empty", `{}`},
+		{"model search state", `{"model_search_state":"search_mcp"}`},
+		{"native fallback", `{"model_search_state":"standalone","native_search_fallback_used":true}`},
+		{"legacy attribution", `{"mcp_attribution":{"status":"complete","sources":[{"connector_id":"connector_openai_search_service","server_name":"example","tool_name":"search","first_turn_id":"turn_1"}]}}`},
+		{"malformed attribution", `{"mcp_attribution":"unreadable"}`},
+		{"unknown state", `{"model_search_state":"future_provider"}`},
 	}
+	removed := []string{"mcp_attribution", "model_search_state", "native_search_fallback_used", "legacy_search_mcp_used"}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var metadata HarnessMetadata
 			if err := json.Unmarshal([]byte(tc.raw), &metadata); err != nil {
 				t.Fatalf("Unmarshal(%s): %v", tc.raw, err)
 			}
-			switch {
-			case tc.want == nil && metadata.LegacySearchMCPUsed != nil:
-				t.Fatalf("legacy_search_mcp_used = %v, want absent", *metadata.LegacySearchMCPUsed)
-			case tc.want != nil && (metadata.LegacySearchMCPUsed == nil || *metadata.LegacySearchMCPUsed != *tc.want):
-				t.Fatalf("legacy_search_mcp_used = %v, want %v", metadata.LegacySearchMCPUsed, *tc.want)
-			}
 			encoded, err := json.Marshal(metadata)
 			if err != nil {
 				t.Fatalf("Marshal: %v", err)
 			}
-			if strings.Contains(string(encoded), "mcp_attribution") || strings.Contains(string(encoded), "legacy_search_mcp_used") {
-				t.Fatalf("serialized metadata kept the legacy member: %s", encoded)
+			for _, member := range removed {
+				if strings.Contains(string(encoded), member) {
+					t.Fatalf("serialized metadata kept removed member %q: %s", member, encoded)
+				}
 			}
 		})
 	}
 }
 
-func boolPointer(value bool) *bool {
-	return &value
-}
-
-// TestMarkRetainedSourcesIncomplete mirrors
+// TestMarkRetainedSourcesIncomplete mirrors// TestMarkRetainedSourcesIncomplete mirrors
 // `CodexHarnessMetadata::mark_retained_sources_incomplete`: dropping delivery
 // proof also clears the ordering guidance.
 func TestMarkRetainedSourcesIncomplete(t *testing.T) {

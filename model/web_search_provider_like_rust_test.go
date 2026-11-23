@@ -2,31 +2,27 @@ package model
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
-// Rust #59033: the resolved model may select the search provider.
-func TestModelInfoParsesWebSearchProviderLikeRust(t *testing.T) {
+// Rust #62808 removed ModelInfo.web_search_provider together with
+// model-selected Search MCP routing. Older catalogs that still carry the
+// member must keep parsing, and the field must not resurface on output.
+func TestModelInfoIgnoresRemovedWebSearchProviderLikeRust(t *testing.T) {
+	raw := `{"slug":"m","display_name":"M","web_search_provider":"search_mcp","truncation_policy":{"mode":"bytes","limit":10000}}`
 	var info ModelInfo
-	if err := json.Unmarshal([]byte(`{"slug":"m","display_name":"M","web_search_provider":"search_mcp"}`), &info); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+	if err := json.Unmarshal([]byte(raw), &info); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
 	}
-	if info.WebSearchProvider == nil || *info.WebSearchProvider != "search_mcp" {
-		t.Fatalf("WebSearchProvider = %v, want search_mcp", info.WebSearchProvider)
+	if info.Slug != "m" {
+		t.Fatalf("Slug = %q", info.Slug)
 	}
-	var absent ModelInfo
-	if err := json.Unmarshal([]byte(`{"slug":"m2","display_name":"M2"}`), &absent); err != nil {
-		t.Fatalf("unmarshal absent: %v", err)
+	encoded, err := json.Marshal(info)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
 	}
-	if absent.WebSearchProvider != nil {
-		t.Fatalf("absent WebSearchProvider = %v, want nil", *absent.WebSearchProvider)
-	}
-	withStandalone := `{"slug":"m3","display_name":"M3","web_search_provider":"standalone"}`
-	var standalone ModelInfo
-	if err := json.Unmarshal([]byte(withStandalone), &standalone); err != nil {
-		t.Fatalf("unmarshal standalone: %v", err)
-	}
-	if standalone.WebSearchProvider == nil || *standalone.WebSearchProvider != "standalone" {
-		t.Fatalf("standalone WebSearchProvider = %v", standalone.WebSearchProvider)
+	if strings.Contains(string(encoded), "web_search_provider") {
+		t.Fatalf("model info re-serialized the removed field: %s", encoded)
 	}
 }

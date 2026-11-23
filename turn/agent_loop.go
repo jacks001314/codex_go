@@ -289,10 +289,6 @@ type AgentLoopRequest struct {
 	// request so a long turn can refresh them between steps. An empty result
 	// means the instructions were cleared (Rust #44675).
 	InstructionsProvider func() string
-	// ReserveSearch holds the selected fallback search provider for the whole
-	// sampling request and its emitted tool calls. Releasing an unused offer
-	// leaves the thread free to recover hosted search on the next step.
-	ReserveSearch func() (func(), error)
 	// PreSamplingValidation, when set, runs before every sampling request of the
 	// turn; a non-nil error fails the turn before its model request (Rust #51157
 	// validates required environment skills there, as a fatal error). It mirrors
@@ -651,7 +647,6 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		// futures have been drained, so the step's tool spans (mcp.tools.call and
 		// the tool records) nest under it. endSamplingRequestSpan closes the span
 		// exactly once on every path that leaves the step.
-		var releaseSearch func()
 		samplingSpanEnded := false
 		endSamplingRequestSpan := func() {
 			if samplingSpanEnded {
@@ -670,10 +665,6 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			if samplingSpan != nil {
 				samplingSpan.End()
 			}
-			if releaseSearch != nil {
-				releaseSearch()
-				releaseSearch = nil
-			}
 		}
 		if samplingSpan != nil {
 			// The turn's tool dispatches and code-mode calls propagate this span's
@@ -691,16 +682,6 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		stepTools := request.Tools
 		if iteration > 0 && request.ToolsForStep != nil {
 			stepTools = request.ToolsForStep(stepModel)
-		}
-		if request.ReserveSearch != nil {
-			var err error
-			releaseSearch, err = request.ReserveSearch()
-			if errors.Is(err, ErrSearchReservationUnavailable) {
-				stepTools = withoutModelWebSearchTools(stepTools)
-			} else if err != nil {
-				endSamplingRequestSpan()
-				return nil, err
-			}
 		}
 		unifiedImageBudget := request.UnifiedImageBudget
 		if request.UnifiedImageBudgetForModel != nil {

@@ -1516,7 +1516,7 @@
    ],
    "phase": "P1",
    "status": "complete",
-   "verifier": "TestModelSearchDiscoveryProjectsConnectorInvocationContextLikeRust;TestBindingRejectsCatalogRefreshAndInvisibleTools"
+   "verifier": "TestAppsInvocationContextCoversSearchConnectorLikeRust;TestBindingRejectsCatalogRefreshAndInvisibleTools"
   },
   {
    "id": "guardian-verified-answer-whole",

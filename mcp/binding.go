@@ -18,10 +18,6 @@ type Binding struct {
 	// hostOwnedApps marks the trusted codex_apps registration captured for this
 	// model step.
 	hostOwnedApps map[string]bool
-	// searchTool and searchInvocationContext are populated only by a successful
-	// model-search discovery. The latter is the connector-owned opaque pin.
-	searchTool              *RuntimeToolInfo
-	searchInvocationContext any
 	// catalogs records the exact client catalog each server's tools came from.
 	// A refreshed catalog advances only its own client's revision, so calls for
 	// unrelated servers stay valid (Rust #43031).

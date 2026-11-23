@@ -76,10 +76,6 @@ type ToolRegistryOptions struct {
 	// MCPToolRequestMetaHook is the host-scoped private metadata hook for one
 	// server/tool registration. Nil disables the hook.
 	MCPToolRequestMetaHook *mcp.MCPToolRequestMetaHook
-	// MCPToolAdmission rejects a prepared MCP call before approval or dispatch.
-	// Search uses it to keep one provider responsible for a thread's browsing
-	// references when a background call outlives its sampling step.
-	MCPToolAdmissionHook func(info *mcp.RuntimeToolInfo, callID string) error
 	// MCPWorkBudgetCheck rechecks the shared rollout budget immediately before
 	// the MCP request is handed to the server (Rust #61578). A denial is
 	// reported to the model as an aborted call; nil disables the check.
@@ -1206,16 +1202,10 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 			}
 		}
 		var admission func(serverName string, toolName string, callID string) error
-		if options.MCPToolAdmissionHook != nil || options.MCPWorkBudgetCheck != nil {
-			infoForHook := info
+		if options.MCPWorkBudgetCheck != nil {
 			admission = func(serverName string, toolName string, callID string) error {
-				if options.MCPWorkBudgetCheck != nil {
-					if err := options.MCPWorkBudgetCheck(); err != nil {
-						return tool.RespondToModel("aborted before MCP handoff: rollout budget exhausted")
-					}
-				}
-				if options.MCPToolAdmissionHook != nil {
-					return options.MCPToolAdmissionHook(&infoForHook, callID)
+				if err := options.MCPWorkBudgetCheck(); err != nil {
+					return tool.RespondToModel("aborted before MCP handoff: rollout budget exhausted")
 				}
 				return nil
 			}
@@ -1289,7 +1279,7 @@ func mcpRuntimeToolRequestMeta(info *mcp.RuntimeToolInfo) map[string]any {
 	if connectorID := strings.TrimSpace(info.ConnectorID); connectorID != "" {
 		apps["connector_id"] = connectorID
 	}
-	if invocationContext, ok := mcp.ModelSearchInvocationContext(info); ok {
+	if invocationContext, ok := mcp.AppsInvocationContext(info); ok {
 		apps["invocation_context"] = invocationContext
 	}
 	return map[string]any{"_codex_apps": apps}

@@ -53489,11 +53489,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Model-selected Search MCP routing is gone (Rust #62808, 4360c5f813): standalone and hosted web search use the turn's effective web_search mode, and the provider precedence, Search discovery, native fallback, reservation, cross-resume provider tracking and `codex.model_search.*` counters are removed. Go dropped `appserver/model_search.go`, `config/model_search.go` (ClientSearchProvider, RequiresNativeSearch), `rollout/model_search.go`, `mcp/model_search.go`, and `retainedctx/mcp_attribution.go`; ModelInfo no longer carries web_search_provider, ConfigReadResponse no longer exposes client_search_provider, hosted_search_policy is unused, and CodexHarnessMetadata no longer interprets model_search_state, native_search_fallback_used or legacy mcp_attribution. Search connector declarations remain ordinary Codex Apps tools, and `_codex_apps.invocation_context` is now forwarded for every Apps call (mcp.AppsInvocationContext) as Rust's apps_invocation_context does. Tests: go test ./turn ./mcp ./config ./model ./retainedctx ./rollout -count=1; go test ./appserver -run 'McpAttribution|ModelSearch|WebSearch|Search|MCPTurnMetadata|StepTool|TurnTool' -count=1; go test ./parity -count=1; go build ./..."
    ],
    "kind": "runtime",
    "sha": "4360c5f8133632a5655fd28a5e33828c9b76056c",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Remove model-selected Search MCP routing (#62808)"
   },
   {

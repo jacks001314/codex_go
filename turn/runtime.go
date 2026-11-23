@@ -16,11 +16,6 @@ import (
 	"codex_go/utils"
 )
 
-// ErrSearchReservationUnavailable tells the sampling loop that a prepared
-// native fallback lost its provider race. The step continues without native
-// search declarations instead of failing the turn or allowing provider mixing.
-var ErrSearchReservationUnavailable = errors.New("native search reservation is unavailable")
-
 type RuntimeOptions struct {
 	Agent  model.AgentRunner
 	Router *tool.Router
@@ -126,10 +121,6 @@ type RuntimeOptions struct {
 	// active call IDs (Rust #57586 HostToolInvocationLookup). A nil registry
 	// leaves dispatch unchanged.
 	InvocationRegistry *agent.InvocationRegistry
-	// SearchReservation holds a fallback provider claim across the sampling
-	// request and the tool calls it emits. The returned release is a no-op when
-	// native search actually ran, making that provider ownership durable.
-	SearchReservation func() (func(), error)
 }
 
 // StepToolPlan is one sampling step's rebuilt tool plan (Rust's per-step
@@ -179,7 +170,6 @@ type Runtime struct {
 	stepToolPlanModel            string
 	dynamicToolCatalog           []DynamicToolSpec
 	invocationRegistry           *agent.InvocationRegistry
-	searchReservation            func() (func(), error)
 }
 
 // ExposesTool reports whether this turn's tool router advertises the named
@@ -250,7 +240,6 @@ func NewRuntime(options *RuntimeOptions) *Runtime {
 		stepToolPlan:                 options.StepToolPlan,
 		dynamicToolCatalog:           append([]DynamicToolSpec(nil), options.DynamicTools...),
 		invocationRegistry:           options.InvocationRegistry,
-		searchReservation:            options.SearchReservation,
 	}
 }
 
@@ -478,20 +467,6 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			instructions = request.InstructionsProvider()
 		}
 		recordToolRegistrationMetrics(r.toolRegistrationMetrics, tool.RegistrationCounts{}, request.ToolMode, request.IncrementalTools)
-		var releaseSearch func()
-		if r.searchReservation != nil {
-			release, reserveErr := r.searchReservation()
-			if errors.Is(reserveErr, ErrSearchReservationUnavailable) {
-				tools = withoutModelWebSearchTools(tools)
-			} else if reserveErr != nil {
-				return nil, reserveErr
-			} else {
-				releaseSearch = release
-			}
-		}
-		if releaseSearch != nil {
-			defer releaseSearch()
-		}
 		response, err := r.agent.Run(ctx, &model.AgentRequest{
 			Prompt:                       request.Prompt,
 			Instructions:                 instructions,
@@ -616,7 +591,6 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 	loopRequest.Tools = MergeHostedTools(MergeHostedTools(loopRequest.Tools, r.hostedTools), request.HostedTools)
 	loopRequest.Tools = filterAllowedHostedTools(loopRequest.Tools, r.allowedTools)
 	loopRequest.InterruptOnCancel = r.interruptOnCancel
-	loopRequest.ReserveSearch = r.searchReservation
 	dispatcher = NewToolDispatcher(&ToolDispatcherOptions{
 		Router:                      r.router,
 		Hooks:                       r.hooks,
@@ -652,34 +626,6 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		Now:                     r.now,
 		DeferMailboxPreemption:  r.deferMailboxPreemption,
 	}).Run(ctx, &loopRequest)
-}
-
-func withoutModelWebSearchTools(tools []any) []any {
-	out := make([]any, 0, len(tools))
-	for _, value := range tools {
-		toolMap, ok := value.(map[string]any)
-		if !ok {
-			out = append(out, value)
-			continue
-		}
-		toolType := strings.ToLower(strings.TrimSpace(hostedToolString(toolMap["type"])))
-		if toolType == HostedWebSearchToolType {
-			continue
-		}
-		if toolType == "namespace" && strings.EqualFold(strings.TrimSpace(hostedToolString(toolMap["name"])), WebSearchNamespace) {
-			continue
-		}
-		if toolType == "additional_tools" {
-			if definitions, ok := toolMap["tools"].([]any); ok {
-				copy := cloneHostedToolMap(toolMap)
-				copy["tools"] = withoutModelWebSearchTools(definitions)
-				out = append(out, copy)
-				continue
-			}
-		}
-		out = append(out, value)
-	}
-	return out
 }
 
 // ToolNamespacesInfo returns the finalized tool inventory of the router that

@@ -166,9 +166,6 @@ func AppendSessionItems(recorder *Recorder, items []session.Item, now time.Time)
 			if err := recorder.AppendItemCompleted(raw, turnID, startedAt, completedAt); err != nil {
 				return fmt.Errorf("append paginated completed item %d (%s/%s): %w", i, items[i].Type, items[i].ID, err)
 			}
-			if err := appendModelSearchCheckpoint(recorder, &items[i], now); err != nil {
-				return fmt.Errorf("append paginated model-search checkpoint %d (%s): %w", i, items[i].ID, err)
-			}
 			continue
 		}
 		item := ItemFromSessionItem(&items[i])
@@ -185,9 +182,6 @@ func AppendSessionItems(recorder *Recorder, items []session.Item, now time.Time)
 		}
 		if err := recorder.AppendLine(*line); err != nil {
 			return err
-		}
-		if err := appendModelSearchCheckpoint(recorder, &items[i], now); err != nil {
-			return fmt.Errorf("append legacy model-search checkpoint %d (%s): %w", i, items[i].ID, err)
 		}
 	}
 	return nil

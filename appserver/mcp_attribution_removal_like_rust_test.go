@@ -8,12 +8,12 @@ import (
 	"codex_go/session"
 )
 
-// Rust #62589 stops checkpointing cumulative MCP attribution into rollout
-// items: recorded items carry only the remaining harness metadata, and search
-// ownership comes from model_search_state.
-func TestRecordedItemsCarryNoMcpAttributionLikeRust(t *testing.T) {
+// Rust #62589 removed cumulative MCP attribution and #62808 removed the
+// model-selected Search MCP provider checkpoint, so a recorded item carries no
+// search-ownership member in its trusted harness metadata.
+func TestRecordedItemsCarryNoSearchOwnershipMetadataLikeRust(t *testing.T) {
 	store := session.NewStore(t.TempDir())
-	threadID := session.ThreadID("thread-mcp-attribution-removed")
+	threadID := session.ThreadID("thread-model-search-removed")
 	now := time.Now().UTC()
 	if err := store.Create(&session.Record{
 		ID: threadID, SessionID: string(threadID), CreatedAt: now, UpdatedAt: now, RecencyAt: now,
@@ -24,10 +24,9 @@ func TestRecordedItemsCarryNoMcpAttributionLikeRust(t *testing.T) {
 	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
 	t.Cleanup(func() { _ = router.Close() })
 
-	firstTurnID := "turn_1"
 	item := session.Item{
 		ID: "msg-1", Type: "message", Role: "user", Text: "hello", CreatedAt: now,
-		Data: map[string]any{"turnId": firstTurnID},
+		Data: map[string]any{"turnId": "turn_1"},
 	}
 	record, err := router.runtimeAppendItems(threadID, []session.Item{item})
 	if err != nil {
@@ -37,23 +36,11 @@ func TestRecordedItemsCarryNoMcpAttributionLikeRust(t *testing.T) {
 		t.Fatalf("recorded items = %#v", record)
 	}
 	for i := range record.Items {
-		raw := harnessMetadataRawFromItem(&record.Items[i])
-		if strings.Contains(string(raw), "mcp_attribution") {
-			t.Fatalf("recorded item %d carries mcp_attribution: %s", i, raw)
+		raw := string(harnessMetadataRawFromItem(&record.Items[i]))
+		for _, removed := range []string{"mcp_attribution", "model_search_state", "native_search_fallback_used"} {
+			if strings.Contains(raw, removed) {
+				t.Fatalf("recorded item %d carries removed search metadata %q: %s", i, removed, raw)
+			}
 		}
-	}
-
-	// New rollouts keep the provider history in model_search_state.
-	if !router.claimModelSearchProvider(string(threadID), modelSearchClientMCP) {
-		t.Fatal("failed to claim Search MCP")
-	}
-	searchItems := []session.Item{{ID: "search", Type: "web_search_call"}}
-	router.annotateModelSearchMetadata(string(threadID), searchItems)
-	raw := harnessMetadataRawFromItem(&searchItems[0])
-	if !strings.Contains(string(raw), "model_search_state") {
-		t.Fatalf("search checkpoint = %s, want model_search_state", raw)
-	}
-	if strings.Contains(string(raw), "mcp_attribution") {
-		t.Fatalf("search checkpoint kept mcp_attribution: %s", raw)
 	}
 }

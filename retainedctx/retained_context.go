@@ -130,16 +130,6 @@ func (s RetainedInputSource) AcceptanceOrder() (uint64, bool) {
 	return *s.Order, true
 }
 
-// ModelSearchState is the persisted owner of a thread's search references
-// (Rust `ModelSearchState`, #62144).
-type ModelSearchState string
-
-const (
-	ModelSearchStateUnused     ModelSearchState = "unused"
-	ModelSearchStateStandalone ModelSearchState = "standalone"
-	ModelSearchStateSearchMCP  ModelSearchState = "search_mcp"
-)
-
 // HarnessMetadata is the retained model's view of Rust's `CodexHarnessMetadata`.
 // Go persists harness metadata as an untyped map, so this type carries only the
 // members the retained-context model consumes.
@@ -192,16 +182,8 @@ type HarnessMetadata struct {
 	CompactionOutput bool `json:"compaction_output,omitempty"`
 	// InheritedUserMessage marks copied parent user/assistant context, which must
 	// not become child-local authorization.
-	InheritedUserMessage bool `json:"inherited_user_message,omitempty"`
-	// LegacySearchMCPUsed records whether an old `mcp_attribution` value
-	// indicates Search MCP may have been used (Rust #62589
-	// `legacy_search_mcp_used`). It is decoded from older rollouts and never
-	// serialized; new rollouts use ModelSearchState.
-	LegacySearchMCPUsed *bool `json:"-"`
-	// ModelSearchState records which search provider owns this thread's
-	// provider-specific references (Rust #62144). Absent on older rollouts.
-	ModelSearchState   *ModelSearchState   `json:"model_search_state,omitempty"`
-	SenderUserMessages *SenderUserMessages `json:"sender_user_messages,omitempty"`
+	InheritedUserMessage bool                `json:"inherited_user_message,omitempty"`
+	SenderUserMessages   *SenderUserMessages `json:"sender_user_messages,omitempty"`
 }
 
 // ConfirmedDelivery mirrors `CodexHarnessMetadata::confirmed_delivery`: an
