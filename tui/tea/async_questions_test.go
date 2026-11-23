@@ -809,38 +809,136 @@ func TestAsyncQuestionsBlankOtherIsNotSubmitted(t *testing.T) {
 	}
 }
 
-// TestAsyncQuestionsBlockClippedChoice mirrors Rust #42894's visibility guard: a
-// suggested option the terminal cannot show in full must not be submittable.
-func TestAsyncQuestionsBlockClippedChoice(t *testing.T) {
-	options := []any{"Postgres", "SQLite", "MySQL", "Oracle", "SQL Server"}
-	feed := func(height int) *Model {
-		model := NewModel(codextui.NewState(nil), Options{Width: 60, Height: height})
-		model.State.SetThreadID("thread-questions")
-		model = feedAsyncQuestions(t, model, "question-1", []any{
-			map[string]any{"title": "Which database should we deploy to production?", "options": options},
-		})
-		updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
-		return updated.(*Model)
+// TestAsyncQuestionsPageThroughOversizedChoiceLikeRust mirrors Rust #62209: a
+// choice taller than the answer area stays selected while PageUp/PageDown
+// scroll its lines, and it only becomes submittable once every line has been
+// painted in order. A choice that fits the answer area is submittable even when
+// the rest of the list is clipped.
+func TestAsyncQuestionsPageThroughOversizedChoiceLikeRust(t *testing.T) {
+	tall := "Line 1.\n\n" + strings.Repeat("More.\n\n", 12) + "End of choice."
+	model := NewModel(codextui.NewState(nil), Options{Width: 60, Height: 12})
+	model.State.SetThreadID("thread-questions")
+	model = feedAsyncQuestions(t, model, "question-1", []any{
+		map[string]any{"title": "Which database should we deploy to production?", "options": []any{"Postgres", tall, "MySQL"}},
+	})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
+	model = updated.(*Model)
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyDown})
+	model = updated.(*Model)
+	if got := model.asyncQuestions.SelectedOptionIndex(); got != 1 {
+		t.Fatalf("selected index = %d, want the oversized choice", got)
+	}
+	model.viewString()
+
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
+	model = updated.(*Model)
+	if len(model.SubmittedRequests()) != 0 {
+		t.Fatalf("unread choice was submitted: %#v", model.SubmittedRequests())
+	}
+	if !strings.Contains(model.viewString(), "Scroll to read the entire option") {
+		t.Fatalf("missing unread-choice notice:\n%s", model.viewString())
 	}
 
-	clipped := feed(8)
-	updated, _ := clipped.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
-	clipped = updated.(*Model)
-	if len(clipped.SubmittedRequests()) != 0 {
-		t.Fatalf("clipped choice was submitted: %#v", clipped.SubmittedRequests())
-	}
-	if !strings.Contains(clipped.viewString(), "Expand terminal to read the entire option") {
-		t.Fatalf("missing clipped-choice notice:\n%s", clipped.viewString())
-	}
-	if clipped.asyncQuestions.UnansweredCount() != 1 {
-		t.Fatal("clipped choice must keep the question pending")
+	// Repeated page keys before a paint must not authorize skipped lines.
+	updated, _ = model.Update(key(keymsg.KeyPgDown))
+	model = updated.(*Model)
+	updated, _ = model.Update(key(keymsg.KeyPgDown))
+	model = updated.(*Model)
+	model.viewString()
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
+	model = updated.(*Model)
+	if len(model.SubmittedRequests()) != 0 {
+		t.Fatalf("skipped lines authorized the answer: %#v", model.SubmittedRequests())
 	}
 
-	roomy := feed(60)
+	// Page back to the start and then read every line one page at a time.
+	for index := 0; index < 20 && model.asyncQuestionOptions.offset > model.asyncQuestionOptions.selectedStart; index++ {
+		updated, _ = model.Update(key(keymsg.KeyPgUp))
+		model = updated.(*Model)
+		model.viewString()
+	}
+	for index := 0; index < 20 && !model.asyncQuestions.OtherSelected(); index++ {
+		if model.asyncQuestionOptions.fullySeen(1) {
+			break
+		}
+		updated, _ = model.Update(key(keymsg.KeyPgDown))
+		model = updated.(*Model)
+		model.viewString()
+		if model.asyncQuestions.SelectedOptionIndex() != 1 {
+			t.Fatalf("paging moved the selection to %d", model.asyncQuestions.SelectedOptionIndex())
+		}
+	}
+	if !model.asyncQuestionOptions.fullySeen(1) {
+		t.Fatalf("paging never displayed the whole choice (offset=%d seen=%d height=%d)", model.asyncQuestionOptions.offset, model.asyncQuestionOptions.seenEnd, model.asyncQuestionOptions.selectedHeight)
+	}
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
+	model = updated.(*Model)
+	if requests := model.SubmittedRequests(); len(requests) != 1 || !strings.Contains(requests[0].Prompt, "End of choice.") {
+		t.Fatalf("paged submitted requests = %#v", requests)
+	}
+
+	// A choice that fits the answer area is submittable while the list around
+	// it is clipped (the old whole-block gate rejected this).
+	roomy := NewModel(codextui.NewState(nil), Options{Width: 60, Height: 8})
+	roomy.State.SetThreadID("thread-questions")
+	roomy = feedAsyncQuestions(t, roomy, "question-1", []any{
+		map[string]any{"title": "Which database should we deploy to production?", "options": []any{"Postgres", "SQLite", "MySQL", "Oracle", "SQL Server"}},
+	})
+	updated, _ = roomy.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
+	roomy = updated.(*Model)
+	roomy.viewString()
 	updated, _ = roomy.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	roomy = updated.(*Model)
 	if requests := roomy.SubmittedRequests(); len(requests) != 1 || requests[0].Prompt != asyncQuestionReplyPrompt("question-1", 0, "Which database should we deploy to production?", "Postgres") {
 		t.Fatalf("roomy submitted requests = %#v", requests)
+	}
+}
+
+// TestAsyncQuestionsPagingWaitsForPaintLikeRust mirrors Rust #62209: a page key
+// that arrives before the current choice has been painted keeps the selection
+// and scroll position until the next frame measures the window.
+func TestAsyncQuestionsPagingWaitsForPaintLikeRust(t *testing.T) {
+	tall := strings.Repeat("Oversized choice.\n\n", 20)
+	model := NewModel(codextui.NewState(nil), Options{Width: 60, Height: 12})
+	model.State.SetThreadID("thread-questions")
+	model = feedAsyncQuestions(t, model, "question-1", []any{
+		map[string]any{"title": "Which?", "options": []any{"First choice", tall, "Third choice"}},
+	})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
+	model = updated.(*Model)
+	model.viewString()
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyDown})
+	model = updated.(*Model)
+	// The selection changed but the viewport still describes the first choice.
+	updated, _ = model.Update(key(keymsg.KeyPgDown))
+	model = updated.(*Model)
+	if got := model.asyncQuestions.SelectedOptionIndex(); got != 1 {
+		t.Fatalf("page key moved the selection to %d before repaint", got)
+	}
+	model.viewString()
+	updated, _ = model.Update(key(keymsg.KeyPgDown))
+	model = updated.(*Model)
+	if got := model.asyncQuestions.SelectedOptionIndex(); got != 1 {
+		t.Fatalf("paging an oversized choice moved the selection to %d", got)
+	}
+}
+
+// TestAsyncQuestionsPagingThroughShortListKeepsListBehaviorLikeRust pins the
+// fallback: when the focused choice fits the window, PageDown keeps its list
+// meaning and moves the selection to the last choice.
+func TestAsyncQuestionsPagingThroughShortListKeepsListBehaviorLikeRust(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{Width: 60, Height: 40})
+	model.State.SetThreadID("thread-questions")
+	model = feedAsyncQuestions(t, model, "question-1", []any{
+		map[string]any{"title": "Which?", "options": []any{"Postgres", "SQLite", "MySQL"}},
+	})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
+	model = updated.(*Model)
+	model.viewString()
+	updated, _ = model.Update(key(keymsg.KeyPgDown))
+	model = updated.(*Model)
+	if got := model.asyncQuestions.SelectedOptionIndex(); got != 3 {
+		t.Fatalf("page_down on a fitting choice moved to %d, want the Other row", got)
 	}
 }
 

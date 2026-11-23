@@ -142,10 +142,14 @@ func (m *Model) applyAsyncQuestionKey(msg keymsg.KeyMsg, keySpec string) (bubble
 			m.asyncQuestions.MoveSelection(true)
 			return nil, true
 		case "page_up":
-			m.asyncQuestions.PageSelection(false)
+			if !m.pageAsyncQuestionOption(false) {
+				m.asyncQuestions.PageSelection(false)
+			}
 			return nil, true
 		case "page_down":
-			m.asyncQuestions.PageSelection(true)
+			if !m.pageAsyncQuestionOption(true) {
+				m.asyncQuestions.PageSelection(true)
+			}
 			return nil, true
 		case "jump_top":
 			m.asyncQuestions.JumpSelection(true)
@@ -382,8 +386,8 @@ func (m *Model) submitAsyncQuestionAnswerWith(queue bool, submit func(SubmitSour
 	if !ready {
 		return nil
 	}
-	if m.asyncQuestions.AnswerIsNamedChoice() && !m.asyncQuestionChoicesVisible() {
-		m.notice = "Expand terminal to read the entire option"
+	if m.asyncQuestions.AnswerIsNamedChoice() && !m.asyncQuestionOptionFullySeen() {
+		m.notice = "Scroll to read the entire option"
 		return nil
 	}
 	answer, ready, tooLong := bottompane.BuildAsyncQuestionAnswer(questionID, question, text)
@@ -580,20 +584,20 @@ func (m *Model) appendBufferedAsyncQuestions(events []protocol.ThreadEvent) {
 	}
 }
 
-// asyncQuestionChoicesVisible reports whether the focused question's suggested
-// choices fit the rows available below the transcript. Rust blocks submitting a
-// choice that the terminal cannot display in full (#42894).
-func (m *Model) asyncQuestionChoicesVisible() bool {
+// asyncQuestionOptionFullySeen reports whether the focused model-authored
+// choice has been painted in full, either because it fits the answer area as a
+// whole or because paging displayed every one of its lines in order at full
+// width (Rust #62209, replacing #42894's whole-block visibility gate).
+func (m *Model) asyncQuestionOptionFullySeen() bool {
 	question, ok := m.asyncQuestions.CurrentQuestion()
-	if !ok || len(question.Options) == 0 {
+	if !ok || len(question.Options) == 0 || m.asyncQuestions.FocusIsNotes() {
 		return true
 	}
-	required := m.asyncQuestionBlockRows(question)
-	available := m.height - 3 - minTranscriptHeight
-	if m.regionChromeEnabled() {
-		available -= 3
-	}
-	return required <= max(available, 1)
+	// A paint normally keeps the viewport current; measure when a submission
+	// arrives before the next frame so the gate never depends on stale
+	// geometry. Measuring never counts lines as seen.
+	m.ensureAsyncQuestionOptionsViewport(question, false)
+	return m.asyncQuestionOptions.fullySeen(m.asyncQuestions.SelectedOptionIndex())
 }
 
 // asyncQuestionBlockRows counts the rows the expanded editor needs for the
@@ -646,56 +650,79 @@ func (m *Model) renderAsyncQuestions() []string {
 		return lines
 	}
 	width := max(m.width-2, 8)
-	for _, line := range wrapAsyncQuestionTitleLines(question.Title, width) {
+	titleLines := wrapAsyncQuestionTitleLines(question.Title, width)
+	for _, line := range titleLines {
 		lines = append(lines, m.accentAsyncQuestionText(line))
 	}
+	hint := m.asyncQuestionHintLine()
 	if len(question.Options) > 0 {
-		lines = append(lines, m.renderAsyncQuestionChoices(question, width)...)
+		height := m.asyncQuestionOptionsAreaHeight(len(titleLines), boolRow(hint != ""), boolRow(count > 1))
+		lines = append(lines, m.renderAsyncQuestionChoices(question, width, height)...)
 	}
-	if hint := m.asyncQuestionHintLine(); hint != "" {
+	if hint != "" {
 		lines = append(lines, hint)
 	}
 	return lines
 }
 
-// renderAsyncQuestionChoices renders the numbered suggested options plus the
-// appended editable Other choice (Rust #42894/#42897).
-func (m *Model) renderAsyncQuestionChoices(question bottompane.AsyncUserInputQuestion, width int) []string {
+// asyncQuestionOptionLineGroups renders each numbered choice, followed by the
+// appended editable Other row, into the wrapped lines the option viewport
+// pages through (Rust #62209 option_rows).
+func (m *Model) asyncQuestionOptionLineGroups(question bottompane.AsyncUserInputQuestion, width int) [][]string {
 	selected := m.asyncQuestions.SelectedOptionIndex()
-	labels := make([]string, 0, len(question.Options)+1)
-	labels = append(labels, question.Options...)
-	labels = append(labels, m.asyncQuestions.OtherLabel())
-	lines := make([]string, 0, len(labels))
-	for index, label := range labels {
+	groups := make([][]string, 0, len(question.Options)+1)
+	for index, label := range question.Options {
 		marker := " "
 		if index == selected {
 			marker = "›"
 		}
-		prefix := marker + " " + strconv.Itoa(index+1) + ". "
-		prefixWidth := len([]rune(prefix))
-		if index < len(question.Options) {
-			// Named choices render Markdown and terminal hyperlinks, wrapped
-			// after the numbered prefix (Rust #57259).
-			for _, line := range m.asyncQuestionChoiceLines(label, width, prefix) {
-				if index == selected {
-					lines = append(lines, m.accentAsyncQuestionText(line))
-				} else {
-					lines = append(lines, line)
-				}
-			}
-			continue
+		// Named choices render Markdown and terminal hyperlinks, wrapped after
+		// the numbered prefix (Rust #57259).
+		groups = append(groups, m.asyncQuestionChoiceLines(label, width, marker+" "+strconv.Itoa(index+1)+". "))
+	}
+	otherIndex := len(question.Options)
+	marker := " "
+	if selected == otherIndex {
+		marker = "›"
+	}
+	prefix := marker + " " + strconv.Itoa(otherIndex+1) + ". "
+	prefixWidth := len([]rune(prefix))
+	label := m.asyncQuestions.OtherLabel()
+	otherLines := []string{}
+	for lineIndex, line := range wrapAsyncQuestionText(label, width, prefixWidth) {
+		text := line
+		if lineIndex == 0 {
+			text = prefix + line
 		}
-		for lineIndex, line := range wrapAsyncQuestionText(label, width, prefixWidth) {
-			text := line
-			if lineIndex == 0 {
-				text = prefix + line
+		otherLines = append(otherLines, text)
+	}
+	if len(otherLines) == 0 {
+		otherLines = []string{prefix}
+	}
+	return append(groups, otherLines)
+}
+
+// renderAsyncQuestionChoices paints the options window the viewport selected.
+// PageUp/PageDown move that window, so an oversized choice stays selected while
+// its remaining lines are read (Rust #62209 render_scrollable_options).
+func (m *Model) renderAsyncQuestionChoices(question bottompane.AsyncUserInputQuestion, width int, height int) []string {
+	groups := m.asyncQuestionOptionLineGroups(question, width)
+	selected := m.asyncQuestions.SelectedOptionIndex()
+	m.asyncQuestionOptions.update(m.asyncQuestions.CurrentQuestionID(), groups, width, height, selected, true)
+	lines := make([]string, 0, height)
+	start := 0
+	for index, group := range groups {
+		for relative, text := range group {
+			line := start + relative
+			if line < m.asyncQuestionOptions.offset || line >= m.asyncQuestionOptions.offset+height {
+				continue
 			}
 			if index == selected {
-				lines = append(lines, m.accentAsyncQuestionText(text))
-			} else {
-				lines = append(lines, text)
+				text = m.accentAsyncQuestionText(text)
 			}
+			lines = append(lines, text)
 		}
+		start += len(group)
 	}
 	return lines
 }

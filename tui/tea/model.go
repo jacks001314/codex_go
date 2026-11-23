@@ -2807,6 +2807,10 @@ type Model struct {
 	// asyncQuestions retains pending async questions with their drafts
 	// (Rust #42891 bottom_pane.questions).
 	asyncQuestions bottompane.AsyncQuestions
+	// asyncQuestionOptions tracks the scroll window of the expanded question's
+	// choices so PageUp/PageDown can page through an oversized choice without
+	// changing the selection (Rust #62209 async_questions/options.rs).
+	asyncQuestionOptions asyncQuestionOptionsViewport
 	// asyncQuestionMainDraft stashes the composer draft while the async question
 	// editor owns the composer, because Go uses one composer where Rust keeps a
 	// separate main composer and question editor.
@@ -13930,6 +13934,13 @@ func (m *Model) applyTranscriptNavigationKey(msg keymsg.KeyMsg) bool {
 	switch msg.Type {
 	case keymsg.KeyPgUp, keymsg.KeyPgDown, keymsg.KeyHome, keymsg.KeyCtrlHome, keymsg.KeyEnd, keymsg.KeyCtrlEnd:
 	default:
+		return false
+	}
+	// Rust #62209: while an expanded question owns the choice list, PageUp and
+	// PageDown page the focused choice or move its list selection; the
+	// transcript keeps its scroll position until the question view closes.
+	if (msg.Type == keymsg.KeyPgUp || msg.Type == keymsg.KeyPgDown) &&
+		m.asyncQuestions.Expanded() && m.asyncQuestions.HasOptions() {
 		return false
 	}
 	// Rust #50389: a configured shortcut for an active action wins over

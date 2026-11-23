@@ -51618,11 +51618,14 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "tui/tea/async_question_options.go ports Rust #62209's OptionViewport: a visual-line window over the expanded question's choices with offset, visible range, per-choice heights, a painted-lines seen counter, and horizontal-clipping tracking.",
+    "PageUp/PageDown page an oversized focused choice while keeping it selected; when the choice fits, the existing list page behavior still applies. The expanded question owns page keys so transcript scrolling stays put.",
+    "Submission now requires the focused model-authored choice to be fully painted (or read line-by-line via paging), replacing #42894's whole-block visibility gate; unread or skipped lines still block with 'Scroll to read the entire option'.",
+    "Tests: TestAsyncQuestionsPageThroughOversizedChoiceLikeRust, TestAsyncQuestionsPagingWaitsForPaintLikeRust, TestAsyncQuestionsPagingThroughShortListKeepsListBehaviorLikeRust; go test ./tui/tea -run AsyncQuestion; go test ./tui/tea; go build ./..."
    ],
    "kind": "runtime",
    "sha": "ba8ab2d0501f13f70d109d090a1951d1699cd297",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Allow paging through long choices in async questions (#62209)"
   },
   {
