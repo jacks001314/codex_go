@@ -20,19 +20,24 @@ func DisplayWidth(text string) int {
 	width := 0
 	graphemes := uniseg.NewGraphemes(text)
 	for graphemes.Next() {
-		grapheme := graphemes.Str()
-		marks := 0
-		var base strings.Builder
-		for _, r := range grapheme {
-			if r == '\uFF9E' || r == '\uFF9F' {
-				marks++
-				continue
-			}
-			base.WriteRune(r)
-		}
-		width += runewidth.StringWidth(base.String()) + marks
+		width += displayWidthOfGrapheme(graphemes.Str())
 	}
 	return width
+}
+
+// displayWidthOfGrapheme measures one grapheme cluster the way DisplayWidth
+// does, counting halfwidth-katakana voicing marks as their own columns.
+func displayWidthOfGrapheme(grapheme string) int {
+	marks := 0
+	var base strings.Builder
+	for _, r := range grapheme {
+		if r == '\uFF9E' || r == '\uFF9F' {
+			marks++
+			continue
+		}
+		base.WriteRune(r)
+	}
+	return runewidth.StringWidth(base.String()) + marks
 }
 
 // printableASCII reports whether every byte is a printable ASCII character.

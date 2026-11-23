@@ -561,8 +561,7 @@ func truncateOutputLinesMiddle(lines []string, maxRows int, width int, omittedHi
 	rows := make([]int, len(lines))
 	totalRows := 0
 	for index, line := range lines {
-		lineWidth := tui.DisplayWidth(utils.StripANSI(line))
-		rows[index] = max(1, (lineWidth+width-1)/width)
+		rows[index] = tui.PhysicalRowCount(utils.StripANSI(line), width)
 		totalRows += rows[index]
 	}
 	if totalRows <= maxRows {
@@ -587,7 +586,7 @@ func truncateOutputLinesMiddle(lines []string, maxRows int, width int, omittedHi
 		return "    " + outputEllipsisText(omitted, "")
 	}
 	ellipsis := ellipsisText(estimatedOmitted)
-	ellipsisRows := max(1, (tui.DisplayWidth(ellipsis)+width-1)/width)
+	ellipsisRows := tui.PhysicalRowCount(utils.StripANSI(ellipsis), width)
 	if ellipsisRows >= maxRows {
 		return []string{ellipsis}
 	}

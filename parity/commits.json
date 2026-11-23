@@ -54268,11 +54268,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "N/A by architecture: the row reservation feeds Rust's inline history writer (insert_history.rs wrap_history_hyperlink_lines/write_history_line), which has no Go carrier - tui/insert_history.go only declares the InsertHistoryRequest value with no producer or executor, and Go paints completed cells inside the Bubble Tea inline viewport instead of writing terminal scrollback (tui/tea/inline_first_turn_like_rust_test.go pins the first reply appearing once without permanent scrollback writes). The shared helper did land: tui.PhysicalRowCount in tui/width.go mirrors width.rs physical_row_count (a wide cluster that starts in the last column consumes the unused cell, clusters starting with a narrow character may straddle; empty lines count one row), displayWidthOfGrapheme is now shared with DisplayWidth, and exec_cell truncateOutputLinesMiddle estimates wrapped rows and the ellipsis row with it. TestPhysicalRowCountLikeRust covers the wide-URL, straddling, empty, exact-width and zero-width cases; go test ./tui/... and go build ./... pass apart from the pre-existing TestResolvedTooltipsRenderRustSnapshotLabels failure."
    ],
    "kind": "runtime",
    "sha": "b46c087c7e52ca8c1aba775dad99d9549b537312",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Count wide-character wraps when inserting TUI history (#63151)"
   },
   {
