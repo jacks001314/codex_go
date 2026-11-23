@@ -141,6 +141,14 @@ func resolveRequirementConstrainedApprovalPolicy(configured string, allowed []sa
 	), nil
 }
 
+// ResolveRequirementConstrainedApprovalsReviewer applies the managed
+// allowed_approvals_reviewers list to a saved reviewer selection. Runtime
+// replacements use it to re-resolve a request against the policy that is
+// current when they start (Rust #63390).
+func ResolveRequirementConstrainedApprovalsReviewer(configured string, allowed []ApprovalsReviewer) (string, string, error) {
+	return resolveRequirementConstrainedApprovalsReviewer(configured, allowed)
+}
+
 // resolveRequirementConstrainedApprovalsReviewer mirrors Rust's
 // Constrained<ApprovalsReviewer> built from allowed_approvals_reviewers.
 func resolveRequirementConstrainedApprovalsReviewer(configured string, allowed []ApprovalsReviewer) (string, string, error) {

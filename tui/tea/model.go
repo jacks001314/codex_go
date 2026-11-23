@@ -1048,6 +1048,10 @@ type RateLimitResetConsumeResultMsg struct {
 
 type DiffResultMsg struct {
 	RequestID uint64
+	// ThreadID and CWD let applyDiffResult drop a diff computed for another
+	// thread or working directory (Rust #63400).
+	ThreadID  string
+	CWD       string
 	Text      string
 	IsGitRepo bool
 	Err       error
@@ -13884,10 +13888,13 @@ func (m *Model) applyDiffCommand() bubbletea.Cmd {
 	m.notice = "Computing diff..."
 	m.refreshTranscript()
 	cwd := strings.TrimSpace(m.sessionCWD)
+	threadID := m.currentThreadID()
 	return func() bubbletea.Msg {
 		text, isGitRepo, err := reader(cwd)
 		return DiffResultMsg{
 			RequestID: requestID,
+			ThreadID:  threadID,
+			CWD:       cwd,
 			Text:      text,
 			IsGitRepo: isGitRepo,
 			Err:       err,
@@ -13908,6 +13915,14 @@ func (m *Model) nextDiffRequest() uint64 {
 
 func (m *Model) applyDiffResult(msg DiffResultMsg) bubbletea.Cmd {
 	if m == nil || m.pendingDiffRequestID != msg.RequestID {
+		return nil
+	}
+	// Rust #63400: an asynchronous diff only opens when the thread and the
+	// working directory still match the session that asked for it.
+	if msg.ThreadID != "" && msg.ThreadID != m.currentThreadID() {
+		return nil
+	}
+	if msg.CWD != "" && msg.CWD != strings.TrimSpace(m.sessionCWD) {
 		return nil
 	}
 	m.pendingDiffRequestID = 0

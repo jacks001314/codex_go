@@ -5151,6 +5151,10 @@ func (r *RuntimeRouter) handleThreadRevertRuntime(request *Request) (*ThreadReve
 	// the reconstructed thread so the reverted suffix cannot fall back to global
 	// defaults.
 	r.applyThreadRevertModelSettings(params.ThreadID)
+	// Rust #63390: the saved reviewer request is resolved against the policy the
+	// replacement runtime starts with, so a policy change during the revert
+	// cannot carry an outdated decision forward.
+	r.applyThreadRevertApprovalsReviewer(params.ThreadID)
 	receiptRevision := r.threadReadStateRevisionToRetire(params.ThreadID, params.BeforeTurnID)
 	result, err := r.services.ThreadRouter.dispatch(request)
 	if err != nil {
@@ -5225,6 +5229,69 @@ func (r *RuntimeRouter) applyThreadRevertModelSettings(threadID string) {
 	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
 	record.Metadata.Extra["config"] = overrides
 	_ = r.runtimeSaveThreadRecord(record)
+}
+
+// applyThreadRevertApprovalsReviewer resolves the reverted thread's reviewer
+// request against the current approvals policy (Rust #63390). The previously
+// effective reviewer stands in only when no explicit request was saved.
+func (r *RuntimeRouter) applyThreadRevertApprovalsReviewer(threadID string) {
+	threadID = strings.TrimSpace(threadID)
+	if r == nil || threadID == "" {
+		return
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil {
+		return
+	}
+	overrides := threadRecordConfigOverrides(record)
+	requested, effective := "", ""
+	if overrides != nil {
+		requested, _ = threadConfigStringValue(overrides, "requested_approvals_reviewer")
+		effective, _ = threadConfigStringValue(overrides, "approvals_reviewer")
+	}
+	if settings := r.threadSettingsForTurn(threadID); settings != nil {
+		if value := strings.TrimSpace(settings.RequestedApprovalsReviewer); value != "" {
+			requested = value
+		}
+		if value := strings.TrimSpace(settings.ApprovalsReviewer); value != "" {
+			effective = value
+		}
+	}
+	requested = strings.TrimSpace(requested)
+	if requested == "" {
+		requested = strings.TrimSpace(effective)
+	}
+	if requested == "" {
+		return
+	}
+	resolved := r.constrainApprovalsReviewer(record, requested)
+	setThreadRecordConfigOverride(record, "requested_approvals_reviewer", requested)
+	setThreadRecordConfigOverride(record, "approvals_reviewer", resolved)
+	_ = r.runtimeSaveThreadRecord(record)
+	if r.services.ThreadExtras != nil {
+		reviewer, request := resolved, requested
+		if _, err := r.services.ThreadExtras.UpdateSettings(&SettingsUpdateParams{
+			ThreadID:                   threadID,
+			ApprovalsReviewer:          &reviewer,
+			RequestedApprovalsReviewer: &request,
+		}); err != nil {
+			slog.Warn("reverted history but could not apply the approvals reviewer", "thread_id", threadID, "error", err)
+		}
+	}
+}
+
+// constrainApprovalsReviewer applies the managed allowed_approvals_reviewers
+// list of the thread's current configuration to one reviewer selection.
+func (r *RuntimeRouter) constrainApprovalsReviewer(record *session.Record, requested string) string {
+	cfg, err := r.configForThreadRecord(record, nil)
+	if err != nil || cfg == nil || cfg.Requirements == nil {
+		return requested
+	}
+	resolved, _, err := config.ResolveRequirementConstrainedApprovalsReviewer(requested, cfg.Requirements.AllowedApprovalsReviewers)
+	if err != nil || strings.TrimSpace(resolved) == "" {
+		return requested
+	}
+	return strings.TrimSpace(resolved)
 }
 
 func collaborationModeModelID(mode map[string]any) string {

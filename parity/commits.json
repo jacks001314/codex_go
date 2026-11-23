@@ -55072,9 +55072,105 @@
    "sha": "0c7efeb50d8d44511ee68dc788d550149a63656c",
    "status": "complete",
    "subject": "Show and copy file paths from TUI sidebar previews (#63388)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 136: complete - thread/revert resolves the saved approvals reviewer against the current policy (Rust #63390). appserver/runtime_router.go `applyThreadRevertApprovalsReviewer` runs with the revert rebuild: it takes the explicit `requested_approvals_reviewer` (falling back to the previously effective reviewer and the live thread settings), resolves it with `config.ResolveRequirementConstrainedApprovalsReviewer` against the thread configuration's current `allowed_approvals_reviewers`, then writes the resolved pair to the record overrides and the live thread settings, so the replacement reports the new effective reviewer with the original request preserved. appserver/thread_revert_reviewer_policy_like_rust_test.go replays the Rust scenario (auto_review/user captured, requirement switched to ['user'] during the revert) and asserts the replacement reports user/user and the record keeps both values. Verified with go test ./appserver -run TestThreadRevertResolvesApprovalsReviewerAgainstCurrentPolicyLikeRust."
+   ],
+   "kind": "runtime",
+   "sha": "74efed3bf35a34c0f5602174a46266a4f75ef1fe",
+   "status": "complete",
+   "subject": "Apply current approvals reviewer policy after thread revert (#63390)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 136: not_applicable - Rust #63392 only deletes a TUI test that duplicated disabled-app mention popup coverage in codex-rs/tui/src/bottom_pane/chat_composer.rs; it changes no product code, so there is no Go behavior to port."
+   ],
+   "kind": "runtime",
+   "sha": "a3fd52a61d0fafb2a143fa6e2490fcfc62dbf307",
+   "status": "not_applicable",
+   "subject": "Remove the disabled-app mention popup test (#63392)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 136: not_applicable - Rust #63393 only folds one streaming assertion into an existing Responses WebSocket test in codex-rs/core/tests/suite/client_websockets.rs (1 insertion, 22 deletions); no runtime behavior changes."
+   ],
+   "kind": "runtime",
+   "sha": "e7cde429e1053112c6d4c4fd18a0edf39cee9994",
+   "status": "not_applicable",
+   "subject": "Consolidate Responses WebSocket streaming coverage (#63393)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 136: not_applicable - Rust #63396 deletes a redundant collaboration-mode TUI test in codex-rs/tui/src/chatwidget/tests/plan_mode.rs; no product code changes."
+   ],
+   "kind": "runtime",
+   "sha": "699889ecb33038fdc1e57a915062924fbd32631b",
+   "status": "not_applicable",
+   "subject": "Remove the redundant TUI test for default collaboration mode (#63396)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 136: not_applicable - Rust #63397 deletes a duplicate MCP HTTP response size-limit test from codex-rs/rmcp-client/tests/mcp_2026_discovery.rs; the size limit itself is unchanged, and Go's rmcp client keeps its own coverage."
+   ],
+   "kind": "runtime",
+   "sha": "d56ae4699b1a1e316bdb0ea91928b4dd4ea9ee1e",
+   "status": "not_applicable",
+   "subject": "Remove duplicate MCP HTTP response size-limit test (#63397)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 136: not_applicable - Rust #63398 merges two v2 continuation tests in codex-rs/core/tests/suite/client_websockets.rs (2 insertions, 42 deletions); no runtime behavior changes."
+   ],
+   "kind": "runtime",
+   "sha": "1b6ef00d25d2d874ffba34825e5f59c6e79f5a18",
+   "status": "not_applicable",
+   "subject": "Consolidate Responses WebSocket v2 continuation tests (#63398)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 136: partial - local `/diff` guards asynchronous results but still runs without a session permission profile (Rust #63400). The thread/working-directory guard is implemented: tui/tea DiffResultMsg carries the requesting thread id and cwd, applyDiffCommand stamps them, and applyDiffResult drops a result whose thread or directory no longer matches (tui/tea/diff_result_guard_like_rust_test.go). Go's `/diff` still runs git through tui.ReadGitDiff with LocalWorkspaceCommandRunner inside the CLI process, and the TUI has no app-server `command/exec` workspace runner, so the named-profile routing, the `has_permission_profile` reattachment check, the profiled `GIT_NO_LAZY_FETCH`/`GIT_ALLOW_PROTOCOL` hardening and the profiled `rev-parse` discovery error text have no carrier yet. Remaining work: add an app-server-backed WorkspaceCommandRunner (command/exec with `permissionProfile` plus permissionProfile/list catalog lookup) and the session local-daemon/single-root checks before `/diff` can select a profile."
+   ],
+   "kind": "runtime",
+   "sha": "6755b0d25a54987145b93e1bb87fc67db76f8837",
+   "status": "partial",
+   "subject": "Use session permission profiles for local `/diff` (#63400)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 136: not_applicable - Rust #63401 deletes a five-line empty plugin list rendering test in codex-rs/core/src/plugins/render_tests.rs; no product code changes."
+   ],
+   "kind": "runtime",
+   "sha": "70e009974cda539445c984582b993cf385a474ca",
+   "status": "not_applicable",
+   "subject": "Remove the empty plugin list rendering test (#63401)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "0c7efeb50d8d44511ee68dc788d550149a63656c",
+ "rustToInclusive": "70e009974cda539445c984582b993cf385a474ca",
  "schemaVersion": 1
 }
