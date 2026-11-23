@@ -55168,9 +55168,33 @@
    "sha": "70e009974cda539445c984582b993cf385a474ca",
    "status": "not_applicable",
    "subject": "Remove the empty plugin list rendering test (#63401)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 137: not_applicable - Rust #63404 deletes a duplicate legacy MCP-over-HTTP response size test from codex-rs/rmcp-client/tests/mcp_2026_discovery.rs because the mcp_2026_message_limits suite already covers it; no product code changes and Go has no matching duplicated test to remove."
+   ],
+   "kind": "runtime",
+   "sha": "78fe0c9f239bbb23bc7515223388c8073993249b",
+   "status": "not_applicable",
+   "subject": "Remove duplicate legacy MCP HTTP response size test (#63404)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 137: not_applicable - Rust #63406 is a Rust link-time specialization of the OTel exporters: `ExporterScope` const traits replace the const-generic selection, `BlockingHttpService`/`BlockingMetricsDestination` build trace-only (code-mode host) and Statsig-metrics-only (Windows sandbox setup) providers on the SDK's default HTTP client so the linker drops the rest, traces keep the dedicated batch span processor under a Tokio runtime, and the headers helper is skipped when the provider owns the client. Go has no OTel export path in its code-mode host or Windows sandbox service to specialize, its linker drops unmatched builder code on its own, and the runtime signal scoping already lives in `otelProviderSignals` (NewHTTPTracesOtelProvider/NewHTTPMetricsOtelProvider in telemetry/otel_provider.go, mirroring Rust #62854). The other half of the commit is already Go's shape: the settings carry no CodexHome and `otelinit` hands its own codex home to the headers helper as the command working directory."
+   ],
+   "kind": "runtime",
+   "sha": "69477b3a77ed17eb207d2c9da7354b9a3a704114",
+   "status": "not_applicable",
+   "subject": "Specialize blocking OTLP/HTTP providers for single-signal export (#63406)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "70e009974cda539445c984582b993cf385a474ca",
+ "rustToInclusive": "69477b3a77ed17eb207d2c9da7354b9a3a704114",
  "schemaVersion": 1
 }
