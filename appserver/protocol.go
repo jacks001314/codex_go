@@ -825,7 +825,11 @@ type Thread struct {
 	GitInfo              *GitInfo           `json:"gitInfo"`
 	Name                 *string            `json:"name"`
 	DaybreakEnabled      *bool              `json:"daybreakEnabled"`
-	Turns                []Turn             `json:"turns"`
+	// DaybreakProgramPropagationEnrolled reports the live root thread's
+	// enrollment in the Daybreak propagation experiment (Rust #62879). It is
+	// null when only stored metadata is available.
+	DaybreakProgramPropagationEnrolled *bool  `json:"daybreakProgramPropagationEnrolled"`
+	Turns                              []Turn `json:"turns"`
 }
 
 func (t *Thread) MarshalJSON() ([]byte, error) {
@@ -838,73 +842,75 @@ func (t *Thread) MarshalJSON() ([]byte, error) {
 		historyMode = ThreadHistoryLegacy
 	}
 	return json.Marshal(struct {
-		ID                   string              `json:"id"`
-		Environments         []ThreadEnvironment `json:"environments"`
-		SessionID            string              `json:"sessionId"`
-		ForkedFromID         *string             `json:"forkedFromId"`
-		AttachedToThreadID   *string             `json:"attachedToThreadId"`
-		ParentThreadID       *string             `json:"parentThreadId"`
-		Preview              string              `json:"preview"`
-		Ephemeral            bool                `json:"ephemeral"`
-		Section              *ThreadSection      `json:"section"`
-		SectionEnteredAt     *int64              `json:"sectionEnteredAt"`
-		ProjectID            *string             `json:"projectId"`
-		HistoryMode          ThreadHistoryMode   `json:"historyMode"`
-		ModelProvider        string              `json:"modelProvider"`
-		Model                *string             `json:"model"`
-		SelectedModelInfo    *SelectedModelInfo  `json:"selectedModelInfo"`
-		ReasoningEffort      *ReasoningEffort    `json:"reasoningEffort"`
-		CreatedAt            int64               `json:"createdAt"`
-		UpdatedAt            int64               `json:"updatedAt"`
-		RecencyAt            *int64              `json:"recencyAt"`
-		Status               ThreadStatus        `json:"status"`
-		Path                 *string             `json:"path"`
-		CWD                  string              `json:"cwd"`
-		CLIVersion           string              `json:"cliVersion"`
-		Originator           *string             `json:"originator"`
-		Source               SessionSource       `json:"source"`
-		CanAcceptDirectInput *bool               `json:"canAcceptDirectInput"`
-		ThreadSource         *ThreadSource       `json:"threadSource"`
-		AgentNickname        *string             `json:"agentNickname"`
-		AgentRole            *string             `json:"agentRole"`
-		GitInfo              *GitInfo            `json:"gitInfo"`
-		Name                 *string             `json:"name"`
-		DaybreakEnabled      *bool               `json:"daybreakEnabled"`
-		Turns                []Turn              `json:"turns"`
+		ID                                 string              `json:"id"`
+		Environments                       []ThreadEnvironment `json:"environments"`
+		SessionID                          string              `json:"sessionId"`
+		ForkedFromID                       *string             `json:"forkedFromId"`
+		AttachedToThreadID                 *string             `json:"attachedToThreadId"`
+		ParentThreadID                     *string             `json:"parentThreadId"`
+		Preview                            string              `json:"preview"`
+		Ephemeral                          bool                `json:"ephemeral"`
+		Section                            *ThreadSection      `json:"section"`
+		SectionEnteredAt                   *int64              `json:"sectionEnteredAt"`
+		ProjectID                          *string             `json:"projectId"`
+		HistoryMode                        ThreadHistoryMode   `json:"historyMode"`
+		ModelProvider                      string              `json:"modelProvider"`
+		Model                              *string             `json:"model"`
+		SelectedModelInfo                  *SelectedModelInfo  `json:"selectedModelInfo"`
+		ReasoningEffort                    *ReasoningEffort    `json:"reasoningEffort"`
+		CreatedAt                          int64               `json:"createdAt"`
+		UpdatedAt                          int64               `json:"updatedAt"`
+		RecencyAt                          *int64              `json:"recencyAt"`
+		Status                             ThreadStatus        `json:"status"`
+		Path                               *string             `json:"path"`
+		CWD                                string              `json:"cwd"`
+		CLIVersion                         string              `json:"cliVersion"`
+		Originator                         *string             `json:"originator"`
+		Source                             SessionSource       `json:"source"`
+		CanAcceptDirectInput               *bool               `json:"canAcceptDirectInput"`
+		ThreadSource                       *ThreadSource       `json:"threadSource"`
+		AgentNickname                      *string             `json:"agentNickname"`
+		AgentRole                          *string             `json:"agentRole"`
+		GitInfo                            *GitInfo            `json:"gitInfo"`
+		Name                               *string             `json:"name"`
+		DaybreakEnabled                    *bool               `json:"daybreakEnabled"`
+		DaybreakProgramPropagationEnrolled *bool               `json:"daybreakProgramPropagationEnrolled"`
+		Turns                              []Turn              `json:"turns"`
 	}{
-		ID:                   t.ID,
-		Environments:         t.Environments,
-		SessionID:            t.SessionID,
-		ForkedFromID:         t.ForkedFromID,
-		AttachedToThreadID:   t.AttachedToThreadID,
-		ParentThreadID:       t.ParentThreadID,
-		Preview:              t.Preview,
-		Ephemeral:            t.Ephemeral,
-		Section:              t.Section,
-		SectionEnteredAt:     t.SectionEnteredAt,
-		ProjectID:            t.ProjectID,
-		HistoryMode:          historyMode,
-		ModelProvider:        t.ModelProvider,
-		Model:                t.Model,
-		SelectedModelInfo:    t.SelectedModelInfo,
-		ReasoningEffort:      t.ReasoningEffort,
-		CreatedAt:            t.CreatedAt,
-		UpdatedAt:            t.UpdatedAt,
-		RecencyAt:            t.RecencyAt,
-		Status:               t.Status,
-		Path:                 t.Path,
-		CWD:                  t.CWD,
-		CLIVersion:           t.CLIVersion,
-		Originator:           t.Originator,
-		Source:               t.Source,
-		CanAcceptDirectInput: t.CanAcceptDirectInput,
-		ThreadSource:         t.ThreadSource,
-		AgentNickname:        t.AgentNickname,
-		AgentRole:            t.AgentRole,
-		GitInfo:              t.GitInfo,
-		Name:                 t.Name,
-		DaybreakEnabled:      t.DaybreakEnabled,
-		Turns:                turns,
+		ID:                                 t.ID,
+		Environments:                       t.Environments,
+		SessionID:                          t.SessionID,
+		ForkedFromID:                       t.ForkedFromID,
+		AttachedToThreadID:                 t.AttachedToThreadID,
+		ParentThreadID:                     t.ParentThreadID,
+		Preview:                            t.Preview,
+		Ephemeral:                          t.Ephemeral,
+		Section:                            t.Section,
+		SectionEnteredAt:                   t.SectionEnteredAt,
+		ProjectID:                          t.ProjectID,
+		HistoryMode:                        historyMode,
+		ModelProvider:                      t.ModelProvider,
+		Model:                              t.Model,
+		SelectedModelInfo:                  t.SelectedModelInfo,
+		ReasoningEffort:                    t.ReasoningEffort,
+		CreatedAt:                          t.CreatedAt,
+		UpdatedAt:                          t.UpdatedAt,
+		RecencyAt:                          t.RecencyAt,
+		Status:                             t.Status,
+		Path:                               t.Path,
+		CWD:                                t.CWD,
+		CLIVersion:                         t.CLIVersion,
+		Originator:                         t.Originator,
+		Source:                             t.Source,
+		CanAcceptDirectInput:               t.CanAcceptDirectInput,
+		ThreadSource:                       t.ThreadSource,
+		AgentNickname:                      t.AgentNickname,
+		AgentRole:                          t.AgentRole,
+		GitInfo:                            t.GitInfo,
+		Name:                               t.Name,
+		DaybreakEnabled:                    t.DaybreakEnabled,
+		DaybreakProgramPropagationEnrolled: t.DaybreakProgramPropagationEnrolled,
+		Turns:                              turns,
 	})
 }
 
@@ -1717,11 +1723,16 @@ type ThreadStartParams struct {
 	// DaybreakEnabled is the initial Daybreak choice for a persistent thread
 	// (Rust #45513). Omitted or null leaves it unset; ephemeral threads reject
 	// an explicit value. It does not select a turn's cyber access program.
-	DaybreakEnabled         *bool                    `json:"daybreakEnabled,omitempty"`
-	RuntimeWorkspaceRoots   []string                 `json:"runtimeWorkspaceRoots,omitempty"`
-	SelectedCapabilityRoots []SelectedCapabilityRoot `json:"selectedCapabilityRoots,omitempty"`
-	Environments            []map[string]any         `json:"environments,omitempty"`
-	DynamicTools            []json.RawMessage        `json:"dynamicTools,omitempty"`
+	DaybreakEnabled *bool `json:"daybreakEnabled,omitempty"`
+	// DaybreakProgramPropagationEnrolled opts a new root thread out of the
+	// Daybreak propagation experiment when false (Rust #62879). Omitted, null
+	// or true uses the configured enrollment rule; managed requirements take
+	// precedence. Requires experimentalApi.
+	DaybreakProgramPropagationEnrolled *bool                    `json:"daybreakProgramPropagationEnrolled,omitempty"`
+	RuntimeWorkspaceRoots              []string                 `json:"runtimeWorkspaceRoots,omitempty"`
+	SelectedCapabilityRoots            []SelectedCapabilityRoot `json:"selectedCapabilityRoots,omitempty"`
+	Environments                       []map[string]any         `json:"environments,omitempty"`
+	DynamicTools                       []json.RawMessage        `json:"dynamicTools,omitempty"`
 	// AllowedTools restricts the thread's tool inventory for its lifetime. An
 	// empty list disables all tools; nil preserves ordinary setup (Rust #45711).
 	AllowedTools *[]string `json:"allowedTools,omitempty"`
@@ -4115,37 +4126,38 @@ func BuildThread(record *session.Record, path string, includeTurns bool) *Thread
 		sectionEnteredAt = &value
 	}
 	thread := &Thread{
-		ID:                 threadID,
-		Environments:       threadEnvironmentsFromRecord(record),
-		SessionID:          sessionID,
-		ForkedFromID:       stringPtrIfNotEmpty(string(record.ForkedFromID)),
-		AttachedToThreadID: stringPtrIfNotEmpty(string(record.AttachedThreadParentID)),
-		ParentThreadID:     stringPtrIfNotEmpty(string(record.ParentThreadID)),
-		Preview:            record.Preview,
-		Ephemeral:          boolFromMap(record.Metadata.Extra, "ephemeral"),
-		Section:            threadSectionFromRecord(record),
-		SectionEnteredAt:   sectionEnteredAt,
-		HistoryMode:        historyMode,
-		ModelProvider:      modelProvider,
-		Model:              stringPtrIfNotEmpty(record.Metadata.Model),
-		SelectedModelInfo:  selectedModelInfoForModel(record.Metadata.Model),
-		ReasoningEffort:    reasoningEffortFromRecord(record),
-		CreatedAt:          unixOrZero(record.CreatedAt),
-		UpdatedAt:          unixOrZero(record.UpdatedAt),
-		RecencyAt:          recencyAt,
-		Status:             NotLoadedStatus(),
-		Path:               threadPath,
-		CWD:                record.Metadata.CWD,
-		CLIVersion:         record.Metadata.CLIVersion,
-		Originator:         stringPtrIfNotEmpty(record.Metadata.Originator),
-		Source:             source,
-		ThreadSource:       threadSource,
-		AgentNickname:      stringPtrIfNotEmpty(record.Metadata.AgentNickname),
-		AgentRole:          stringPtrIfNotEmpty(record.Metadata.AgentRole),
-		GitInfo:            gitInfoFromMap(record.Metadata.Git),
-		Name:               stringPtrIfNotEmpty(record.Title),
-		DaybreakEnabled:    record.Metadata.DaybreakEnabled,
-		Turns:              []Turn{},
+		ID:                                 threadID,
+		Environments:                       threadEnvironmentsFromRecord(record),
+		SessionID:                          sessionID,
+		ForkedFromID:                       stringPtrIfNotEmpty(string(record.ForkedFromID)),
+		AttachedToThreadID:                 stringPtrIfNotEmpty(string(record.AttachedThreadParentID)),
+		ParentThreadID:                     stringPtrIfNotEmpty(string(record.ParentThreadID)),
+		Preview:                            record.Preview,
+		Ephemeral:                          boolFromMap(record.Metadata.Extra, "ephemeral"),
+		Section:                            threadSectionFromRecord(record),
+		SectionEnteredAt:                   sectionEnteredAt,
+		HistoryMode:                        historyMode,
+		ModelProvider:                      modelProvider,
+		Model:                              stringPtrIfNotEmpty(record.Metadata.Model),
+		SelectedModelInfo:                  selectedModelInfoForModel(record.Metadata.Model),
+		ReasoningEffort:                    reasoningEffortFromRecord(record),
+		CreatedAt:                          unixOrZero(record.CreatedAt),
+		UpdatedAt:                          unixOrZero(record.UpdatedAt),
+		RecencyAt:                          recencyAt,
+		Status:                             NotLoadedStatus(),
+		Path:                               threadPath,
+		CWD:                                record.Metadata.CWD,
+		CLIVersion:                         record.Metadata.CLIVersion,
+		Originator:                         stringPtrIfNotEmpty(record.Metadata.Originator),
+		Source:                             source,
+		ThreadSource:                       threadSource,
+		AgentNickname:                      stringPtrIfNotEmpty(record.Metadata.AgentNickname),
+		AgentRole:                          stringPtrIfNotEmpty(record.Metadata.AgentRole),
+		GitInfo:                            gitInfoFromMap(record.Metadata.Git),
+		Name:                               stringPtrIfNotEmpty(record.Title),
+		DaybreakEnabled:                    record.Metadata.DaybreakEnabled,
+		DaybreakProgramPropagationEnrolled: cloneOptionalBool(record.DaybreakProgramPropagationEnrolled),
+		Turns:                              []Turn{},
 	}
 	if includeTurns {
 		thread.Turns = turnsFromRecord(record)

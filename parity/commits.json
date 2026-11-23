@@ -53815,11 +53815,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "New root threads can opt out of Daybreak propagation (Rust #62879, 566020b724). `thread/start` accepts `daybreakProgramPropagationEnrolled` behind experimentalApi: omitted or true joins the experiment when the `daybreak_program_propagation` feature is enabled, an explicit false opts out unless managed requirements force the feature on, and a disabled feature always reports false. Enrollment is session-local: `thread/start`, live `thread/read`, `thread/resume`, `thread/metadata/update` and `thread/list` report the live value, a stored read reports null, a cold resume or fork reports false, and unloading the thread drops it. Native helpers enroll only when the parent thread itself joined at startup, so an opted-out root stops propagation to its helpers. Tests: go test ./appserver -run Daybreak -count=1; go test ./appserver -run 'ExperimentalAPI|HelperDaybreak|Thread(Start|Resume|Fork|Read|Unsubscribe)|Daybreak|SpawnAgent|HistoryInitialization' -count=1; go test ./session -count=1; go build ./...; go vet ./appserver ./session; go test ./parity -count=1"
    ],
    "kind": "runtime",
    "sha": "566020b72410eb46345b0c3ae55dd6a4d3268e89",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Allow new threads to opt out of Daybreak propagation (#62879)"
   },
   {

@@ -3777,6 +3777,7 @@ func TestRuntimeRouterExperimentalAPICapabilityGate(t *testing.T) {
 	assertExperimentalError(6, MethodThreadStart, map[string]any{"cwd": t.TempDir(), "mockExperimentalField": "mock"}, "thread/start.mockExperimentalField")
 	assertExperimentalError(7, MethodThreadStart, map[string]any{"cwd": t.TempDir(), "dynamicTools": []any{map[string]any{"namespace": "tools", "tools": []any{map[string]any{"name": "echo", "description": "Echo", "inputSchema": map[string]any{"type": "object"}}}}}}, "thread/start.dynamicTools")
 	assertExperimentalError(8, MethodThreadStart, map[string]any{"cwd": t.TempDir(), "approvalPolicy": map[string]any{"granular": map[string]any{"sandbox_approval": true}}}, "askForApproval.granular")
+	assertExperimentalError(11, MethodThreadStart, map[string]any{"cwd": t.TempDir(), "daybreakProgramPropagationEnrolled": false}, "thread/start.daybreakProgramPropagationEnrolled")
 
 	start := requestWithParams(t, IntID(9), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()})
 	start.ConnectionID = "conn-no-experimental"

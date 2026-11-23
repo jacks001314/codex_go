@@ -51,6 +51,16 @@ type Router struct {
 	// resumeAccountCheck, when installed by the runtime, rejects a CLI resume of
 	// a thread attributed to another ChatGPT account or workspace (Rust #58890).
 	resumeAccountCheck func(record *session.Record, clientName string) error
+	// daybreakProgramPropagationEnrollment decides whether a newly started root
+	// thread joins the Daybreak propagation experiment (Rust #62879). The
+	// runtime installs it with the thread-start config and managed requirements.
+	daybreakProgramPropagationEnrollment func(params *ThreadStartParams) bool
+	// daybreakEnrollments keeps the Daybreak propagation enrollment this router
+	// observed for live threads. Rust #62879 stores it in the loaded thread's
+	// extension data, never in the rollout, so the map is dropped when a thread
+	// unloads and stored reads report null.
+	daybreakEnrollmentMu sync.Mutex
+	daybreakEnrollments  map[session.ThreadID]bool
 	// tracer, when set by the runtime that built the OTEL provider, instruments
 	// every request with Rust's `app_server.request` span.
 	tracer *telemetry.Tracer
@@ -170,6 +180,7 @@ func NewRouter(store *session.Store) *Router {
 		threads:                threads,
 		defaultHistoryMode:     ThreadHistoryLegacy,
 		historyInitializations: map[session.ThreadID]session.HistoryInitialization{},
+		daybreakEnrollments:    map[session.ThreadID]bool{},
 	}
 	if store != nil {
 		codexHome := codexHomeFromSessionStore(store)
@@ -196,6 +207,62 @@ func (r *Router) SetDefaultHistoryMode(mode ThreadHistoryMode) {
 	switch mode {
 	case ThreadHistoryLegacy, ThreadHistoryPaginated:
 		r.defaultHistoryMode = mode
+	}
+}
+
+// setDaybreakProgramPropagationEnrollment records whether a thread in this
+// router joined the Daybreak propagation experiment (Rust #62879 enrollment
+// lives on the loaded thread, not in the rollout). A nil enrollment records
+// false: a stored or cold thread never re-enters the experiment.
+func (r *Router) setDaybreakProgramPropagationEnrollment(threadID session.ThreadID, enrolled *bool) {
+	if r == nil || strings.TrimSpace(string(threadID)) == "" {
+		return
+	}
+	value := false
+	if enrolled != nil {
+		value = *enrolled
+	}
+	r.daybreakEnrollmentMu.Lock()
+	if r.daybreakEnrollments == nil {
+		r.daybreakEnrollments = map[session.ThreadID]bool{}
+	}
+	r.daybreakEnrollments[threadID] = value
+	r.daybreakEnrollmentMu.Unlock()
+}
+
+// forgetDaybreakProgramPropagationEnrollment drops the enrollment of a thread
+// that stopped being live, so later reads report stored metadata only.
+func (r *Router) forgetDaybreakProgramPropagationEnrollment(threadID session.ThreadID) {
+	if r == nil {
+		return
+	}
+	r.daybreakEnrollmentMu.Lock()
+	delete(r.daybreakEnrollments, threadID)
+	r.daybreakEnrollmentMu.Unlock()
+}
+
+// daybreakProgramPropagationEnrollmentValue reports the enrollment this router
+// recorded for threadID, whether or not the thread is still loaded.
+func (r *Router) daybreakProgramPropagationEnrollmentValue(threadID session.ThreadID) (bool, bool) {
+	if r == nil {
+		return false, false
+	}
+	r.daybreakEnrollmentMu.Lock()
+	defer r.daybreakEnrollmentMu.Unlock()
+	value, ok := r.daybreakEnrollments[threadID]
+	return value, ok
+}
+
+// applyLiveDaybreakProgramPropagationEnrollment fills the session-local
+// enrollment on a record read for a live thread, mirroring Rust's
+// apply_live_thread_settings projection of the loaded thread.
+func (r *Router) applyLiveDaybreakProgramPropagationEnrollment(record *session.Record) {
+	if r == nil || record == nil || !r.threadManager().HasLiveThread(record.ID) {
+		return
+	}
+	if value, ok := r.daybreakProgramPropagationEnrollmentValue(record.ID); ok {
+		enrolled := value
+		record.DaybreakProgramPropagationEnrolled = &enrolled
 	}
 }
 
@@ -306,6 +373,9 @@ func (r *Router) acquireMetadataRolloutWriter(threadID session.ThreadID) (*sessi
 
 func (r *Router) releaseLiveThreads(threadIDs []session.ThreadID) {
 	r.threadManager().ReleaseLiveThreads(threadIDs)
+	for _, threadID := range threadIDs {
+		r.forgetDaybreakProgramPropagationEnrollment(threadID)
+	}
 }
 
 func (r *Router) readThreadRecordForFork(threadID session.ThreadID, includeArchived bool, includeHistory bool) (*session.Record, error) {
@@ -346,6 +416,7 @@ func (r *Router) readThreadRecord(threadID session.ThreadID, includeArchived boo
 	}
 	if err == nil {
 		r.applyIndexedThreadName(record)
+		r.applyLiveDaybreakProgramPropagationEnrollment(record)
 	}
 	return record, err
 }
@@ -360,17 +431,31 @@ func (r *Router) saveThreadRecord(record *session.Record) error {
 }
 
 func (r *Router) updateThreadMetadata(threadID session.ThreadID, patch *session.MetadataPatch, includeArchived bool) (*session.Record, error) {
+	var record *session.Record
+	var err error
 	if liveThread := r.threadManager().LiveThread(threadID); liveThread != nil {
-		return liveThread.UpdateMetadata(patch, includeArchived)
+		record, err = liveThread.UpdateMetadata(patch, includeArchived)
+	} else {
+		record, err = r.store.UpdateMetadata(threadID, patch, includeArchived)
 	}
-	return r.store.UpdateMetadata(threadID, patch, includeArchived)
+	if err == nil {
+		r.applyLiveDaybreakProgramPropagationEnrollment(record)
+	}
+	return record, err
 }
 
 func (r *Router) appendThreadItems(threadID session.ThreadID, items []session.Item) (*session.Record, error) {
+	var record *session.Record
+	var err error
 	if liveThread := r.threadManager().LiveThread(threadID); liveThread != nil {
-		return liveThread.AppendItems(items)
+		record, err = liveThread.AppendItems(items)
+	} else {
+		record, err = r.store.AppendItems(threadID, items)
 	}
-	return r.store.AppendItems(threadID, items)
+	if err == nil {
+		r.applyLiveDaybreakProgramPropagationEnrollment(record)
+	}
+	return record, err
 }
 
 func closeTemporaryWriters(locks []*session.WriterLock) {
@@ -1600,6 +1685,10 @@ func (r *Router) handleThreadStart(request *Request) (*ThreadStartResponse, erro
 		},
 	}
 	record.Metadata.CreatorUserID, record.Metadata.CreatorAccountID = r.creatorIdentityForThread()
+	if r.daybreakProgramPropagationEnrollment != nil {
+		enrolled := r.daybreakProgramPropagationEnrollment(&params)
+		record.DaybreakProgramPropagationEnrolled = &enrolled
+	}
 	if err := r.store.Create(record); err != nil {
 		return nil, err
 	}
@@ -1608,6 +1697,7 @@ func (r *Router) handleThreadStart(request *Request) (*ThreadStartResponse, erro
 		_ = r.store.Delete(record.ID)
 		return nil, err
 	}
+	r.setDaybreakProgramPropagationEnrollment(record.ID, record.DaybreakProgramPropagationEnrolled)
 	if len(record.Items) > 0 {
 		if err := r.createThreadRollout(record, now); err != nil {
 			r.releaseLiveThreads([]session.ThreadID{record.ID})
@@ -1780,6 +1870,7 @@ func (r *Router) handleThreadResume(request *Request) (response *ThreadResumeRes
 				return
 			}
 			retention.Commit()
+			r.setDaybreakProgramPropagationEnrollment(record.ID, record.DaybreakProgramPropagationEnrolled)
 		}()
 	}
 	if !sourceWasLive && !explicitRolloutPath && retention != nil {
@@ -1827,6 +1918,10 @@ func (r *Router) handleThreadResume(request *Request) (response *ThreadResumeRes
 		}
 	}
 	if !sourceWasLive {
+		// Rust #62879: a cold resume has no live attachment, so the new session
+		// reports false even when propagation is enabled at startup.
+		enrolled := false
+		record.DaybreakProgramPropagationEnrolled = &enrolled
 		r.setHistoryInitialization(record.ID, session.HistoryInitializationColdResume)
 	} else if existing := r.historyInitializationForThread(record.ID); existing != "" {
 		r.setHistoryInitialization(record.ID, existing)
@@ -2056,6 +2151,10 @@ func (r *Router) handleThreadResumeHistory(request *Request, params *ThreadResum
 		return nil, err
 	}
 	r.setHistoryInitialization(record.ID, session.HistoryInitializationSuppliedHistory)
+	// Rust #62879: supplied history is inherited context, so the new session
+	// starts outside the Daybreak propagation experiment.
+	enrolled := false
+	record.DaybreakProgramPropagationEnrolled = &enrolled
 	// Rust #45487: a supplied-history resume creates a thread with inherited
 	// context, so it acquires persistence like thread creation and releases the
 	// writer if initialization fails.
@@ -2073,6 +2172,7 @@ func (r *Router) handleThreadResumeHistory(request *Request, params *ThreadResum
 				return
 			}
 			retention.Commit()
+			r.setDaybreakProgramPropagationEnrollment(record.ID, record.DaybreakProgramPropagationEnrolled)
 		}()
 	}
 	if err := r.createThreadRollout(record, now); err != nil {
@@ -2733,6 +2833,9 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 	if err != nil {
 		return nil, threadForkRecordError(err)
 	}
+	// Rust #62879: a fork starts without live propagation enrollment.
+	enrolled := false
+	record.DaybreakProgramPropagationEnrolled = &enrolled
 	if strings.TrimSpace(params.BeforeTurnID) == "" && strings.TrimSpace(params.LastTurnID) == "" {
 		r.appendLiveThreadItemsForFork(sourceID, record, mode, params.ExcludeTurns)
 	}
@@ -2763,6 +2866,7 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 			_ = r.store.Delete(record.ID)
 			return nil, err
 		}
+		r.setDaybreakProgramPropagationEnrollment(record.ID, record.DaybreakProgramPropagationEnrolled)
 	}
 	applyThreadForkName(record, sourceRecord)
 	if params.ThreadSource != nil {
@@ -5213,6 +5317,7 @@ func (r *Router) threadSearchResults(records []session.Record, searchTerm string
 	data := make([]ThreadSearchResult, 0, len(records))
 	for i := range records {
 		record := &records[i]
+		r.applyLiveDaybreakProgramPropagationEnrollment(record)
 		thread := BuildThread(record, r.threadRolloutPath(record), false)
 		if thread == nil {
 			continue

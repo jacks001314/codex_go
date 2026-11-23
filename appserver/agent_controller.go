@@ -346,6 +346,17 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 		extra[session.HistoryInitializationExtraKey] = string(session.HistoryInitializationNew)
 	}
 	record.Metadata.Extra = extra
+	if c.helperDaybreakPropagationEnabled() {
+		// Rust #62879 spawn.rs: a native helper enrolls only when its parent
+		// already joined the propagation experiment.
+		enrolled := true
+		record.DaybreakProgramPropagationEnrolled = &enrolled
+	}
+	if c.router.services.ThreadRouter != nil {
+		// Keep the enrollment with the router: Rust keeps it on the child's
+		// loaded thread, so the child's own helpers can inherit it.
+		c.router.services.ThreadRouter.setDaybreakProgramPropagationEnrollment(threadID, record.DaybreakProgramPropagationEnrolled)
+	}
 	if c.router.services.ThreadRouter != nil {
 		c.router.services.ThreadRouter.setHistoryInitialization(threadID, session.HistoryInitializationFromExtra(extra))
 	}

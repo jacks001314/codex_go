@@ -1269,6 +1269,9 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 	router.allowedSymlinkedCodexHome = allowedSymlinkedCodexHomeForConfigService(configService)
 	if router.services.ThreadRouter != nil {
 		router.services.ThreadRouter.SetCreatorIdentity(router.threadCreatorIdentity)
+		// Rust #62879: the thread-start path asks the runtime whether a new root
+		// thread joins Daybreak propagation.
+		router.services.ThreadRouter.daybreakProgramPropagationEnrollment = router.daybreakProgramPropagationEnrollmentForStart
 	}
 	if router.services.ServerRequests == nil {
 		router.services.ServerRequests = NewServerRequestBroker()
@@ -3829,6 +3832,9 @@ func experimentalAPIFieldReasonForRequest(request *Request) string {
 	case MethodThreadStart:
 		if rawParamPresentNonNull(request, "mockExperimentalField") {
 			return "thread/start.mockExperimentalField"
+		}
+		if rawParamPresentNonNull(request, "daybreakProgramPropagationEnrolled") {
+			return "thread/start.daybreakProgramPropagationEnrolled"
 		}
 		if rawParamArrayNonEmpty(request, "dynamicTools") {
 			return "thread/start.dynamicTools"
@@ -6587,6 +6593,8 @@ func (r *RuntimeRouter) handleEphemeralThreadStartRuntime(request *Request) (*Th
 			Extra:                   extra,
 		},
 	}
+	enrolled := r.daybreakProgramPropagationEnrollmentForStart(&params)
+	record.DaybreakProgramPropagationEnrolled = &enrolled
 	if params.Prompt != "" {
 		record.Items = []session.Item{{
 			ID:        "item-" + safeIdentifier(request.ID.String()),
@@ -6610,6 +6618,47 @@ func (r *RuntimeRouter) handleEphemeralThreadStartRuntime(request *Request) (*Th
 		ServiceTier:             stringPtrIfNotEmpty(serviceTier),
 		DisabledPluginIDs:       disabledPluginIDsFromRecord(record),
 	}, true, nil
+}
+
+// daybreakProgramPropagationEnrollmentForStart mirrors Rust #62879's root
+// enrollment decision: a new root joins the experiment only when the feature is
+// enabled, unless the client explicitly opts out. Managed requirements take
+// precedence over the client's opt-out.
+func (r *RuntimeRouter) daybreakProgramPropagationEnrollmentForStart(params *ThreadStartParams) bool {
+	if r == nil || params == nil {
+		return false
+	}
+	cfg, err := r.effectiveConfigForThreadStart(params)
+	if err != nil || cfg == nil {
+		return false
+	}
+	if !features.Enabled(cfg.FeatureSettings(), "daybreak_program_propagation") {
+		return false
+	}
+	if params.DaybreakProgramPropagationEnrolled != nil && !*params.DaybreakProgramPropagationEnrolled {
+		return cfg.Requirements != nil && cfg.Requirements.FeatureRequirements["daybreak_program_propagation"]
+	}
+	return true
+}
+
+// daybreakProgramPropagationEnrolled reports the live enrollment the thread
+// recorded at startup. Stored metadata does not carry it, so a cold thread
+// reports false.
+func (r *RuntimeRouter) daybreakProgramPropagationEnrolled(threadID string) bool {
+	if r == nil {
+		return false
+	}
+	threadID = strings.TrimSpace(threadID)
+	if r.services.ThreadRouter != nil {
+		if enrolled, ok := r.services.ThreadRouter.daybreakProgramPropagationEnrollmentValue(session.ThreadID(threadID)); ok {
+			return enrolled
+		}
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil || record.DaybreakProgramPropagationEnrolled == nil {
+		return false
+	}
+	return *record.DaybreakProgramPropagationEnrolled
 }
 
 func (r *RuntimeRouter) markRuntimeSeedRollout(response *ThreadStartResponse, request *Request) {
@@ -6704,6 +6753,9 @@ func (r *RuntimeRouter) handleEphemeralThreadForkRuntime(request *Request) (*Thr
 	if err != nil {
 		return nil, true, threadForkRecordError(err)
 	}
+	// Rust #62879: a fork receives no live propagation enrollment.
+	ephemeralForkEnrolled := false
+	record.DaybreakProgramPropagationEnrolled = &ephemeralForkEnrolled
 	if strings.TrimSpace(params.BeforeTurnID) == "" && strings.TrimSpace(params.LastTurnID) == "" {
 		r.appendLiveThreadItemsForFork(sourceID, record, mode, params.ExcludeTurns)
 	}
@@ -7909,6 +7961,9 @@ func (r *RuntimeRouter) markThreadUnloaded(threadID string) {
 	// Rust ends a session's `session_loop` span when the submission loop
 	// terminates; Go's thread unload is the same lifecycle point.
 	r.endThreadSessionSpan(threadID)
+	if r.services.ThreadRouter != nil {
+		r.services.ThreadRouter.forgetDaybreakProgramPropagationEnrollment(session.ThreadID(threadID))
+	}
 	r.setThreadUnloadDelayOverride(threadID, 0, false)
 	r.requireThreadStatus().RemoveThread(threadID)
 	r.clearThreadSubscriptions(threadID)
@@ -8482,6 +8537,9 @@ func (r *RuntimeRouter) handleActiveThreadForkRuntime(request *Request) (any, bo
 	if err != nil {
 		return nil, true, threadForkRecordError(err)
 	}
+	// Rust #62879: a fork receives no live propagation enrollment.
+	forkEnrolled := false
+	record.DaybreakProgramPropagationEnrolled = &forkEnrolled
 	if params.AttachToSource {
 		record.AttachedThreadParentID = record.ForkedFromID
 	}
@@ -8491,6 +8549,7 @@ func (r *RuntimeRouter) handleActiveThreadForkRuntime(request *Request) (any, bo
 			_ = r.services.ThreadRouter.store.Delete(record.ID)
 			return nil, true, err
 		}
+		r.services.ThreadRouter.setDaybreakProgramPropagationEnrollment(record.ID, record.DaybreakProgramPropagationEnrolled)
 	}
 	var liveItems []session.Item
 	if !params.ExcludeTurns && mode != session.ForkNone &&
@@ -11107,6 +11166,14 @@ func (r *RuntimeRouter) applyLiveThreadModelSettings(thread *Thread) {
 		return
 	}
 	applyThreadModelSettings(thread, r.threadSettingsForTurn(thread.ID))
+	// Rust #62879 apply_live_thread_settings: a loaded thread reports whether it
+	// joined the Daybreak propagation experiment at startup.
+	if r.services.ThreadRouter != nil {
+		if enrolled, ok := r.services.ThreadRouter.daybreakProgramPropagationEnrollmentValue(session.ThreadID(strings.TrimSpace(thread.ID))); ok {
+			value := enrolled
+			thread.DaybreakProgramPropagationEnrolled = &value
+		}
+	}
 }
 
 func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams, committed *Settings) error {

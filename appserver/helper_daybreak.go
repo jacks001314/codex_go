@@ -67,7 +67,12 @@ func (c *runtimeAgentController) helperDaybreakPropagationEnabled() bool {
 	if err != nil || cfg == nil {
 		return false
 	}
-	return features.Enabled(cfg.FeatureSettings(), "daybreak_program_propagation")
+	if !features.Enabled(cfg.FeatureSettings(), "daybreak_program_propagation") {
+		return false
+	}
+	// Rust #62879 spawn.rs: propagation reaches a helper only when the parent
+	// thread itself joined the experiment at startup.
+	return c.router.daybreakProgramPropagationEnrolled(c.parentID)
 }
 
 // helperDaybreakOwner reports the ChatGPT account that may own a saved Daybreak

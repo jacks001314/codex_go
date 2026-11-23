@@ -374,8 +374,12 @@ type Record struct {
 	Items                  []Item           `json:"items,omitempty"`
 	FromRollout            bool             `json:"-"`
 	ItemCount              int              `json:"-"`
-	InheritedItems         int              `json:"-"`
-	InheritedTurns         int              `json:"-"`
+	// DaybreakProgramPropagationEnrolled is the session-local enrollment of a
+	// live root thread (Rust helper_daybreak::Enrollment, #62879). It is never
+	// persisted: a stored record reports null and a cold resume starts false.
+	DaybreakProgramPropagationEnrolled *bool `json:"-"`
+	InheritedItems                     int   `json:"-"`
+	InheritedTurns                     int   `json:"-"`
 }
 
 // HistoryPosition freezes the materialized prefix inherited by a paginated
