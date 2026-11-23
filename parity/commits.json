@@ -52415,11 +52415,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1262: N/A (Go only reads trace bundles) - the commit deduplicates repeated large tool-output strings while a trace bundle is written. Go implements only the reader side: rollout/trace_reduce.go validates the manifest/event schema pins and summarizes events plus payload refs (rollout/trace_same_binary_replay_like_rust_test.go, rollout/trace_replay_validation_like_rust_test.go). Nothing in Go writes trace bundles, so there is no payload store to deduplicate."
    ],
    "kind": "runtime",
    "sha": "508a42966658b4f1d018ea471522beed791537ce",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Deduplicate large tool output strings in rollout traces (#62407)"
   },
   {
@@ -53101,11 +53101,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1262: N/A (Go admits a turn in one step) - Rust needs the snapshot accessor because a turn can reserve its slot and hold a turn id while host admission (installing the execution guard) is still pending. Go reserves and admits in one call (requireTurns().Start) and its only admission gate is the manager-level TurnAdmissionPause, which blocks new turns before a slot exists and drains running ones (appserver/account_session_workspace_switching_like_rust_test.go TestTurnAdmissionPauseBlocksNewTurnsLikeRust); ActiveTurn carries no admitted flag, so there is no Pending state to report. The change is a core library accessor with no app-server protocol field."
    ],
    "kind": "runtime",
    "sha": "75f2d93e7cac9fc63540b786b8adc0f3e205b5dc",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Expose current turn admission state on `CodexThread` (#62604)"
   },
   {
@@ -53163,11 +53163,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1262: N/A (Rust crate split) - the commit moves in-memory policy construction, validation and evaluation into codex-execpolicy-rules so config, protocol and prompt code stop pulling the Starlark parser, re-exporting the rule types from codex-execpolicy and preserving validation error source locations. Go has no crate graph to split: exec/exec_policy.go holds the in-memory rule types and their evaluation with no Starlark dependency, and the change carries no behavior or wire difference to match."
    ],
    "kind": "runtime",
    "sha": "5bdb5e8b3c4b43e4a10e53f2f8a3813d318d1f9c",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Split in-memory execution policy rules into a separate crate (#62615)"
   },
   {
