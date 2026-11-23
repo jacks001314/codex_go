@@ -46,6 +46,12 @@ func (m *Model) refreshSlashPopup() {
 		m.slashPopup = slashCommandPopup{}
 		return
 	}
+	// Rust #63054: shell mode keeps its input literal, so completion popups
+	// stay closed until the leading `!` is removed.
+	if m.isBangShellCommand() {
+		m.slashPopup = slashCommandPopup{}
+		return
+	}
 	query, ok := slashPopupQuery(m.composerText())
 	if !ok {
 		m.slashPopup = slashCommandPopup{}

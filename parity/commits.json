@@ -54119,11 +54119,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "tui/tea refreshSlashPopup and refreshSkillPopup close all completion popups while isBangShellCommand() is true, so `$env:HTTP_PROXY` and `@file` tokens stay literal in `!` shell commands and completion returns when the leading bang is removed.",
+    "Test: TestShellModeSuppressesCompletionPopupsLikeRust; go test ./tui/tea -count=1; go build ./..."
    ],
    "kind": "runtime",
    "sha": "17cb2e3a7f2ab2d3dbfa4d03d525eef92ec7aafb",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Suppress TUI completion popups in shell mode (#63054)"
   },
   {
@@ -54484,11 +54485,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Audit: the Go TUI replay buffer stores protocol.ThreadEvent values that carry no turn-diff payload and the tea model never consumes turn/diff/updated notifications, so repeated 1 MiB diff updates cannot evict replay events here. No buffer filter is needed."
    ],
    "kind": "runtime",
    "sha": "9e3479e00a2aa22dd3e9e8662420b07ae3185951",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Keep turn diff updates out of the TUI replay buffer (#63218)"
   },
   {

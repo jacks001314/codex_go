@@ -47,6 +47,14 @@ func (m *Model) refreshSkillPopup() bubbletea.Cmd {
 		m.mentionPopup = nil
 		return nil
 	}
+	// Rust #63054: `$` and `@` tokens in a `!` shell command are literal
+	// shell syntax (for example PowerShell's `$env:HTTP_PROXY`), so neither
+	// completion popup opens while shell mode owns the draft.
+	if m.isBangShellCommand() {
+		m.skillPopup = skillPopupState{}
+		m.mentionPopup = nil
+		return nil
+	}
 	query, ok := skillPopupQuery(m.composer.Value())
 	if !ok && features.Enabled(m.featureSettings, "mentions_v2") {
 		m.skillPopup = skillPopupState{}
