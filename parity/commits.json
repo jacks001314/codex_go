@@ -40478,11 +40478,11 @@
     "codex_go"
    ],
    "evidence": [
-    "update/plan_2026_11_02.md: tracked: picker/store refresh rework"
+    "Batch 140: complete - the `/subagents` picker prioritizes waiting threads (Rust #58720). tui/tea/agent.go orders rows with `agentPickerOrder` (threads with an outstanding approval first), labels waiting rows through `agentPickerLabel` with the `(needs approval)` suffix, seeds the initial selection with a waiting or current thread, and `withPendingAgentRows` adds a row for a thread whose approval arrived before its metadata. tui/tea/thread_approvals.go keeps one approval modal at a time, queues requests for background threads in `pendingApprovals`, reports them through `pendingApprovalThreadIDs` and `pendingThreadApprovalLabels` for the bottom-pane notice, re-renders the open picker with `refreshThreadApprovalViews` while keeping the selected thread, dedupes replayed requests after a reconnect with `approvalRequestAlreadyKnown`, and names threads with `threadLabel`/`agentEntryThreadLabel` (agent path first, UUID tail for unnamed agents). tui/tea/subagent_approval_picker_like_rust_test.go covers the grouping, the notice, replay when the thread is selected, the label rules, selection preservation when rows move and the metadata-less row; side_context_label_like_rust_test.go pins the notice label. Verified with go test ./tui/tea -run 'TestSubagentApproval|TestSideContextLabel|TestModelSubagent'."
    ],
    "kind": "runtime",
    "sha": "181b4a853d396f009a3a02b9c36eb393e6acbe75",
-   "status": "partial",
+   "status": "complete",
    "subject": "Prioritize pending approvals in the subagent picker (#58720)"
   },
   {
