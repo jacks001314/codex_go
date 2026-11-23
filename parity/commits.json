@@ -52511,11 +52511,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Sampling already selects retained bodies by the request's resolved owner string (ResultBodyAttachments(owner, input)), which is Go's counterpart to passing the resolved ResultBodyDestination into sampling; a destination without an owner attaches nothing. Tests: go test ./turn -run 'ResultBodyTurnAttachmentsAddressRowsLikeRust' -count=1",
+    "A connector result capture now re-checks, while the per-turn store lock is held, that the store is still the recorder's live capture before retaining the body (Rust #62434). A capture that raced with a replacement store returns no local ID instead of leaving an unreadable result row. Tests: go test ./turn -run 'ResultBody' -count=1",
+    "go test ./turn -count=1; go test ./appserver -run 'ResultBody|Connector' -count=1; go build ./...; go vet ./turn. The Rust commit's remaining changes (header iteration shape and an equivalent auth-mode match) are cosmetic and do not alter Go behavior."
    ],
    "kind": "runtime",
    "sha": "524e15989b79039e14d01cd197ed6e6580bd59f2",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Expand connector result metadata coverage across auth configurations (#62434)"
   },
   {

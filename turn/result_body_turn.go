@@ -61,6 +61,18 @@ func (t *ResultBodyTurn) Record(source model.ToolResultBodySource) (string, bool
 // pairs it with that child call's ID, so a sampling request can send
 // `tool_result` and `tool_result_call_id` together (Rust #62423).
 func (t *ResultBodyTurn) RecordNested(source model.ToolResultBodySource, nestedCallID string) (string, bool) {
+	return t.recordNested(source, nestedCallID, nil)
+}
+
+// recordNestedIfCurrent retains one completed MCP result only while current
+// reports the store is still the live capture for its turn. Rust #62434 repeats
+// this check under the retention lock so a result that lands after the turn's
+// capture moved on cannot leave a dangling local result ID behind.
+func (t *ResultBodyTurn) recordNestedIfCurrent(source model.ToolResultBodySource, nestedCallID string, current func() bool) (string, bool) {
+	return t.recordNested(source, nestedCallID, current)
+}
+
+func (t *ResultBodyTurn) recordNested(source model.ToolResultBodySource, nestedCallID string, current func() bool) (string, bool) {
 	if t == nil {
 		return "", false
 	}
@@ -71,6 +83,9 @@ func (t *ResultBodyTurn) RecordNested(source model.ToolResultBodySource, nestedC
 	body = body.WithNestedCallID(nestedCallID)
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if current != nil && !current() {
+		return "", false
+	}
 	if len(t.byID) >= maxPendingExecutedToolCalls || body.CompactBytes() > maxResultBodyBytes-t.bytes {
 		return "", false
 	}

@@ -146,7 +146,12 @@ func (r *ExecutedToolCallRecorder) CaptureNestedResultBody(turnID string, owner 
 	if store == nil {
 		return "", false
 	}
-	return store.RecordNested(source, nestedCallID)
+	// Rust #62434: the capture owner is re-checked while the retained bodies
+	// are locked, so a store replaced after the lookup cannot keep a body whose
+	// local ID no later request in this turn will attach.
+	return store.recordNestedIfCurrent(source, nestedCallID, func() bool {
+		return r.currentResultBodyTurn() == store
+	})
 }
 
 // ReleaseResultBody releases one captured body by its local ID. The caller uses
