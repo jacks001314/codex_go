@@ -53329,11 +53329,14 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-20 upstream window; awaiting per-commit audit."
+    "RuntimeRouter.startExecutorCapabilityDiscoveryPrewarm starts the thread's V2 discovery while the turn runtime is being prepared; prewarmExecutorCapabilityDiscoveryV2 reserves cache capacity for the whole remote selection and fetches each supported executor's inventory with the same sandbox context and cache key the first step uses.",
+    "Each prewarm is bounded by a five second timeout, runs after the per-environment pending/failed and supports-capability-discovery-v2 checks, and leaves turn startup untouched on connection errors, discovery errors or timeouts; a timed-out load records no cooldown so the first step retries, while successes and failures are reused from the cache.",
+    "Tests cover reuse by the first step, cached failure suppression after a failed prewarm, unsupported executors, the feature gate, and the turn-start hook.",
+    "go test ./appserver -run 'ExecutorDiscoveryPrewarm|TurnStartPrewarmsExecutorDiscovery' -count=1; go test ./appserver -run 'Discovery|Capability|MCP|Mcp|Prewarm' -count=1"
    ],
    "kind": "runtime",
    "sha": "ffa05c8bfb7572f1b4139e775324bfd284f1cbe5",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Prewarm executor capability discovery during remote startup (#62674)"
   },
   {

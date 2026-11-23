@@ -22846,6 +22846,9 @@ func (r *RuntimeRouter) startTurnRuntimeAsync(params *turn.TurnStartParams, resp
 		r.emitTurnRuntimeError(params.ThreadID, response.Turn.ID, err)
 		return
 	}
+	// Rust #62674 starts remote executor discovery while the turn runtime is
+	// still being prepared so the first step can reuse its inventory.
+	r.startExecutorCapabilityDiscoveryPrewarm(ctx, params.ThreadID, paramsCopy)
 	// Rust #62437 collects HEAD and the remote URLs after turn setup; the
 	// worktree status scan waits for admission (runTurnRuntime).
 	if cwd, ok := turnGitEnrichmentCWD(paramsCopy); ok {
