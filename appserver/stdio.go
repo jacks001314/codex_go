@@ -3,6 +3,7 @@ package appserver
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -142,6 +143,58 @@ func (w *stdioShutdownWatchdog) disarm() {
 	}
 }
 
+// fileReadResponseBufferSize batches the small chunks emitted by the streaming
+// base64 encoder (Rust #62599's FILE_RESPONSE_BUFFER_SIZE).
+const fileReadResponseBufferSize = 64 * 1024
+
+// streamableFileReadResponse reports the fs/readFile response and bytes a
+// stdio write can stream instead of eagerly encoding them (Rust #62599).
+func streamableFileReadResponse(value any) (*Response, []byte, bool) {
+	response, ok := value.(*Response)
+	if !ok || response == nil || response.Error != nil {
+		return nil, nil, false
+	}
+	file, ok := response.Result.(*ReadFileResponse)
+	if !ok || file == nil || len(file.Data) == 0 {
+		return nil, nil, false
+	}
+	return response, file.Data, true
+}
+
+// writeStreamedFileReadResponse writes an OK fs/readFile response as
+// `{"id":...,"result":{"dataBase64":"..."}}` without materializing the encoded
+// payload. The caller holds the connection's write lock.
+func writeStreamedFileReadResponse(out io.Writer, response *Response, data []byte) error {
+	envelope, err := json.Marshal(struct {
+		JSONRPC string    `json:"jsonrpc,omitempty"`
+		ID      RequestID `json:"id"`
+	}{JSONRPC: response.JSONRPC, ID: response.ID})
+	if err != nil {
+		return err
+	}
+	if len(envelope) == 0 || envelope[len(envelope)-1] != '}' {
+		return errors.New("fs/readFile response envelope is not an object")
+	}
+	buffered := bufio.NewWriterSize(out, fileReadResponseBufferSize)
+	if _, err := buffered.Write(envelope[:len(envelope)-1]); err != nil {
+		return err
+	}
+	if _, err := buffered.WriteString(`,"result":{"dataBase64":"`); err != nil {
+		return err
+	}
+	encoder := base64.NewEncoder(base64.StdEncoding, buffered)
+	if _, err := encoder.Write(data); err != nil {
+		return err
+	}
+	if err := encoder.Close(); err != nil {
+		return err
+	}
+	if _, err := buffered.WriteString("\"}}\n"); err != nil {
+		return err
+	}
+	return buffered.Flush()
+}
+
 func serveJSONLineConnection(router *RuntimeRouter, stdin io.Reader, stdout io.Writer) error {
 	return serveJSONLineConnectionContext(router, context.Background(), stdin, stdout, nil)
 }
@@ -171,6 +224,13 @@ func serveJSONLineConnectionContext(router *RuntimeRouter, ctx context.Context, 
 		}
 	}
 	writeJSONLine := func(value any) error {
+		// Rust #62599: stream an fs/readFile payload instead of allocating the
+		// base64 string and a complete JSON frame before writing.
+		if response, data, ok := streamableFileReadResponse(value); ok {
+			writeMu.Lock()
+			defer writeMu.Unlock()
+			return writeStreamedFileReadResponse(stdout, response, data)
+		}
 		data, err := json.Marshal(value)
 		if err != nil {
 			return err

@@ -23,7 +23,7 @@ func TestServiceReadWriteFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
-	decoded, err := base64.StdEncoding.DecodeString(response.DataBase64)
+	decoded, err := base64.StdEncoding.DecodeString(response.Base64())
 	if err != nil {
 		t.Fatalf("DecodeString() error = %v", err)
 	}

@@ -53029,11 +53029,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "FSService.ReadFile now returns the file as raw bytes (ReadFileResponse.Data) and every non-stdio transport still receives the same dataBase64 field through ReadFileResponse.MarshalJSON, which mirrors Rust's FsReadFileBytes -> FsReadFileResponse conversion. Tests: go test ./appserver -run 'ReadFileResponseKeepsBytesUntilEncoded' -count=1",
+    "The stdio connection streams an OK fs/readFile response into its newline-delimited JSON frame through a 64 KiB bufio.Writer and a base64 stream encoder instead of allocating the base64 string plus a complete JSON copy (Rust #62599). Streamed frames are byte-identical to the eagerly marshaled response for empty, padded, and larger-than-buffer payloads, and an end-to-end stdio request preserves the request ID and payload. Tests: go test ./appserver -run 'StreamedFileRead|StreamableFileRead|StreamsFSReadFile' -count=1",
+    "go test ./appserver -run 'Stdio|ReadFile|WriteFile|Schema|FS' -count=1; go build ./...; go vet ./appserver"
    ],
    "kind": "runtime",
    "sha": "665e0a9a65555d8705a66d358fbb6ea964f864ce",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Stream app-server `fs/readFile` responses over stdio (#62599)"
   },
   {

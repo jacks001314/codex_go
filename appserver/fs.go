@@ -61,8 +61,42 @@ func (p *ReadFileParams) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// ReadFileResponse carries a file read result. Contents stay as bytes until a
+// transport encodes them: the stdio writer streams the base64 payload straight
+// into its JSON frame from this response (Rust #62599). DataBase64 keeps the
+// eager encoding for in-process callers that build a response directly.
 type ReadFileResponse struct {
-	DataBase64 string `json:"dataBase64"`
+	DataBase64 string `json:"-"`
+	Data       []byte `json:"-"`
+}
+
+// Base64 reports the payload, encoding bytes a transport has not encoded yet.
+func (r *ReadFileResponse) Base64() string {
+	if r == nil {
+		return ""
+	}
+	if r.DataBase64 != "" || len(r.Data) == 0 {
+		return r.DataBase64
+	}
+	return base64.StdEncoding.EncodeToString(r.Data)
+}
+
+func (r ReadFileResponse) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		DataBase64 string `json:"dataBase64"`
+	}{DataBase64: (&r).Base64()})
+}
+
+func (r *ReadFileResponse) UnmarshalJSON(data []byte) error {
+	var decoded struct {
+		DataBase64 string `json:"dataBase64"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	r.DataBase64 = decoded.DataBase64
+	r.Data = nil
+	return nil
 }
 
 type WriteFileParams struct {
@@ -359,7 +393,7 @@ func (s *FSService) ReadFile(params *ReadFileParams) (*ReadFileResponse, error) 
 	if err != nil {
 		return nil, err
 	}
-	return &ReadFileResponse{DataBase64: base64.StdEncoding.EncodeToString(data)}, nil
+	return &ReadFileResponse{Data: data}, nil
 }
 
 func (s *FSService) WriteFile(params *WriteFileParams) (*WriteFileResponse, error) {

@@ -279,7 +279,7 @@ func TestRuntimeRouterDispatchesThreadAndFS(t *testing.T) {
 		t.Fatalf("fs read error: %+v", read.Error)
 	}
 	response := read.Result.(*ReadFileResponse)
-	decoded, err := base64.StdEncoding.DecodeString(response.DataBase64)
+	decoded, err := base64.StdEncoding.DecodeString(response.Base64())
 	if err != nil {
 		t.Fatalf("DecodeString() error = %v", err)
 	}
