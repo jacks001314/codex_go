@@ -3665,7 +3665,8 @@ func protocolImageGenerationItemFromAgentItem(item *model.AgentItem) protocol.Th
 	savedPath := firstNonEmpty(execStringFromAny(data["savedPath"]), execStringFromAny(data["saved_path"]))
 	transparentBackground := execBoolPtrFromAny(firstExecAny(data, "transparentBackground", "transparent_background"))
 	generationID := execStringPtrFromAny(firstExecAny(data, "generationId", "generation_id"))
-	built := protocol.ImageGenerationItemWithID(firstNonEmpty(item.ID, item.CallID, "image-generation"), status, revisedPrompt, savedPath, transparentBackground, generationID)
+	imageMetadata := codexapi.StoredImageMetadata(firstExecAny(data, "imageMetadata", "image_metadata"))
+	built := protocol.ImageGenerationItemWithMetadata(firstNonEmpty(item.ID, item.CallID, "image-generation"), status, revisedPrompt, savedPath, transparentBackground, generationID, imageMetadata)
 	// Rust #38024: usage-limit failures ride on the item as a typed failure.
 	if failure := data["failure"]; failure != nil {
 		if built.Metadata == nil {

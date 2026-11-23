@@ -450,7 +450,27 @@ func resumeImageGenerationItem(item session.Item) protocol.ThreadItem {
 		strings.TrimSpace(item.Text),
 	)
 	savedPath := interactiveSessionItemDataString(item, "savedPath", "saved_path")
-	projected := protocol.ImageGenerationItem(firstNonEmptyLocal(callID, strings.TrimSpace(item.ID)), status, revisedPrompt, savedPath)
+	var generationID *string
+	if value := interactiveSessionItemDataString(item, "generationId", "generation_id"); value != "" {
+		generationID = &value
+	}
+	// Rust #62871: per-image backend metadata survives resume; it is opaque
+	// surface data, so the stored object is carried through unchanged.
+	var imageMetadata map[string]any
+	if value, ok := item.Data["imageMetadata"].(map[string]any); ok {
+		imageMetadata = value
+	} else if value, ok := item.Data["image_metadata"].(map[string]any); ok {
+		imageMetadata = value
+	}
+	projected := protocol.ImageGenerationItemWithMetadata(
+		firstNonEmptyLocal(callID, strings.TrimSpace(item.ID)),
+		status,
+		revisedPrompt,
+		savedPath,
+		nil,
+		generationID,
+		imageMetadata,
+	)
 	projected.CallID = callID
 	return projected
 }

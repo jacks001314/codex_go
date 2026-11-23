@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/codexapi"
 	"codex_go/session"
 	"codex_go/utils"
 )
@@ -2509,6 +2510,18 @@ func (w *canonicalReplayWriter) writeImageGeneration(entry canonicalReplayLine) 
 		_ = out.field("generationId", text)
 	} else {
 		_ = out.rawField("generationId", []byte("null"))
+	}
+	// Rust #62871: a legacy record's metadata is re-encoded through
+	// `ImageGenerationItem`, so malformed or non-object values are dropped and
+	// empty metadata is omitted while the image itself is kept.
+	if raw, present := fields["image_metadata"]; present && !canonicalRawIsNull(raw) {
+		if metadata := codexapi.ParseStoredImageMetadataJSON(raw); len(metadata) > 0 {
+			encoded, err := json.Marshal(metadata)
+			if err != nil {
+				return err
+			}
+			_ = out.rawField("imageMetadata", encoded)
+		}
 	}
 	turnID, err := w.ensureTurn(entry.timestamp, entry.sourceIndex)
 	if err != nil {

@@ -6260,6 +6260,17 @@ func (r *RuntimeRouter) sessionItemForImageGeneration(threadID string, item *mod
 		data["generationId"] = generationID
 		data["generation_id"] = generationID
 	}
+	// Rust #62871: the completed item keeps the backend's per-image metadata
+	// under both the wire and internal spellings so persistence and resume
+	// replay the same object.
+	imageMetadataValue := data["imageMetadata"]
+	if imageMetadataValue == nil {
+		imageMetadataValue = data["image_metadata"]
+	}
+	if imageMetadata := codexapi.StoredImageMetadata(imageMetadataValue); len(imageMetadata) > 0 {
+		data["imageMetadata"] = imageMetadata
+		data["image_metadata"] = imageMetadata
+	}
 	if strings.TrimSpace(result) != "" {
 		if codexHome := r.codexHomeForImageGeneration(); codexHome != "" {
 			if savedPath, err := eventmap.SaveImageGenerationResult(codexHome, threadID, itemID, result); err == nil {

@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"codex_go/codexapi"
 	"codex_go/gitutil"
 	"codex_go/mcp"
 	"codex_go/model"
@@ -1543,6 +1544,7 @@ func (i *ThreadItem) marshalPayloadJSON() ([]byte, error) {
 		generationID := threadItemStringPtrFromData(i.Data, "generationId", "generation_id")
 		savedPath := threadItemStringPtrFromData(i.Data, "savedPath", "saved_path")
 		inputImages := threadItemInputImagesFromData(i.Data)
+		imageMetadata := threadItemImageMetadataFromData(i.Data)
 		// Rust #54398 (ext/items/src/image_generation.rs `GeneratedImageRef`): an
 		// image-generation item carries either the durable attachment reference
 		// (`fileId`) or the inline base64 `result`. The `File` variant is declared
@@ -1550,15 +1552,16 @@ func (i *ThreadItem) marshalPayloadJSON() ([]byte, error) {
 		// fields, keep the file reference; Go applies the same preference here.
 		if fileID := threadItemStringFromData(i.Data, "fileId", "file_id"); fileID != "" {
 			return json.Marshal(struct {
-				Type                  string  `json:"type"`
-				ID                    string  `json:"id"`
-				Status                string  `json:"status"`
-				RevisedPrompt         *string `json:"revisedPrompt"`
-				FileID                string  `json:"fileId"`
-				TransparentBackground *bool   `json:"transparentBackground"`
-				GenerationID          *string `json:"generationId"`
-				SavedPath             *string `json:"savedPath,omitempty"`
-				InputImages           []any   `json:"inputImages,omitempty"`
+				Type                  string         `json:"type"`
+				ID                    string         `json:"id"`
+				Status                string         `json:"status"`
+				RevisedPrompt         *string        `json:"revisedPrompt"`
+				FileID                string         `json:"fileId"`
+				TransparentBackground *bool          `json:"transparentBackground"`
+				GenerationID          *string        `json:"generationId"`
+				SavedPath             *string        `json:"savedPath,omitempty"`
+				InputImages           []any          `json:"inputImages,omitempty"`
+				ImageMetadata         map[string]any `json:"imageMetadata,omitempty"`
 			}{
 				Type:                  "imageGeneration",
 				ID:                    i.ID,
@@ -1569,18 +1572,20 @@ func (i *ThreadItem) marshalPayloadJSON() ([]byte, error) {
 				GenerationID:          generationID,
 				SavedPath:             savedPath,
 				InputImages:           inputImages,
+				ImageMetadata:         imageMetadata,
 			})
 		}
 		return json.Marshal(struct {
-			Type                  string  `json:"type"`
-			ID                    string  `json:"id"`
-			Status                string  `json:"status"`
-			RevisedPrompt         *string `json:"revisedPrompt"`
-			Result                string  `json:"result"`
-			TransparentBackground *bool   `json:"transparentBackground"`
-			GenerationID          *string `json:"generationId"`
-			SavedPath             *string `json:"savedPath,omitempty"`
-			InputImages           []any   `json:"inputImages,omitempty"`
+			Type                  string         `json:"type"`
+			ID                    string         `json:"id"`
+			Status                string         `json:"status"`
+			RevisedPrompt         *string        `json:"revisedPrompt"`
+			Result                string         `json:"result"`
+			TransparentBackground *bool          `json:"transparentBackground"`
+			GenerationID          *string        `json:"generationId"`
+			SavedPath             *string        `json:"savedPath,omitempty"`
+			InputImages           []any          `json:"inputImages,omitempty"`
+			ImageMetadata         map[string]any `json:"imageMetadata,omitempty"`
 		}{
 			Type:                  "imageGeneration",
 			ID:                    i.ID,
@@ -1591,6 +1596,7 @@ func (i *ThreadItem) marshalPayloadJSON() ([]byte, error) {
 			GenerationID:          generationID,
 			SavedPath:             savedPath,
 			InputImages:           inputImages,
+			ImageMetadata:         imageMetadata,
 		})
 	case "enteredReviewMode":
 		return json.Marshal(struct {
@@ -5243,6 +5249,20 @@ func threadItemUserInputContentFromData(data map[string]any) []map[string]any {
 // completed image-generation item records (Rust #54420 `inputImages`). The field
 // is absent on items written before the change and on generations that read no
 // local image, in which case the wire form omits it entirely.
+// threadItemImageMetadataFromData reads the per-image backend metadata
+// (Rust #62871). Metadata that history replay already decoded must stay a JSON
+// object; anything else is dropped without discarding the image item.
+func threadItemImageMetadataFromData(data map[string]any) map[string]any {
+	if data == nil {
+		return nil
+	}
+	value, ok := data["imageMetadata"]
+	if !ok {
+		value = data["image_metadata"]
+	}
+	return codexapi.StoredImageMetadata(value)
+}
+
 func threadItemInputImagesFromData(data map[string]any) []any {
 	value := threadItemAnyFromData(data, "inputImages", "input_images")
 	if value == nil {
@@ -7364,6 +7384,7 @@ func normalizeHistoryUnionData(payload map[string]any, marker string) map[string
 	copyHistoryAlias(data, "savedPath", "saved_path")
 	copyHistoryAlias(data, "transparentBackground", "transparent_background")
 	copyHistoryAlias(data, "generationId", "generation_id")
+	copyHistoryAlias(data, "imageMetadata", "image_metadata")
 	copyHistoryAlias(data, "arguments", "input", "rawArguments", "raw_arguments")
 	return data
 }

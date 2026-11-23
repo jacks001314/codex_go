@@ -53777,11 +53777,14 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "codexapi.ImageData decodes the optional per-image image_metadata field independently (object only, 1 MiB, 24-level limit; stored history keeps serde_json's 128-level limit) so invalid metadata never drops the image.",
+    "turn.ImageGenerationHandler carries imageMetadata/image_metadata on the completed item data while keeping it out of the model tool output; protocol.ThreadItem exposes ImageMetadata and exec items project it.",
+    "appserver serializes imageMetadata on both file-backed and inline imageGeneration items, omits empty values, and normalizes history aliases; rollout persists the core image_metadata, exposes imageMetadata publicly, and preserves it through legacy migration and modern item replay; local TUI resume projects it.",
+    "Tests: codexapi/image_metadata_like_rust_test.go, turn/image_generation_metadata_like_rust_test.go, appserver/image_generation_metadata_like_rust_test.go, rollout/image_generation_metadata_like_rust_test.go; go test ./codexapi ./protocol ./rollout ./turn; go test ./appserver -run 'ImageGeneration|Imagegen|Image'; go test ./exec -run Image; go test ./app -run 'Image|Resume'; go build ./..."
    ],
    "kind": "runtime",
    "sha": "0bfb8467da6ace1d0628f36fcda905084d3e0e96",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Preserve per-image metadata in app-server image generation items (#62871)"
   },
   {

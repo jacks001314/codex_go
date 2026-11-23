@@ -192,10 +192,14 @@ type ThreadItem struct {
 	TransparentBackground *bool            `json:"transparent_background,omitempty"`
 	// GenerationID is the backend-provided image generation identifier
 	// (Rust #57552). It is omitted for older records that predate the field.
-	GenerationID *string        `json:"generation_id,omitempty"`
-	Success      *bool          `json:"success,omitempty"`
-	Items        []TodoItem     `json:"items,omitempty"`
-	Metadata     map[string]any `json:"metadata,omitempty"`
+	GenerationID *string `json:"generation_id,omitempty"`
+	// ImageMetadata carries the per-image backend metadata exposed on
+	// image-generation items (Rust #62871). Empty metadata stays out of the
+	// serialized item.
+	ImageMetadata map[string]any `json:"imageMetadata,omitempty"`
+	Success       *bool          `json:"success,omitempty"`
+	Items         []TodoItem     `json:"items,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
 	// ClientID is the app server's echoed clientUserMessageId on a completed
 	// user message (Rust #42451). It lets the TUI acknowledge the exact pending
 	// steer even when several submissions carry identical content. The value is
@@ -324,6 +328,12 @@ func ImageGenerationItem(id string, status string, revisedPrompt string, savedPa
 // ImageGenerationItemWithID builds an image-generation item that also carries
 // the backend-provided generation id (Rust #57552).
 func ImageGenerationItemWithID(id string, status string, revisedPrompt string, savedPath string, transparentBackground *bool, generationID *string) ThreadItem {
+	return ImageGenerationItemWithMetadata(id, status, revisedPrompt, savedPath, transparentBackground, generationID, nil)
+}
+
+// ImageGenerationItemWithMetadata also carries the per-image backend metadata
+// (Rust #62871); empty metadata is omitted from the item and its metadata map.
+func ImageGenerationItemWithMetadata(id string, status string, revisedPrompt string, savedPath string, transparentBackground *bool, generationID *string, imageMetadata map[string]any) ThreadItem {
 	metadata := map[string]any{
 		"status":         status,
 		"revisedPrompt":  revisedPrompt,
@@ -335,6 +345,10 @@ func ImageGenerationItemWithID(id string, status string, revisedPrompt string, s
 		metadata["generationId"] = *generationID
 		metadata["generation_id"] = *generationID
 	}
+	if len(imageMetadata) > 0 {
+		metadata["imageMetadata"] = imageMetadata
+		metadata["image_metadata"] = imageMetadata
+	}
 	return ThreadItem{
 		ID:                    id,
 		Type:                  "imageGeneration",
@@ -343,6 +357,7 @@ func ImageGenerationItemWithID(id string, status string, revisedPrompt string, s
 		SavedPath:             savedPath,
 		TransparentBackground: transparentBackground,
 		GenerationID:          generationID,
+		ImageMetadata:         imageMetadata,
 		Metadata:              metadata,
 	}
 }

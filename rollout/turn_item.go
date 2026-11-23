@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/codexapi"
 	"codex_go/session"
 	"codex_go/shell"
 	"codex_go/utils"
@@ -546,6 +547,11 @@ func populateCoreImageGeneration(core map[string]any, item *session.Item, values
 	// Rust #57552: the backend-provided image generation id is persisted with
 	// the item and restored on resume.
 	copyOptional(core, "generation_id", firstAny(values, "generationId", "generation_id"))
+	// Rust #62871: per-image backend metadata is opaque JSON and stays on the
+	// item through the paginated rollout, resume, and legacy migration.
+	if metadata := codexapi.StoredImageMetadata(firstAny(values, "imageMetadata", "image_metadata")); len(metadata) > 0 {
+		core["image_metadata"] = metadata
+	}
 	// Rust #54398 `GeneratedImageRef::File`: a completed generation keeps its
 	// durable attachment reference instead of the inline result, and #54420
 	// keeps the observed local `input_images` (`Vec<ImageGenerationInputImage>`).
@@ -573,6 +579,10 @@ func populatePublicImageGeneration(out, core map[string]any) {
 	out["transparentBackground"] = nullableAny(core, "transparent_background", "transparentBackground")
 	out["generationId"] = nullableAny(core, "generation_id", "generationId")
 	copyOptional(out, "savedPath", firstAny(core, "saved_path", "savedPath"))
+	// Rust skips empty metadata (`skip_serializing_if = "Map::is_empty"`).
+	if metadata := codexapi.StoredImageMetadata(firstAny(core, "image_metadata", "imageMetadata")); len(metadata) > 0 {
+		out["imageMetadata"] = metadata
+	}
 	// Rust skips an empty `input_images` on both the extension item and the
 	// public surface (`#[serde(skip_serializing_if = "Vec::is_empty")]`, #54420).
 	if images := camelObjectSlice(firstAny(core, "input_images", "inputImages")); len(images) > 0 {

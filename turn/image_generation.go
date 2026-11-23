@@ -192,7 +192,7 @@ func (h *ImageGenerationHandler) Execute(ctx context.Context, invocation *tool.I
 	if err != nil {
 		return imageGenerationErrorOutput(invocation, args.Prompt, err.Error()), nil
 	}
-	result, transparentBackground, generationID, requestID, err := h.executeImageRequest(ctx, request, imageGenerationTurnID(invocation))
+	result, transparentBackground, generationID, imageMetadata, requestID, err := h.executeImageRequest(ctx, request, imageGenerationTurnID(invocation))
 	if err != nil {
 		if requestID == "" {
 			requestID = imageGenerationErrorRequestID(err)
@@ -263,6 +263,13 @@ func (h *ImageGenerationHandler) Execute(ctx context.Context, invocation *tool.I
 		// persist it through rollout and thread history.
 		data["generationId"] = *generationID
 		data["generation_id"] = *generationID
+	}
+	if len(imageMetadata) > 0 {
+		// Rust #62871: the backend's per-image metadata rides on the completed
+		// item through rollout, resume, and legacy replay. It is surface
+		// metadata only and never reaches the model tool output.
+		data["imageMetadata"] = imageMetadata
+		data["image_metadata"] = imageMetadata
 	}
 	if savedPath != "" {
 		data["savedPath"] = savedPath
@@ -436,9 +443,9 @@ func (h *ImageGenerationHandler) requestForArgs(ctx context.Context, args *image
 	}, inputImages, nil
 }
 
-func (h *ImageGenerationHandler) executeImageRequest(ctx context.Context, request *imageGenerationRequest, turnID string) (string, *bool, *string, string, error) {
+func (h *ImageGenerationHandler) executeImageRequest(ctx context.Context, request *imageGenerationRequest, turnID string) (string, *bool, *string, map[string]any, string, error) {
 	if request == nil {
-		return "", nil, nil, "", fmt.Errorf("image request is nil")
+		return "", nil, nil, nil, "", fmt.Errorf("image request is nil")
 	}
 	var response *codexapi.ImageResponse
 	var requestID string
@@ -449,18 +456,18 @@ func (h *ImageGenerationHandler) executeImageRequest(ctx context.Context, reques
 	case imageGenerationRequestEdit:
 		response, requestID, err = h.postImageRequest(ctx, "images/edits", request.edit, turnID)
 	default:
-		return "", nil, nil, "", fmt.Errorf("unknown image request kind %q", request.kind)
+		return "", nil, nil, nil, "", fmt.Errorf("unknown image request kind %q", request.kind)
 	}
 	if err != nil {
-		return "", nil, nil, requestID, err
+		return "", nil, nil, nil, requestID, err
 	}
 	if response == nil || len(response.Data) == 0 {
-		return "", nil, nil, requestID, &imageGenerationRequestError{
+		return "", nil, nil, nil, requestID, &imageGenerationRequestError{
 			message:   "image generation returned no image data",
 			requestID: requestID,
 		}
 	}
-	return response.Data[0].B64JSON, transparentBackgroundValue(response.Background), response.Data[0].GenerationID, requestID, nil
+	return response.Data[0].B64JSON, transparentBackgroundValue(response.Background), response.Data[0].GenerationID, response.Data[0].ImageMetadata, requestID, nil
 }
 
 // observeImageGenerationRequestID records the nested ImageGen request id for

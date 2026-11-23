@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"codex_go/codexapi"
 	"codex_go/utils"
 )
 
@@ -1268,6 +1269,18 @@ func canonicalExtensionImageGeneration(source json.RawMessage, kind string) ([]b
 		_ = item.out.rawField("generationId", canonicalSerdeString(text))
 	} else {
 		_ = item.out.rawField("generationId", []byte("null"))
+	}
+	// Rust #62871: replaying the item decodes `imageMetadata` through
+	// `DefaultOnError`, so an invalid value is dropped and empty metadata is
+	// omitted while the image survives.
+	if raw, present := item.fields["imageMetadata"]; present && !canonicalRawIsNull(raw) {
+		if metadata := codexapi.ParseStoredImageMetadataJSON(raw); len(metadata) > 0 {
+			encoded, err := json.Marshal(metadata)
+			if err != nil {
+				return nil, false, err
+			}
+			_ = item.out.rawField("imageMetadata", encoded)
+		}
 	}
 	return item.finish()
 }
