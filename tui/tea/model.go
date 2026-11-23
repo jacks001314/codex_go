@@ -1205,6 +1205,17 @@ type AgentThreadVisibilityMsg struct {
 	Archived bool
 }
 
+// AgentThreadStatusMsg carries a thread/status/changed notification into the
+// agents overview so a Cloud thread changed by another client updates in place
+// (Rust #62858).
+type AgentThreadStatusMsg struct {
+	ThreadID          string
+	StatusType        string
+	Active            bool
+	WaitingOnApproval bool
+	WaitingOnUserInput bool
+}
+
 // AgentThreadReadStateMsg carries a thread/readState/changed notification into
 // the command center and focused-conversation acknowledgement state (Rust
 // #58263).
@@ -5143,6 +5154,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, m.applyAgentListResult(msg)
 	case AgentThreadVisibilityMsg:
 		return m, m.setAgentThreadVisibilityFromNotification(msg.ThreadID, msg.Archived)
+	case AgentThreadStatusMsg:
+		return m, m.applyAgentThreadStatus(msg)
 	case AgentThreadReadStateMsg:
 		m.applyAgentThreadReadState(msg)
 		return m, nil

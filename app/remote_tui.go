@@ -6052,6 +6052,34 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 		}
 		c.accountStatusUpdated(payload)
 		return nil
+	case appserver.NotificationThreadStatusChanged:
+		var payload appserver.ThreadStatusChangedNotification
+		if err := json.Unmarshal(message.Params, &payload); err != nil {
+			return err
+		}
+		status := payload.Status
+		statusType := strings.TrimSpace(status.Type)
+		active := strings.EqualFold(statusType, "active")
+		waitingOnApproval := false
+		waitingOnUserInput := false
+		for _, flag := range status.ActiveFlags {
+			switch flag {
+			case appserver.ThreadActiveFlagWaitingOnApproval:
+				waitingOnApproval = true
+			case appserver.ThreadActiveFlagWaitingOnUserInput:
+				waitingOnUserInput = true
+			}
+		}
+		// Rust #62858: the Agents overview follows a thread another client
+		// changed even when this TUI has no conversation stream attached.
+		c.send(codextea.AgentThreadStatusMsg{
+			ThreadID:           payload.ThreadID,
+			StatusType:         statusType,
+			Active:             active,
+			WaitingOnApproval:  waitingOnApproval,
+			WaitingOnUserInput: waitingOnUserInput,
+		})
+		return nil
 	case appserver.NotificationThreadArchived:
 		var payload appserver.ThreadArchivedNotification
 		if err := json.Unmarshal(message.Params, &payload); err != nil {

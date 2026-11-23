@@ -754,6 +754,39 @@ func (v *View) SetRowModel(threadID string, model string) bool {
 	return false
 }
 
+// SetRowStatus patches a listed task's status in place (Rust #62858: a Cloud
+// stream thread/status/changed notification updates the overview without
+// waiting for the next list refresh). It reports whether a row changed.
+func (v *View) SetRowStatus(threadID string, statusType string, active bool, waitingOnApproval bool, waitingOnUserInput bool) bool {
+	if v == nil {
+		return false
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return false
+	}
+	statusType = strings.TrimSpace(statusType)
+	group := GroupForStatus(statusType, waitingOnApproval, waitingOnUserInput)
+	for i := range v.Rows {
+		row := &v.Rows[i]
+		if strings.TrimSpace(row.ThreadID) != threadID {
+			continue
+		}
+		if row.StatusType == statusType && row.StatusActive == active &&
+			row.WaitingOnApproval == waitingOnApproval && row.WaitingOnUserInput == waitingOnUserInput &&
+			row.Group == group {
+			return false
+		}
+		row.StatusType = statusType
+		row.StatusActive = active
+		row.WaitingOnApproval = waitingOnApproval
+		row.WaitingOnUserInput = waitingOnUserInput
+		row.Group = group
+		return true
+	}
+	return false
+}
+
 func (g projectGroup) equal(other projectGroup) bool {
 	return g.commonDir == other.commonDir && g.relativeCWD == other.relativeCWD
 }
