@@ -133,6 +133,11 @@ type ToolRegistryOptions struct {
 	// FunctionDescriptionPrefixes carries the active model's
 	// functions-namespace per-tool guidance (Rust #51930).
 	FunctionDescriptionPrefixes map[string]string
+	// ModelToolMessages carries the selected model's tool catalog entry. Its
+	// four prefix tables share description_prefix_budget_bytes, validated
+	// before any tool availability is resolved (Rust #62534). Nil skips the
+	// catalog-level check while still preparing the explicit prefix maps.
+	ModelToolMessages *model.ToolMessages
 	// IndirectDescriptionPrefixes carries the active model's guidance for
 	// Code Mode, ALL_TOOLS, and tool search renderings (Rust #47642).
 	IndirectDescriptionPrefixes *tool.IndirectDescriptionPrefixes
@@ -575,6 +580,9 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 	if options == nil {
 		options = DefaultToolRegistryOptions("")
 	}
+	if err := options.ModelToolMessages.ValidateDescriptionPrefixBudget(); err != nil {
+		return nil, err
+	}
 	registry := tool.NewRegistry()
 	registry.SetDefaultInputSchemaMaxBytes(maxIntTurn(tool.DefaultCodeModeInputSchemaMaxBytes, options.CodeModeToolInputSchemaMaxBytes))
 	// Rust #50741/#50962: the environment-backed tools are advertised by the
@@ -834,7 +842,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 	}
 	var indirectPrefixes *tool.IndirectNamespacePrefixes
 	if options.IndirectDescriptionPrefixes != nil {
-		resolved, resolveErr := tool.NewIndirectNamespacePrefixes(options.IndirectDescriptionPrefixes, registry.MCPServerNamespaces())
+		resolved, resolveErr := tool.NewIndirectNamespacePrefixes(options.IndirectDescriptionPrefixes, registry.MCPServerNamespaces(), registry.BuiltinToolNamespaces())
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
@@ -844,6 +852,9 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 	if options.CodeModeOnlyStrictThirdPartyTools && options.ToolMode == model.ToolModeCodeModeOnly {
 		registry.EnforceStrictThirdPartyTools()
 	}
+	// Rust prepares function guidance before the search index and the Code
+	// Mode exec/wait wrappers capture their specifications (#62534).
+	registry.ApplyFunctionsNamespaceFunctionDescriptionPrefixes(options.FunctionDescriptionPrefixes)
 	if options.EnableToolSearch {
 		// Rust only adds tool_search when at least one deferred executor is
 		// searchable. Advertising an empty search tool causes models to emit a
@@ -890,9 +901,6 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		if err := registry.Prepend(execExecutor); err != nil {
 			return nil, err
 		}
-	}
-	if err := registry.ApplyFunctionsNamespaceFunctionDescriptionPrefixes(options.FunctionDescriptionPrefixes); err != nil {
-		return nil, err
 	}
 	if options.AllowedTools != nil {
 		registry.RestrictToTools(*options.AllowedTools)

@@ -447,8 +447,14 @@ type ToolMessages struct {
 	// IncrementalTools overrides harness-owned incremental catalog notices.
 	IncrementalTools *IncrementalToolMessages `json:"incremental_tools,omitempty"`
 	// FunctionsNamespaceFunctionsDescriptionPrefixes prepends model-owned
-	// guidance to available default-namespace function descriptions.
+	// guidance to available default-namespace function descriptions. All
+	// configured prefixes share DescriptionPrefixBudgetBytes with indirect
+	// namespace guidance (Rust #62534).
 	FunctionsNamespaceFunctionsDescriptionPrefixes map[string]string `json:"functions_namespace_functions_description_prefixes,omitempty"`
+	// DescriptionPrefixBudgetBytes bounds the total UTF-8 bytes of every
+	// trimmed prefix value configured in this catalog entry. Defaults to 512.
+	// Each configured entry counts once, including selectors that never apply.
+	DescriptionPrefixBudgetBytes *int `json:"description_prefix_budget_bytes,omitempty"`
 	// MultiAgent carries the Multi-Agent V2 tools' catalog overrides (Rust
 	// #46505).
 	MultiAgent *MultiAgentToolMessages `json:"multi_agent,omitempty"`
@@ -474,8 +480,49 @@ type CodeModeToolMessage = tool.CodeModeToolMessage
 // tools); MCP server keys are configured server names before namespace
 // normalization. Values are trimmed and empty values add no prefix.
 type IndirectDescriptionPrefixes struct {
+	// Namespaces carries exact rendered namespace selectors. Overlapping
+	// selectors must agree after trimming.
 	Namespaces map[string]string `json:"namespaces,omitempty"`
-	MCPServers map[string]string `json:"mcp_servers,omitempty"`
+	// BuiltinToolNamespaces annotates namespace headers of registered
+	// built-in tools, including headers shared with client tools. Flat
+	// listings omit this selector; external-only namespaces are ignored.
+	BuiltinToolNamespaces map[string]string `json:"builtin_tool_namespaces,omitempty"`
+	MCPServers            map[string]string `json:"mcp_servers,omitempty"`
+}
+
+// DefaultDescriptionPrefixBudgetBytes is Rust's
+// DEFAULT_DESCRIPTION_PREFIX_BUDGET_BYTES for catalog-configured tool
+// description prefixes (Rust #62534).
+const DefaultDescriptionPrefixBudgetBytes = 512
+
+// ValidateDescriptionPrefixBudget counts each configured prefix value once in
+// trimmed UTF-8 bytes across the functions and indirect namespace tables. Keys,
+// paragraph separators, and rendered copies are excluded. A missing limit uses
+// 512 bytes; a model may raise it.
+func (t *ToolMessages) ValidateDescriptionPrefixBudget() error {
+	if t == nil {
+		return nil
+	}
+	bytes := 0
+	addValues := func(values map[string]string) {
+		for _, value := range values {
+			bytes += len(strings.TrimSpace(value))
+		}
+	}
+	addValues(t.FunctionsNamespaceFunctionsDescriptionPrefixes)
+	if indirect := t.IndirectDescriptionPrefixes; indirect != nil {
+		addValues(indirect.Namespaces)
+		addValues(indirect.BuiltinToolNamespaces)
+		addValues(indirect.MCPServers)
+	}
+	limit := DefaultDescriptionPrefixBudgetBytes
+	if t.DescriptionPrefixBudgetBytes != nil {
+		limit = *t.DescriptionPrefixBudgetBytes
+	}
+	if bytes > limit {
+		return fmt.Errorf("Model catalog tool description prefixes total %d UTF-8 bytes, exceeding description_prefix_budget_bytes (%d)", bytes, limit)
+	}
+	return nil
 }
 
 // IncrementalToolMessages mirrors Rust's model-catalog overrides for
@@ -2805,8 +2852,9 @@ func cloneIndirectDescriptionPrefixes(in *IndirectDescriptionPrefixes) *Indirect
 		return nil
 	}
 	return &IndirectDescriptionPrefixes{
-		Namespaces: cloneStringMap(in.Namespaces),
-		MCPServers: cloneStringMap(in.MCPServers),
+		Namespaces:            cloneStringMap(in.Namespaces),
+		BuiltinToolNamespaces: cloneStringMap(in.BuiltinToolNamespaces),
+		MCPServers:            cloneStringMap(in.MCPServers),
 	}
 }
 

@@ -476,15 +476,13 @@ func TestRegistryAppliesFunctionsNamespaceDescriptionPrefixesLikeRust(t *testing
 			t.Fatal(err)
 		}
 	}
-	if err := registry.ApplyFunctionsNamespaceFunctionDescriptionPrefixes(map[string]string{
+	registry.ApplyFunctionsNamespaceFunctionDescriptionPrefixes(map[string]string{
 		"exec":    "  Exec guidance.  ",
 		"custom":  "Custom guidance.",
 		"create":  "Wrong namespace.",
 		"missing": "Unavailable tool.",
 		"empty":   "   ",
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	if spec, _ := registry.Spec(PlainName("exec")); spec.Description != "Exec guidance.\n\nRun code." {
 		t.Fatalf("exec description = %q", spec.Description)
 	}
@@ -502,10 +500,13 @@ func TestRegistryAppliesFunctionsNamespaceDescriptionPrefixesLikeRust(t *testing
 	if err := oversized.Register(NewExecutorFunc(Spec{Name: PlainName("two"), Description: "Two."}, nil)); err != nil {
 		t.Fatal(err)
 	}
-	if err := oversized.ApplyFunctionsNamespaceFunctionDescriptionPrefixes(map[string]string{
+	// The 256-byte per-application limit moved to the model catalog's shared
+	// description_prefix_budget_bytes check (Rust #62534).
+	oversized.ApplyFunctionsNamespaceFunctionDescriptionPrefixes(map[string]string{
 		"one": strings.Repeat("x", 200),
 		"two": strings.Repeat("y", 100),
-	}); err == nil {
-		t.Fatal("combined prefix budget was not enforced")
+	})
+	if spec, _ := oversized.Spec(PlainName("two")); spec.Description != strings.Repeat("y", 100)+"\n\nTwo." {
+		t.Fatalf("large configured prefix was not applied = %q", spec.Description)
 	}
 }

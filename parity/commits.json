@@ -52681,11 +52681,14 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "model.ToolMessages parses description_prefix_budget_bytes (default 512) and validates all four prefix tables together: each trimmed value counts once in UTF-8 bytes, including selectors that never apply; keys, separators and rendered copies are excluded.",
+    "IndirectDescriptionPrefixes.builtin_tool_namespaces resolves only namespaces with a registered built-in tool. Guidance annotates namespace headers (including headers shared with client tools) once and is omitted from flat listings; overlapping selectors must agree after trimming or report the Rust conflict message.",
+    "turn.BuildToolRegistry validates the budget before resolving tool availability, prepares functions-namespace guidance before the search index and Code Mode wrappers capture specs, and gives late-registered exec/wait wrappers the same prefix. The old 256-byte per-application limit is removed.",
+    "go test ./tool ./model ./turn -count=1; go build ./...; go vet ./...; go test ./parity -count=1"
    ],
    "kind": "runtime",
    "sha": "27e16c08c39de52a51af7c6105daa3821961469f",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Add built-in namespace guidance and budget tool description prefixes (#62534)"
   },
   {

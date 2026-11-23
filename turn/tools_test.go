@@ -854,7 +854,7 @@ func TestBuildToolRegistryAppliesIndirectDescriptionPrefixesLikeRust(t *testing.
 	if !ok || direct.Description != "Search Drive." || direct.NamespaceDescription != "Drive tools." {
 		t.Fatalf("direct MCP spec was changed = %#v", direct)
 	}
-	resolved, err := tool.NewIndirectNamespacePrefixes(options.IndirectDescriptionPrefixes, registry.MCPServerNamespaces())
+	resolved, err := tool.NewIndirectNamespacePrefixes(options.IndirectDescriptionPrefixes, registry.MCPServerNamespaces(), registry.BuiltinToolNamespaces())
 	if err != nil {
 		t.Fatalf("NewIndirectNamespacePrefixes() error = %v", err)
 	}

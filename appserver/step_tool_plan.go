@@ -171,6 +171,7 @@ func (r *RuntimeRouter) stepToolRegistryOptions(inputs rememberedTurnToolInputs,
 	options.ExperimentalSupportedTools = nil
 	options.ModelConfirmationPolicies = nil
 	options.FunctionDescriptionPrefixes = nil
+	options.ModelToolMessages = nil
 	options.IndirectDescriptionPrefixes = nil
 	options.SendUserMessageAsyncDescription = nil
 	options.RequestUserInputAsyncDescription = nil
@@ -187,6 +188,7 @@ func (r *RuntimeRouter) stepToolRegistryOptions(inputs rememberedTurnToolInputs,
 					options.SendUserMessageAsyncDescription = modelTools.SendUserMessageAsync.Description
 				}
 				options.FunctionDescriptionPrefixes = modelTools.FunctionsNamespaceFunctionsDescriptionPrefixes
+				options.ModelToolMessages = modelTools
 				options.IndirectDescriptionPrefixes = indirectDescriptionPrefixesFromModel(modelTools.IndirectDescriptionPrefixes)
 			}
 			options.RequestUserInputAsyncDescription = messages.RequestUserInputAsyncDescription()

@@ -17,7 +17,7 @@ func TestIndirectNamespacePrefixesResolveServerNamespacesLikeRust(t *testing.T) 
 		},
 	}, map[string][]string{
 		"drive": {"mcp__drive"},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("NewIndirectNamespacePrefixes() error = %v", err)
 	}
@@ -36,7 +36,7 @@ func TestIndirectNamespacePrefixesRejectConflictingMCPSelectorsLikeRust(t *testi
 	_, err := NewIndirectNamespacePrefixes(&IndirectDescriptionPrefixes{
 		Namespaces: map[string]string{"mcp__drive": "namespace guidance"},
 		MCPServers: map[string]string{"drive": "server guidance"},
-	}, map[string][]string{"drive": {"mcp__drive"}})
+	}, map[string][]string{"drive": {"mcp__drive"}}, nil)
 	var conflict *IndirectNamespacePrefixConflict
 	if !errors.As(err, &conflict) {
 		t.Fatalf("error = %v, want IndirectNamespacePrefixConflict", err)
@@ -49,7 +49,7 @@ func TestIndirectNamespacePrefixesRejectConflictingMCPSelectorsLikeRust(t *testi
 func TestIndirectNamespacePrefixesApplyOnlyToRenderedSpecCopiesLikeRust(t *testing.T) {
 	prefixes, err := NewIndirectNamespacePrefixes(&IndirectDescriptionPrefixes{
 		Namespaces: map[string]string{"functions": "Function guidance.", "mcp__drive": "Drive guidance."},
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("NewIndirectNamespacePrefixes() error = %v", err)
 	}

@@ -10,7 +10,11 @@ import (
 // applied only to indirectly presented tools, never to direct specifications.
 type IndirectDescriptionPrefixes struct {
 	Namespaces map[string]string `json:"namespaces,omitempty"`
-	MCPServers map[string]string `json:"mcp_servers,omitempty"`
+	// BuiltinToolNamespaces annotates namespace headers of registered built-in
+	// tools, including headers shared with client tools. Flat listings omit
+	// this selector, and external-only namespaces are ignored (Rust #62534).
+	BuiltinToolNamespaces map[string]string `json:"builtin_tool_namespaces,omitempty"`
+	MCPServers            map[string]string `json:"mcp_servers,omitempty"`
 }
 
 // IndirectNamespacePrefixConflict reports two catalog selectors that resolve to
@@ -34,8 +38,11 @@ func (e *IndirectNamespacePrefixConflict) Error() string {
 }
 
 // IndirectNamespacePrefixes is a resolved, trimmed namespace-to-prefix map.
+// Builtin headers annotate namespace headers only; the prefix map also applies
+// to each flat entry in an indirectly presented listing.
 type IndirectNamespacePrefixes struct {
-	prefixes map[string]string
+	prefixes       map[string]string
+	builtinHeaders map[string]string
 }
 
 // NewIndirectNamespacePrefixes expands configured MCP server selectors through
@@ -45,8 +52,10 @@ type IndirectNamespacePrefixes struct {
 func NewIndirectNamespacePrefixes(
 	prefixes *IndirectDescriptionPrefixes,
 	serverNamespaces map[string][]string,
+	builtinNamespaces []string,
 ) (*IndirectNamespacePrefixes, error) {
 	resolved := map[string]resolvedIndirectPrefix{}
+	builtinHeaders := map[string]string{}
 	if prefixes != nil {
 		for namespace, prefix := range prefixes.Namespaces {
 			namespace = strings.TrimSpace(namespace)
@@ -63,23 +72,35 @@ func NewIndirectNamespacePrefixes(
 			if server == "" {
 				continue
 			}
-			trimmed := strings.TrimSpace(prefix)
 			for _, namespace := range serverNamespaces[server] {
+				if err := insertIndirectPrefix(&resolved, namespace, prefix, "mcp_servers."+server); err != nil {
+					return nil, err
+				}
+			}
+		}
+		if len(prefixes.BuiltinToolNamespaces) > 0 {
+			registered := make(map[string]struct{}, len(builtinNamespaces))
+			for _, namespace := range builtinNamespaces {
+				if namespace = strings.TrimSpace(namespace); namespace != "" {
+					registered[namespace] = struct{}{}
+				}
+			}
+			for namespace, prefix := range prefixes.BuiltinToolNamespaces {
 				namespace = strings.TrimSpace(namespace)
 				if namespace == "" {
 					continue
 				}
-				source := "mcp_servers." + server
-				existing, ok := resolved[namespace]
-				if ok && existing.value != trimmed {
-					return nil, &IndirectNamespacePrefixConflict{
-						Namespace:    namespace,
-						FirstSource:  existing.source,
-						SecondSource: source,
-					}
+				if _, ok := registered[namespace]; !ok {
+					continue
 				}
-				if !ok {
-					resolved[namespace] = resolvedIndirectPrefix{value: trimmed, source: source}
+				if _, ok := resolved[namespace]; ok {
+					if err := insertIndirectPrefix(&resolved, namespace, prefix, "builtin_tool_namespaces."+namespace); err != nil {
+						return nil, err
+					}
+					continue
+				}
+				if trimmed := strings.TrimSpace(prefix); trimmed != "" {
+					builtinHeaders[namespace] = trimmed
 				}
 			}
 		}
@@ -90,7 +111,32 @@ func NewIndirectNamespacePrefixes(
 			out[namespace] = prefix.value
 		}
 	}
-	return &IndirectNamespacePrefixes{prefixes: out}, nil
+	return &IndirectNamespacePrefixes{prefixes: out, builtinHeaders: builtinHeaders}, nil
+}
+
+func insertIndirectPrefix(
+	resolved *map[string]resolvedIndirectPrefix,
+	namespace string,
+	prefix string,
+	source string,
+) error {
+	namespace = strings.TrimSpace(namespace)
+	if namespace == "" {
+		return nil
+	}
+	trimmed := strings.TrimSpace(prefix)
+	existing, ok := (*resolved)[namespace]
+	if ok && existing.value != trimmed {
+		return &IndirectNamespacePrefixConflict{
+			Namespace:    namespace,
+			FirstSource:  existing.source,
+			SecondSource: source,
+		}
+	}
+	if !ok {
+		(*resolved)[namespace] = resolvedIndirectPrefix{value: trimmed, source: source}
+	}
+	return nil
 }
 
 type resolvedIndirectPrefix struct {
@@ -98,17 +144,36 @@ type resolvedIndirectPrefix struct {
 	source string
 }
 
-// PrefixForNamespace returns the trimmed prefix for a rendered namespace.
-// Plain function tools use the `functions` namespace selector.
+// PrefixForNamespace returns the trimmed guidance for a rendered namespace
+// header. Plain function tools use the `functions` namespace selector.
+// Built-in namespace guidance applies when no explicit indirect selector
+// resolves the same namespace.
 func (p *IndirectNamespacePrefixes) PrefixForNamespace(namespace string) string {
 	if p == nil {
 		return ""
 	}
+	namespace = renderedNamespace(namespace)
+	if prefix, ok := p.prefixes[namespace]; ok {
+		return prefix
+	}
+	return p.builtinHeaders[namespace]
+}
+
+// flatPrefix returns guidance attached to an individual entry in a flat
+// indirect listing. Built-in namespace selectors annotate headers only.
+func (p *IndirectNamespacePrefixes) flatPrefix(namespace string) string {
+	if p == nil {
+		return ""
+	}
+	return p.prefixes[renderedNamespace(namespace)]
+}
+
+func renderedNamespace(namespace string) string {
 	namespace = strings.TrimSpace(namespace)
 	if namespace == "" {
-		namespace = defaultFunctionNamespace
+		return defaultFunctionNamespace
 	}
-	return p.prefixes[namespace]
+	return namespace
 }
 
 // ApplyToSpec returns a copy of one tool specification with indirect rendering
@@ -118,12 +183,10 @@ func (p *IndirectNamespacePrefixes) ApplyToSpec(spec Spec) Spec {
 		return spec
 	}
 	namespace := renderedToolNamespace(spec.Name)
-	prefix := p.PrefixForNamespace(namespace)
-	if prefix == "" {
-		return spec
+	if prefix := p.flatPrefix(namespace); prefix != "" {
+		spec.Description = prependToolDescriptionPrefix(prefix, spec.Description)
 	}
-	spec.Description = prependToolDescriptionPrefix(prefix, spec.Description)
-	if strings.TrimSpace(spec.Name.Namespace) != "" {
+	if prefix := p.PrefixForNamespace(namespace); prefix != "" && strings.TrimSpace(spec.Name.Namespace) != "" {
 		spec.NamespaceDescription = prependToolDescriptionPrefix(prefix, spec.NamespaceDescription)
 	}
 	return spec

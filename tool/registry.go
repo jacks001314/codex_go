@@ -360,6 +360,10 @@ type Registry struct {
 	nativeReview               map[string]bool
 	order                      []string
 	defaultInputSchemaMaxBytes int
+	// functionsNamespaceFunctionPrefixes holds the trimmed catalog guidance
+	// for plain functions. Tools registered after preparation, including the
+	// Code Mode exec/wait wrappers, receive the same prefix (Rust #62534).
+	functionsNamespaceFunctionPrefixes map[string]string
 }
 
 // DefaultCodeModeInputSchemaMaxBytes is Rust's
@@ -456,10 +460,10 @@ func (r *Registry) SetCodeModeMessages(messages *CodeModeToolMessages) {
 	}
 	r.mu.Lock()
 	if executor != nil && execSpec.Name.Key() != "" {
-		r.specs[execSpec.Name.Key()] = execSpec
+		r.specs[execSpec.Name.Key()] = r.applyWrapperFunctionDescriptionPrefixLocked(execSpec)
 	}
 	if waitExecutor != nil && waitSpec.Name.Key() != "" {
-		r.specs[waitSpec.Name.Key()] = waitSpec
+		r.specs[waitSpec.Name.Key()] = r.applyWrapperFunctionDescriptionPrefixLocked(waitSpec)
 	}
 	r.mu.Unlock()
 }
@@ -524,6 +528,7 @@ func (r *Registry) register(executor Executor, skipDuplicate bool, prepend bool)
 	if spec.InputSchemaMaxBytes < r.defaultInputSchemaMaxBytes {
 		spec.InputSchemaMaxBytes = r.defaultInputSchemaMaxBytes
 	}
+	spec = r.applyWrapperFunctionDescriptionPrefixLocked(spec)
 	if _, exists := r.executors[key]; exists {
 		if skipDuplicate {
 			return false, nil
@@ -762,39 +767,107 @@ func (r *Registry) MCPServerNamespaces() map[string][]string {
 	return out
 }
 
-// ApplyFunctionsNamespaceFunctionDescriptionPrefixes prepends model-owned
-// guidance to available default-namespace tools. Values are trimmed; empty
-// values and unavailable names add nothing. The combined prefix text for
-// reachable tools, including two-byte separators, is capped at 256 UTF-8 bytes
-// (Rust #51930).
-func (r *Registry) ApplyFunctionsNamespaceFunctionDescriptionPrefixes(prefixes map[string]string) error {
-	if r == nil || len(prefixes) == 0 {
-		return nil
+// ApplyFunctionsNamespaceFunctionDescriptionPrefixes prepares model-owned
+// guidance for registered default-namespace functions. Values are trimmed;
+// empty values and unavailable names add nothing. The catalog's four prefix
+// tables share one UTF-8 byte budget that is validated before tool availability
+// is resolved (Rust #62534), so this method does not apply a separate limit.
+func (r *Registry) ApplyFunctionsNamespaceFunctionDescriptionPrefixes(prefixes map[string]string) {
+	if r == nil {
+		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	remaining := 256
+	normalized := map[string]string{}
+	if len(prefixes) > 0 {
+		for _, key := range r.order {
+			spec := r.specs[key]
+			if spec.Exposure == ExposureHidden || strings.TrimSpace(spec.Name.Namespace) != "" {
+				continue
+			}
+			if _, exists := normalized[spec.Name.Name]; exists {
+				continue
+			}
+			prefix, ok := prefixes[spec.Name.Name]
+			if !ok {
+				continue
+			}
+			if prefix = strings.TrimSpace(prefix); prefix != "" {
+				normalized[spec.Name.Name] = prefix
+			}
+		}
+		// The planner adds these wrappers after preparing registered tools.
+		for _, name := range []string{CodeModeExecToolName, CodeModeWaitToolName} {
+			if _, exists := normalized[name]; exists {
+				continue
+			}
+			if prefix, ok := prefixes[name]; ok {
+				if prefix = strings.TrimSpace(prefix); prefix != "" {
+					normalized[name] = prefix
+				}
+			}
+		}
+	}
+	r.functionsNamespaceFunctionPrefixes = normalized
 	for _, key := range r.order {
 		spec := r.specs[key]
-		if strings.TrimSpace(spec.Name.Namespace) != "" {
+		if spec.Exposure == ExposureHidden {
 			continue
 		}
-		prefix, ok := prefixes[spec.Name.Name]
-		if !ok {
-			continue
-		}
-		prefix = strings.TrimSpace(prefix)
-		if prefix == "" {
-			continue
-		}
-		if len(prefix)+2 > remaining {
-			return errors.New("available functions' description prefixes exceed the 256-byte combined limit")
-		}
-		remaining -= len(prefix) + 2
-		spec.Description = prependToolDescriptionPrefix(prefix, spec.Description)
-		r.specs[key] = spec
+		r.specs[key] = r.applyFunctionDescriptionPrefixLocked(spec)
 	}
-	return nil
+}
+
+// applyFunctionDescriptionPrefixLocked prepares a tool specification with the
+// functions-namespace guidance already configured on the registry. The caller
+// must hold r.mu or have exclusive access.
+func (r *Registry) applyFunctionDescriptionPrefixLocked(spec Spec) Spec {
+	if r == nil || len(r.functionsNamespaceFunctionPrefixes) == 0 || strings.TrimSpace(spec.Name.Namespace) != "" {
+		return spec
+	}
+	prefix, ok := r.functionsNamespaceFunctionPrefixes[strings.TrimSpace(spec.Name.Name)]
+	if !ok || prefix == "" {
+		return spec
+	}
+	spec.Description = prependToolDescriptionPrefix(prefix, spec.Description)
+	return spec
+}
+
+// applyWrapperFunctionDescriptionPrefixLocked prepares a Code Mode exec/wait
+// wrapper registered after the planner collected the other plain functions.
+// Other late registrations never received a configured prefix in Rust.
+func (r *Registry) applyWrapperFunctionDescriptionPrefixLocked(spec Spec) Spec {
+	name := strings.TrimSpace(spec.Name.Name)
+	if name != CodeModeExecToolName && name != CodeModeWaitToolName {
+		return spec
+	}
+	return r.applyFunctionDescriptionPrefixLocked(spec)
+}
+
+// BuiltinToolNamespaces reports the rendered namespaces that contain a
+// registered built-in tool. Built-in namespace guidance applies to these
+// headers, including headers shared with client tools (Rust #62534).
+func (r *Registry) BuiltinToolNamespaces() []string {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	seen := map[string]struct{}{}
+	out := make([]string, 0)
+	for _, key := range r.order {
+		spec := r.specs[key]
+		if spec.ThirdParty {
+			continue
+		}
+		namespace := renderedToolNamespace(spec.Name)
+		if _, exists := seen[namespace]; exists {
+			continue
+		}
+		seen[namespace] = struct{}{}
+		out = append(out, namespace)
+	}
+	return out
 }
 
 func prependToolDescriptionPrefix(prefix string, description string) string {

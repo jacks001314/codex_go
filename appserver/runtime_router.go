@@ -18750,8 +18750,9 @@ func indirectDescriptionPrefixesFromModel(in *model.IndirectDescriptionPrefixes)
 		return nil
 	}
 	return &tool.IndirectDescriptionPrefixes{
-		Namespaces: cloneStringMap(in.Namespaces),
-		MCPServers: cloneStringMap(in.MCPServers),
+		Namespaces:            cloneStringMap(in.Namespaces),
+		BuiltinToolNamespaces: cloneStringMap(in.BuiltinToolNamespaces),
+		MCPServers:            cloneStringMap(in.MCPServers),
 	}
 }
 
@@ -18781,7 +18782,7 @@ func resolvedIndirectDescriptionPrefixesForTurn(
 	if prefixes == nil {
 		return nil, nil
 	}
-	return tool.NewIndirectNamespacePrefixes(prefixes, router.Registry().MCPServerNamespaces())
+	return tool.NewIndirectNamespacePrefixes(prefixes, router.Registry().MCPServerNamespaces(), router.Registry().BuiltinToolNamespaces())
 }
 
 // markThreadMemoryPollutedOnToolOutput mirrors Rust's `handle_any_tool`
@@ -19151,6 +19152,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 					options.SendUserMessageAsyncDescription = tools.SendUserMessageAsync.Description
 				}
 				options.FunctionDescriptionPrefixes = tools.FunctionsNamespaceFunctionsDescriptionPrefixes
+				options.ModelToolMessages = tools
 				options.IndirectDescriptionPrefixes = indirectDescriptionPrefixesFromModel(tools.IndirectDescriptionPrefixes)
 			}
 			// Rust #47773: request_user_input_async uses the same catalog
