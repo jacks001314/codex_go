@@ -55214,9 +55214,21 @@
    "sha": "8d867a0c7dcfa44b5d63709303e4e20abb864564",
    "status": "not_applicable",
    "subject": "Remove redundant Responses WebSocket v2 beta header test (#63409)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 145: not_applicable - Rust #63414 deletes the app-server unit test `read_summary_from_rollout_returns_empty_preview_when_no_user_message`, which only asserted that a rollout holding session metadata alone yields an empty preview. The behavior stays covered in Go by appserver/router_test.go (thread preview is empty and the pathless thread/list payload omits it) and appserver/state_runtime_test.go (archived thread with an empty preview stays visible), so there is no production code to port."
+   ],
+   "kind": "runtime",
+   "sha": "964fdd565e29d9e1ab6a5caabb70765d0b49e7ad",
+   "status": "not_applicable",
+   "subject": "Remove the empty-preview rollout summary test (#63414)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "8d867a0c7dcfa44b5d63709303e4e20abb864564",
+ "rustToInclusive": "964fdd565e29d9e1ab6a5caabb70765d0b49e7ad",
  "schemaVersion": 1
 }
