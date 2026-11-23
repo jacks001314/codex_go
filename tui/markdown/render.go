@@ -687,11 +687,14 @@ func repaintListMarkers(rendered string, marker *regexp.Regexp, markerSGR string
 // Rust #54315 contrasts every one of those foregrounds against the terminal
 // background before the renderer sees them.
 func applyThemeMarkupColors(style ansi.StyleConfig, themeID string, level codextui.StdoutColorLevel) ansi.StyleConfig {
+	// Rust #62840 reuses one syntax highlighter for every foreground lookup in
+	// MarkdownStyles, so the theme is selected once per style build.
+	resolver := codextui.NewThemeScopeResolver(themeID)
 	foreground := func(scopes ...string) *string {
 		// Rust #54315: every themed Markdown foreground goes through
 		// `readable_color_on(fg, None)` so syntax colours stay legible on the
 		// terminal background. Inline code keeps its raw syntax colour.
-		if value := codextui.ThemeScopeForegroundValueReadable(themeID, level, scopes...); value != "" {
+		if value := resolver.ForegroundValueReadable(level, scopes...); value != "" {
 			return styleString(value)
 		}
 		return nil
@@ -722,7 +725,7 @@ func applyThemeMarkupColors(style ansi.StyleConfig, themeID string, level codext
 	// Rust #46069: inline code and local file paths (rendered as code spans)
 	// borrow the theme's Markdown raw-text foreground, keeping cyan when the
 	// theme styles neither scope.
-	if value := codextui.ThemeScopeForegroundValue(themeID, "markup.inline.raw.string.markdown", "markup.raw.inline.markdown"); value != "" {
+	if value := resolver.ForegroundValue("markup.inline.raw.string.markdown", "markup.raw.inline.markdown"); value != "" {
 		style.Code.StylePrimitive.Color = styleString(value)
 	}
 	return style

@@ -18,6 +18,7 @@ import (
 var bundledThemeAssets embed.FS
 
 var (
+	bundledThemeParses       sync.Map
 	bundledThemeChromaStyles sync.Map
 	bundledThemeAccents      sync.Map
 )
@@ -38,19 +39,29 @@ func bundledThemeFileNames() []string {
 	return names
 }
 
+// loadBundledTheme parses an embedded theme once and reuses the result: the
+// assets are immutable, and Markdown style building looks up many scopes per
+// render (Rust #62840 reuses one highlighter for the same reason).
 func loadBundledTheme(name string) *tmTheme {
 	id := strings.ToLower(strings.TrimSpace(name))
 	if id == "" {
 		return nil
 	}
+	if cached, ok := bundledThemeParses.Load(id); ok {
+		theme, _ := cached.(*tmTheme)
+		return theme
+	}
 	data, err := bundledThemeAssets.ReadFile("themes/assets/" + id + ".tmTheme")
 	if err != nil {
+		bundledThemeParses.Store(id, (*tmTheme)(nil))
 		return nil
 	}
 	theme, err := parseTMTheme(data)
 	if err != nil {
+		bundledThemeParses.Store(id, (*tmTheme)(nil))
 		return nil
 	}
+	bundledThemeParses.Store(id, theme)
 	return theme
 }
 

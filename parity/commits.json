@@ -52114,11 +52114,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Port of Rust's sidebar_document/open_error.rs: a failed preview now shows a classified heading (File not found with the moved-file hint for the three missing-path OS messages, Permission denied with the read-access hint for the three permission messages, otherwise Could not open file plus the read error), the bold attempted filename and a secondary 'in {directory}' line, then the hint. tui/tea/sidebar_document.go splits the path into directory/basename, wraps long filenames and hints word by word with hard breaks, and wraps the directory at its separators like Rust's split_inclusive(['/', '\\\\']); an unresolved link keeps the attempted path in the pane, so the original path stays visible. TestSidebarDocumentOpenErrorNamesPathLikeRust covers the three classifications and TestSidebarDocumentOpenErrorWrapsNarrowPaneLikeRust pins wrapping inside a 14-column pane; go test ./tui/tea and go build ./... pass."
    ],
    "kind": "runtime",
    "sha": "333ea3194740c2e19edb215e7c8867170e013e13",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Make sidebar file preview errors easier to act on (#62362)"
   },
   {
@@ -52512,11 +52512,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "N/A by architecture: the commit adds ToolLifecycleContributor::mcp_tool_request_meta so extensions can attach request _meta to outgoing MCP calls. Go has no extension tool-lifecycle contributor API - tool.McpToolContext (tool/hooks.go) exists only as read-only provenance inside pre/post tool-use hook payloads, and mcp/tool_executor.go builds it for hook dispatch; the MCP client request has no contributor hook or _meta injection point to extend. The plugin package id is already carried as McpToolContext.PluginID, and Go's 64 KiB persisted-result limits live in their own packages (e.g. exec.DefaultOutputMaxBytes), so no exported constant needed moving."
    ],
    "kind": "runtime",
    "sha": "c764c44a0559b36e016efefcfeb473966162e5d5",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Let extensions attach metadata to MCP tool requests (#62435)"
   },
   {
@@ -53610,11 +53610,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Reuse in place: tui.ThemeScopeResolver (tui/theme_scope_foreground.go) selects the custom .tmTheme, bundled asset, or chroma mapping once and serves every scope lookup, mirroring MarkdownStyles::for_theme building one Highlighter; applyThemeMarkupColors (tui/markdown/render.go) now resolves headings, emphasis, strong, link, blockquote and inline code through a single resolver instead of ~11 per-lookup theme loads. loadBundledTheme caches the parsed embedded asset (tui/bundled_themes.go), so repeated style builds stop re-reading the .tmTheme. The readable_color_on adjustment (#54315) and the accent-colour fallback for inline code are preserved; package-level ThemeScopeForeground* helpers delegate to the resolver. TestThemeScopeResolverMatchesPerLookupLikeRust pins equal colours for ada/dracula/nord/catppuccin-mocha across ten Markdown scopes and TestBundledThemeParsingIsReusedLikeRust pins the cached parse; go test ./tui/... and go build ./... pass apart from the pre-existing TestResolvedTooltipsRenderRustSnapshotLabels failure."
    ],
    "kind": "runtime",
    "sha": "5bee962f5e9c99c1e91b3fd097b03fc280aaf956",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Reuse one syntax highlighter when building TUI Markdown styles (#62840)"
   },
   {
@@ -54220,11 +54220,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "N/A by architecture: the commit makes Rust's terminal_probe poll readable input with a zero timeout before every read so a launcher clearing O_NONBLOCK on the duplicated descriptor cannot block past the deadline. Go has no probe read loop with a deadline: tui/terminal_probe.go only builds the startup queries (StartupProbeQueryTerminalIdentity) and parses replies (ParseCursorPosition/UpdateStartupProbe), while the reply bytes arrive through the Bubble Tea input loop and pty reads use ptyio deadlines (ptyio/pty_unix.go). There is no dedicated probe reader to guard."
    ],
    "kind": "runtime",
    "sha": "1476a08f1b410e359e64becf2494bc248743e396",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Prevent TUI startup hangs when a launcher restores blocking input (#63089)"
   },
   {

@@ -18,15 +18,131 @@ import (
 // colour-level gate in the Mermaid path), so this emits the theme's rgb as a
 // truecolor sequence and a palette-encoded theme as an indexed sequence.
 
+// ThemeScopeResolver resolves many TextMate scopes against one theme. Rust
+// #62840 builds a single highlighter for every foreground lookup in
+// MarkdownStyles; Go mirrors that by selecting the custom, bundled, or chroma
+// theme once per Markdown style build instead of once per lookup.
+type ThemeScopeResolver struct {
+	id          string
+	textmate    *tmTheme
+	chromaStyle *chroma.Style
+	chromaText  chroma.Colour
+}
+
+// NewThemeScopeResolver selects the theme a theme id resolves to:
+// a custom `.tmTheme`, then the bundled asset, then the chroma mapping.
+func NewThemeScopeResolver(themeID string) *ThemeScopeResolver {
+	id := strings.ToLower(strings.TrimSpace(themeID))
+	resolver := &ThemeScopeResolver{id: id}
+	if id == "" {
+		return resolver
+	}
+	if theme := loadCustomTheme(id); theme != nil {
+		resolver.textmate = theme
+		return resolver
+	}
+	if theme := loadBundledTheme(id); theme != nil {
+		resolver.textmate = theme
+		return resolver
+	}
+	style := chromastyles.Get(ChromaThemeForCodexTheme(id))
+	resolver.chromaStyle = style
+	resolver.chromaText = style.Get(chroma.Text).Colour
+	return resolver
+}
+
+// Foreground resolves the theme's foreground colour for the first scope it
+// styles. A parsed TextMate theme is authoritative: a scope it leaves to the
+// terminal default has no colour, so the caller's fallback applies rather than
+// borrowing another source. A chroma-mapped theme uses the resolved style's own
+// token colour and skips a token that only inherits the default text colour,
+// which would otherwise mask the caller's fallback.
+func (r *ThemeScopeResolver) Foreground(scopes ...string) (TerminalColor, bool) {
+	if r == nil || r.id == "" {
+		return TerminalColor{}, false
+	}
+	if r.textmate != nil {
+		return r.textmate.scopeForeground(scopes...)
+	}
+	for _, scope := range scopes {
+		// A bundled bat theme resolves the scopes recorded in
+		// bat_theme_scopes.go exactly as Rust does; a theme that leaves the
+		// scope unstyled has no foreground to borrow, so the next scope (and
+		// ultimately the caller's fallback) still applies.
+		if colour, ok, known := batThemeRawInlineForeground(r.id, scope); known {
+			if ok {
+				return colour, true
+			}
+			continue
+		}
+		token, ok := tmThemeSelectorToken(scope)
+		if !ok {
+			continue
+		}
+		colour := r.chromaStyle.Get(token).Colour
+		if colour.IsSet() && colour != r.chromaText {
+			return TerminalColor{RGB: &RGB{R: uint8(colour.Red()), G: uint8(colour.Green()), B: uint8(colour.Blue())}}, true
+		}
+	}
+	return TerminalColor{}, false
+}
+
+// ForegroundSGR renders Foreground as an SGR prefix.
+func (r *ThemeScopeResolver) ForegroundSGR(scopes ...string) string {
+	colour, ok := r.Foreground(scopes...)
+	if !ok {
+		return ""
+	}
+	return themeForegroundSGR(colour)
+}
+
+// ForegroundValue renders Foreground in the value form glamour resolves.
+func (r *ThemeScopeResolver) ForegroundValue(scopes ...string) string {
+	colour, ok := r.Foreground(scopes...)
+	if !ok {
+		return ""
+	}
+	return themeForegroundValue(colour)
+}
+
+// ForegroundValueReadable renders Foreground in the value form glamour accepts
+// after the contrast adaptation Rust applies to every themed Markdown
+// foreground (`readable_color_on(color, None)`, #54315).
+func (r *ThemeScopeResolver) ForegroundValueReadable(level StdoutColorLevel, scopes ...string) string {
+	colour, ok := r.Foreground(scopes...)
+	if !ok {
+		return ""
+	}
+	return themeForegroundValueReadable(colour, level)
+}
+
 // ThemeScopeForegroundSGR renders the theme's foreground colour for the first
 // matching scope as an SGR prefix. It returns "" when the theme styles none of
 // the scopes or the scope resolves to the terminal default, so the caller keeps
 // its own fallback.
 func ThemeScopeForegroundSGR(themeID string, scopes ...string) string {
-	colour, ok := themeScopeForeground(themeID, scopes...)
-	if !ok {
-		return ""
-	}
+	return NewThemeScopeResolver(themeID).ForegroundSGR(scopes...)
+}
+
+// ThemeScopeForegroundValue renders the theme's foreground colour for the first
+// matching scope in the value form glamour resolves ("#rrggbb" for a truecolor
+// theme, a decimal palette index otherwise). It returns "" when the theme styles
+// none of the scopes, so the caller keeps its own fallback (Rust
+// `foreground_style_for_scopes_with_theme` returning None).
+func ThemeScopeForegroundValue(themeID string, scopes ...string) string {
+	return NewThemeScopeResolver(themeID).ForegroundValue(scopes...)
+}
+
+// ThemeScopeForegroundValueReadable is ThemeScopeForegroundValue with the
+// contrast adaptation Rust applies to every themed Markdown foreground
+// (`readable_color_on(color, None)`, #54315). The scope's colour is resolved
+// against the terminal's default background and re-encoded in the value form
+// glamour accepts.
+func ThemeScopeForegroundValueReadable(themeID string, level StdoutColorLevel, scopes ...string) string {
+	return NewThemeScopeResolver(themeID).ForegroundValueReadable(level, scopes...)
+}
+
+func themeForegroundSGR(colour TerminalColor) string {
 	if colour.Index != nil {
 		return fmt.Sprintf("\x1b[38;5;%dm", *colour.Index)
 	}
@@ -36,16 +152,7 @@ func ThemeScopeForegroundSGR(themeID string, scopes ...string) string {
 	return ""
 }
 
-// ThemeScopeForegroundValue renders the theme's foreground colour for the first
-// matching scope in the value form glamour resolves ("#rrggbb" for a truecolor
-// theme, a decimal palette index otherwise). It returns "" when the theme styles
-// none of the scopes, so the caller keeps its own fallback (Rust
-// `foreground_style_for_scopes_with_theme` returning None).
-func ThemeScopeForegroundValue(themeID string, scopes ...string) string {
-	colour, ok := themeScopeForeground(themeID, scopes...)
-	if !ok {
-		return ""
-	}
+func themeForegroundValue(colour TerminalColor) string {
 	if colour.RGB != nil {
 		return fmt.Sprintf("#%02x%02x%02x", colour.RGB.R, colour.RGB.G, colour.RGB.B)
 	}
@@ -55,16 +162,7 @@ func ThemeScopeForegroundValue(themeID string, scopes ...string) string {
 	return ""
 }
 
-// ThemeScopeForegroundValueReadable is ThemeScopeForegroundValue with the
-// contrast adaptation Rust applies to every themed Markdown foreground
-// (`readable_color_on(color, None)`, #54315). The scope's colour is resolved
-// against the terminal's default background and re-encoded in the value form
-// glamour accepts.
-func ThemeScopeForegroundValueReadable(themeID string, level StdoutColorLevel, scopes ...string) string {
-	colour, ok := themeScopeForeground(themeID, scopes...)
-	if !ok {
-		return ""
-	}
+func themeForegroundValueReadable(colour TerminalColor, level StdoutColorLevel) string {
 	adapted := ReadableColorOn(colour, nil, level)
 	if adapted.Index != nil {
 		return strconv.Itoa(int(*adapted.Index))
@@ -75,51 +173,13 @@ func ThemeScopeForegroundValueReadable(themeID string, level StdoutColorLevel, s
 	// A colour level that cannot express the adapted colour (or a terminal
 	// whose default background is unknown) keeps the theme's own value; the
 	// renderer's colour profile still quantizes it for the terminal.
-	return ThemeScopeForegroundValue(themeID, scopes...)
+	return themeForegroundValue(colour)
 }
 
 // themeScopeForeground resolves a theme's foreground colour for the first scope
-// it styles. A custom `.tmTheme` wins over the bundled asset, and a chroma-mapped
-// theme falls back to the resolved style's own token colour (skipping a token
-// that only inherits the default text colour, which would otherwise mask the
-// caller's fallback).
+// it styles.
 func themeScopeForeground(themeID string, scopes ...string) (TerminalColor, bool) {
-	id := strings.ToLower(strings.TrimSpace(themeID))
-	if id == "" {
-		return TerminalColor{}, false
-	}
-	if theme := loadCustomTheme(id); theme != nil {
-		// A parsed theme is authoritative: a scope it leaves to the terminal
-		// default has no colour, so Rust falls through to the caller's fallback
-		// rather than borrowing another source.
-		return theme.scopeForeground(scopes...)
-	}
-	if theme := loadBundledTheme(id); theme != nil {
-		return theme.scopeForeground(scopes...)
-	}
-	style := chromastyles.Get(ChromaThemeForCodexTheme(id))
-	defaultText := style.Get(chroma.Text).Colour
-	for _, scope := range scopes {
-		// A bundled bat theme resolves the scopes recorded in
-		// bat_theme_scopes.go exactly as Rust does; a theme that leaves the
-		// scope unstyled has no foreground to borrow, so the next scope (and
-		// ultimately the caller's fallback) still applies.
-		if colour, ok, known := batThemeRawInlineForeground(id, scope); known {
-			if ok {
-				return colour, true
-			}
-			continue
-		}
-		token, ok := tmThemeSelectorToken(scope)
-		if !ok {
-			continue
-		}
-		colour := style.Get(token).Colour
-		if colour.IsSet() && colour != defaultText {
-			return TerminalColor{RGB: &RGB{R: uint8(colour.Red()), G: uint8(colour.Green()), B: uint8(colour.Blue())}}, true
-		}
-	}
-	return TerminalColor{}, false
+	return NewThemeScopeResolver(themeID).Foreground(scopes...)
 }
 
 // scopeForeground returns the theme's foreground for the first scope whose

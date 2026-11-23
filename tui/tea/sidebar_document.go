@@ -784,12 +784,7 @@ func (m *Model) buildSidebarDocumentLines(tab *sidebarDocumentTab, width int) []
 		return []string{"\x1b[2m" + m.sidebarLoadingGlyphAt(started) + " Opening…\x1b[22m"}
 	}
 	if view.Err != "" {
-		message := "Could not open file: " + view.Err
-		lines := wrapSidebarChooserText(message, width)
-		for index := range lines {
-			lines[index] = "\x1b[31m" + lines[index] + "\x1b[39m"
-		}
-		return lines
+		return sidebarDocumentOpenErrorLines(tab, view, width)
 	}
 	if view.Code {
 		return m.sidebarDocumentCodeLines(view, width)
@@ -805,6 +800,183 @@ func (m *Model) buildSidebarDocumentLines(tab *sidebarDocumentTab, width int) []
 		lines = append(lines, codextui.TruncateToWidth(line, width))
 	}
 	return lines
+}
+
+// sidebarDocumentOpenErrorLines renders a failed preview the way Rust #62362
+// does (tui/src/app/sidebar_document/open_error.rs): the heading classifies the
+// read failure, the attempted file and its directory follow so a truncated tab
+// label cannot hide which file failed, and the hint says what to do next.
+func sidebarDocumentOpenErrorLines(tab *sidebarDocumentTab, view SidebarDocumentView, width int) []string {
+	path := strings.TrimSpace(view.Path)
+	if path == "" && tab != nil {
+		path = strings.TrimSpace(tab.Path)
+	}
+	heading, hint := sidebarDocumentOpenErrorText(view.Err)
+	lines := []string{sidebarDocumentOpenErrorHeading(heading), ""}
+	directory, filename := sidebarDocumentSplitPath(path)
+	if filename == "" {
+		filename = path
+	}
+	for _, part := range sidebarDocumentErrorWrapText(filename, width) {
+		lines = append(lines, "\x1b[1m"+part+"\x1b[22m")
+	}
+	if directory != "" {
+		for _, part := range sidebarDocumentErrorWrapPath("in "+directory, width) {
+			lines = append(lines, "\x1b[2m"+part+"\x1b[22m")
+		}
+	}
+	lines = append(lines, "")
+	for _, part := range sidebarDocumentErrorWrapText(hint, width) {
+		lines = append(lines, part)
+	}
+	return lines
+}
+
+// sidebarDocumentOpenErrorText classifies a failed read. The app-server sends
+// the OS message, so the reason decides the heading and the recovery hint; any
+// other failure keeps its own detail (Rust open_error.rs).
+func sidebarDocumentOpenErrorText(readErr string) (string, string) {
+	message := strings.TrimSpace(readErr)
+	if reason, _, ok := strings.Cut(message, " (os error "); ok {
+		message = strings.TrimSpace(reason)
+	}
+	lower := strings.ToLower(message)
+	switch {
+	case strings.Contains(lower, "no such file or directory"),
+		strings.Contains(lower, "the system cannot find the file specified"),
+		strings.Contains(lower, "the system cannot find the path specified"):
+		return "File not found", "This file may have moved since the link was added."
+	case strings.Contains(lower, "permission denied"),
+		strings.Contains(lower, "operation not permitted"),
+		strings.Contains(lower, "access is denied"):
+		return "Permission denied", "Check your read access, then reopen the link."
+	}
+	return "Could not open file", message
+}
+
+func sidebarDocumentOpenErrorHeading(heading string) string {
+	switch heading {
+	case "File not found":
+		// Rust paints this heading with the warning notice style.
+		return "\x1b[1m\x1b[33m" + heading + "\x1b[39m\x1b[22m"
+	case "Permission denied":
+		return "\x1b[31m" + heading + "\x1b[39m"
+	}
+	return "\x1b[31m" + heading + "\x1b[39m"
+}
+
+// sidebarDocumentSplitPath splits a path into its directory (with the trailing
+// separator) and basename, keeping the host's own separators (Rust
+// open_error.rs splits on the basename suffix for the same reason).
+func sidebarDocumentSplitPath(path string) (string, string) {
+	index := strings.LastIndexAny(path, "/\\")
+	if index < 0 {
+		return "", path
+	}
+	return path[:index+1], path[index+1:]
+}
+
+// sidebarDocumentErrorWrapText wraps text at width and breaks a single word
+// wider than the line, mirroring textwrap's NoHyphenation splitter.
+func sidebarDocumentErrorWrapText(text string, width int) []string {
+	if text == "" {
+		return nil
+	}
+	if width <= 0 {
+		return []string{text}
+	}
+	var lines []string
+	current := ""
+	flush := func() {
+		if current != "" {
+			lines = append(lines, current)
+			current = ""
+		}
+	}
+	for _, word := range strings.Fields(text) {
+		if current != "" && codextui.DisplayWidth(current)+1+codextui.DisplayWidth(word) <= width {
+			current += " " + word
+			continue
+		}
+		flush()
+		if codextui.DisplayWidth(word) <= width {
+			current = word
+			continue
+		}
+		parts := sidebarDocumentErrorHardWrap(word, width)
+		lines = append(lines, parts[:len(parts)-1]...)
+		current = parts[len(parts)-1]
+	}
+	flush()
+	if len(lines) == 0 {
+		return []string{""}
+	}
+	return lines
+}
+
+// sidebarDocumentErrorWrapPath wraps a path at its separators so each line ends
+// on a directory boundary (Rust's split_inclusive(['/', '\\'])).
+func sidebarDocumentErrorWrapPath(text string, width int) []string {
+	if text == "" || width <= 0 {
+		return []string{text}
+	}
+	segments := make([]string, 0, 4)
+	start := 0
+	for index, r := range text {
+		if r == '/' || r == '\\' {
+			segments = append(segments, text[start:index+1])
+			start = index + 1
+		}
+	}
+	if start < len(text) {
+		segments = append(segments, text[start:])
+	}
+	var lines []string
+	current := ""
+	for _, segment := range segments {
+		if current != "" && codextui.DisplayWidth(current)+codextui.DisplayWidth(segment) > width {
+			lines = append(lines, current)
+			current = ""
+		}
+		if current == "" && codextui.DisplayWidth(segment) > width {
+			parts := sidebarDocumentErrorHardWrap(segment, width)
+			lines = append(lines, parts[:len(parts)-1]...)
+			current = parts[len(parts)-1]
+			continue
+		}
+		current += segment
+	}
+	if current != "" {
+		lines = append(lines, current)
+	}
+	if len(lines) == 0 {
+		return []string{text}
+	}
+	return lines
+}
+
+func sidebarDocumentErrorHardWrap(word string, width int) []string {
+	if width <= 0 {
+		return []string{word}
+	}
+	var parts []string
+	current := ""
+	for _, r := range word {
+		next := current + string(r)
+		if current != "" && codextui.DisplayWidth(next) > width {
+			parts = append(parts, current)
+			current = string(r)
+			continue
+		}
+		current = next
+	}
+	if current != "" {
+		parts = append(parts, current)
+	}
+	if len(parts) == 0 {
+		return []string{word}
+	}
+	return parts
 }
 
 // sidebarDocumentCodeLines lays the source out with Rust's gutter geometry:
