@@ -60,6 +60,26 @@ type GatewayOAuthReadResponse struct {
 	Error              *string             `json:"error"`
 }
 
+// GatewayOAuthTarget identifies an explicit service to authorize instead of
+// the selected model provider (Rust #62859). Only {"kind":"configServer"} is
+// defined, and only the dedicated --startup-oauth connection may send it.
+type GatewayOAuthTarget struct {
+	Kind string `json:"kind"`
+}
+
+// GatewayOAuthTargetConfigServer authorizes the config server bundled with the
+// application rather than a model provider gateway.
+const GatewayOAuthTargetConfigServer = "configServer"
+
+// StartupGatewayOAuthChangedNotification is the browser handoff on the
+// dedicated --startup-oauth connection (Rust #62859). The regular
+// account/gatewayOAuth/changed notification stays in use elsewhere.
+type StartupGatewayOAuthChangedNotification struct {
+	Target  GatewayOAuthTarget `json:"target"`
+	Status  GatewayOAuthStatus `json:"status"`
+	AuthURL string             `json:"authUrl"`
+}
+
 // GatewayOAuthReadParams selects the configured provider whose gateway
 // credential readiness is read. A nil provider keeps the current provider
 // (Rust #59819).
@@ -68,9 +88,13 @@ type GatewayOAuthReadParams struct {
 }
 
 // GatewayOAuthLoginParams selects the configured provider to authorize. The
-// default provider and any thread's provider stay unchanged.
+// default provider and any thread's provider stay unchanged. Target is
+// serialized as null when omitted, matching Rust's wire shape (Rust #62859).
 type GatewayOAuthLoginParams struct {
 	ModelProvider *string `json:"modelProvider,omitempty"`
+	// Target is available only on --startup-oauth and is mutually exclusive
+	// with ModelProvider; the regular login handler rejects it (Rust #62859).
+	Target *GatewayOAuthTarget `json:"target"`
 	// DeviceAuth asks for the device-authorization flow (Rust #60486).
 	DeviceAuth bool `json:"deviceAuth,omitempty"`
 }
@@ -151,21 +175,30 @@ func (r *RuntimeRouter) validateGatewayOAuthProviderSelection(cfg *config.Config
 	return nil
 }
 
-// gatewayOAuthProviderSelection decodes the optional modelProvider parameter.
-// An absent, null, or empty selector keeps the current provider.
-func gatewayOAuthProviderSelection(request *Request) (string, error) {
+// decodeGatewayOAuthLoginParams decodes the optional login parameters once so
+// provider selection, the startup target and device authorization stay
+// consistent (Rust #62859).
+func decodeGatewayOAuthLoginParams(request *Request) (GatewayOAuthLoginParams, error) {
 	if request == nil {
-		return "", nil
+		return GatewayOAuthLoginParams{}, nil
 	}
 	raw := strings.TrimSpace(string(request.Params))
 	if raw == "" || raw == "null" {
-		return "", nil
+		return GatewayOAuthLoginParams{}, nil
 	}
-	var params struct {
-		ModelProvider *string `json:"modelProvider"`
-	}
+	var params GatewayOAuthLoginParams
 	if err := json.Unmarshal(request.Params, &params); err != nil {
-		return "", jsonRPCInvalidRequest("Invalid params: " + err.Error())
+		return GatewayOAuthLoginParams{}, jsonRPCInvalidRequest("Invalid params: " + err.Error())
+	}
+	return params, nil
+}
+
+// gatewayOAuthProviderSelection decodes the optional modelProvider parameter.
+// An absent, null, or empty selector keeps the current provider.
+func gatewayOAuthProviderSelection(request *Request) (string, error) {
+	params, err := decodeGatewayOAuthLoginParams(request)
+	if err != nil {
+		return "", err
 	}
 	if params.ModelProvider == nil {
 		return "", nil
@@ -175,16 +208,9 @@ func gatewayOAuthProviderSelection(request *Request) (string, error) {
 
 // gatewayOAuthLoginDeviceAuth decodes the optional deviceAuth flag.
 func gatewayOAuthLoginDeviceAuth(request *Request) (bool, error) {
-	if request == nil {
-		return false, nil
-	}
-	raw := strings.TrimSpace(string(request.Params))
-	if raw == "" || raw == "null" {
-		return false, nil
-	}
-	var params GatewayOAuthLoginParams
-	if err := json.Unmarshal(request.Params, &params); err != nil {
-		return false, jsonRPCInvalidRequest("Invalid params: " + err.Error())
+	params, err := decodeGatewayOAuthLoginParams(request)
+	if err != nil {
+		return false, err
 	}
 	return params.DeviceAuth, nil
 }
@@ -261,14 +287,20 @@ func (r *RuntimeRouter) handleGatewayOAuthLogin(request *Request) (*GatewayOAuth
 	if request != nil {
 		connectionID = strings.TrimSpace(request.ConnectionID)
 	}
-	selection, err := gatewayOAuthProviderSelection(request)
+	params, err := decodeGatewayOAuthLoginParams(request)
 	if err != nil {
 		return nil, err
 	}
-	deviceAuth, err := gatewayOAuthLoginDeviceAuth(request)
-	if err != nil {
-		return nil, err
+	if params.Target != nil {
+		// Rust #62859: explicit targets belong to the dedicated
+		// --startup-oauth connection; the regular handler rejects them.
+		return nil, jsonRPCInvalidRequest("Explicit gateway OAuth targets are available only during startup")
 	}
+	selection := ""
+	if params.ModelProvider != nil {
+		selection = strings.TrimSpace(*params.ModelProvider)
+	}
+	deviceAuth := params.DeviceAuth
 	providerID, _, manager, err := r.gatewayOAuthProvider(selection)
 	if err != nil {
 		return nil, err

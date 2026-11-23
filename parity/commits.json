@@ -53699,11 +53699,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "account/gatewayOAuth/login decodes an optional target and the regular app-server handler rejects it before any sign-in starts with 'Explicit gateway OAuth targets are available only during startup'; login params keep Rust's wire shape with target:null when omitted. GatewayOAuthTarget ({kind:configServer}) and StartupGatewayOAuthChangedNotification are defined and validated against the vendored Rust JSON schemas. Tests: go test ./appserver -run 'GatewayOAuthLoginRejectsExplicitStartupTarget|GatewayOAuthLoginParamsSerializeStartupTarget|StartupGatewayOAuthChangedNotificationSerializes|GatewayOAuthReadSelectsConfiguredProvider' -count=1; go build ./..."
    ],
    "kind": "runtime",
    "sha": "b392250f487949a79931ef4f7871bfdacc19c6e9",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Define the startup OAuth protocol for config servers (#62859)"
   },
   {
