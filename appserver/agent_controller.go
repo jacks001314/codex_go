@@ -298,7 +298,7 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 		}
 		record = forked
 		forkedHistory = true
-		record.Items = excludeChildExcludedItems(filterInheritedCurrentTimeReminders(record.Items))
+		record.Items = excludeChildExcludedItems(filterInheritedCurrentTimeReminders(record.Items, c.router.inheritedMultiAgentRoleBodies(c.parentID)))
 		// Rust spawn.rs's forked-item provenance: persist the scope of every copied
 		// conversational message, so a resume cannot recapture the parent's
 		// authorization as the child's own.
@@ -2008,15 +2008,58 @@ func runtimeForkTurns(value *string) string {
 // full-history fork. Filtering happens per content item so unrelated content
 // sharing a developer message survives; the message is dropped only when
 // filtering leaves it empty (Rust #38446/#38619/#39641).
-func filterInheritedCurrentTimeReminders(items []session.Item) []session.Item {
+func filterInheritedCurrentTimeReminders(items []session.Item, parentRoleBodies []string) []session.Item {
 	filtered := items[:0]
 	for i := range items {
 		item := &items[i]
-		if retainForkedDeveloperMessage(item) {
+		if retainForkedDeveloperMessage(item, parentRoleBodies) {
 			filtered = append(filtered, *item)
 		}
 	}
 	return filtered
+}
+
+// inheritedMultiAgentRoleBodies mirrors Rust's prepare_forked_history
+// (#62842): the parent's resolved bundled/configured role guidance bodies, so a
+// forked child drops inherited role messages that carry no marker tag.
+func (r *RuntimeRouter) inheritedMultiAgentRoleBodies(threadID string) []string {
+	if r == nil {
+		return nil
+	}
+	cfg := r.effectiveMCPConfigForThread(threadID)
+	if cfg == nil {
+		return nil
+	}
+	v2, err := cfg.MultiAgentV2Config(0)
+	if err != nil {
+		return nil
+	}
+	omitUpdatePlan := !cfg.UpdatePlanEnabled()
+	bodies := make([]string, 0, 2)
+	for _, role := range []struct {
+		bundled    string
+		configured *string
+	}{
+		{agent.MultiAgentV2RootUsageHint, nilIfNilV2(v2, true)},
+		{agent.MultiAgentV2SubagentUsageHint, nilIfNilV2(v2, false)},
+	} {
+		instructions, ok := resolveMultiAgentRoleInstructions(role.configured, nil, role.bundled, v2, omitUpdatePlan)
+		if !ok || strings.TrimSpace(instructions.Text) == "" {
+			continue
+		}
+		bodies = append(bodies, strings.TrimSpace(instructions.Text))
+	}
+	return bodies
+}
+
+func nilIfNilV2(v2 *config.MultiAgentV2Config, root bool) *string {
+	if v2 == nil {
+		return nil
+	}
+	if root {
+		return v2.RootAgentUsageHintText
+	}
+	return v2.SubagentUsageHintText
 }
 
 // retainForkedDeveloperMessage filters fork-specific developer instruction
@@ -2028,7 +2071,7 @@ func filterInheritedCurrentTimeReminders(items []session.Item) []session.Item {
 // instructions are dropped even though they carry no marker tag; the
 // positional `content_item_kinds` metadata is the Go equivalent of Rust's
 // `AnnotatedContent::kind()`.
-func retainForkedDeveloperMessage(item *session.Item) bool {
+func retainForkedDeveloperMessage(item *session.Item, parentRoleBodies []string) bool {
 	if item == nil {
 		return false
 	}
@@ -2038,7 +2081,8 @@ func retainForkedDeveloperMessage(item *session.Item) bool {
 		kinds = sessionItemContentItemKinds(item)
 	}
 	if len(item.Content) == 0 {
-		if forkExcludedContentItemKind(kinds, 0) || isForkExcludedDeveloperText(item.Text) {
+		if forkExcludedContentItemKind(kinds, 0) || isForkExcludedDeveloperText(item.Text) ||
+			isInheritedMultiAgentRoleBody(item.Text, parentRoleBodies) {
 			return false
 		}
 		if sessionItemIsCurrentTimeReminder(item) {
@@ -2054,7 +2098,8 @@ func retainForkedDeveloperMessage(item *session.Item) bool {
 			contentChanged = true
 			continue
 		}
-		if part.Type == "input_text" && isForkExcludedDeveloperText(part.Text) {
+		if part.Type == "input_text" && (isForkExcludedDeveloperText(part.Text) ||
+			isInheritedMultiAgentRoleBody(part.Text, parentRoleBodies)) {
 			contentChanged = true
 			continue
 		}
@@ -2201,6 +2246,24 @@ func sessionItemObjects(item *session.Item) []map[string]any {
 		objects = append(objects, item.Data)
 	}
 	return objects
+}
+
+// isInheritedMultiAgentRoleBody matches legacy untagged parent role guidance by
+// its body text (Rust #62842 prepare_forked_history).
+func isInheritedMultiAgentRoleBody(text string, parentRoleBodies []string) bool {
+	if len(parentRoleBodies) == 0 {
+		return false
+	}
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return false
+	}
+	for _, body := range parentRoleBodies {
+		if body != "" && trimmed == body {
+			return true
+		}
+	}
+	return false
 }
 
 func isForkExcludedDeveloperText(text string) bool {

@@ -28492,7 +28492,7 @@ func TestRuntimeRouterMultiAgentV2InjectsUsageHintWorldState(t *testing.T) {
 	}
 	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
 	request := waitForRuntimeAgentRequest(t, agent)
-	if !inputItemsContainKindAndText(request.InputItems, multiAgentUsageHintKind, "You are `/root`") {
+	if !inputItemsContainKindAndText(request.InputItems, multiAgentRoleInstructionsKind, "You are `/root`") {
 		t.Fatalf("V2 usage hint missing from turn input items: %#v", request.InputItems)
 	}
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)

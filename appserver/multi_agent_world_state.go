@@ -45,18 +45,32 @@ const (
 // multiAgentRoleInstructions is Rust's MultiAgentRoleInstructions.
 type multiAgentRoleInstructions struct {
 	Text       string
-	Marked     bool
 	Configured bool
 }
 
 // render applies the fragment markers Rust's `ContextualUserFragment::render`
-// adds. Rust concatenates markers without surrounding newlines and only marks
-// catalog-owned text.
+// adds. Rust #62842 renders bundled, catalog and configured role guidance with
+// the same markers and keeps configured text that is already tagged.
 func (role multiAgentRoleInstructions) render() string {
-	if !role.Marked {
+	if role.Configured && multiAgentRoleMatchesText(role.Text) {
 		return role.Text
 	}
 	return multiAgentRoleOpenMarker + role.Text + multiAgentRoleCloseMarker
+}
+
+// multiAgentRoleMatchesText mirrors ContextualUserFragment::matches_text: the
+// text starts and ends with the fragment's markers, ignoring surrounding
+// whitespace and ASCII case.
+func multiAgentRoleMatchesText(text string) bool {
+	trimmed := strings.TrimLeft(text, " \t\r\n")
+	if len(trimmed) < len(multiAgentRoleOpenMarker) || !strings.EqualFold(trimmed[:len(multiAgentRoleOpenMarker)], multiAgentRoleOpenMarker) {
+		return false
+	}
+	trimmed = strings.TrimRight(trimmed, " \t\r\n")
+	if len(trimmed) < len(multiAgentRoleCloseMarker) {
+		return false
+	}
+	return strings.EqualFold(trimmed[len(trimmed)-len(multiAgentRoleCloseMarker):], multiAgentRoleCloseMarker)
 }
 
 func (role multiAgentRoleInstructions) fingerprint() string {
@@ -118,10 +132,8 @@ func resolveMultiAgentRoleInstructions(configured *string, catalog *string, bund
 		return multiAgentRoleInstructions{Text: *configured, Configured: true}, true
 	}
 	base := ""
-	marked := false
 	if catalog != nil {
 		base = *catalog
-		marked = true
 	} else {
 		base = rustBundledMultiAgentRole(bundled)
 	}
@@ -140,13 +152,11 @@ func resolveMultiAgentRoleInstructions(configured *string, catalog *string, bund
 		// still describe their admission limit. An explicit role override still
 		// wins, and empty role text still suppresses the guidance.
 		return multiAgentRoleInstructions{
-			Text:   multiAgentConcurrencyGuidance(maxConcurrency),
-			Marked: true,
+			Text: multiAgentConcurrencyGuidance(maxConcurrency),
 		}, true
 	}
 	return multiAgentRoleInstructions{
-		Text:   composeMultiAgentRoleBody(base, omitUpdatePlan, maxConcurrency, waitEnabled, exposeOverrides),
-		Marked: marked,
+		Text: composeMultiAgentRoleBody(base, omitUpdatePlan, maxConcurrency, waitEnabled, exposeOverrides),
 	}, true
 }
 

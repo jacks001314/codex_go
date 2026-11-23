@@ -12,17 +12,27 @@ import (
 	"codex_go/turn"
 )
 
+// Rust #62842: configured, catalog and bundled role guidance all render as a
+// <multi_agent_role> developer message; configured text that already carries
+// the markers is preserved.
 func TestMultiAgentRoleSnapshotMatchesRustFragmentHash(t *testing.T) {
 	configured := "Configured root guidance."
 	role, ok := resolveMultiAgentRoleInstructions(&configured, nil, "bundled", nil, false)
 	if !ok {
 		t.Fatal("configured role was dropped")
 	}
-	if role.Marked || role.render() != configured {
-		t.Fatalf("configured role = %#v, want verbatim unmarked text", role)
+	wantConfigured := multiAgentRoleOpenMarker + configured + multiAgentRoleCloseMarker
+	if role.render() != wantConfigured {
+		t.Fatalf("configured role = %q, want %q", role.render(), wantConfigured)
 	}
-	if got, want := role.fingerprint(), session.TextWorldStateFragmentHash("developer", configured); got != want {
+	if got, want := role.fingerprint(), session.TextWorldStateFragmentHash("developer", wantConfigured); got != want {
 		t.Fatalf("configured fingerprint = %q, want %q", got, want)
+	}
+
+	alreadyTagged := "<multi_agent_role>Tagged root guidance.</multi_agent_role>"
+	tagged, ok := resolveMultiAgentRoleInstructions(&alreadyTagged, nil, "bundled", nil, false)
+	if !ok || tagged.render() != alreadyTagged {
+		t.Fatalf("tagged configured role = %q (ok=%v), want it preserved verbatim", tagged.render(), ok)
 	}
 
 	catalog := "Catalog root guidance."
@@ -30,11 +40,16 @@ func TestMultiAgentRoleSnapshotMatchesRustFragmentHash(t *testing.T) {
 	if !ok {
 		t.Fatal("catalog role was dropped")
 	}
-	if !catalogRole.Marked || !strings.HasPrefix(catalogRole.render(), multiAgentRoleOpenMarker) || !strings.HasSuffix(catalogRole.render(), multiAgentRoleCloseMarker) {
+	if !strings.HasPrefix(catalogRole.render(), multiAgentRoleOpenMarker) || !strings.HasSuffix(catalogRole.render(), multiAgentRoleCloseMarker) {
 		t.Fatalf("catalog role = %#v, want marked text", catalogRole)
 	}
 	if got, want := catalogRole.fingerprint(), session.TextWorldStateFragmentHash("developer", catalogRole.render()); got != want {
 		t.Fatalf("catalog fingerprint = %q, want %q", got, want)
+	}
+
+	bundled, ok := resolveMultiAgentRoleInstructions(nil, nil, "Bundled root guidance.", nil, false)
+	if !ok || !strings.HasPrefix(bundled.render(), multiAgentRoleOpenMarker) || !strings.HasSuffix(bundled.render(), multiAgentRoleCloseMarker) {
+		t.Fatalf("bundled role = %#v, want marked text", bundled)
 	}
 }
 
@@ -101,12 +116,13 @@ func TestMultiAgentUsageHintPersistsBareHashLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("multiAgentUsageHintInputItem() error = %v", err)
 	}
+	tagged := multiAgentRoleOpenMarker + "Configured root guidance." + multiAgentRoleCloseMarker
 	texts := messageInputTextsForRole([]any{item}, "developer")
-	if len(texts) != 1 || texts[0] != "Configured root guidance." {
-		t.Fatalf("usage hint texts = %#v", texts)
+	if len(texts) != 1 || texts[0] != tagged {
+		t.Fatalf("usage hint texts = %#v, want %q", texts, tagged)
 	}
-	if !inputItemsContainKindAndText([]any{item}, multiAgentUsageHintKind, "Configured root guidance.") {
-		t.Fatalf("usage hint item = %#v, want kind %q", item, multiAgentUsageHintKind)
+	if !inputItemsContainKindAndText([]any{item}, multiAgentRoleInstructionsKind, tagged) {
+		t.Fatalf("usage hint item = %#v, want kind %q", item, multiAgentRoleInstructionsKind)
 	}
 
 	record, err := router.threadRecord(session.ThreadID(threadID), true, true)
@@ -117,7 +133,7 @@ func TestMultiAgentUsageHintPersistsBareHashLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeWorldState() error = %v", err)
 	}
-	wantHash, _ := json.Marshal(session.TextWorldStateFragmentHash("developer", "Configured root guidance."))
+	wantHash, _ := json.Marshal(session.TextWorldStateFragmentHash("developer", tagged))
 	if string(state.MultiAgentUsageHint) != string(wantHash) {
 		t.Fatalf("usage hint snapshot = %s, want bare hash %s", state.MultiAgentUsageHint, wantHash)
 	}

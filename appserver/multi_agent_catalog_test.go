@@ -50,7 +50,7 @@ func TestFilterInheritedDeveloperFragmentsDropsParentRoleGuidanceLikeRust(t *tes
 		{ID: "reminder", Type: "message", Data: map[string]any{"kind": "current_time_reminder"}},
 		{ID: "role-content", Type: "message", Content: []session.ContentPart{{Type: "input_text", Text: "<multi_agent_role>\nchild role\n</multi_agent_role>"}}},
 	}
-	filtered := filterInheritedCurrentTimeReminders(items)
+	filtered := filterInheritedCurrentTimeReminders(items, nil)
 	if len(filtered) != 1 || filtered[0].ID != "keep" {
 		t.Fatalf("filtered = %#v, want only the ordinary developer message", filtered)
 	}
@@ -67,7 +67,7 @@ func TestFilterInheritedDeveloperFragmentsDropsStaleWordingLikeRust(t *testing.T
 		{ID: "stale-hint", Type: "message", Text: "<multi_agent_usage_hint>an ancient hint wording that no bundled string matches</multi_agent_usage_hint>"},
 		{ID: "stale-role", Type: "message", Content: []session.ContentPart{{Type: "input_text", Text: "<multi_agent_role>an ancient role wording</multi_agent_role>"}}},
 	}
-	filtered := filterInheritedCurrentTimeReminders(items)
+	filtered := filterInheritedCurrentTimeReminders(items, nil)
 	if len(filtered) != 1 || filtered[0].ID != "keep" {
 		t.Fatalf("filtered = %#v, want only the ordinary developer message", filtered)
 	}
@@ -109,7 +109,7 @@ func TestFilterInheritedDeveloperFragmentsDropsUnmarkedHintByKindLikeRust(t *tes
 		{ID: "unmarked-hint", Type: "message", Role: "developer", Raw: raw, Text: "Previous parent root guidance."},
 		{ID: "unmarked-role", Type: "message", Role: "developer", Raw: roleRaw, Text: "an ancient role wording"},
 	}
-	filtered := filterInheritedCurrentTimeReminders(items)
+	filtered := filterInheritedCurrentTimeReminders(items, nil)
 	if len(filtered) != 1 || filtered[0].ID != "keep" {
 		t.Fatalf("filtered = %#v, want only the ordinary developer message", filtered)
 	}
@@ -142,7 +142,7 @@ func TestFilterInheritedDeveloperFragmentsRealignsContentItemKindsLikeRust(t *te
 			{Type: "input_text", Text: "Preserved compacted developer context."},
 		},
 	}}
-	filtered := filterInheritedCurrentTimeReminders(items)
+	filtered := filterInheritedCurrentTimeReminders(items, nil)
 	if len(filtered) != 1 || len(filtered[0].Content) != 1 ||
 		filtered[0].Content[0].Text != "Preserved compacted developer context." {
 		t.Fatalf("filtered = %#v, want only the preserved content item", filtered)
@@ -181,7 +181,7 @@ func TestFilterInheritedDeveloperFragmentsRealignsKindsAfterTextFilterLikeRust(t
 			{Type: "input_text", Text: "Preserved developer context."},
 		},
 	}}
-	filtered := filterInheritedCurrentTimeReminders(items)
+	filtered := filterInheritedCurrentTimeReminders(items, nil)
 	if len(filtered) != 1 || len(filtered[0].Content) != 1 ||
 		filtered[0].Content[0].Text != "Preserved developer context." {
 		t.Fatalf("filtered = %#v, want only the preserved content item", filtered)
@@ -209,7 +209,7 @@ func TestFilterInheritedDeveloperFragmentsKeepsNonDeveloperKindContentLikeRust(t
 		t.Fatalf("marshal user item error = %v", err)
 	}
 	items := []session.Item{{ID: "user", Type: "message", Role: "user", Raw: raw, Text: "user text"}}
-	filtered := filterInheritedCurrentTimeReminders(items)
+	filtered := filterInheritedCurrentTimeReminders(items, nil)
 	if len(filtered) != 1 || filtered[0].ID != "user" {
 		t.Fatalf("filtered = %#v, want the user message kept", filtered)
 	}
@@ -227,7 +227,7 @@ func TestFilterInheritedDeveloperFragmentsPreservesUnrelatedContentLikeRust(t *t
 			},
 		},
 	}
-	filtered := filterInheritedCurrentTimeReminders(items)
+	filtered := filterInheritedCurrentTimeReminders(items, nil)
 	if len(filtered) != 1 || filtered[0].ID != "compound" || len(filtered[0].Content) != 1 ||
 		filtered[0].Content[0].Text != "unrelated context that must survive" {
 		t.Fatalf("filtered = %#v, want only the unrelated content item", filtered)

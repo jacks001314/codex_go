@@ -16566,11 +16566,10 @@ func (r *RuntimeRouter) multiAgentUsageHintInputItemForModel(threadID string, cf
 		// Rust records an unrecognized previous snapshot without re-emitting it.
 		return nil, nil
 	}
-	kind := multiAgentUsageHintKind
-	if role.Marked {
-		kind = multiAgentRoleInstructionsKind
-	}
-	rendered := contextfrag.Render(contextfrag.NewSimpleFragmentWithKind(contextfrag.RoleDeveloper, "", "", role.render(), kind))
+	// Rust #62842 renders every role source as a multi_agent.role_instructions
+	// developer message.
+	rendered := contextfrag.Render(contextfrag.NewSimpleFragmentWithKind(
+		contextfrag.RoleDeveloper, "", "", role.render(), multiAgentRoleInstructionsKind))
 	return buildRenderedMessage(rendered), nil
 }
 

@@ -42,8 +42,8 @@ func TestDisabledNativeToolsKeepsConcurrencyGuidanceLikeRust(t *testing.T) {
 
 	override := "custom role"
 	role, ok := resolveMultiAgentRoleInstructions(&override, nil, agent.MultiAgentV2RootUsageHint, v2, false)
-	if !ok || role.render() != "custom role" {
-		t.Fatalf("override role = %q (ok=%v), want the explicit text verbatim", role.render(), ok)
+	if want := multiAgentRoleOpenMarker + override + multiAgentRoleCloseMarker; !ok || role.render() != want {
+		t.Fatalf("override role = %q (ok=%v), want %q", role.render(), ok, want)
 	}
 	empty := ""
 	if _, ok := resolveMultiAgentRoleInstructions(&empty, nil, agent.MultiAgentV2RootUsageHint, v2, false); ok {

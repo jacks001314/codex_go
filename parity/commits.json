@@ -53626,11 +53626,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Bundled, catalog and configured multi-agent role guidance all render as tagged multi_agent.role_instructions developer messages, and configured text that already carries <multi_agent_role> stays verbatim (Rust #62842, 2b5111917c). Fork history drops inherited role messages by content kind, by marker, or by matching the parent's resolved role body so legacy untagged guidance is removed too. Tests: go test ./appserver -run 'MultiAgent|Fork|Usage|Role|Hint|WorldState|Collaboration|Spawn' -count=1; go test ./agent ./exec -count=1; go test ./parity -count=1"
    ],
    "kind": "runtime",
    "sha": "2b5111917c1497ed945da543221f67ebe6e95280",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Tag all multi-agent role instructions consistently (#62842)"
   },
   {
