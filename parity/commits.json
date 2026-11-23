@@ -53007,11 +53007,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1262: complete (Go already unifies the path) - Rust only centralizes which schema the diagnostics helper deserializes (ConfigToml vs ShellEnvironmentPolicyFilterConfigToml) so loaders stop passing a deserialization type and the config.toml filename; both keep the same layer traversal and source reporting and no wire or user-visible behavior changes. Go validates the merged layer values once and reports the shell environment filter through the same path as the rest of the config (config/config.go validateKnownFields -> ValidateShellEnvironmentPolicy), with nested-path diagnostics such as 'in `shell_environment_policy.inherit`' (config/config_value_validation_nested_test.go). Tests: go test ./config -run 'ShellEnvironment|Nested|Validation' -count=1"
    ],
    "kind": "runtime",
    "sha": "8b2070d29f95c17d5b7e17c77107740d3e340b3a",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Centralize schema selection for config diagnostics (#62587)"
   },
   {
@@ -53297,11 +53297,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1262: N/A (Go persists a turn at its boundary) - the commit releases a completed MCP result from active-turn memory only when the paginated store already returns the identical payload by item id, and restores released results by id on resume because a stale page may hold an older or truncated result. Go keeps a running turn's completed items, MCP results included, in the session.LiveThreadItems overlay exactly because the embedded exec runner writes the turn to the durable store at its boundaries (session/live_items.go, appserver/live_thread_items.go); thread/items/list serves the committed store plus that overlay. There is no persisted copy to verify against during the turn, and releasing would drop the only copy a fork reader can see."
    ],
    "kind": "runtime",
    "sha": "7642e80723386d113ee5c95647164f72e3d68d6d",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Release persisted MCP tool results from active-turn memory (#62641)"
   },
   {
@@ -53335,11 +53335,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1262: N/A (no thread-store abstraction) - Rust adds CreateThreadParams.inherited_history_visibility with Full (the app-server default) and ModelContextOnly, and only the local store rejects ModelContextOnly as unsupported. Go's app-server has one file-backed session store: thread/fork keeps inherited history visible through preparePaginatedForkHistoryBase/history_base (appserver/router.go), list_turns and list_items read the local rollout directly, and no CreateThreadParams or prepared-fork store API exists to carry a visibility mode (rg 'InheritedHistoryVisibility|ModelContextOnly|CreateThreadParams' -g '*.go' is empty). The app-server path this commit ships is Full, which is what Go already does."
    ],
    "kind": "runtime",
    "sha": "10ca17496f5c934b9cf4baacda95c4a785f95630",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Pass inherited history visibility to the thread store (#62644)"
   },
   {
@@ -53498,11 +53498,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-20 upstream window; awaiting per-commit audit."
+    "Round 1262: N/A (no rollout-trace reducer graph) - the commit records the originating tool call id on inter-agent delivery and uses it inside codex-rs/rollout-trace/src/reducer (tool/agents.rs, conversation.rs, thread.rs) so a delivered message links to its sender tool call and the interaction edge stays on the recipient thread. Go's trace support is rollout/trace_reduce.go, a same-binary replay summary (manifest/event schema pins, event type counts, payload refs, raw events); it carries no tool_calls, ConversationItemKind, InteractionEdge or ProducerRef model, and Go has neither a producer nor a consumer for source_tool_call_id (rg 'source_tool_call_id' -g '*.go' is empty). There is no edge graph to link."
    ],
    "kind": "runtime",
    "sha": "076ac7856b1235947f271930bd7437bae54a0dfc",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Link agent tool calls to delivered messages in rollout traces (#62709)"
   },
   {
@@ -53728,11 +53728,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "Round 1262: complete (Go already avoids the copies) - Rust stops cloning tool schemas and allocating a JSON buffer just to measure their compact size, reuses the parsed schema when it fits the budget, and serializes borrowed tool specs/namespace members while preserving namespace field order because those bytes feed the additional_tools item id. Go measures with jsonschema.approximateJSONLen, documented as 'the compact JSON byte length without allocation churn; it is equivalent to len(json.Marshal(v))', reached from compactSchemaFitsBudget/compactNormalizedSchemaLen (jsonschema/jsonschema.go), and its catalog definitions serialize from Go structs so field order is fixed by the type instead of a clone-then-marshal step. Tests: go test ./jsonschema -count=1"
    ],
    "kind": "runtime",
    "sha": "4c153c26c0b5c54a22e0e775b46bcc4aa8872c79",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Reduce allocations when preparing tool schemas and catalogs (#62849)"
   },
   {
