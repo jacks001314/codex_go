@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 )
@@ -27,9 +28,18 @@ type ToolSearchResult struct {
 
 type ToolSearchHandler struct {
 	specs       []Spec
-	index       []toolSearchDocument
 	omitSources bool
+
+	// index is built by the first search that needs it (Rust #63440): a turn
+	// that never calls `tool_search` must not tokenize the deferred catalog.
+	// Regular and Code Mode searches share one handler, so they share one
+	// build, and concurrent first searches share it through the Once.
+	indexOnce sync.Once
+	index     []toolSearchDocument
 }
+
+// toolSearchIndexBuildHook observes deferred index builds in tests.
+var toolSearchIndexBuildHook func()
 
 func NewToolSearchHandler(specs []Spec) *ToolSearchHandler {
 	return NewToolSearchHandlerWithOptions(specs, false)
@@ -47,9 +57,7 @@ func NewToolSearchHandlerWithOptions(specs []Spec, omitSources bool) *ToolSearch
 		searchable = append(searchable, spec)
 	}
 	sortSpecs(searchable)
-	handler := &ToolSearchHandler{specs: searchable, omitSources: omitSources}
-	handler.rebuildIndex()
-	return handler
+	return &ToolSearchHandler{specs: searchable, omitSources: omitSources}
 }
 
 func RegisterToolSearchHandler(registry *Registry, specs []Spec) error {
@@ -168,6 +176,7 @@ func (h *ToolSearchHandler) search(query string, limit int) []Spec {
 	if len(queryTokens) == 0 {
 		return nil
 	}
+	h.ensureIndex()
 	type scored struct {
 		index int
 		score int
@@ -196,15 +205,28 @@ func (h *ToolSearchHandler) search(query string, limit int) []Spec {
 	return out
 }
 
-func (h *ToolSearchHandler) rebuildIndex() {
+// ensureIndex builds the deferred-tool index once, on the first search that
+// needs it (Rust #63440 defers the build until then). The build runs inside
+// Execute and never observes cancellation, so a canceled first search still
+// leaves a completed index for the next one.
+func (h *ToolSearchHandler) ensureIndex() {
 	if h == nil {
 		return
 	}
-	h.index = make([]toolSearchDocument, 0, len(h.specs))
-	for i, spec := range h.specs {
-		text := searchTextForSpec(spec)
-		h.index = append(h.index, newToolSearchDocument(i, text))
+	h.indexOnce.Do(func() {
+		h.index = buildToolSearchIndex(h.specs)
+		if toolSearchIndexBuildHook != nil {
+			toolSearchIndexBuildHook()
+		}
+	})
+}
+
+func buildToolSearchIndex(specs []Spec) []toolSearchDocument {
+	index := make([]toolSearchDocument, 0, len(specs))
+	for i, spec := range specs {
+		index = append(index, newToolSearchDocument(i, searchTextForSpec(spec)))
 	}
+	return index
 }
 
 type toolSearchDocument struct {

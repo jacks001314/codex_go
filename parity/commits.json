@@ -55318,9 +55318,33 @@
    "sha": "598083ae586954aa11edc8e8224a33ea878445ed",
    "status": "not_applicable",
    "subject": "Route Statsig requests through Codex's HTTP client (#63438)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 158: complete - Rust #63440 stops building the deferred-tool search index during tool planning and instead builds it on a blocking worker when the first search over a nonempty catalog needs it; regular and Code Mode searches share the build and a canceled search leaves the completed index behind. Go's `tool.ToolSearchHandler` tokenized the whole deferred catalog in its constructor (`rebuildIndex`). It now keeps `specs` only and builds through `indexOnce`/`ensureIndex` inside `search`, so an empty query builds nothing, the first real search builds once, later searches reuse it, and concurrent first searches share one build. `TestToolSearchIndexBuildsOnFirstSearchLikeRust`, `TestToolSearchConcurrentFirstSearchesShareOneBuildLikeRust` and `TestToolSearchBuildSurvivesCanceledSearchLikeRust` cover the three behaviors; restoring the eager constructor build fails the first test."
+   ],
+   "kind": "runtime",
+   "sha": "8a64bc9c7e0e524e75950b644f0cc7f4b660c175",
+   "status": "complete",
+   "subject": "Defer tool search indexing until the first search (#63440)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 158: not_applicable - Rust #63441 keeps each thread's event receiver in that thread's channel instead of in `active_thread_rx`, so clearing the active thread cannot drop unread events, and a live same-thread reattachment drains the old receiver while skipping its queued `ThreadClosed` unless a shutdown is pending. Go has no receiver-per-thread object to move: `app/remote_tui.go` applies notifications as they arrive to the tea program and re-fetches history on thread switch, while `tui/app.ThreadEventStore` (the closest Rust parity module, used for realtime delegation) buffers events per thread and holds no receiver field. `thread/closed` only updates the side pane's parent status (`sendSideParentStatusChange(..., SideParentStatusClosed)`), and Go has no live-attachment replacement path that could misread a stale close. There is therefore no Go carrier for the receiver bookkeeping or the close suppression."
+   ],
+   "kind": "runtime",
+   "sha": "573bc548464aeef750d464e7cc33c15ddf5907fe",
+   "status": "not_applicable",
+   "subject": "Keep TUI event receivers with their threads (#63441)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "598083ae586954aa11edc8e8224a33ea878445ed",
+ "rustToInclusive": "573bc548464aeef750d464e7cc33c15ddf5907fe",
  "schemaVersion": 1
 }
