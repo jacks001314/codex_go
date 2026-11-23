@@ -8,6 +8,17 @@ import (
 )
 
 func NewCollabAgentToolCall(item *protocol.ThreadItem, completed bool) (PlainHistoryCell, bool) {
+	return NewCollabAgentToolCallWithResolver(item, completed, nil)
+}
+
+// CollabAgentLabelFunc resolves a spawned subagent's display label from its
+// thread id (Rust #63444). It returns "" when the nickname is still unknown, so
+// the row keeps the thread id it was rendered with.
+type CollabAgentLabelFunc func(threadID string) string
+
+// NewCollabAgentToolCallWithResolver renders a collab tool call with resolved
+// subagent labels instead of raw thread ids.
+func NewCollabAgentToolCallWithResolver(item *protocol.ThreadItem, completed bool, resolve CollabAgentLabelFunc) (PlainHistoryCell, bool) {
 	if item == nil {
 		return PlainHistoryCell{}, false
 	}
@@ -28,7 +39,7 @@ func NewCollabAgentToolCall(item *protocol.ThreadItem, completed bool) (PlainHis
 	}
 	label := "agent"
 	if len(receivers) > 0 && strings.TrimSpace(receivers[0]) != "" {
-		label = strings.TrimSpace(receivers[0])
+		label = collabAgentLabel(receivers[0], resolve)
 	}
 	line := ""
 	switch tool {
@@ -91,7 +102,7 @@ func NewCollabAgentToolCall(item *protocol.ThreadItem, completed bool) (PlainHis
 			if state.Message != nil && strings.TrimSpace(*state.Message) != "" && !looksEncryptedCollabPrompt(*state.Message) {
 				detail += " - " + strings.TrimSpace(*state.Message)
 			}
-			lines = append(lines, "  └ "+key+": "+detail)
+			lines = append(lines, "  └ "+collabAgentLabel(key, resolve)+": "+detail)
 		}
 	}
 	return NewPlainHistoryCell(lines), true
@@ -116,6 +127,21 @@ func NewSubAgentActivity(kind string, agentPath string) (PlainHistoryCell, bool)
 		return PlainHistoryCell{}, false
 	}
 	return NewPlainHistoryCell([]string{line}), true
+}
+
+// collabAgentLabel prefers the resolved subagent nickname and falls back to the
+// thread id the event carried.
+func collabAgentLabel(threadID string, resolve CollabAgentLabelFunc) string {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return ""
+	}
+	if resolve != nil {
+		if label := strings.TrimSpace(resolve(threadID)); label != "" {
+			return label
+		}
+	}
+	return threadID
 }
 
 func looksEncryptedCollabPrompt(value string) bool {

@@ -751,6 +751,17 @@ func (m *Model) agentEntry(threadID string) (codextui.AgentThreadEntry, bool) {
 	return codextui.AgentThreadEntry{}, false
 }
 
+// collabAgentNickname resolves the nickname a spawned subagent's transcript
+// row shows (Rust #63444). Archived entries stay in agentItems so an older row
+// can still be labelled while the thread itself stays out of the picker.
+func (m *Model) collabAgentNickname(threadID string) string {
+	entry, ok := m.agentEntry(threadID)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(entry.AgentNickname)
+}
+
 func (m *Model) visibleAgentEntries(entries []codextui.AgentThreadEntry) []codextui.AgentThreadEntry {
 	if m == nil {
 		return entries

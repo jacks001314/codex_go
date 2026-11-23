@@ -9714,7 +9714,7 @@ func (m *Model) renderCollabAgentToolCall(item *protocol.ThreadItem, completed b
 	if m == nil || item == nil {
 		return
 	}
-	cell, ok := historycell.NewCollabAgentToolCall(item, completed)
+	cell, ok := historycell.NewCollabAgentToolCallWithResolver(item, completed, m.collabAgentNickname)
 	if !ok {
 		return
 	}
