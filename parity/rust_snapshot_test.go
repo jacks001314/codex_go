@@ -254,6 +254,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"tui",
 		"user-input",
 		"user-verification",
+		"tool-call-id",
 		"tools",
 		"v8-poc",
 		"websocket-auth",
@@ -363,7 +364,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// digest of the new anchor checkout.
 		// Re-anchored to upstream 59ac39addb: Cargo.toml gained the
 		// user-input workspace member (#61949).
-		{Path: "Cargo.toml", SHA256: "b763ee646de17e7ee3e20230d283fbcad1bc2c654edfe3e7aa981e4d1292ca9d"},
+		{Path: "Cargo.toml", SHA256: "fc907793a7ff03b1e08a81ac3b2f2fba357f388ab85028ccb726019f3d637da7"},
 		{Path: "cli/src/lib.rs", SHA256: "4b67417ded45ae654415e1b46c18c2716810f5fc58be141766da64427e1522ed"},
 		// Re-pinned to upstream 8ae55c863d (#47411): the shared network policy
 		// runs through embedded Codex startup.
@@ -373,7 +374,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// thread/list exclusion field; Go side already landed as sync551).
 		// Re-anchored to upstream 59ac39addb: exec input preparation moved
 		// behind the shared user-input helpers (#61949/#61962).
-		{Path: "exec/src/lib.rs", SHA256: "21fe100ac2496fdf8ace5b8dcccd265f120a73230a5e160863632f992b4dff1a"},
+		{Path: "exec/src/lib.rs", SHA256: "f6ce16288cb6883a1b7c08960a4b4481bd0482445ea3f1675e56fbae888123b6"},
 		// Re-pinned to upstream 7498521d (#46319): exec JSON web-search items
 		// now carry the structured results array.
 		{Path: "exec/src/exec_events.rs", SHA256: "dafa872d7e86a099e56e28a329dcb9c03db90ed768c3b88cca8c91d46dc1d0e5"},
@@ -396,13 +397,13 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// runtime authentication through ProviderAuthContext (#57607).
 		// Re-anchored to upstream 59ac39addb: the client gained the
 		// user-input snapshot path for tool outputs (#61962).
-		{Path: "core/src/client.rs", SHA256: "80c5b53fcae9e8123bde78c97aae1496e161a6dd2d2c45c21a29367928ffef6b"},
+		{Path: "core/src/client.rs", SHA256: "81d196c1887a085449deff9bc84979ea5596a6e47b4fd25bd89527e2aac6bd19"},
 		// Re-pinned to upstream 8ae55c863d (#47207/#47248/#47377/#47648): the
 		// gateway OAuth, MCP resource-target, realtime reasoning-status and
 		// executor bearer-token requests.
 		// Round-112 re-anchor to 8196bcdc18: thread/sample/cancel joined the
 		// client request definitions.
-		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "ee8ff27b16a979b04d40f425ebe5d6d6963d2cbd379cc6bdd13b6894399215ab"},
+		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "c31b60e8c6ba993e1406a7d64e884744529a21f300b999c1d47008f003534aaa"},
 		// Re-pinned to upstream 8ae55c863d (#46917/#47028/#47207/#47407): the
 		// provider-requirements, message-board, gateway-auth and network-policy
 		// suites joined the module list.

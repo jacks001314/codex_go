@@ -540,16 +540,33 @@ func (r *RuntimeRouter) scopedPermissionsWorldStateUpdates(
 			}
 		}
 	} else {
-		for _, environmentID := range sortedPermissionScopeIDs(descriptions) {
-			description := descriptions[environmentID]
-			instructions := description.instructions
-			updates = append(updates, modelInputTextMessage(contextfrag.RoleDeveloper, scopedPermissionsUpdateText(environmentID, &instructions)))
+		// An initially blank section keeps its checkpoint without emitting
+		// empty fragments (Rust #62933); the next approved prefix still reports
+		// through the saved-prefix notice.
+		if permissionsDescriptionsHaveInstructions(descriptions) {
+			for _, environmentID := range sortedPermissionScopeIDs(descriptions) {
+				description := descriptions[environmentID]
+				instructions := description.instructions
+				updates = append(updates, modelInputTextMessage(contextfrag.RoleDeveloper, scopedPermissionsUpdateText(environmentID, &instructions)))
+			}
 		}
 	}
 	if err := r.persistPermissionsWorldState(record, state, current); err != nil {
 		return nil, err
 	}
 	return updates, nil
+}
+
+// permissionsDescriptionsHaveInstructions reports whether any scope renders a
+// non-blank permission description. Rust's PermissionsState::has_instructions
+// (#62933) uses the same test to skip the initial fragment.
+func permissionsDescriptionsHaveInstructions(descriptions map[string]permissionDescription) bool {
+	for _, description := range descriptions {
+		if strings.TrimSpace(description.instructions) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // scopedPermissionsWithdrawals restates every scope a previous scoped

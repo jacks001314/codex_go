@@ -228,6 +228,7 @@ func rustTopLevelDirectoriesSnapshot() []string {
 		"thread-context-ids",
 		"thread-manager-sample",
 		"thread-store",
+		"tool-call-id",
 		"tools",
 		"tui",
 		"uds",

@@ -102,9 +102,9 @@ var Registry = []Spec{
 	{Key: "web_search_request", Stage: StageDeprecated},
 	{Key: "web_search_cached", Stage: StageDeprecated},
 	{Key: "standalone_web_search", Stage: StageUnderDevelopment},
-	// Rust #59033: the host may authorize MCP search independently of native
-	// search through per-turn policy. Under development and off by default.
-	{Key: "hosted_search_policy", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust #62894: an opt-in default switches the native search mode to
+	// indexed. Stable and off by default.
+	{Key: "web_search_indexed_default", Stage: StageStable, DefaultEnabled: false},
 	{Key: "search_tool", Stage: StageRemoved},
 	{Key: "codex_git_commit", Stage: StageRemoved},
 	{Key: "runtime_metrics", Stage: StageUnderDevelopment},
@@ -308,7 +308,7 @@ var Registry = []Spec{
 	{Key: "unified_image_budget", Stage: StageStable, DefaultEnabled: true},
 	{Key: "resize_all_images", Stage: StageRemoved, DefaultEnabled: true},
 	{Key: "item_ids", Stage: StageRemoved, DefaultEnabled: true},
-	{Key: "concurrent_reasoning_summaries", Stage: StageUnderDevelopment},
+	{Key: "concurrent_reasoning_summaries", Stage: StageStable, DefaultEnabled: true},
 	{Key: "skill_mcp_dependency_install", Stage: StageStable, DefaultEnabled: true},
 	{Key: "skill_search", Stage: StageStable, DefaultEnabled: true},
 	{Key: "skill_env_var_dependency_prompt", Stage: StageRemoved},

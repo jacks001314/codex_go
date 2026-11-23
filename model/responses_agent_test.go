@@ -32,6 +32,7 @@ func TestResponsesAgentRunnerPostsResponsesRequest(t *testing.T) {
 	var recordedProviderHeader string
 	var recordedTimingHeader string
 	var recordedBetaFeaturesHeader string
+	var recordedExcludeHeader string
 	var recordedBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		recordedPath = r.URL.String()
@@ -39,6 +40,7 @@ func TestResponsesAgentRunnerPostsResponsesRequest(t *testing.T) {
 		recordedProviderHeader = r.Header.Get("x-provider-test")
 		recordedTimingHeader = r.Header.Get(responsesIncludeTimingMetricsHeader)
 		recordedBetaFeaturesHeader = r.Header.Get(codexapi.ClientCodexBetaFeaturesHeader)
+		recordedExcludeHeader = r.Header.Get(codexapi.ClientCodexExcludeHeader)
 		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
 			t.Fatalf("Decode request body error = %v", err)
 		}
@@ -117,6 +119,9 @@ func TestResponsesAgentRunnerPostsResponsesRequest(t *testing.T) {
 	}
 	if recordedBetaFeaturesHeader != "memories,remote_compaction_v2" {
 		t.Fatalf("beta features header = %q", recordedBetaFeaturesHeader)
+	}
+	if recordedExcludeHeader != "tools" {
+		t.Fatalf("exclude header = %q", recordedExcludeHeader)
 	}
 	if recordedBody["model"] != "gpt-test" || recordedBody["stream"] != false || recordedBody["store"] != false {
 		t.Fatalf("body = %#v", recordedBody)

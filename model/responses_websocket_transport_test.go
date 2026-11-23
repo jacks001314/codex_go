@@ -118,6 +118,9 @@ func TestResponsesAgentRunnerRunPrefersWebSocketLikeRust(t *testing.T) {
 		if got.Get(codexapi.ClientCodexBetaFeaturesHeader) != "memories,remote_compaction_v2" {
 			t.Fatalf("beta features header = %q", got.Get(codexapi.ClientCodexBetaFeaturesHeader))
 		}
+		if got.Get(codexapi.ClientCodexExcludeHeader) != "tools" {
+			t.Fatalf("exclude header = %q", got.Get(codexapi.ClientCodexExcludeHeader))
+		}
 	default:
 		t.Fatal("websocket handshake headers were not observed")
 	}

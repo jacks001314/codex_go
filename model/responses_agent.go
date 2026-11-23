@@ -3135,6 +3135,7 @@ func (r *ResponsesAgentRunner) newResponsesHTTPRequestWithToolResults(ctx contex
 	addIncludeTimingMetricsHeader(httpRequest.Header, apiRequest.IncludeTimingMetrics)
 	addTurnStateHeader(httpRequest.Header, r.turnStateForRequest(request))
 	addBetaFeaturesHeader(httpRequest.Header, apiRequest.BetaFeaturesHeader)
+	addExcludeHeader(httpRequest.Header)
 	addOriginatorHeader(httpRequest.Header, requestOriginator(request))
 	addSessionIdentityHeaders(httpRequest.Header, request)
 	if guardianReviewer {
@@ -3399,6 +3400,17 @@ func addBetaFeaturesHeader(headers http.Header, betaFeaturesHeader string) {
 		return
 	}
 	headers.Set(codexapi.ClientCodexBetaFeaturesHeader, betaFeaturesHeader)
+}
+
+// addExcludeHeader asks the Responses API to omit the echoed tool catalog
+// (Rust build_responses_headers inserts x-codex-exclude: tools for every
+// Responses request, including the WebSocket handshake that reuses these
+// headers).
+func addExcludeHeader(headers http.Header) {
+	if headers == nil {
+		return
+	}
+	headers.Set(codexapi.ClientCodexExcludeHeader, "tools")
 }
 
 func (r *ResponsesAgentRunner) doResponsesHTTPRequest(httpRequest *http.Request) (*http.Response, error) {

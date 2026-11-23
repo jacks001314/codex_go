@@ -15,6 +15,7 @@ const (
 	ClientCodexParentThreadIDHeader              = "x-codex-parent-thread-id"
 	ClientCodexWindowIDHeader                    = "x-codex-window-id"
 	ClientCodexBetaFeaturesHeader                = "x-codex-beta-features"
+	ClientCodexExcludeHeader                     = "x-codex-exclude"
 	ClientOpenAIMemgenRequestHeader              = "x-openai-memgen-request"
 	ClientOpenAISubagentHeader                   = "x-openai-subagent"
 	ClientResponsesAPIIncludeTimingMetricsHeader = "x-responsesapi-include-timing-metrics"

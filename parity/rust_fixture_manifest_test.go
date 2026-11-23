@@ -173,7 +173,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// suites and snapshots.
 			// Re-anchored to upstream 59ac39addb: five fixtures joined
 			// core/tests/suite across the Guardian and subagent windows.
-			Files: 501,
+			Files: 505,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{

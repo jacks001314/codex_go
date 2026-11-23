@@ -58,8 +58,8 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	// Re-anchored to upstream 59ac39addb: the sidebar files/preview work
 	// (#61920/#61922) and the composer edit history (#61951) added seven
 	// goldens (1537 -> 1544).
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1568 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1568", got)
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1579 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1579", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -137,7 +137,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// Re-anchored to upstream a394ff9cf6: one more app-level golden.
 			// Re-anchored to upstream 59ac39addb: three app-level goldens joined
 			// the sidebar/document preview work (#61920/#61922).
-			Files:    119,
+			Files:    124,
 			Owner:    "tui/app, tui/chatwidget",
 			Focus:    "desktop history UI, cancelled-turn composer restore, and thread goal action rendering",
 			Priority: []string{"app", "composer", "history"},
@@ -176,7 +176,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// added one.
 			// Re-anchored to 6bfdc75f: the command-center ownership and Cloud
 			// reconnect work (#60929/#60969) added one app golden.
-			Files:    91,
+			Files:    92,
 			Owner:    "tui/app",
 			Focus:    "app-level catalog and migration prompts",
 			Priority: []string{"app", "model"},
@@ -212,7 +212,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// layouts, a net gain of four.
 			// Re-anchored to upstream 59ac39addb: the shared composer edit
 			// history (#61951) added one golden.
-			Files:    39,
+			Files:    40,
 			Owner:    "tui/bottom_pane/chat_composer",
 			Focus:    "draft and voice composer layout snapshots",
 			Priority: []string{"composer"},
@@ -376,7 +376,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/clipboard_copy/snapshots",
-			Files:    4,
+			Files:    5,
 			Owner:    "tui/clipboard_copy",
 			Focus:    "clipboard copy failure routing for empty selections and tmux targets",
 			Priority: []string{"render"},
@@ -390,7 +390,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// Round-90 re-anchor to head 4eb4a65407: the config panel surface
 			// gained its own snapshot directory (18 goldens).
 			// Re-anchored to upstream 59ac39addb: one more config-panel golden.
-			Files:    19,
+			Files:    20,
 			Owner:    "tui/config_panel",
 			Focus:    "config panel rendering, choice widgets, global search and validation states",
 			Priority: []string{"status"},
@@ -552,7 +552,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// text helpers, follow control, prompt header, search,
 			// selection hints, composer gap, and the compact/detailed copy
 			// presentations.
-			Files:    51,
+			Files:    53,
 			Owner:    "tui/transcript_view",
 			Focus:    "interactive transcript viewport: layout cache, text/tab rendering, prompt header, search, selection hints, and copy feedback",
 			Priority: []string{"history", "app", "composer"},

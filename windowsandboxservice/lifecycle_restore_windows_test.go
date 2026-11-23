@@ -5,6 +5,7 @@ package windowsandboxservice
 import (
 	"errors"
 	"strings"
+	"syscall"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -126,8 +127,8 @@ func TestRestoreAuthenticatedUserRefusesADifferentLoggedInUser(t *testing.T) {
 	}
 	stubSessionToken(t, token, nil)
 	err = lifecycle.RestoreAuthenticatedUser(3)
-	if err == nil || !strings.Contains(err.Error(), "does not match the recorded sandbox owner") {
-		t.Fatalf("RestoreAuthenticatedUser() error = %v", err)
+	if !errors.Is(err, ErrOwnerUnavailable) {
+		t.Fatalf("RestoreAuthenticatedUser() error = %v, want ErrOwnerUnavailable", err)
 	}
 	if saved != 0 {
 		t.Fatalf("RestoreAuthenticatedUser() saved %d records, want 0", saved)
@@ -216,6 +217,44 @@ func TestRestoreRecordedOwnerReportsTheRecordedFailure(t *testing.T) {
 	stubWindowsSessions(t, []uint32{3, 5}, nil)
 	err := lifecycle.RestoreRecordedOwner()
 	if err == nil || !strings.Contains(err.Error(), "no logged-in user") {
+		t.Fatalf("RestoreRecordedOwner() error = %v", err)
+	}
+}
+
+func TestRestoreRecordedOwnerDefersWhenNoOwnerSessionHasAToken(t *testing.T) {
+	lifecycle := &Lifecycle{
+		subscribe: noUninstallSubscription,
+		loadRecord: func() (*windowssandbox.InstallationRecord, error) {
+			return &windowssandbox.InstallationRecord{UserSID: currentUserSID(t), CodexHome: t.TempDir(), SessionID: 3}, nil
+		},
+		saveRecord: func(record *windowssandbox.InstallationRecord) (*windowssandbox.InstallationRecord, error) {
+			t.Fatal("RestoreRecordedOwner() saved a record before the owner signed in")
+			return nil, nil
+		},
+	}
+	t.Cleanup(lifecycle.Close)
+	stubSessionToken(t, 0, windows.ERROR_NO_TOKEN)
+	stubWindowsSessions(t, []uint32{3, 5}, nil)
+	if err := lifecycle.RestoreRecordedOwner(); err != nil {
+		t.Fatalf("RestoreRecordedOwner() error = %v", err)
+	}
+}
+
+func TestRestoreRecordedOwnerDefersWhenTheSessionIsGone(t *testing.T) {
+	lifecycle := &Lifecycle{
+		subscribe: noUninstallSubscription,
+		loadRecord: func() (*windowssandbox.InstallationRecord, error) {
+			return &windowssandbox.InstallationRecord{UserSID: currentUserSID(t), CodexHome: t.TempDir(), SessionID: 3}, nil
+		},
+		saveRecord: func(record *windowssandbox.InstallationRecord) (*windowssandbox.InstallationRecord, error) {
+			t.Fatal("RestoreRecordedOwner() saved a record for a missing session")
+			return nil, nil
+		},
+	}
+	t.Cleanup(lifecycle.Close)
+	stubSessionToken(t, 0, syscall.Errno(2))
+	stubWindowsSessions(t, []uint32{3}, nil)
+	if err := lifecycle.RestoreRecordedOwner(); err != nil {
 		t.Fatalf("RestoreRecordedOwner() error = %v", err)
 	}
 }

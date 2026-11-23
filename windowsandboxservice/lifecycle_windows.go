@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -14,6 +15,27 @@ import (
 	"codex_go/sandbox/windowssandbox"
 	"codex_go/sandbox/windowssandbox/provisionservice"
 )
+
+// ErrOwnerUnavailable reports that the recorded sandbox owner has no usable
+// session yet (Rust OwnerRestore::OwnerUnavailable). At boot the recorded
+// session may not exist, may have no token, or may belong to another user; a
+// session change wakes the listener to retry at sign-in, so this is not a
+// failure.
+var ErrOwnerUnavailable = errors.New("sandbox owner session is unavailable")
+
+// errorCtxWinstationNotFound is ERROR_CTX_WINSTATION_NOT_FOUND, which
+// WTSQueryUserToken reports once the recorded session has gone away.
+const errorCtxWinstationNotFound syscall.Errno = 7023
+
+// ownerSessionUnavailable recognizes the three errors Rust treats as a
+// missing owner session instead of a lifecycle failure.
+func ownerSessionUnavailable(err error) bool {
+	var errno syscall.Errno
+	if !errors.As(err, &errno) {
+		return false
+	}
+	return errno == windows.ERROR_FILE_NOT_FOUND || errno == errorCtxWinstationNotFound || errno == windows.ERROR_NO_TOKEN
+}
 
 // Lifecycle owns the authenticated owner of the recorded sandbox: the saved
 // installation record, the owner token and the pinned ancestor/home handles that
@@ -256,6 +278,9 @@ func (lifecycle *Lifecycle) RestoreAuthenticatedUser(sessionID uint32) error {
 	}
 	token, err := querySessionUserToken(sessionID)
 	if err != nil {
+		if ownerSessionUnavailable(err) {
+			return ErrOwnerUnavailable
+		}
 		return fmt.Errorf("open the logged-in user token: %w", err)
 	}
 	userSID, err := tokenUserSIDBytes(token)
@@ -264,8 +289,9 @@ func (lifecycle *Lifecycle) RestoreAuthenticatedUser(sessionID uint32) error {
 		return err
 	}
 	if windowssandbox.StringFromSIDBytes(userSID) != record.UserSID {
+		// Another user is signed in to this session; keep waiting for the owner.
 		_ = token.Close()
-		return errors.New("logged-in user does not match the recorded sandbox owner")
+		return ErrOwnerUnavailable
 	}
 	var pins []windows.Handle
 	defer func() { closeHandles(pins) }()
@@ -306,7 +332,9 @@ func (lifecycle *Lifecycle) RestoreAuthenticatedUser(sessionID uint32) error {
 
 // RestoreRecordedOwner ports PackageLifecycle::restore_logged_in_owner: retry
 // the recorded session, then any other session whose user matches the recorded
-// owner SID, because session IDs can change while the service is stopped.
+// owner SID, because session IDs can change while the service is stopped. An
+// owner that is not signed in yet is left for the session-change listener
+// (Rust #62865).
 func (lifecycle *Lifecycle) RestoreRecordedOwner() error {
 	if lifecycle == nil {
 		return errors.New("missing sandbox lifecycle")
@@ -319,6 +347,12 @@ func (lifecycle *Lifecycle) RestoreRecordedOwner() error {
 	if recordedErr == nil {
 		return nil
 	}
+	// A missing session or a non-owner sign-in defers restoration to sign-in;
+	// only a real failure is remembered as the reason restoration gave up.
+	var failure error
+	if !errors.Is(recordedErr, ErrOwnerUnavailable) {
+		failure = recordedErr
+	}
 	sessionIDs, err := listWindowsSessions()
 	if err != nil {
 		return fmt.Errorf("list current Windows sessions: %w", err)
@@ -327,11 +361,15 @@ func (lifecycle *Lifecycle) RestoreRecordedOwner() error {
 		if sessionID == record.SessionID {
 			continue
 		}
-		if lifecycle.RestoreAuthenticatedUser(sessionID) == nil {
+		sessionErr := lifecycle.RestoreAuthenticatedUser(sessionID)
+		if sessionErr == nil {
 			return nil
 		}
+		if !errors.Is(sessionErr, ErrOwnerUnavailable) && failure == nil {
+			failure = sessionErr
+		}
 	}
-	return recordedErr
+	return failure
 }
 
 // guardPresent reports whether the home's own directory guard is still

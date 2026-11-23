@@ -53443,9 +53443,1065 @@
    "sha": "9f2b87495bf979f6c1953cf00c98143981664914",
    "status": "audit_pending",
    "subject": "Recover server replies after Responses WebSocket write failures (#62749)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "bb5b9c6240136de8ff4d30215e2341c44559aa04",
+   "status": "audit_pending",
+   "subject": "Read Responses WebSocket messages during blocked uploads (#62771)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "d402acbebac03429169dec70eb977e3c1f5b6f40",
+   "status": "audit_pending",
+   "subject": "Reset TUI thread-switch state on reconnect (#62807)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "4360c5f8133632a5655fd28a5e33828c9b76056c",
+   "status": "audit_pending",
+   "subject": "Remove model-selected Search MCP routing (#62808)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "51f4b8af01db1fb04e0cc6235444573ecceda716",
+   "status": "audit_pending",
+   "subject": "Include native USD in ChatGPT turn cost telemetry (#62810)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Bazel toolchain upgrade (.bazelversion, MODULE.bazel.lock); the Go repository has no Bazel build."
+   ],
+   "kind": "release",
+   "sha": "4e9ce8fa9e7649ec58601a3d61da7a086da75500",
+   "status": "not_applicable",
+   "subject": "Upgrade Bazel to 9.3.3 (#62820)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "60fc55bb6950910be0bbcdd3e45552a29cf659b0",
+   "status": "audit_pending",
+   "subject": "Enable OAuth discovery by default for config servers (#62824)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "7fcb825b46433c4417c8ebdc5b5d0d08a4dc682e",
+   "status": "audit_pending",
+   "subject": "Persist Guardian retention limits in thread settings (#62827)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "ab7a93771efc8a15421106f6ec9a33121d216c05",
+   "status": "audit_pending",
+   "subject": "Honor Guardian retention settings for assistant messages (#62828)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "0a0b1021f06dffda763bdafbee32e25c04cac20b",
+   "status": "audit_pending",
+   "subject": "Apply elastic Guardian budgets to retained user and sender evidence (#62829)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "a1afa122738382adabe2dd1ccfc510a70ed381f0",
+   "status": "audit_pending",
+   "subject": "Let required hooks block continuation on failure (#62831)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "1c0c806028d5d585c574f85e5c8e979dbb2205be",
+   "status": "audit_pending",
+   "subject": "Record MCP tool call outcomes in traces (#62833)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "df6064096ac6ccc1a2b13410bd7efbe30ad21bdd",
+   "status": "audit_pending",
+   "subject": "Load managed cloud config for plugin add and list (#62837)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "5bee962f5e9c99c1e91b3fd097b03fc280aaf956",
+   "status": "audit_pending",
+   "subject": "Reuse one syntax highlighter when building TUI Markdown styles (#62840)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "2b5111917c1497ed945da543221f67ebe6e95280",
+   "status": "audit_pending",
+   "subject": "Tag all multi-agent role instructions consistently (#62842)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "9735367e18dcaeb02f5031460625b5f7f0f59e21",
+   "status": "audit_pending",
+   "subject": "Return an assessment for explicit Guardian reviews (#62846)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "4c153c26c0b5c54a22e0e775b46bcc4aa8872c79",
+   "status": "audit_pending",
+   "subject": "Reduce allocations when preparing tool schemas and catalogs (#62849)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "63598243af3fa93ac670fb39da48b4b0967fb365",
+   "status": "audit_pending",
+   "subject": "Limit guardian response resampling to one retry (#62852)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "548dd628df95e01dbaee503ca9cbb216242baaf1",
+   "status": "audit_pending",
+   "subject": "Specialize OpenTelemetry providers for HTTP traces and metrics (#62854)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "941e1dcade1598f7d10ac06b7a0c77df6857a32e",
+   "status": "audit_pending",
+   "subject": "Defer built-in Default mode instructions until after Plan mode (#62857)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "beac2ef8fc1ccba3e6014c8d1009737fc1dfd378",
+   "status": "audit_pending",
+   "subject": "Keep Cloud threads current in the Agents overview (#62858)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "b392250f487949a79931ef4f7871bfdacc19c6e9",
+   "status": "audit_pending",
+   "subject": "Define the startup OAuth protocol for config servers (#62859)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "codexapi.ClientCodexExcludeHeader (x-codex-exclude) is set to `tools` for every Responses request in addExcludeHeader (model/responses_agent.go), so the HTTP POST and the WebSocket handshake both ask the server to omit the echoed tool catalog. Tests: go test ./model -run 'TestResponsesAgentRunnerPostsResponsesRequest|TestResponsesAgentRunnerRunPrefersWebSocketLikeRust' -count=1"
+   ],
+   "kind": "protocol",
+   "sha": "8ecb4c9d0feb91ece02978f6aa77b540692b1ad9",
+   "status": "complete",
+   "subject": "Ask the Responses API to omit the echoed tool catalog (#62863)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "663358f98d20a35a9661fb9fa070fe2ecd6a5b42",
+   "status": "audit_pending",
+   "subject": "Keep agent concurrency guidance when native tools are disabled (#62864)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "windowsandboxservice.ErrOwnerUnavailable classifies a missing session (ERROR_FILE_NOT_FOUND, ERROR_CTX_WINSTATION_NOT_FOUND, ERROR_NO_TOKEN) and a different signed-in SID as OwnerUnavailable; RestoreAuthenticatedUser returns it without failing, and RestoreRecordedOwner keeps scanning other sessions and returns nil when the owner has not signed in yet, leaving restoration to the session-change listener (Rust OwnerRestore::OwnerUnavailable). Tests: go test ./windowsandboxservice -run 'RestoreAuthenticatedUser|RestoreRecordedOwner' -count=1"
+   ],
+   "kind": "runtime",
+   "sha": "f342aa7b929d7ddd4df66a4af8b638b6017d1b19",
+   "status": "complete",
+   "subject": "Defer Windows sandbox owner restoration until sign-in (#62865)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "cf8992e940cc673aa091f96b75519fca580d300a",
+   "status": "audit_pending",
+   "subject": "Enable configuration server OAuth during app-server startup (#62867)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "e346540867efaa2b73a22ea96e044b5311ae9cf0",
+   "status": "audit_pending",
+   "subject": "Use runtime authentication for TUI WebRTC calls (#62870)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "0bfb8467da6ace1d0628f36fcda905084d3e0e96",
+   "status": "audit_pending",
+   "subject": "Preserve per-image metadata in app-server image generation items (#62871)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "66618f0512ccd43ebd9784f3f0af3f9e93ca6d0c",
+   "status": "audit_pending",
+   "subject": "Prewarm MCP servers during cloud catalog refresh (#62876)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "566020b72410eb46345b0c3ae55dd6a4d3268e89",
+   "status": "audit_pending",
+   "subject": "Allow new threads to opt out of Daybreak propagation (#62879)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "bb1037ba042f88ec566f7364ee49c9070ebd03bf",
+   "status": "audit_pending",
+   "subject": "Compose managed domain rules across network config layers (#62882)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "619d36f810f89fcbf0fd91c1fd8dce23d3851d0a",
+   "status": "audit_pending",
+   "subject": "Tag user reports with the latest reasoning removal status (#62883)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "7edf91b13c54f20aab22fece0abfa4a5c28379b3",
+   "status": "audit_pending",
+   "subject": "Track explicit web search modes and expose indexed in the SDK (#62884)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "8a1a476659ba82105ec945d4b790f299cff25f42",
+   "status": "audit_pending",
+   "subject": "Use a shared `ToolCallId` for dispatched tool invocations (#62888)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Rust replaced serde_json::to_vec with codex_utils_string::serialized_json_bytes to avoid a temporary buffer. Go's encoding/json has no length-only encoder, and the executed-tool-call metadata path sizes the same JSON through its normal marshal; there is no separate buffer to remove."
+   ],
+   "kind": "protocol",
+   "sha": "63a15005de43a3db68d451403593b202ed337d20",
+   "status": "not_applicable",
+   "subject": "Avoid temporary JSON buffers when sizing executed tool call metadata (#62889)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "bfe3c825702e9235a631a1db58f291bed7a44cfe",
+   "status": "audit_pending",
+   "subject": "Broaden legacy fallback for MCP discovery over HTTP (#62893)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "4739e94260dccd4ec050d457b437a5fc82e3493e",
+   "status": "audit_pending",
+   "subject": "Add an opt-in indexed web search default (#62894)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "e3a398d3e40d4b53efb2860e0e5296d67b1212f4",
+   "status": "audit_pending",
+   "subject": "Allow model catalogs to set initial collaboration guidance (#62896)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "db72403243ee3ba63ab7d258e6b3c80545fc423d",
+   "status": "audit_pending",
+   "subject": "Distinguish conversation item IDs from Responses IDs in traces (#62898)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "features.Registry now declares concurrent_reasoning_summaries as stable and enabled by default, matching Rust #62903; the existing consumers already honor the gate (exec/exec.go and appserver/turn_runtime.go pass ConcurrentReasoningSummaries from features.Enabled). Tests: go test ./features ./config -count=1"
+   ],
+   "kind": "runtime",
+   "sha": "58952e0c398f4e088740d8f748a746fe315f464a",
+   "status": "complete",
+   "subject": "Enable concurrent reasoning summaries by default (#62903)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "553c7f8ea63a921308b4b30ddaaef7730fd22bba",
+   "status": "audit_pending",
+   "subject": "Use automatic reasoning summaries by default in the TUI (#62904)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "f63f8b9bc663eaf4dfd606e64afd61c5d0e1b249",
+   "status": "audit_pending",
+   "subject": "Add a reasoning summary picker to `/config` (#62905)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "ddfaef91b258da5a0217951ed5f6e0039add5e02",
+   "status": "audit_pending",
+   "subject": "Report HTTP MCP startup problems clearly in codex exec (#62906)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "556901ba7218b9862827d00142a52f19746b1a18",
+   "status": "audit_pending",
+   "subject": "Forward TUI clipboard copies to Rex clients (#62931)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "43d8b78241444f7268e75c87ca0f5f7d8138cef7",
+   "status": "audit_pending",
+   "subject": "Fix reasoning summary config lookup and request snapshot (#62932)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "appserver.scopedPermissionsWorldStateUpdates persists an initially blank scoped permissions checkpoint without emitting an empty fragment (permissionsDescriptionsHaveInstructions mirrors Rust PermissionsState::has_instructions, #62933), and a later approved prefix still emits the saved-prefix notice. Tests: go test ./appserver -run 'TestScopedPermissionsWorldStateSkipsInitiallyBlankInstructionsLikeRust|TestPermissionsWorldState|TestCompactPermissions' -count=1"
+   ],
+   "kind": "runtime",
+   "sha": "1145028ae47e8119955323d38ce34122d418f951",
+   "status": "complete",
+   "subject": "Skip empty permissions messages in the initial context (#62933)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "1731314b3b7ec68d6b831591107958da72d61101",
+   "status": "audit_pending",
+   "subject": "Dock the Agent Command Center beside the conversation (#62986)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "a0436d69ffd9a6d943d9b56175ba2968c5e698af",
+   "status": "audit_pending",
+   "subject": "Make Command Center easier to navigate in the TUI workspace (#62990)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "586bd4b891fab95ad3abf9ff57e38746c63d7499",
+   "status": "audit_pending",
+   "subject": "Support the Orca integrated terminal (#63013)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "140815f19c05a24a70ebc273016bd54ff71ced7c",
+   "status": "audit_pending",
+   "subject": "Fix clipboard text fallback and guard pending pastes in the TUI (#63022)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "59edd0d512a9fc1660f2ecf6562c803051b90faa",
+   "status": "audit_pending",
+   "subject": "Complete named settings for TUI slash commands (#63036)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "704ffed1c58ac349c129e459c50c71979dfac6b4",
+   "status": "audit_pending",
+   "subject": "Refresh the Code Mode exec catalog when helper signatures change (#63046)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "9302bb553e70512888a9053fd7aa52e23fa30d1e",
+   "status": "audit_pending",
+   "subject": "Select and copy Markdown blocks in the transcript (#63047)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "17cb2e3a7f2ab2d3dbfa4d03d525eef92ec7aafb",
+   "status": "audit_pending",
+   "subject": "Suppress TUI completion popups in shell mode (#63054)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "f12fa0fbc5c39eb59a4ad9d894b306a91ee8867c",
+   "status": "audit_pending",
+   "subject": "Keep the TUI transcript selection cursor visible (#63056)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "d4014cb19d23614be39c0cf57d981e042ba0763a",
+   "status": "audit_pending",
+   "subject": "Keep Cloud reply stream recovery retryable after transient failures (#63058)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "8653ca9e99b2c805107bde7b7d6f57a634c643d0",
+   "status": "audit_pending",
+   "subject": "Add an async user messaging opt-in for spawned subagents (#63069)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "6fd58416e3134633539641d74755b177b0342a5a",
+   "status": "audit_pending",
+   "subject": "Prevent MCP reply POSTs from resolving pending requests (#63075)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "357fe240c91563c1e6c9690bb27a2e609282d615",
+   "status": "audit_pending",
+   "subject": "Share truncation logic for environment startup errors (#63077)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "618d501ea0403847ab0070a697cbda8c85054c89",
+   "status": "audit_pending",
+   "subject": "Preserve fenced code source in TUI transcript copy mode (#63085)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "e1ecb5c8fce02d780e50b4cc8856f1f49ca0d26a",
+   "status": "audit_pending",
+   "subject": "Fix linked worktree hook loading when the root `.codex` is a file (#63088)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "1476a08f1b410e359e64becf2494bc248743e396",
+   "status": "audit_pending",
+   "subject": "Prevent TUI startup hangs when a launcher restores blocking input (#63089)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "cf3ff1530d821ec2d26452da4971d8e3e7d18d25",
+   "status": "audit_pending",
+   "subject": "Show a loading indicator while the resume picker starts (#63102)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "69ee78825e15772e065179dd5b91678be4f00ab3",
+   "status": "audit_pending",
+   "subject": "Keep task status visible and fix paging in the agent command center (#63145)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "227fa4e805d44988b0888390f41afe1358e9d24d",
+   "status": "audit_pending",
+   "subject": "Show task loading progress in the docked agent command center (#63146)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "b46c087c7e52ca8c1aba775dad99d9549b537312",
+   "status": "audit_pending",
+   "subject": "Count wide-character wraps when inserting TUI history (#63151)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "104d2564181d8eb4e67d0c92005f3ab1052051d4",
+   "status": "audit_pending",
+   "subject": "Preserve the host terminal's cursor shape in default TUI sessions (#63152)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "2ef0f669011616a921d11702e7abc9b2b1172dfa",
+   "status": "audit_pending",
+   "subject": "Increase Linux voice callback periods at 48 kHz (#63169)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "a0995c2b2b68248960c69cb812b5f4898dac7e4c",
+   "status": "audit_pending",
+   "subject": "Fix account refresh for new cloud sessions (#63171)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Cargo dependency update (url 2.5.9, form_urlencoded 1.2.3); Go dependencies are pinned in go.mod/go.sum and do not carry these crates."
+   ],
+   "kind": "release",
+   "sha": "1c8774ff1df3b1ba65793be7ad5cfd669badc317",
+   "status": "not_applicable",
+   "subject": "Update `url` to 2.5.9 and `form_urlencoded` to 1.2.3 (#63174)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "7085656b5e86f2bae8e393eaaac83577432c2595",
+   "status": "audit_pending",
+   "subject": "Reuse runtime-authenticated Responses WebSockets (#63175)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "61cb947f057155b705dda922739663fe2c37cf65",
+   "status": "audit_pending",
+   "subject": "Refresh terminal tips and show configured leader and agent shortcuts (#63176)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "5824b38693412e0787d45bbd0167be495b69660f",
+   "status": "audit_pending",
+   "subject": "Let Codex open workspace files in the terminal sidebar (#63184)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "27cfadaf850f9f3add5f2ad76c58778054fb703a",
+   "status": "audit_pending",
+   "subject": "Extract TUI side conversation navigation hints (#63188)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "ba1c17f9600a44d7dadb0b867690a9d936150e8d",
+   "status": "audit_pending",
+   "subject": "Widen sidebar tab close targets in the TUI (#63189)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "b087609f83932055ec9083c8afbd181fcffcd1a5",
+   "status": "audit_pending",
+   "subject": "Keep terminal background colors when foreground replies are missing (#63191)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "0bbbda9250645afb7eeb18a1b7a3c600c926ecc2",
+   "status": "audit_pending",
+   "subject": "Defer numbered TUI questions during active input (#63192)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "9f2cbb9c09daf36d60c3f110cd16dc46c8c225f1",
+   "status": "audit_pending",
+   "subject": "Discard TUI typeahead after prompt rewind and fork (#63193)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "b361a3323f2f09335561848ee40424533d7d94a7",
+   "status": "audit_pending",
+   "subject": "Keep streamed TUI answers intact when notices interrupt them (#63194)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "988e85bd5590863186dde8bd147b3c322f6fbd42",
+   "status": "audit_pending",
+   "subject": "Honor tmux mouse changes while the TUI is in alternate screen (#63195)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "3cae922e10d2263c5207a28175768688c7d1fb6e",
+   "status": "audit_pending",
+   "subject": "Keep streamed output visible until inline history is repainted (#63196)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "4ae20b9f28f72d46fcea7431381b88fb4c70514a",
+   "status": "audit_pending",
+   "subject": "Add creation-time sorting to Command Center search (#63208)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "44848822b1a58fa40cdcd89ec3161c757735cfd0",
+   "status": "audit_pending",
+   "subject": "Automatically resume disconnected cloud conversations in the TUI (#63211)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "9e3479e00a2aa22dd3e9e8662420b07ae3185951",
+   "status": "audit_pending",
+   "subject": "Keep turn diff updates out of the TUI replay buffer (#63218)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "ae6c0c8ac164bdead234d8cdc794dbcdc5b37d28",
+   "status": "audit_pending",
+   "subject": "Exclude per-item usage attribution by default (#63219)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "1b0b42bfcaa6bdac5ab0acafd0d99fda87de2c47",
+   "status": "audit_pending",
+   "subject": "Render flushed TUI input in the same frame (#63233)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Equivalent already: appserver.FeedbackRingBuffer.Write drops the oldest bytes so the buffer keeps exactly the last max bytes (len(data) >= max replaces the buffer with the tail; otherwise needed > max drops the front), which is what Rust's retain_back(max - data.len()) does after #63235. Tests: go test ./appserver -run TestRingBufferKeepsTail -count=1"
+   ],
+   "kind": "runtime",
+   "sha": "c9325ea78c52a6fb36de22f47e799b624d71db0d",
+   "status": "complete",
+   "subject": "Simplify eviction in the log ring buffer (#63235)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+   ],
+   "kind": "runtime",
+   "sha": "f1fd6c4c3570401033d25ea1a34e111b000df0d4",
+   "status": "audit_pending",
+   "subject": "Preserve mentions in cloud conversation transcripts (#63237)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Rust changed body.to_vec() to Vec::from(body) to move an http Body instead of copying it. Go's startup sync reads plugin responses with io.ReadAll, which already returns a single owned []byte; there is no equivalent eager copy to remove."
+   ],
+   "kind": "runtime",
+   "sha": "e0a6d0532deefa65eb7e86287fffadebbfda7591",
+   "status": "not_applicable",
+   "subject": "Avoid eager copies of plugin startup HTTP response bodies (#63241)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "9f2b87495bf979f6c1953cf00c98143981664914",
+ "rustToInclusive": "e0a6d0532deefa65eb7e86287fffadebbfda7591",
  "schemaVersion": 1
 }

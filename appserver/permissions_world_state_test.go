@@ -297,3 +297,73 @@ func TestCompactPermissionsSnapshotMatchesRustWireShapeLikeRust(t *testing.T) {
 		t.Fatalf("added prefixes = %#v, want only cargo test", added)
 	}
 }
+
+// TestScopedPermissionsWorldStateSkipsInitiallyBlankInstructionsLikeRust pins
+// Rust #62933: a blank scoped permissions section persists its checkpoint but
+// emits no fragment, and a later approved prefix still reports through the
+// saved-prefix notice.
+func TestScopedPermissionsWorldStateSkipsInitiallyBlankInstructionsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(t.TempDir())
+	threadID := session.ThreadID("thread-scoped-blank-permissions")
+	now := time.Now().UTC()
+	if err := store.Create(&session.Record{
+		ID: threadID, SessionID: string(threadID), CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{HistoryMode: string(ThreadHistoryLegacy), Extra: map[string]any{}},
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+	})
+	t.Cleanup(func() { _ = router.Close() })
+
+	blank := " \t "
+	empty := ""
+	modelInfo := &model.ModelInfo{
+		Slug: "blank-permissions-model",
+		ModelMessages: &model.ModelMessages{
+			Permissions: &model.PermissionMessages{ReadOnly: &blank, WorkspaceWrite: &blank, DangerFullAccess: &blank},
+			Approvals:   &model.ApprovalMessages{OnRequest: &empty, OnRequestAutoReview: &empty, Never: &empty, UnlessTrusted: &empty},
+		},
+	}
+	params := &turn.TurnStartParams{ThreadID: string(threadID), CWD: home}
+	cfg := &config.Config{Values: map[string]any{"features": map[string]any{"per_environment_context": true}}}
+
+	first, err := router.permissionsWorldStateInputItems(string(threadID), params, modelInfo, cfg)
+	if err != nil {
+		t.Fatalf("permissionsWorldStateInputItems() error = %v", err)
+	}
+	if len(first) != 0 {
+		t.Fatalf("blank permissions emitted %d fragments: %#v", len(first), first)
+	}
+	record, err := store.Load(threadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := session.DecodeWorldState(record.Metadata.WorldState)
+	if err != nil {
+		t.Fatalf("DecodeWorldState() error = %v", err)
+	}
+	var snapshot permissionsScopedWorldStateSnapshot
+	if err := json.Unmarshal(state.PermissionInstructions, &snapshot); err != nil {
+		t.Fatalf("scoped snapshot = %s: %v", state.PermissionInstructions, err)
+	}
+	if snapshot.ThreadDefaults == "" {
+		t.Fatalf("scoped checkpoint was not persisted: %s", state.PermissionInstructions)
+	}
+
+	router.rememberExecPolicyAmendmentSaved(string(threadID), "turn-1", []string{"touch"})
+	second, err := router.permissionsWorldStateInputItems(string(threadID), params, modelInfo, cfg)
+	if err != nil {
+		t.Fatalf("permissionsWorldStateInputItems() error = %v", err)
+	}
+	if len(second) != 1 {
+		t.Fatalf("saved prefix updates = %#v, want one message", second)
+	}
+	want := "Approved command prefix saved:\n- [\"touch\"]"
+	if got := permissionsInputItemText(t, second[0]); got != want {
+		t.Fatalf("saved prefix = %q, want %q", got, want)
+	}
+}
