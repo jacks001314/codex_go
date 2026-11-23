@@ -513,6 +513,36 @@ func (m *RemoteModelsManager) RawModelCatalog(strategy RefreshStrategy) ModelsRe
 	return ModelsResponse{Models: m.GetRemoteModels()}
 }
 
+// NeedsInitialization mirrors Rust ModelsManager::needs_initialization
+// (#62627): command auth must be resolved before a catalog identity can be
+// checked, disabled discovery needs no work, and otherwise the catalog is
+// initialized only when its in-memory state belongs to the current identity.
+func (m *RemoteModelsManager) NeedsInitialization() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	commandAuth := m.commandAuth
+	apiKeyAuth := m.apiKeyAuth
+	discoveryDisabled := m.apiKeyDiscoveryDisabled
+	supportsAPIKeyModels := m.supportsAPIKeyModels
+	identity := m.identity
+	fetched := m.fetched
+	fetchedIdentity := m.fetchedIdentity
+	policy := m.apiKeyModelDiscovery
+	m.mu.RUnlock()
+	if commandAuth {
+		return true
+	}
+	if apiKeyAuth && (discoveryDisabled || !supportsAPIKeyModels || policy == nil || !policy.get()) {
+		return false
+	}
+	if !fetched {
+		return true
+	}
+	return identity != "" && fetchedIdentity != identity
+}
+
 func (m *RemoteModelsManager) GetRemoteModels() []ModelInfo {
 	if m == nil {
 		return nil

@@ -10,11 +10,14 @@ package appserver
 // while the provider stays selected.
 
 import (
+	"fmt"
 	"strings"
 
 	"codex_go/auth"
 	"codex_go/config"
+	"codex_go/features"
 	"codex_go/model"
+	"codex_go/turn"
 )
 
 // GuardianInferenceProvider is the inference route a host selects for Guardian
@@ -113,6 +116,100 @@ func (r *RuntimeRouter) guardianReviewProviderID(actorProviderID string) string 
 		return provider.ID
 	}
 	return strings.TrimSpace(actorProviderID)
+}
+
+// guardianModelsManager resolves the catalog belonging to the host-selected
+// Guardian provider (Rust #62588 ThreadManager sharing one Guardian catalog
+// between scoring and blocking review). It never blocks on a remote fetch: the
+// caller schedules initialization in the background (#62627).
+func (r *RuntimeRouter) guardianModelsManager(cfg *config.Config) model.ModelsManager {
+	provider, ok := r.guardianInferenceProvider()
+	if !ok {
+		return nil
+	}
+	discovery := true
+	if cfg != nil {
+		discovery = features.Enabled(cfg.FeatureSettings(), "api_key_model_discovery")
+	}
+	key := fmt.Sprintf("%s|%s|%t", provider.ID, strings.TrimSpace(provider.Info.ModelCatalogURL), discovery)
+	r.guardianModelsMu.Lock()
+	cached := r.guardianModels[key]
+	r.guardianModelsMu.Unlock()
+	if cached != nil {
+		return cached
+	}
+	codexHome := strings.TrimSpace(r.codexHomeForRollout())
+	var snapshot *auth.AuthDotJSON
+	if codexHome != "" {
+		if resolved, err := r.resolveAuthWithLoginRestrictionsAndOptions(codexHome, r.authStoreOptionsForOriginator("")); err == nil && resolved != nil {
+			snapshot = &resolved.Auth
+		}
+	}
+	runtimeProvider := model.CreateRuntimeProviderWithResidency(
+		provider.ID,
+		provider.Info,
+		snapshot,
+		managedResidencyForConfig(cfg),
+	)
+	manager := runtimeProvider.ModelsManager(nil)
+	model.SetAPIKeyModelDiscoveryEnabled(manager, discovery)
+	r.guardianModelsMu.Lock()
+	if r.guardianModels == nil {
+		r.guardianModels = map[string]model.ModelsManager{}
+	}
+	if existing := r.guardianModels[key]; existing != nil {
+		manager = existing
+	} else {
+		r.guardianModels[key] = manager
+	}
+	r.guardianModelsMu.Unlock()
+	return manager
+}
+
+// retryGuardianCatalogInitializationInBackground mirrors Rust #62627
+// LunaSampler::retry_catalog_initialization_in_background: at most one retry
+// runs at a time and it never delays the observed tool call.
+func (r *RuntimeRouter) retryGuardianCatalogInitializationInBackground(manager model.ModelsManager) bool {
+	if r == nil || manager == nil || !manager.NeedsInitialization() {
+		return false
+	}
+	r.guardianCatalogRetryMu.Lock()
+	if r.guardianCatalogRetryInFlight {
+		r.guardianCatalogRetryMu.Unlock()
+		return false
+	}
+	r.guardianCatalogRetryInFlight = true
+	r.guardianCatalogRetryMu.Unlock()
+	go func() {
+		defer func() {
+			r.guardianCatalogRetryMu.Lock()
+			r.guardianCatalogRetryInFlight = false
+			r.guardianCatalogRetryMu.Unlock()
+		}()
+		manager.RawModelCatalog(model.RefreshOnline)
+	}()
+	return true
+}
+
+// guardianCatalogRecoveryDue reports whether an observation should schedule the
+// background catalog retry (Rust #62627): the host selected a Guardian
+// provider, its catalog needs initialization, automatic work may run (auto
+// review outside full access), and requirements do not disable all Guardian
+// scoring.
+func (r *RuntimeRouter) guardianCatalogRecoveryDue(cfg *config.Config, params *turn.TurnStartParams, manager model.ModelsManager) bool {
+	if r == nil || manager == nil || !manager.NeedsInitialization() {
+		return false
+	}
+	if _, ok := r.guardianInferenceProvider(); !ok {
+		return false
+	}
+	if guardianScoringDisabledByRequirements(cfg) {
+		return false
+	}
+	if reviewer := turnApprovalsReviewerForTurn(cfg, params); !strings.EqualFold(reviewer, string(config.ApprovalsReviewerAutoReview)) {
+		return false
+	}
+	return !turnIsFullAccess(cfg, firstNonEmpty(turnCWD(params), r.services.DefaultCWD), params)
 }
 
 // managedGuardianPolicyRequirement reports the managed `guardian_policy_config`

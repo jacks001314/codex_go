@@ -14,6 +14,8 @@ type countingModelsManager struct {
 	calls      chan model.RefreshStrategy
 }
 
+func (m *countingModelsManager) NeedsInitialization() bool { return false }
+
 func (m *countingModelsManager) record(strategy model.RefreshStrategy) {
 	m.mu.Lock()
 	m.strategies = append(m.strategies, strategy)

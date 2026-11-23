@@ -1420,6 +1420,10 @@ const (
 )
 
 type ModelsManager interface {
+	// NeedsInitialization reports whether a catalog fetch must be scheduled,
+	// without waiting on the catalog lock or credentials (Rust #62627
+	// ModelsManager::needs_initialization). Static catalogs need no work.
+	NeedsInitialization() bool
 	ListModels(strategy RefreshStrategy) []ModelPreset
 	RawModelCatalog(strategy RefreshStrategy) ModelsResponse
 	// ModelCatalogWithOrigins mirrors Rust model_catalog_with_origins: the
@@ -1483,6 +1487,10 @@ func (m *StaticModelsManager) ModelCatalogWithOrigins(_ RefreshStrategy) []Catal
 		catalog = append(catalog, CatalogModel{Model: info, Origin: m.origin})
 	}
 	return catalog
+}
+
+func (m *StaticModelsManager) NeedsInitialization() bool {
+	return false
 }
 
 func (m *StaticModelsManager) ListModels(strategy RefreshStrategy) []ModelPreset {

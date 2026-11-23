@@ -21,6 +21,8 @@ type guardianCatalogManager struct {
 	startOnce sync.Once
 }
 
+func (m *guardianCatalogManager) NeedsInitialization() bool { return false }
+
 func newGuardianCatalogManager(models ...model.ModelInfo) *guardianCatalogManager {
 	return &guardianCatalogManager{models: append([]model.ModelInfo(nil), models...)}
 }

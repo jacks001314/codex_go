@@ -53022,7 +53022,7 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1267: partial - a host can now select a Guardian inference provider (RuntimeServices.GuardianModelProvider: id plus resolved model.ProviderInfo), and Guardian resolves its route from it (Rust #62588). appserver/guardian_inference.go derives the provider's preferred reviewer (Luna for API-key providers, codex-auto-review for OpenAI-auth), builds a dedicated reviewer model runner on that provider so review requests never borrow the actor's endpoint or credentials, resets the reviewer response chains when the provider is bound, reports the Guardian provider id on the review plan and prepared options, and restricts policy text to the managed guardian_policy_config requirement so actor configuration policy cannot steer Guardian. Tests: go test ./appserver -run 'Guardian' -count=1. Remaining: the shared Guardian model catalog (catalog-based reviewer resolution, model_catalog_url seeding, api-key discovery defaults), V2 scorer routing and classifier catalog (#62607), actor checkpoint/history reuse rules, and the guardian_model_provider_id analytics field."
+    "Round 1268: partial - the host-selected Guardian provider now also owns a shared model catalog (Rust #62588): the router builds one catalog from the provider's base URL, model_catalog_url and API-key discovery setting, caches it apart from the actor's catalog, uses it for reviewer selection and catalog metadata (so instructions, auto-review messages and thresholds come from the Guardian provider), keeps the separate reviewer runner and preferred reviewer, and retries initialization in the background (#62627). Remaining: reviewer isolation resets when the host provider is selected (service tier, context window/compaction overrides, transcript mode and history prompt), the actor checkpoint/history reuse rule, and the guardian_model_provider_id analytics field."
    ],
    "kind": "runtime",
    "sha": "5f8c36e8368cb97720bd9c21b2dafacccbdc9679",
@@ -53116,11 +53116,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1267: partial - Guardian V2 resources follow the host-selected provider where Go already resolves them through the review plan (Rust #62607): the preferred reviewer, auto-review messages, thresholds and reviewer instructions now come from the Guardian provider's preferred model, the dedicated Guardian runner carries that provider's API-key access policy, and the reviewer ignores the actor stream's serving assessment because it was produced by a different inference route. Tests: go test ./appserver -run 'Guardian' -count=1. Remaining: a dedicated Guardian model catalog (model_catalog_url, skip-bundled-seed and api-key discovery defaults) so classifier instructions/thresholds/input limits come from the provider's own catalog rather than the shared one; that catalog also carries #62588's remaining shared-catalog work."
+    "Round 1268: Guardian V2 runs against the configured Guardian provider (Rust #62607). The review plan resolves the preferred reviewer, auto-review messages, thresholds and instructions from that provider's own catalog, the dedicated Guardian runner carries the provider's API-key access policy, and the reviewer ignores the actor stream's serving assessment because it was produced by a different inference route. Tests: go test ./appserver -run 'Guardian' -count=1."
    ],
    "kind": "runtime",
    "sha": "efcc0cf917330e397ad6f34f1445e0bc32a0286e",
-   "status": "partial",
+   "status": "complete",
    "subject": "Enable Guardian V2 scoring with an explicit Guardian provider (#62607)"
   },
   {
@@ -53206,11 +53206,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1266: partial - Rust retries Guardian catalog initialization in the background when a tool call is observed and background scoring is allowed, allows one retry at a time, and checks readiness against current credentials before scheduling. Go's appserver/guardian_review_catalog_refresh.go keeps one shared refresh per parent thread (Rust #57789): a failed fetch still completes the attempt and later lookups do not retry, and there is no tool-call-triggered background retry or credential readiness check."
+    "Round 1268: Guardian model discovery retries in the background (Rust #62627). model.ModelsManager gains NeedsInitialization with implementations for remote (command auth first, disabled API-key discovery short-circuits, otherwise an unfetched or other-identity catalog needs work), static (never) and lazy managers; the router builds one catalog for the host-selected Guardian provider (cached by provider id, catalog URL and discovery setting, never the actor's cache) and retries its initialization single-flight in a goroutine so an observed tool call is not delayed. The retry runs only when the provider is selected, the catalog needs initialization, the turn uses auto review outside full access, and requirements do not disable Guardian scoring. Tests: go test ./model -run 'NeedsInitialization' -count=1; go test ./appserver -run 'GuardianCatalogRecovery|GuardianModelsManager' -count=1."
    ],
    "kind": "runtime",
    "sha": "ead489ac4d06b13a69909173469a17be126348a4",
-   "status": "partial",
+   "status": "complete",
    "subject": "Retry Guardian model discovery in the background (#62627)"
   },
   {

@@ -395,6 +395,15 @@ type RuntimeRouter struct {
 	threadModelsMu   sync.Mutex
 	startupModelsKey string
 	threadModels     map[string]model.ModelsManager
+	// guardianModels holds the catalog belonging to the host-selected Guardian
+	// provider (Rust #62588 shared Guardian catalog). It never reuses the
+	// actor's cache, so provider catalogs cannot leak between the routes.
+	guardianModelsMu sync.Mutex
+	guardianModels   map[string]model.ModelsManager
+	// guardianCatalogRetryInFlight keeps the catalog initialization retry
+	// single-flight (Rust #62627 retry_catalog_initialization_in_background).
+	guardianCatalogRetryMu       sync.Mutex
+	guardianCatalogRetryInFlight bool
 	// externalImportOriginatorMu guards the originator of the client that
 	// requested the in-flight external-agent import. The completion runs on a
 	// background goroutine, so the request connection's client info is captured

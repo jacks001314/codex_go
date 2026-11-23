@@ -805,11 +805,24 @@ func (r *RuntimeRouter) guardianReviewPlanForTurnContext(ctx context.Context, th
 	// lookup still forces one reread while later calls resolve the catalog only
 	// once. The lookup itself uses the in-memory catalog, so a recovered
 	// reviewer survives a failed disk-cache write.
+	_, guardianProviderSelected := r.guardianInferenceProvider()
 	refreshCompleted := r.guardianCatalogRefreshCompleted(threadID)
+	// Rust #62588: scoring and blocking review share the host-selected Guardian
+	// provider's catalog. Rust #62627 retries its initialization in the
+	// background so the observed tool call is never delayed by /models.
+	guardianModels := r.guardianModelsManager(cfg)
+	if guardianProviderSelected && r.guardianCatalogRecoveryDue(cfg, active.Params, guardianModels) {
+		r.retryGuardianCatalogInitializationInBackground(guardianModels)
+	}
 	// Rust #57770: only reviewer entries the provider advertised or the
 	// configuration supplied can be selected; a bundled entry does not prove a
 	// custom gateway offers it unless the parent set an explicit override.
 	reviewCatalog := func() []model.ModelPreset {
+		if guardianModels != nil {
+			return model.BuildAvailableModels(guardianReviewCatalogModels(
+				guardianModels.ModelCatalogWithOrigins(model.RefreshInMemory), parentInfo,
+			))
+		}
 		return model.BuildAvailableModels(guardianReviewCatalogModels(
 			r.requireModels().ModelCatalogWithOrigins(model.RefreshInMemory), parentInfo,
 		))
@@ -847,7 +860,11 @@ func (r *RuntimeRouter) guardianReviewPlanForTurnContext(ctx context.Context, th
 	// review model or the parent model overrode it, and the parent's otherwise.
 	catalogInfo := parentInfo
 	if selection.Model != "" && (selection.CatalogContainsAutoReview || selection.ModelOverridden) {
-		if info := r.modelInfoForRuntimeWithConfig(selection.Model, cfg); info != nil {
+		if guardianModels != nil {
+			if info := guardianModels.GetModelInfo(selection.Model, modelConfigForAppTurn(cfg)); strings.TrimSpace(info.Slug) != "" {
+				catalogInfo = &info
+			}
+		} else if info := r.modelInfoForRuntimeWithConfig(selection.Model, cfg); info != nil {
 			catalogInfo = info
 		}
 	}
@@ -860,7 +877,6 @@ func (r *RuntimeRouter) guardianReviewPlanForTurnContext(ctx context.Context, th
 	if active.Params != nil {
 		reasoningSummary = firstNonEmpty(reasoningSummary, stringPtrValue(active.Params.Summary))
 	}
-	_, guardianProviderSelected := r.guardianInferenceProvider()
 	plan := guardianReviewPlan{
 		Selection:          selection,
 		AutoReview:         autoReview,

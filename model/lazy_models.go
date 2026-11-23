@@ -79,6 +79,20 @@ func (m *LazyModelsManager) ForOriginator(originator string) (ModelsManager, boo
 	return partitioned.ForOriginator(originator)
 }
 
+func (m *LazyModelsManager) NeedsInitialization() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	cached := m.cached
+	done := m.done
+	m.mu.Unlock()
+	if !done || cached == nil {
+		return true
+	}
+	return cached.NeedsInitialization()
+}
+
 func (m *LazyModelsManager) ListModels(strategy RefreshStrategy) []ModelPreset {
 	return m.resolve().ListModels(strategy)
 }
