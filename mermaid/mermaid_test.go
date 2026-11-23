@@ -854,7 +854,9 @@ RL
 // Mirrors the Rust #54419 vectors: `<br>`, `<br/>` and `<br />` are line breaks
 // inside quoted and unquoted flowchart node labels, the 40-display-cell bound is
 // applied per rendered line, the decision marker stays on the first line, and
-// every other unsupported label (including breaks in edge labels) still fails.
+// every other unsupported label still fails. Rust #62550 extended the same
+// syntax to edge labels, which `TestMultilineEdgeLabelsInEveryDirectionLikeRust`
+// covers.
 func TestFlowchartLineBreakLabelsMatchRust(t *testing.T) {
 	var baseline string
 	for _, spelling := range []string{"<br>", "<br/>", "<br />"} {
@@ -915,8 +917,7 @@ func TestFlowchartLineBreakLabelsMatchRust(t *testing.T) {
 	for _, source := range []string{
 		"flowchart TD; A[\"one<br/><b>two</b>\"]",
 		"flowchart TD; A[\"one<br class='x'>two\"]",
-		"flowchart TD; A -->|one<br/>two| B",
-		"flowchart TD; A -- one<br>two --> B",
+		"flowchart TD; A[\"one<br/>\t<br/>two\"]",
 		"flowchart TD; A[<br/><br />]",
 	} {
 		if _, err := Render(source, 100); err != ErrUnsupported {

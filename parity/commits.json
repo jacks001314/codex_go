@@ -52773,11 +52773,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1268: partial - Rust renders `<br>`, `<br/>` and `<br />` as line breaks inside flowchart edge labels, reserving a row per line and preserving blank lines. Go's mermaid package supports those breaks in node labels only (mermaid/parse.go flowchartLabel rewriting, mermaid/draw.go label lines); edge labels with `<br>` still fail closed as ErrUnsupported (mermaid/mermaid_test.go multi-error case) and draw.go places one label row per edge port."
+    "Batch 129: complete - flowchart edge labels support `<br>`, `<br/>` and `<br />` line breaks like Rust #62550. mermaid/parse.go extracts `multilineLabel`, shared by node and edge labels, which validates every rendered line with `checkLabelContent`, collapses a whitespace-only line to \"\" so it reserves space without painting over a connector, rejects a label made only of breaks or whitespace, and keeps the 40-display-cell bound per line. mermaid/draw.go sizes the label gutter from the widest line, adds `labelHeight` to the horizontal lane offset, reserves one port row per label line in vertical layouts through `portRows`, and paints each line on its own row. mermaid/multiline_edge_labels_like_rust_test.go pins the Rust `multiline_edge_labels_in_every_direction` snapshot for TD/BT/LR/RL, blank-line equivalence (`one<br> <br>two` == `one<br><br>two`, `   <br>go` == `<br>go`), pipe/infix agreement and the per-line width/TooWide limits; mermaid/mermaid_test.go drops the old edge-break rejections, keeps the node break vectors and adds the tab-spelling rejection. Verified with go test ./mermaid ./tui/markdown, go build ./... and go vet ./mermaid."
    ],
    "kind": "runtime",
    "sha": "76aa61878757298bebde2d4382194ba1a8f9335a",
-   "status": "partial",
+   "status": "complete",
    "subject": "Render multiline Mermaid flowchart edge labels (#62550)"
   },
   {

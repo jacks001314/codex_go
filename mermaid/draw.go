@@ -25,13 +25,22 @@ func renderGraph(g *graph, maxWidth int) ([][]Span, error) {
 		}
 		labels[i] = lines
 	}
+	// Rust #62550: an edge label may carry `<br>` line breaks. The gutter is as
+	// wide as the widest rendered line, and vertical ports reserve one row per
+	// line so two-line labels do not overlap.
 	labelWidth := 0
+	labelHeight := 1
 	for _, e := range g.edges {
-		if w := textWidth(e.label); w > labelWidth {
-			labelWidth = w
-		}
-		if w := textWidth(e.targetLabel); w > labelWidth {
-			labelWidth = w
+		for _, label := range []string{e.label, e.targetLabel} {
+			lines := strings.Split(label, "\n")
+			if len(lines) > labelHeight {
+				labelHeight = len(lines)
+			}
+			for _, line := range lines {
+				if w := textWidth(line); w > labelWidth {
+					labelWidth = w
+				}
+			}
 		}
 	}
 	var boxCross int
@@ -58,9 +67,9 @@ func renderGraph(g *graph, maxWidth int) ([][]Span, error) {
 	ports := make([][2]int, len(g.edges))
 	for i, e := range g.edges {
 		source := counts[e.from]
-		counts[e.from]++
+		counts[e.from] += portRows(horizontal, e.label)
 		target := counts[e.to]
-		counts[e.to]++
+		counts[e.to] += portRows(horizontal, e.targetLabel)
 		ports[i] = [2]int{source, target}
 	}
 	stride := 1
@@ -157,7 +166,7 @@ func renderGraph(g *graph, maxWidth int) ([][]Span, error) {
 	}
 	firstLane := inset + boxCross
 	if horizontal {
-		firstLane += 4
+		firstLane += labelHeight + 3
 	} else {
 		firstLane += labelWidth + 5
 	}
@@ -327,8 +336,10 @@ func renderGraph(g *graph, maxWidth int) ([][]Span, error) {
 			if horizontal {
 				x, y = labelled.port+1, inset+boxCross+1
 			}
-			if err := putText(canvas.row(y), x, labelled.label); err != nil {
-				return nil, err
+			for offset, line := range strings.Split(labelled.label, "\n") {
+				if err := putText(canvas.row(y+offset), x, line); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -425,6 +436,16 @@ func putText(row []cell, column int, text string) error {
 		column += width
 	}
 	return nil
+}
+
+// portRows is the number of sub-rows one edge port occupies (Rust #62550): a
+// vertical layout stacks every label line, while a horizontal layout strides by
+// label width instead.
+func portRows(horizontal bool, label string) int {
+	if horizontal {
+		return 1
+	}
+	return len(strings.Split(label, "\n"))
 }
 
 func minInt(a, b int) int {

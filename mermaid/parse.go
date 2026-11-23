@@ -215,12 +215,8 @@ func flowchartEdge(rest *string) (string, rune, rune, bool, error) {
 			if err != nil {
 				return "", 0, 0, false, err
 			}
-			parsed, err := flowchartLabel(rawLabel)
+			parsed, err := multilineLabel(rawLabel)
 			if err != nil {
-				return "", 0, 0, false, err
-			}
-			// Edge labels never carry line breaks; they are validated whole.
-			if err := checkLabel(parsed); err != nil {
 				return "", 0, 0, false, err
 			}
 			label = parsed
@@ -252,12 +248,8 @@ func flowchartEdge(rest *string) (string, rune, rune, bool, error) {
 	if !strings.HasPrefix(remaining, ">") {
 		return "", 0, 0, false, ErrUnsupported
 	}
-	parsed, err := flowchartLabel(strings.TrimSpace(text))
+	parsed, err := multilineLabel(strings.TrimSpace(text))
 	if err != nil {
-		return "", 0, 0, false, err
-	}
-	// Edge labels never carry line breaks; they are validated whole.
-	if err := checkLabel(parsed); err != nil {
 		return "", 0, 0, false, err
 	}
 	*rest = remaining[len(">"):]
@@ -315,27 +307,9 @@ func flowchartNode(rest *string, g *graph, block *int) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	label, err := flowchartLabel(rawLabel)
+	label, err := multilineLabel(rawLabel)
 	if err != nil {
 		return 0, err
-	}
-	// Rust #54419: `<br>`, `<br/>` and `<br />` are line breaks inside flowchart
-	// node labels. The 40-display-cell bound applies per rendered line, a label
-	// that is only breaks or whitespace stays unsupported, and every other piece
-	// of markup is still rejected by checkLabel.
-	label = strings.ReplaceAll(label, "<br>", "\n")
-	label = strings.ReplaceAll(label, "<br/>", "\n")
-	label = strings.ReplaceAll(label, "<br />", "\n")
-	if strings.TrimSpace(label) == "" {
-		return 0, ErrUnsupported
-	}
-	for _, line := range strings.Split(label, "\n") {
-		if line == "" {
-			continue
-		}
-		if err := checkLabel(line); err != nil {
-			return 0, err
-		}
 	}
 	*rest = remaining
 	current := &g.nodes[index]
@@ -367,19 +341,55 @@ func flowchartLabel(label string) (string, error) {
 	if strings.Contains(resolved, "\"") {
 		return "", ErrUnsupported
 	}
-	// Callers validate the label: node labels after line-break expansion, edge
-	// labels as a whole (Rust #54419 moved `check_label` out of this helper).
+	// Callers validate the label through multilineLabel or checkLabel (Rust
+	// moved `check_label` out of this helper).
 	return resolved, nil
+}
+
+// multilineLabel expands `<br>`, `<br/>` and `<br />` inside a flowchart label
+// (Rust #62550 `parse::multiline_label`). Node and edge labels both use it; a
+// label that is only breaks or whitespace stays unsupported, each rendered line
+// keeps the 40-display-cell bound, and a whitespace-only line collapses to ""
+// so it reserves space without painting over an edge connector.
+func multilineLabel(label string) (string, error) {
+	resolved, err := flowchartLabel(label)
+	if err != nil {
+		return "", err
+	}
+	resolved = strings.ReplaceAll(resolved, "<br>", "\n")
+	resolved = strings.ReplaceAll(resolved, "<br/>", "\n")
+	resolved = strings.ReplaceAll(resolved, "<br />", "\n")
+	if strings.TrimSpace(resolved) == "" {
+		return "", ErrUnsupported
+	}
+	lines := strings.Split(resolved, "\n")
+	for i, line := range lines {
+		if err := checkLabelContent(line); err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(line) == "" {
+			lines[i] = ""
+		}
+	}
+	return strings.Join(lines, "\n"), nil
 }
 
 // checkLabel mirrors `parse::check_label`: markup needs deliberate
 // decoding/layout, but printable punctuation (including ampersands and
 // comparison operators) is plain text.
 func checkLabel(label string) error {
-	if labelContainsMarkup(label) {
+	if strings.TrimSpace(label) == "" {
 		return ErrUnsupported
 	}
-	if strings.TrimSpace(label) == "" {
+	return checkLabelContent(label)
+}
+
+// checkLabelContent mirrors `parse::check_label_content`: it rejects markup,
+// control characters and unsafe drawing symbols, and applies the per-line
+// display-cell bound. Whitespace-only content is accepted here so a blank line
+// inside a multiline label can reserve space.
+func checkLabelContent(label string) error {
+	if labelContainsMarkup(label) {
 		return ErrUnsupported
 	}
 	for _, ch := range label {
