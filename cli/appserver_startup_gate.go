@@ -26,7 +26,7 @@ type appServerOption struct {
 }
 
 const (
-	appServerStartupGroup      = "<--startup-sign-out|--print-startup-config|--startup-client-info <STARTUP_CLIENT_INFO>>"
+	appServerStartupGroup      = "<--print-startup-config|--startup-oauth>"
 	appServerWebSocketGroup    = "<--ws-auth <MODE>|--ws-token-file <PATH>|--ws-token-sha256 <HEX>|--ws-shared-secret-file <PATH>|--ws-issuer <ISSUER>|--ws-audience <AUDIENCE>|--ws-max-clock-skew-seconds <SECONDS>>"
 	appServerCodeModeHostGroup = "<--code-mode-host <URL>>"
 )
@@ -35,11 +35,12 @@ const (
 // declaration order.
 var appServerOptions = []appServerOption{
 	{name: "config", token: "--config <key=value>", takesValue: true},
-	{name: "startup-sign-out", token: "--startup-sign-out", group: "startup"},
+	{name: "startup-sign-out", token: "--startup-sign-out"},
 	{name: "enable", token: "--enable <FEATURE>", takesValue: true},
 	{name: "print-startup-config", token: "--print-startup-config", group: "startup"},
+	{name: "startup-oauth", token: "--startup-oauth", group: "startup"},
 	{name: "disable", token: "--disable <FEATURE>", takesValue: true},
-	{name: "startup-client-info", token: "--startup-client-info <STARTUP_CLIENT_INFO>", takesValue: true, group: "startup"},
+	{name: "startup-client-info", token: "--startup-client-info <STARTUP_CLIENT_INFO>", takesValue: true},
 	{name: "cloud-skills-snapshot", token: "--cloud-skills-snapshot <PATH>", takesValue: true},
 	{name: "code-mode-host", token: "--code-mode-host <URL>", takesValue: true, group: "code-mode-host"},
 	{name: "strict-config", token: "--strict-config"},
@@ -62,17 +63,34 @@ var appServerOptions = []appServerOption{
 // declares for the startup gate. `--remote-control` stays out of the help page
 // but takes part in the conflict check.
 var appServerConflicts = map[string][]string{
-	"print-startup-config": {"stdio", "listen", "remote-control"},
-	"stdio":                {"listen", "print-startup-config"},
-	"listen":               {"stdio", "print-startup-config"},
-	"remote-control":       {"print-startup-config"},
+	"print-startup-config": {"stdio", "listen", "remote-control", "startup-oauth"},
+	"startup-oauth":        {"stdio", "listen", "remote-control", "print-startup-config"},
+	"startup-sign-out":     {"startup-oauth"},
+	"stdio":                {"listen", "print-startup-config", "startup-oauth"},
+	"listen":               {"stdio", "print-startup-config", "startup-oauth"},
+	"remote-control":       {"print-startup-config", "startup-oauth"},
 }
 
 // appServerRequires mirrors clap's requires relations: the startup discovery
 // flags only run together with `--print-startup-config`.
 var appServerRequires = map[string][]string{
 	"startup-sign-out":    {"print-startup-config"},
-	"startup-client-info": {"print-startup-config"},
+	"startup-client-info": {"startup_mode"},
+}
+
+// appServerRequirementGroup is one clap argument group a requires relation can
+// target. Rust #62867 declares startup_mode for --print-startup-config and
+// --startup-oauth, so the client-info option accepts either mode.
+type appServerRequirementGroup struct {
+	names []string
+	token string
+}
+
+var appServerRequirementGroups = map[string]appServerRequirementGroup{
+	"startup_mode": {
+		names: []string{"print-startup-config", "startup-oauth"},
+		token: "<--print-startup-config|--startup-oauth>",
+	},
 }
 
 // appServerGroupUsage renders the argument group a used option belongs to.
@@ -202,10 +220,58 @@ func validateAppServerStartupGate(args []string, opts *AppServerOptions) error {
 		return nil
 	}
 	present := appServerPresentOptions(args)
+	// clap reports an unsatisfied group requirement before its conflict pass;
+	// direct requirements stay behind it (Rust #62867).
+	if err := appServerGroupRequirementError(present); err != nil {
+		return err
+	}
 	if err := appServerConflictError(present); err != nil {
 		return err
 	}
 	return appServerRequirementError(present)
+}
+
+// appServerGroupRequirementError reports an unsatisfied requirement group. Only
+// --startup-client-info declares one: startup_mode accepts either
+// --print-startup-config or --startup-oauth.
+func appServerGroupRequirementError(present []appServerOption) error {
+	if len(present) == 0 {
+		return nil
+	}
+	accepted := make(map[string]bool, len(present))
+	for _, option := range present {
+		accepted[option.name] = true
+	}
+	missing := make([]string, 0, 1)
+	for _, option := range present {
+		for _, name := range appServerRequires[option.name] {
+			group, ok := appServerRequirementGroups[name]
+			if !ok || appServerGroupAccepted(accepted, group) {
+				continue
+			}
+			if !clapUsageTokenListed(missing, group.token) {
+				missing = append(missing, group.token)
+			}
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	tokens := make([]string, 0, len(present)+len(missing))
+	seen := make(map[string]bool, len(present))
+	for _, option := range present {
+		if option.hidden || seen[option.token] {
+			continue
+		}
+		seen[option.token] = true
+		tokens = append(tokens, option.token)
+	}
+	tokens = append(tokens, missing...)
+	return &UsageError{
+		Message:    requiredArgumentsMessage(missing...),
+		Usage:      appServerUsageText(tokens),
+		SmartUsage: true,
+	}
 }
 
 // appServerConflictError reports the first present argument clap finds a
@@ -256,35 +322,66 @@ func appServerArgumentConflictError(option appServerOption, conflicting, present
 		excluded[conflict.name] = true
 	}
 	kept := make([]appServerOption, 0, len(present))
-	used := make([]string, 0, len(present))
 	for _, candidate := range present {
 		if candidate.hidden || excluded[candidate.name] {
 			continue
 		}
 		kept = append(kept, candidate)
-		used = append(used, candidate.token)
 	}
-	required := make([]string, 0, len(used))
+	required := make([]string, 0, len(kept))
+	groups := make([]string, 0, 1)
+	groupMembers := make(map[string]bool)
+	keptNames := make(map[string]bool, len(kept))
+	for _, candidate := range kept {
+		keptNames[candidate.name] = true
+	}
 	for _, candidate := range kept {
 		for _, name := range appServerRequires[candidate.name] {
+			if group, known := appServerRequirementGroups[name]; known {
+				if !clapUsageTokenListed(groups, group.token) {
+					groups = append(groups, group.token)
+				}
+				for _, member := range group.names {
+					groupMembers[member] = true
+				}
+				continue
+			}
 			requirement, known := appServerOptionByName(name)
-			if !known || excluded[name] || clapUsageTokenListed(used, requirement.token) || clapUsageTokenListed(required, requirement.token) {
+			if !known || excluded[name] || keptNames[name] || clapUsageTokenListed(required, requirement.token) {
 				continue
 			}
 			required = append(required, requirement.token)
 		}
 	}
+	used := make([]string, 0, len(kept))
+	for _, candidate := range kept {
+		if groupMembers[candidate.name] {
+			continue
+		}
+		used = append(used, candidate.token)
+	}
+	tokens := make([]string, 0, len(required)+len(used)+len(groups))
+	seen := make(map[string]bool, len(required)+len(used)+len(groups))
+	for _, token := range append(append(required, used...), groups...) {
+		if seen[token] {
+			continue
+		}
+		seen[token] = true
+		tokens = append(tokens, token)
+	}
 	return &UsageError{
 		Message:    message,
-		Usage:      appServerUsageText(append(required, used...)),
+		Usage:      appServerUsageText(tokens),
 		SmartUsage: true,
 	}
 }
 
-// appServerRequirementError reports the `requires` targets clap accepted an
-// option for but never received. clap skips a requirement whose argument
-// conflicts with an accepted one, which is how `--startup-client-info` passes
-// next to `--stdio`.
+// appServerRequirementError reports the requires targets clap accepted an
+// option for but never received. A requirement whose argument conflicts with an
+// accepted one is skipped, which is how --startup-sign-out passes next to
+// --stdio. Group requirements are never skipped: Rust #62867 makes
+// --startup-client-info require the startup_mode group, and clap still reports
+// the missing group next to a conflicting transport flag.
 func appServerRequirementError(present []appServerOption) error {
 	if len(present) == 0 {
 		return nil
@@ -293,25 +390,60 @@ func appServerRequirementError(present []appServerOption) error {
 	for _, option := range present {
 		accepted[option.name] = true
 	}
-	var roots []string
-	var missing []string
+	// Collect missing groups first so a direct requirement that points at one of
+	// their members is not reported twice.
+	missingGroups := make([]string, 0, 1)
+	groupMissing := make(map[string]bool)
 	for _, option := range present {
 		for _, name := range appServerRequires[option.name] {
-			if accepted[name] || len(appServerConflictingPresent(present, appServerOption{name: name})) > 0 {
+			group, ok := appServerRequirementGroups[name]
+			if !ok || appServerGroupAccepted(accepted, group) {
+				continue
+			}
+			if !clapUsageTokenListed(missingGroups, group.token) {
+				missingGroups = append(missingGroups, group.token)
+			}
+			for _, member := range group.names {
+				groupMissing[member] = true
+			}
+		}
+	}
+	var roots []string
+	for _, option := range present {
+		for _, name := range appServerRequires[option.name] {
+			if _, isGroup := appServerRequirementGroups[name]; isGroup {
+				continue
+			}
+			if accepted[name] || groupMissing[name] || len(appServerConflictingPresent(present, appServerOption{name: name})) > 0 {
 				continue
 			}
 			if !clapUsageTokenListed(roots, name) {
 				roots = append(roots, name)
 			}
-			if !clapUsageTokenListed(missing, name) {
-				missing = append(missing, name)
-			}
 		}
 	}
-	if len(missing) == 0 {
+	if len(roots) == 0 && len(missingGroups) == 0 {
 		return nil
 	}
-	used := make([]string, 0, len(roots)+len(present)+len(missing))
+	if len(missingGroups) > 0 {
+		// clap renders committed options first and appends the missing group.
+		tokens := make([]string, 0, len(present)+len(missingGroups))
+		seen := make(map[string]bool, len(present))
+		for _, option := range present {
+			if option.hidden || seen[option.token] {
+				continue
+			}
+			seen[option.token] = true
+			tokens = append(tokens, option.token)
+		}
+		tokens = append(tokens, missingGroups...)
+		return &UsageError{
+			Message:    requiredArgumentsMessage(missingGroups...),
+			Usage:      appServerUsageText(tokens),
+			SmartUsage: true,
+		}
+	}
+	used := make([]string, 0, len(roots)+len(present))
 	for _, name := range roots {
 		if requirement, known := appServerOptionByName(name); known {
 			used = append(used, requirement.token)
@@ -322,11 +454,6 @@ func appServerRequirementError(present []appServerOption) error {
 			continue
 		}
 		used = append(used, option.token)
-	}
-	for _, name := range missing {
-		if requirement, known := appServerOptionByName(name); known {
-			used = append(used, requirement.token)
-		}
 	}
 	tokens := make([]string, 0, len(used))
 	seen := make(map[string]bool, len(used))
@@ -342,6 +469,17 @@ func appServerRequirementError(present []appServerOption) error {
 		Usage:      appServerUsageText(tokens),
 		SmartUsage: true,
 	}
+}
+
+// appServerGroupAccepted reports whether one member of a requirement group was
+// accepted.
+func appServerGroupAccepted(accepted map[string]bool, group appServerRequirementGroup) bool {
+	for _, member := range group.names {
+		if accepted[member] {
+			return true
+		}
+	}
+	return false
 }
 
 // appServerRequirementTokens renders the required argument ids clap reports in

@@ -53747,11 +53747,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-23 upstream window; awaiting per-commit audit."
+    "--print-startup-config maps a login-required config-server load failure to the configServerLogin action ({reason:configServer, errorCode:Auth, action:configServerLogin}) and other config-server auth failures to LoginFailed; config.CloudConfigLoadError now carries Rust's login_required/requires_login distinction. codex app-server --startup-oauth serves a dedicated stdio pipe without an initialize handshake: login requires the configServer target, sends account/gatewayOAuth/changed with the auth URL, completes the pending request with {prompt:null}, and cancels with LoginFailed. The clap argument model gained the startup_mode group (--print-startup-config | --startup-oauth). Tests: go test ./app -run 'StartupOAuth|PrintStartupConfig|CloudConfigLoginRequired' -count=1; go test ./cli -count=1; go build ./..."
    ],
    "kind": "runtime",
    "sha": "cf8992e940cc673aa091f96b75519fca580d300a",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Enable configuration server OAuth during app-server startup (#62867)"
   },
   {

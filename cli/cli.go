@@ -603,6 +603,9 @@ type AppServerOptions struct {
 	// PrintStartupConfig validates configuration and emits startup requirements
 	// as JSON without starting the server (Rust #55300).
 	PrintStartupConfig bool
+	// StartupOAuth serves only configuration-server OAuth requests over stdio
+	// before the app server initializes (Rust #62867).
+	StartupOAuth bool
 	// StartupSignOut removes managed credentials before startup discovery.
 	StartupSignOut bool
 	// StartupClientInfo is the JSON ClientInfo used for startup discovery.
@@ -944,7 +947,7 @@ func Parse(args []string) (*Parsed, error) {
 			if err := validateAppServerStartupGate(rest[1:], &p.AppServer); err != nil {
 				return nil, err
 			}
-			if !p.AppServer.PrintStartupConfig {
+			if !p.AppServer.PrintStartupConfig && !p.AppServer.StartupOAuth {
 				// Rust validates the WebSocket transport flags only when it is
 				// about to serve; the startup report never opens a listener.
 				if err := p.AppServer.ValidateWebsocketAuthFlags(); err != nil {
@@ -4317,6 +4320,8 @@ func parseAppServer(args []string, appServer *AppServerOptions) error {
 			appServer.AnalyticsDefaultEnabled = true
 		case arg == "--print-startup-config":
 			appServer.PrintStartupConfig = true
+		case arg == "--startup-oauth":
+			appServer.StartupOAuth = true
 		case arg == "--startup-sign-out":
 			appServer.StartupSignOut = true
 		case arg == "--startup-client-info":

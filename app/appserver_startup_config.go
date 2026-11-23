@@ -20,12 +20,14 @@ import (
 func printAppServerStartupConfig(opts cli.AppServerOptions, root *cli.RootOptions, stdout io.Writer) error {
 	result, err := readAppServerStartupConfig(opts, root)
 	if err != nil {
-		payload := map[string]any{
-			"error": map[string]any{
-				"code":    -32600,
-				"message": err.Error(),
-			},
+		body := map[string]any{
+			"code":    -32600,
+			"message": err.Error(),
 		}
+		if data := appServerStartupConfigServerErrorData(err); data != nil {
+			body["data"] = data
+		}
+		payload := map[string]any{"error": body}
 		encoded, _ := json.Marshal(payload)
 		_, _ = fmt.Fprintln(stdout, string(encoded))
 		return err
@@ -57,8 +59,11 @@ func readAppServerStartupConfig(opts cli.AppServerOptions, root *cli.RootOptions
 			return nil, errors.New("invalid startup client info: name is required")
 		}
 	}
-	cfg, err := loadAppServerConfig(codexHome, opts, root)
+	cfg, err := loadAppServerStartupConfigForDiscovery(codexHome, opts, root)
 	if err != nil {
+		if action := appServerStartupConfigServerAction(err); action != nil {
+			return nil, action
+		}
 		return nil, err
 	}
 	requirements, err := appServerRequirements(codexHome, cfg)
@@ -74,6 +79,56 @@ func readAppServerStartupConfig(opts cli.AppServerOptions, root *cli.RootOptions
 			Requirements:                  projected,
 		},
 	}, nil
+}
+
+// loadAppServerStartupConfigForDiscovery is the configuration entry point used
+// by startup discovery; tests replace it to inject configuration-server
+// failures without a network.
+var loadAppServerStartupConfigForDiscovery = loadAppServerConfig
+
+// appServerStartupActionError is the login-required startup error Rust builds
+// in config_server_error: the diagnostic message names the action while data
+// carries the reason and error code (#62867).
+type appServerStartupActionError struct {
+	message string
+	data    map[string]any
+}
+
+func (e *appServerStartupActionError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.message
+}
+
+// appServerStartupConfigServerAction rewrites a login-required config-server
+// failure into Rust's "Configuration server sign-in required" error.
+func appServerStartupConfigServerAction(err error) error {
+	data := appServerStartupConfigServerErrorData(err)
+	if data == nil || data["action"] == nil {
+		return nil
+	}
+	return &appServerStartupActionError{message: "Configuration server sign-in required", data: data}
+}
+
+// appServerStartupConfigServerErrorData mirrors Rust's config_server_error and
+// config_server_login_failed (#62867): an auth failure from a required
+// configuration server becomes an actionable startup error. A resolvable login
+// asks the client for the configServerLogin action; every other auth failure
+// reports LoginFailed.
+func appServerStartupConfigServerErrorData(err error) map[string]any {
+	var actionErr *appServerStartupActionError
+	if errors.As(err, &actionErr) {
+		return actionErr.data
+	}
+	var loadErr *config.CloudConfigLoadError
+	if !errors.As(err, &loadErr) || loadErr.Code != config.CloudConfigLoadAuth {
+		return nil
+	}
+	if !loadErr.RequiresLogin() {
+		return map[string]any{"reason": "configServer", "errorCode": "LoginFailed"}
+	}
+	return map[string]any{"reason": "configServer", "errorCode": "Auth", "action": "configServerLogin"}
 }
 
 type appServerStartupConfig struct {

@@ -177,6 +177,12 @@ func loadCloudConfigBundleAttempt(ctx context.Context, opts CloudConfigFetchOpti
 	}
 	if opts.Authorize != nil {
 		if err := opts.Authorize(ctx, req); err != nil {
+			// Rust auth_io_error keeps a typed login-required failure instead of
+			// flattening it into a plain message (Rust #62867).
+			var loadErr *CloudConfigLoadError
+			if errors.As(err, &loadErr) && loadErr.Code == CloudConfigLoadAuth {
+				return nil, false, loadErr
+			}
 			return nil, false, NewCloudConfigLoadError(CloudConfigLoadAuth, nil, err.Error())
 		}
 	}

@@ -1919,11 +1919,14 @@ func printMigrateRolloutsOutcome(outcome rollout.MigrationOutcome, stdout io.Wri
 }
 
 func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.RootOptions, stdout io.Writer, stderr io.Writer, stdin io.Reader) error {
-	if opts.PrintStartupConfig {
+	if opts.PrintStartupConfig || opts.StartupOAuth {
 		if len(opts.Subcommand) > 0 {
 			// clap parses the subcommand, so the flag reaches Rust's runtime
 			// check instead of an argument diagnostic.
-			return errors.New("--print-startup-config cannot run a subcommand")
+			return errors.New("startup configuration modes cannot run a subcommand")
+		}
+		if opts.StartupOAuth {
+			return serveAppServerStartupOAuth(ctx, opts, root, stdin, stdout)
 		}
 		return printAppServerStartupConfig(opts, root, stdout)
 	}
@@ -2095,9 +2098,10 @@ func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.Root
 	return fmt.Errorf("unsupported app-server listen address %s", opts.Listen)
 }
 
-func loadAppServerConfig(codexHome string, opts cli.AppServerOptions, root *cli.RootOptions) (*config.Config, error) {
-	strictConfig := opts.StrictConfig
-	loadOpts := &config.EffectiveOptions{StrictConfig: strictConfig}
+// appServerStartupLoadOptions builds the effective-configuration options shared
+// by startup discovery and the startup OAuth pipe (Rust #62867).
+func appServerStartupLoadOptions(opts cli.AppServerOptions, root *cli.RootOptions) *config.EffectiveOptions {
+	loadOpts := &config.EffectiveOptions{StrictConfig: opts.StrictConfig}
 	loadOpts.RawOverrides = append(loadOpts.RawOverrides, opts.ConfigOverrides...)
 	if root != nil {
 		loadOpts.RawOverrides = append(loadOpts.RawOverrides, root.ConfigOverrides...)
@@ -2107,6 +2111,11 @@ func loadAppServerConfig(codexHome string, opts cli.AppServerOptions, root *cli.
 		loadOpts.CWD = root.Shared.CWD
 		loadOpts.StrictConfig = loadOpts.StrictConfig || root.StrictConfig
 	}
+	return loadOpts
+}
+
+func loadAppServerConfig(codexHome string, opts cli.AppServerOptions, root *cli.RootOptions) (*config.Config, error) {
+	loadOpts := appServerStartupLoadOptions(opts, root)
 	bootstrap, err := config.LoadEffectiveWithOptions(codexHome, loadOpts)
 	if err != nil || !bootstrap.RequiresRemoteConfig() {
 		return bootstrap, err

@@ -180,10 +180,28 @@ type CloudConfigLoadError struct {
 	Code       CloudConfigLoadErrorCode
 	Message    string
 	StatusCode *int
+	// LoginRequired marks an auth failure that a browser sign-in can resolve
+	// (Rust CloudConfigBundleLoadError::login_required, #62867).
+	LoginRequired bool
 }
 
 func NewCloudConfigLoadError(code CloudConfigLoadErrorCode, statusCode *int, message string) *CloudConfigLoadError {
 	return &CloudConfigLoadError{Code: code, StatusCode: statusCode, Message: message}
+}
+
+// NewCloudConfigLoginRequiredError mirrors Rust's login_required constructor: an
+// auth failure without a status whose remedy is a fresh sign-in.
+func NewCloudConfigLoginRequiredError(message string) *CloudConfigLoadError {
+	return &CloudConfigLoadError{Code: CloudConfigLoadAuth, Message: message, LoginRequired: true}
+}
+
+// RequiresLogin mirrors Rust CloudConfigBundleLoadError::requires_login: an
+// explicit login-required failure or an auth response with HTTP 401.
+func (e *CloudConfigLoadError) RequiresLogin() bool {
+	if e == nil {
+		return false
+	}
+	return e.LoginRequired || (e.Code == CloudConfigLoadAuth && e.StatusCode != nil && *e.StatusCode == 401)
 }
 
 func (e *CloudConfigLoadError) Error() string {

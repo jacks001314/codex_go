@@ -194,12 +194,18 @@ func configServerUnauthorized(err error) bool {
 }
 
 func configServerAuthenticationError(err error) error {
-	return config.NewCloudConfigLoadError(config.CloudConfigLoadAuth, nil, configServerAuthenticationMessage(err).Error())
+	// Rust auth_io_error preserves LoginRequired so startup discovery can ask
+	// for a browser sign-in instead of reporting a generic auth failure
+	// (Rust #62867).
+	if errors.Is(err, auth.ErrGatewayLoginRequired) {
+		return config.NewCloudConfigLoginRequiredError(configServerSignInMessage)
+	}
+	return config.NewCloudConfigLoadError(config.CloudConfigLoadAuth, nil, configServerAuthFailureMessage)
 }
 
 func configServerAuthenticationMessage(err error) error {
 	if errors.Is(err, auth.ErrGatewayLoginRequired) {
-		return errors.New(configServerSignInMessage)
+		return config.NewCloudConfigLoginRequiredError(configServerSignInMessage)
 	}
 	return errors.New(configServerAuthFailureMessage)
 }
