@@ -52001,11 +52001,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1269: partial - Rust adds prefix-filtered argument completion to the TUI composer (for example `on`/`off` after `/raw`). Go's chat_composer has the slash input parser and command menu (slash_input.go, slash_input_test.go) but no argument completion: no completion source, filter, or rendering for a command's fixed arguments."
+    "Batch 141: complete - the composer completes the first argument of supported slash commands (Rust #62343). tui/tea/slash_argument_completion.go adds the finite argument table (`raw`, `ide`, `usage`, `voice`, `keymap`, `goal`, `mcp`, `pets`) mirroring Rust's `choices()`, resolves a single-line `/command <prefix>` draft into the token to rewrite (a second argument, a multiline draft, an unknown command, or a command the thread/connection cannot run leaves no target), and filters the table by the typed prefix. refreshSlashPopup gives the argument popup priority over the command menu, Tab re-validates the live token and rewrites it in place (`/mcp lo` -> `/mcp login`), and Enter stays ordinary submission so the draft is sent as typed. tui/tea/slash_argument_completion_like_rust_test.go covers the suggestion list and render, prefix filtering, Tab replacement, Enter passthrough, the unsupported drafts and a stale token. Verified with go test ./tui/tea."
    ],
    "kind": "runtime",
    "sha": "42cf4edfcdc872cf2700a54ad0fef7cd25e5295c",
-   "status": "partial",
+   "status": "complete",
    "subject": "Add slash command argument completion to the TUI composer (#62343)"
   },
   {

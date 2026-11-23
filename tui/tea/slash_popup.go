@@ -37,6 +37,13 @@ type slashCommandPopup struct {
 	Items     []slashCommandPopupItem
 	Selected  int
 	ScrollTop int
+	// Argument marks a popup that completes the first argument of
+	// ArgumentCommand instead of a command name (Rust #62343).
+	Argument        bool
+	ArgumentCommand string
+	// ArgumentStart and ArgumentEnd bound the completed token in the composer.
+	ArgumentStart int
+	ArgumentEnd   int
 }
 
 func (m *Model) refreshSlashPopup() {
@@ -58,6 +65,11 @@ func (m *Model) refreshSlashPopup() {
 		return
 	}
 	composerText := m.composerText()
+	// Rust #62343: an argument the command's own table can complete takes the
+	// popup, so `/mcp lo` lists `login` instead of closing the menu.
+	if m.refreshSlashArgumentPopup() {
+		return
+	}
 	query, ok := slashPopupQuery(composerText)
 	if !ok {
 		m.slashPopup = slashCommandPopup{}
@@ -293,6 +305,11 @@ func (m *Model) updateSlashPopupKey(msg keymsg.KeyMsg) (bubbletea.Cmd, bool) {
 	case keymsg.KeyTab:
 		return m.completeSelectedSlashCommand(), true
 	case keymsg.KeyEnter:
+		// Rust #62343: Enter submits an argument draft exactly as typed.
+		if m.slashPopup.Argument {
+			m.slashPopup = slashCommandPopup{}
+			return nil, false
+		}
 		if cmd, ok := m.dispatchSelectedSlashCommand(); ok {
 			return cmd, true
 		}
@@ -390,6 +407,9 @@ func (m *Model) completeSelectedSlashCommand() bubbletea.Cmd {
 	item, ok := m.currentSlashPopupItem()
 	if !ok {
 		return nil
+	}
+	if m.slashPopup.Argument {
+		return m.completeSlashArgument()
 	}
 	firstLine := m.composerText()
 	if index := strings.IndexByte(firstLine, '\n'); index >= 0 {
