@@ -620,6 +620,23 @@ func truncateServerRequestErrorDetail(message string, limit int) string {
 	return message[:cut]
 }
 
+// stillPending reports whether a request is still awaiting a response. A replay
+// snapshot can outlive a resolution, so it re-checks every entry before sending
+// it (Rust #62609).
+func (b *ServerRequestBroker) stillPending(id RequestID) bool {
+	if b == nil {
+		return false
+	}
+	key := strings.TrimSpace(id.String())
+	if key == "" {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	entry, ok := b.pending[key]
+	return ok && entry != nil && !entry.claimed.Load()
+}
+
 func (b *ServerRequestBroker) ReplayThread(threadID string) int {
 	return b.ReplayThreadToConnection(threadID, "")
 }
@@ -643,6 +660,11 @@ func (b *ServerRequestBroker) ReplayThreadToConnection(threadID string, connecti
 	targeted, targetsOneConnection := sink.(TargetedServerRequestSink)
 	sent := 0
 	for _, request := range requests {
+		// The snapshot can outlive a resolution, so re-check each request before
+		// replaying it (Rust #62609).
+		if !b.stillPending(request.ID) {
+			continue
+		}
 		if requiresHumanApprovalRequest(request) {
 			if !humanApproval {
 				continue
