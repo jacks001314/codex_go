@@ -53021,11 +53021,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1266: partial - Rust lets hosts select a Guardian inference provider independently of the actor, sharing the provider and its model catalog between asynchronous scoring and blocking approval reviews, using the provider's preferred reviewer and resolving policy from managed requirements or reviewer model metadata. Go has no guardian-provider selection: reviews, policy rendering and catalog lookup all run through the actor's provider (appserver/agent_runtime.go GuardianPolicyConfig/GuardianPolicyTemplate + provider resolution at the turn start), so a host cannot route Guardian elsewhere."
    ],
    "kind": "runtime",
    "sha": "5f8c36e8368cb97720bd9c21b2dafacccbdc9679",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Support a host-selected inference provider for Guardian (#62588)"
   },
   {
@@ -53115,11 +53115,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1266: partial - Rust routes Guardian V2 classification through the configured Guardian provider and uses its classifier catalog for instructions, reasoning effort, thresholds and input limits, applies that provider's API-key access policy, and ignores actor-stream assessments when the provider is explicit. Go runs V2 scoring off the actor's provider catalog (turn_runtime.go GuardianV2Enabled from the actor model provider config); there is no explicit Guardian provider to route classification through or to take a separate access policy from."
    ],
    "kind": "runtime",
    "sha": "efcc0cf917330e397ad6f34f1445e0bc32a0286e",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Enable Guardian V2 scoring with an explicit Guardian provider (#62607)"
   },
   {
@@ -53205,11 +53205,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Round 1266: partial - Rust retries Guardian catalog initialization in the background when a tool call is observed and background scoring is allowed, allows one retry at a time, and checks readiness against current credentials before scheduling. Go's appserver/guardian_review_catalog_refresh.go keeps one shared refresh per parent thread (Rust #57789): a failed fetch still completes the attempt and later lookups do not retry, and there is no tool-call-triggered background retry or credential readiness check."
    ],
    "kind": "runtime",
    "sha": "ead489ac4d06b13a69909173469a17be126348a4",
-   "status": "audit_pending",
+   "status": "partial",
    "subject": "Retry Guardian model discovery in the background (#62627)"
   },
   {
