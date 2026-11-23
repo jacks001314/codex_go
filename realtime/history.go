@@ -36,7 +36,21 @@ const (
 	RealtimeItemKindBemItemPromoted   RealtimeItemKind = "bemItemPromoted"
 	RealtimeItemKindSessionClosed     RealtimeItemKind = "realtimeSessionClosed"
 	RealtimeItemKindTurnInputAccepted RealtimeItemKind = "turnInputAccepted"
-	RealtimeItemKindSessionEndInput   RealtimeItemKind = "sessionEndInputSaved"
+	// RealtimeItemKindSessionInput is Rust #62251's durable "transcript input
+	// saved without starting a turn" receipt.
+	RealtimeItemKindSessionInput RealtimeItemKind = "sessionInputSaved"
+	// RealtimeItemKindSessionEndInput is the pre-#62251 spelling. Go keeps it so
+	// histories written before the rename still decode and round-trip.
+	RealtimeItemKindSessionEndInput RealtimeItemKind = "sessionEndInputSaved"
+)
+
+// RealtimeSessionInputReason says whether a saved input closed one chunk or the
+// whole session (Rust SessionInputReason).
+type RealtimeSessionInputReason string
+
+const (
+	RealtimeSessionInputReasonChunk      RealtimeSessionInputReason = "chunk"
+	RealtimeSessionInputReasonSessionEnd RealtimeSessionInputReason = "sessionEnd"
 )
 
 // RealtimeTranscriptRole identifies who spoke a transcript segment.
@@ -86,6 +100,8 @@ type RealtimeItemContent struct {
 	SourceEvents []string
 	InputItemID  string
 	Input        string
+	// InputReason is set on session-input receipts (#62251).
+	InputReason RealtimeSessionInputReason
 }
 
 // RealtimeHandoffMode records how an accepted realtime input entered the agent
@@ -146,6 +162,19 @@ func (c RealtimeItemContent) MarshalJSON() ([]byte, error) {
 		return []byte(`{"type":"turnInputAccepted","handoffId":` + jsonString(c.HandoffID) +
 			`,"turnId":` + jsonString(c.TurnID) +
 			`,"mode":` + mode +
+			`,"sourceEventIds":` + string(sources) +
+			`,"inputItemId":` + jsonString(c.InputItemID) +
+			`,"input":` + jsonString(c.Input) + `}`), nil
+	case RealtimeItemKindSessionInput:
+		reason, err := marshalSessionInputReason(c.InputReason, false)
+		if err != nil {
+			return nil, err
+		}
+		sources, err := json.Marshal(c.SourceEvents)
+		if err != nil {
+			return nil, err
+		}
+		return []byte(`{"type":"sessionInputSaved","reason":` + reason +
 			`,"sourceEventIds":` + string(sources) +
 			`,"inputItemId":` + jsonString(c.InputItemID) +
 			`,"input":` + jsonString(c.Input) + `}`), nil
@@ -294,6 +323,19 @@ func (c RealtimeItemContent) marshalRolloutJSON() ([]byte, error) {
 			`,"source_event_ids":` + string(sources) +
 			`,"input_item_id":` + jsonString(c.InputItemID) +
 			`,"input":` + jsonString(c.Input) + `}`), nil
+	case RealtimeItemKindSessionInput:
+		reason, err := marshalSessionInputReason(c.InputReason, true)
+		if err != nil {
+			return nil, err
+		}
+		sources, err := json.Marshal(c.SourceEvents)
+		if err != nil {
+			return nil, err
+		}
+		return []byte(`{"type":"session_input_saved","reason":` + reason +
+			`,"source_event_ids":` + string(sources) +
+			`,"input_item_id":` + jsonString(c.InputItemID) +
+			`,"input":` + jsonString(c.Input) + `}`), nil
 	case RealtimeItemKindSessionEndInput:
 		sources, err := json.Marshal(c.SourceEvents)
 		if err != nil {
@@ -420,6 +462,8 @@ func decodeRealtimeRolloutContent(fields map[string]json.RawMessage) (RealtimeIt
 		}, nil
 	case "turn_input_accepted":
 		return decodeTurnInputAccepted(fields, "handoff_id", "turn_id", "source_event_ids", "input_item_id")
+	case "session_input_saved":
+		return decodeSessionInputSaved(fields, "source_event_ids", "input_item_id")
 	case "session_end_input_saved":
 		return decodeSessionEndInputSaved(fields, "source_event_ids", "input_item_id")
 	default:
@@ -478,7 +522,7 @@ func (i *RealtimeItem) UnmarshalJSON(data []byte) error {
 		switch key {
 		case "id", "realtimeSessionId", "observedAtMs", "type", "role", "text", "turnId", "itemId",
 			"presentation", "outcome", "channels", "handoffId", "mode", "sourceEventIds",
-			"inputItemId", "input":
+			"inputItemId", "input", "reason":
 		default:
 			return fmt.Errorf("unknown realtime item field %q", key)
 		}
@@ -605,6 +649,8 @@ func decodeRealtimeItemContent(fields map[string]json.RawMessage) (RealtimeItemC
 		return content, nil
 	case RealtimeItemKindTurnInputAccepted:
 		return decodeTurnInputAccepted(fields, "handoffId", "turnId", "sourceEventIds", "inputItemId")
+	case "sessionInputSaved":
+		return decodeSessionInputSaved(fields, "sourceEventIds", "inputItemId")
 	case RealtimeItemKindSessionEndInput:
 		return decodeSessionEndInputSaved(fields, "sourceEventIds", "inputItemId")
 	default:
@@ -682,6 +728,64 @@ func decodeTurnInputAccepted(fields map[string]json.RawMessage, handoffKey, turn
 		InputItemID:  inputItemID,
 		Input:        input,
 	}, nil
+}
+
+func decodeSessionInputSaved(fields map[string]json.RawMessage, sourcesKey, inputItemKey string) (RealtimeItemContent, error) {
+	reason, err := requiredRealtimeString(fields, "reason")
+	if err != nil {
+		return RealtimeItemContent{}, err
+	}
+	parsed, err := parseSessionInputReason(reason)
+	if err != nil {
+		return RealtimeItemContent{}, err
+	}
+	sources, err := requiredRealtimeStrings(fields, sourcesKey)
+	if err != nil {
+		return RealtimeItemContent{}, err
+	}
+	inputItemID, err := requiredRealtimeString(fields, inputItemKey)
+	if err != nil {
+		return RealtimeItemContent{}, err
+	}
+	input, err := requiredRealtimeString(fields, "input")
+	if err != nil {
+		return RealtimeItemContent{}, err
+	}
+	return RealtimeItemContent{
+		Kind:         RealtimeItemKindSessionInput,
+		InputReason:  parsed,
+		SourceEvents: sources,
+		InputItemID:  inputItemID,
+		Input:        input,
+	}, nil
+}
+
+// parseSessionInputReason accepts the camelCase v2 spelling and the snake_case
+// rollout spelling for the same two reasons.
+func parseSessionInputReason(value string) (RealtimeSessionInputReason, error) {
+	switch value {
+	case "chunk":
+		return RealtimeSessionInputReasonChunk, nil
+	case "sessionEnd", "session_end":
+		return RealtimeSessionInputReasonSessionEnd, nil
+	default:
+		return "", fmt.Errorf("unknown realtime session input reason %q", value)
+	}
+}
+
+// marshalSessionInputReason emits the v2 camelCase or rollout snake_case form.
+func marshalSessionInputReason(reason RealtimeSessionInputReason, rollout bool) (string, error) {
+	switch reason {
+	case RealtimeSessionInputReasonChunk:
+		return jsonString("chunk"), nil
+	case RealtimeSessionInputReasonSessionEnd:
+		if rollout {
+			return jsonString("session_end"), nil
+		}
+		return jsonString("sessionEnd"), nil
+	default:
+		return "", fmt.Errorf("invalid realtime session input reason %q", reason)
+	}
 }
 
 func decodeSessionEndInputSaved(fields map[string]json.RawMessage, sourcesKey, inputItemKey string) (RealtimeItemContent, error) {

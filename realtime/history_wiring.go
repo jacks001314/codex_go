@@ -153,9 +153,10 @@ func transcriptStreamNotifications(threadID string, effects RealtimeEventEffects
 func historyLifecycleNotifications(threadID string, items []RealtimeItem) []Notification {
 	var notifications []Notification
 	for _, item := range items {
-		// Turn-input acceptance and session-end receipts are durable history,
-		// not live conversation items (Rust #61473).
+		// Turn-input acceptance and saved-input receipts are durable history, not
+		// live conversation items (Rust #61473, #62251).
 		if item.Content.Kind == RealtimeItemKindTurnInputAccepted ||
+			item.Content.Kind == RealtimeItemKindSessionInput ||
 			item.Content.Kind == RealtimeItemKindSessionEndInput {
 			continue
 		}

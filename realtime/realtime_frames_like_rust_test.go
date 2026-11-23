@@ -276,3 +276,67 @@ func hasNotification(notifications []Notification, method NotificationMethod) bo
 	}
 	return false
 }
+
+// Mirrors Rust #62251: a saved transcript input carries a chunk or session-end
+// reason in the v2 camelCase and rollout snake_case spellings, receipts stay out
+// of live notifications, and pre-rename sessionEndInputSaved histories still
+// decode.
+func TestRealtimeSessionInputSavedCarriesReasonLikeRust(t *testing.T) {
+	const chunkWire = `{"id":"chunk-1","realtimeSessionId":"voice","type":"sessionInputSaved","reason":"chunk","sourceEventIds":["a"],"inputItemId":"i1","input":"hello"}`
+	var chunk RealtimeItem
+	if err := json.Unmarshal([]byte(chunkWire), &chunk); err != nil {
+		t.Fatalf("unmarshal chunk receipt: %v", err)
+	}
+	if chunk.Content.Kind != RealtimeItemKindSessionInput || chunk.Content.InputReason != RealtimeSessionInputReasonChunk ||
+		chunk.Content.Input != "hello" || len(chunk.Content.SourceEvents) != 1 {
+		t.Fatalf("chunk receipt = %#v", chunk.Content)
+	}
+	encoded, err := json.Marshal(chunk)
+	if err != nil || string(encoded) != chunkWire {
+		t.Fatalf("chunk receipt round trip = %s, %v", encoded, err)
+	}
+
+	const endWire = `{"id":"end-1","realtimeSessionId":"voice","type":"sessionInputSaved","reason":"sessionEnd","sourceEventIds":[],"inputItemId":"i2","input":"bye"}`
+	var endItem RealtimeItem
+	if err := json.Unmarshal([]byte(endWire), &endItem); err != nil {
+		t.Fatalf("unmarshal session-end receipt: %v", err)
+	}
+	if endItem.Content.InputReason != RealtimeSessionInputReasonSessionEnd {
+		t.Fatalf("session-end reason = %q", endItem.Content.InputReason)
+	}
+	encoded, err = json.Marshal(endItem)
+	if err != nil || string(encoded) != endWire {
+		t.Fatalf("session-end receipt round trip = %s, %v", encoded, err)
+	}
+
+	const rollout = `{"id":"chunk-1","realtime_session_id":"voice","type":"session_input_saved","reason":"session_end","source_event_ids":[],"input_item_id":"i2","input":"bye"}`
+	var persisted RealtimeItem
+	if err := persisted.UnmarshalRolloutJSON([]byte(rollout)); err != nil {
+		t.Fatalf("unmarshal rollout saved input: %v", err)
+	}
+	if persisted.Content.Kind != RealtimeItemKindSessionInput || persisted.Content.InputReason != RealtimeSessionInputReasonSessionEnd {
+		t.Fatalf("rollout saved input = %#v", persisted.Content)
+	}
+	persistedJSON, err := persisted.MarshalRolloutJSON()
+	if err != nil || string(persistedJSON) != rollout {
+		t.Fatalf("rollout saved input round trip = %s, %v", persistedJSON, err)
+	}
+
+	const badReason = `{"id":"bad","realtimeSessionId":"voice","type":"sessionInputSaved","reason":"unknown","sourceEventIds":[],"inputItemId":"i","input":"x"}`
+	if err := json.Unmarshal([]byte(badReason), &RealtimeItem{}); err == nil {
+		t.Fatal("saved input with an unknown reason decoded")
+	}
+
+	const legacy = `{"id":"legacy","realtimeSessionId":"voice","type":"sessionEndInputSaved","sourceEventIds":[],"inputItemId":"i3","input":"bye"}`
+	var legacyItem RealtimeItem
+	if err := json.Unmarshal([]byte(legacy), &legacyItem); err != nil {
+		t.Fatalf("unmarshal legacy receipt: %v", err)
+	}
+	if legacyItem.Content.Kind != RealtimeItemKindSessionEndInput {
+		t.Fatalf("legacy receipt kind = %q", legacyItem.Content.Kind)
+	}
+
+	if notifications := historyLifecycleNotifications("thread-1", []RealtimeItem{chunk, endItem}); len(notifications) != 0 {
+		t.Fatalf("saved-input notifications = %#v, want none", notifications)
+	}
+}
