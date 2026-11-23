@@ -52536,11 +52536,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Audit: the commit adds phase logging inside the Rust mxc-sandbox launcher (mxc_sdk spawn/wait). Go has no MXC launcher module; Windows sandboxing runs through codex_go/windowsandboxservice, so there is no launcher to instrument."
    ],
    "kind": "runtime",
    "sha": "739f934a15983c3d117ce9677c20bcc99370713f",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Add Windows MXC sandbox launch diagnostics (#62439)"
   },
   {
@@ -52586,11 +52586,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Audit: the change only boxes Rust's spawn_thread future to cut per-callsite monomorphization. Go has no ThreadManager/spawn_thread future type or boxing concept (thread start/resume/fork are plain methods), so there is no analogous code to change."
    ],
    "kind": "runtime",
    "sha": "6271f35f527bf7709b9af5e4e752e9f122706a17",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Box the thread startup future in `spawn_thread` (#62477)"
   },
   {
@@ -52699,11 +52699,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Audit: Go's prompt.ExplicitSkillMentionOptions.Inputs is a slice iterated by index (prompt/instructions.go CollectExplicitSkillMentions), so extension turn items already share the host's user input; there is no clone to remove. go test ./prompt -run ExplicitSkillMention passes."
    ],
    "kind": "runtime",
    "sha": "f6a1b619125edfb3eeaf19866493889e32f97e22",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Borrow user input in extension turn contexts (#62540)"
   },
   {
@@ -52711,11 +52711,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Audit: Go's remote TUI client has no worker command queue. remoteAppServerTUIClient writes JSON-RPC directly under writeMu and close() marks the connection closed then calls transport.close() without waiting for queue space, so the Rust hang (Shutdown enqueue behind a full queue) has no Go counterpart."
    ],
    "kind": "runtime",
    "sha": "ab00c6d640e19d771d77859dc3eeff66f8a9168f",
-   "status": "audit_pending",
+   "status": "not_applicable",
    "subject": "Prevent remote app-server shutdown from hanging on a full queue (#62547)"
   },
   {
