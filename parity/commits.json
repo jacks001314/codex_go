@@ -51788,11 +51788,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-19 window (c332754aa3..c764c44a05); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Already equivalent: appserver/message_board.go messageBoardHost.Notify delivers board notices as input items to the active turn (EnqueueIfAcceptingDelivery) or enqueues a trigger_turn-disabled agent message, so it never submits Op::InterAgentCommunication or starts a new turn.",
+    "Go has no separate native-vs-injection board host to switch; every routed notice already uses response-item delivery."
    ],
    "kind": "runtime",
    "sha": "5a6fb36a4d92473a9a792ba4a5952c7183506304",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Route local MCP board notifications through response item injection (#62302)"
   },
   {
@@ -52548,11 +52549,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "Already equivalent: the bundled systemskills/assets/samples/openai-docs skill already links references/model-selection.md, names the GPT-6.2 Astra/Sol migration quickstart, and its latest-model/model-migration/upgrade-guide references match the upstream target files after newline normalization."
    ],
    "kind": "runtime",
    "sha": "b9559ff737000a4fcf7a0e12c3353cca1ea4d008",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Update the `openai-docs` skill for GPT-6.2 (#62447)"
   },
   {
@@ -53352,11 +53353,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Registered from the 2026-11-20 upstream window; awaiting per-commit audit."
+    "selectRetainedItems now keeps explicit retention pins whole in a first pass outside the soft carryover budget (compact.HasExplicitRetentionPin mirrors Rust #62677), and selectLocalUserMessages no longer charges a pin that an explicit decision already selected.",
+    "The `always` injection policy now records retain_in_children=true like Rust's From<InjectedResponseItem>, so an explicit pin is distinguishable from a feature-retained developer message.",
+    "Coverage: compact/explicit_pins_like_rust_test.go (destination-scoped pins under an exhausted budget, ordinary user beside a pinned user) and the updated oversized-exchange test; go test ./compact ./appserver (retention/injection/message-board subset) passes."
    ],
    "kind": "runtime",
    "sha": "ea8ccc1d20ff65398e02490ac34f8c1012848625",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Keep explicitly pinned history outside the carryover token budget (#62677)"
   },
   {

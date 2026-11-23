@@ -46,10 +46,10 @@ func injectedHarnessMetadata(t *testing.T, item session.Item) map[string]any {
 	return metadata
 }
 
-// Rust #62654 `From<InjectedResponseItem> for ResponseItemEnvelope`: each policy
-// records the context-window decision, and only the two new policies record the
-// child decision, so a rollout written before #62654 keeps `always` meaning both
-// scopes.
+// Rust `From<InjectedResponseItem> for ResponseItemEnvelope`: each policy
+// records the context-window decision; `always` and the two scoped policies also
+// record the child decision, so #62677 can tell an explicit pin from a
+// feature-retained item.
 func TestInjectedRetentionPoliciesRecordBothScopesLikeRust(t *testing.T) {
 	cases := []struct {
 		retention      string
@@ -57,7 +57,7 @@ func TestInjectedRetentionPoliciesRecordBothScopesLikeRust(t *testing.T) {
 		wantInChildren *bool
 	}{
 		{retention: "default", wantAcross: false},
-		{retention: "always", wantAcross: true},
+		{retention: "always", wantAcross: true, wantInChildren: retentionPolicyBool(true)},
 		{retention: "alwaysInThread", wantAcross: true, wantInChildren: retentionPolicyBool(false)},
 		{retention: "alwaysInChildren", wantAcross: false, wantInChildren: retentionPolicyBool(true)},
 	}

@@ -72,22 +72,21 @@ func TestRemoteRetentionKeepsExplicitToolExchangeTogetherLikeRust(t *testing.T) 
 	}
 }
 
-// A retained exchange that does not fit is dropped whole and stops the scan so
-// older retained history is not backfilled.
-func TestRemoteRetentionDropsOversizedRetainedExchangeWholeLikeRust(t *testing.T) {
+// Rust #62677 keeps an explicitly pinned exchange outside the carryover budget,
+// so it survives whole even when the soft budget cannot fit it, while the
+// remaining budget still retains ordinary user history.
+func TestRemoteRetentionKeepsOversizedExplicitExchangeLikeRust(t *testing.T) {
 	older := Item{ID: "older", Type: "message", Role: "user", Kind: "user_message", Text: "older instruction"}
 	call := Item{ID: "call", Type: "function_call", CallID: "release-check", Name: "check_release", Text: strings.Repeat("x", 4_000), Data: explicitRetention(true)}
 	output := Item{ID: "output", Type: "function_call_output", CallID: "release-check", Name: "check_release", Text: strings.Repeat("y", 4_000), Data: explicitRetention(true)}
 	budget := EstimateItemTokens(&call) + EstimateItemTokens(&output) - 1
 
 	retained := retainedMessagesForRemoteCompaction([]Item{older, call, output}, budget, retentionPolicy{})
-	if len(retained) != 0 {
-		t.Fatalf("retained = %#v, want the oversized exchange and older history dropped", retained)
+	if got, want := retainedHistoryIDs(retained), "older,call,output"; got != want {
+		t.Fatalf("retained ids = %s, want %s: %#v", got, want, retained)
 	}
-	for _, item := range retained {
-		if strings.Contains(item.Text, "xxxx") || strings.Contains(item.Text, "yyyy") {
-			t.Fatalf("retained exchange was partially truncated: %#v", item)
-		}
+	if !strings.HasPrefix(retained[1].Text, "xxxxxxxx") || !strings.HasPrefix(retained[2].Text, "yyyyyyyy") {
+		t.Fatalf("pinned exchange lost its payload: %#v", retained)
 	}
 }
 

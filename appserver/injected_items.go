@@ -130,7 +130,9 @@ func injectedSessionItems(items []injectedResponseItem, now time.Time, retainCli
 		applyInjectedToolShape(&item, injected.Payload)
 		switch injected.Retention {
 		case injectedRetentionAlways:
-			setItemRetention(&item, true, nil)
+			// Rust `From<InjectedResponseItem>`: Always records both scopes.
+			inheritedByChildren := true
+			setItemRetention(&item, true, &inheritedByChildren)
 		case injectedRetentionAlwaysInThread:
 			keptInThreadOnly := false
 			setItemRetention(&item, true, &keptInThreadOnly)

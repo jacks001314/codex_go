@@ -1011,14 +1011,25 @@ func retainedOutputCallID(item Item) string {
 // their original history position.
 func selectRetainedItems(items []Item, shouldRetain func(Item) bool, isPinned func(Item) bool, maxTokens int, imageBudget bool, durations FileAudioDurations) map[int]Item {
 	selected := map[int]Item{}
+	groups := newestHistoryItemGroups(items, isPinned)
+	// Rust #62677: explicit pins stay whole outside the soft carryover budget,
+	// so an exhausted budget cannot drop or truncate them.
+	for _, group := range groups {
+		if isPinned(group.source) && HasExplicitRetentionPin(group.source) && shouldRetain(group.source) {
+			keepRetainedGroup(selected, group, group.source)
+		}
+	}
 	if maxTokens <= 0 {
 		return selected
 	}
 	remaining := maxTokens
 groupLoop:
-	for _, group := range newestHistoryItemGroups(items, isPinned) {
+	for _, group := range groups {
 		if remaining <= 0 {
 			break
+		}
+		if _, pinned := selected[group.sourcePosition]; pinned {
+			continue
 		}
 		if !shouldRetain(group.source) {
 			continue
@@ -1455,6 +1466,32 @@ func RetentionOverride(item Item) (bool, bool) {
 func IsAlwaysRetained(item Item) bool {
 	retain, ok := RetentionOverride(item)
 	return ok && retain
+}
+
+// HasExplicitRetentionPin reports whether an item carries an explicit injection
+// policy that pins it in at least one destination (Rust #62677
+// `has_explicit_retention_pin`). Pinned items stay outside the soft carryover
+// budget. Older developer messages and named turn outputs could also have been
+// retained by a feature, so they keep their historical pricing.
+func HasExplicitRetentionPin(item Item) bool {
+	metadata := itemHarnessMetadata(item)
+	if metadata == nil {
+		return false
+	}
+	if _, ok := metadata[RetainInChildrenMetadataKey]; ok {
+		return true
+	}
+	if !IsAlwaysRetained(item) {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(item.Type)) {
+	case "message":
+		return strings.ToLower(strings.TrimSpace(item.Role)) != "developer"
+	case "function_call_output":
+		return strings.TrimSpace(item.Name) == "" || strings.TrimSpace(item.CallID) != ""
+	default:
+		return true
+	}
 }
 
 // RetainInChildrenMetadataKey overrides inheritance by spawned agents, including
@@ -2519,10 +2556,8 @@ func selectLocalUserMessages(items []Item, maxTokens int, selected map[int]Item)
 		item := candidate.item
 		tokens := max(1, EstimateTextTokens(ItemText(&item)))
 		if _, already := selected[candidate.position]; already {
-			remaining -= tokens
-			if remaining < 0 {
-				remaining = 0
-			}
+			// Rust #62677: an explicitly pinned message was already selected and
+			// does not spend the optional user-message budget.
 			continue
 		}
 		if tokens <= remaining && contentPartsAreText(item.Content) {
