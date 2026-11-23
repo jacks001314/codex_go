@@ -535,3 +535,104 @@ func TestSteerMailboxMailboxDeliveryPredicatesLikeRust(t *testing.T) {
 		t.Fatal("a steered user message must reopen the current turn")
 	}
 }
+
+// drainedFinalAnswerLoopAgent reports a drained Responses Lite WebSocket
+// preemption that retained the turn's final answer plus a buffered tool call.
+type drainedFinalAnswerLoopAgent struct {
+	requests []model.AgentRequest
+	deliver  func(threadID string, turnID string)
+}
+
+func (a *drainedFinalAnswerLoopAgent) Run(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	a.requests = append(a.requests, *request)
+	if len(a.requests) == 1 {
+		if a.deliver != nil {
+			a.deliver(request.ThreadID, request.TurnID)
+		}
+		return &model.AgentResponse{
+			Preempted:  true,
+			Drained:    true,
+			ResponseID: "resp-drain-final",
+			Message:    "done",
+			Items: []model.AgentItem{
+				{ID: "final-1", Type: "agent_message", Text: "done", Data: map[string]any{"phase": "final_answer"}},
+				{ID: "buffered-tool-item", Type: "function_call", Name: "echo", CallID: "buffered-tool", Arguments: `{}`},
+			},
+		}, nil
+	}
+	return &model.AgentResponse{
+		ResponseID: "resp-after-steer",
+		Message:    "steered",
+		Items: []model.AgentItem{{
+			ID: "final-2", Type: "agent_message", Text: "steered", Data: map[string]any{"phase": "final_answer"},
+		}},
+	}, nil
+}
+
+// steerDuringResponse queues an explicit user message while the sampling
+// request is in flight.
+func steerDuringResponse(t *testing.T, mailbox *SteerMailbox) func(string, string) {
+	t.Helper()
+	return func(threadID string, turnID string) {
+		t.Helper()
+		if err := mailbox.Enqueue(&SteerEnqueueParams{ThreadID: threadID, TurnID: turnID, InputItems: []any{
+			map[string]any{
+				"type":    "message",
+				"role":    "user",
+				"content": []any{map[string]any{"type": "input_text", "text": "also do this"}},
+			},
+		}}); err != nil {
+			t.Errorf("enqueue steer during response: %v", err)
+		}
+	}
+}
+
+// Rust #62639: a drained response that retained a final answer defers
+// queue-only mail to the next turn instead of reopening the current one.
+func TestAgentLoopDefersQueueOnlyMailAfterDrainedFinalAnswerLikeRust(t *testing.T) {
+	mailbox := NewSteerMailbox()
+	agent := &drainedFinalAnswerLoopAgent{deliver: mailDuringResponse(t, mailbox)}
+	loop, executed := newMailboxPreemptionHarness(t, agent, mailbox, false)
+	result, err := loop.Run(context.Background(), &AgentLoopRequest{
+		Prompt: "answer now", Model: "gpt-test", ThreadID: "thread-drain-final", TurnID: "turn-drain-final",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(agent.requests) != 1 {
+		t.Fatalf("sampling requests = %d, want 1 (queue-only mail waits for the next turn)", len(agent.requests))
+	}
+	if *executed != 0 {
+		t.Fatalf("buffered tool call executions = %d, want 0", *executed)
+	}
+	if result.Response == nil || result.Response.ResponseID != "resp-drain-final" {
+		t.Fatalf("result response = %#v, want the drained final response", result.Response)
+	}
+	if !mailbox.HasPendingMailboxItems("thread-drain-final", "turn-drain-final") {
+		t.Fatal("queue-only mail was consumed instead of deferred")
+	}
+}
+
+// User steering received during the drain still reopens the current turn.
+func TestAgentLoopReopensDrainedFinalAnswerForUserSteeringLikeRust(t *testing.T) {
+	mailbox := NewSteerMailbox()
+	agent := &drainedFinalAnswerLoopAgent{deliver: steerDuringResponse(t, mailbox)}
+	loop, _ := newMailboxPreemptionHarness(t, agent, mailbox, false)
+	result, err := loop.Run(context.Background(), &AgentLoopRequest{
+		Prompt: "answer now", Model: "gpt-test", ThreadID: "thread-drain-steer", TurnID: "turn-drain-steer",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(agent.requests) != 2 {
+		t.Fatalf("sampling requests = %d, want 2 after user steering", len(agent.requests))
+	}
+	// The drained response keeps the turn's prompt plus the steer in the
+	// follow-up request's history.
+	if got := userMessageInputItemCount(agent.requests[1].InputItems); got != 2 {
+		t.Fatalf("follow-up user messages = %d, want 2: %v", got, itemTypes(agent.requests[1].InputItems))
+	}
+	if result.Response == nil || result.Response.ResponseID != "resp-after-steer" {
+		t.Fatalf("result response = %#v, want the steered follow-up", result.Response)
+	}
+}

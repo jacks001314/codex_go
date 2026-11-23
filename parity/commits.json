@@ -53211,11 +53211,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Not yet audited for the 2026-11-20 window (c764c44a05..10ca17496f); the commit is queued in the window triage and no Go carrier has been certified yet."
+    "A preempted Responses Lite response that completes while draining no longer reopens the turn just because a mailbox interrupt started it (Rust #62639, 9224da4ce1). Go rechecks the mailbox boundary after the drain: a retained final_answer switches the turn's delivery phase to the next turn, queue-only mail then stays pending and the turn finishes with the drained response (its usage, aborted buffered calls and items kept), while user steering keeps the current-turn phase and reopens sampling. Tests: go test ./turn -run 'Mailbox|Drain|Preempt' -count=1; go test ./turn -count=1"
    ],
    "kind": "runtime",
    "sha": "9224da4ce189c14d9423af2ac573f2ab3abb7969",
-   "status": "audit_pending",
+   "status": "complete",
    "subject": "Defer queue-only mail after a retained final answer (#62639)"
   },
   {

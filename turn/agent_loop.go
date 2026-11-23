@@ -878,7 +878,35 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 					result.InputItems = append(result.InputItems, abortedToolCallOutputItem(&item))
 				}
 			}
-			continue
+			// Rust #62639: a final answer retained during the drain can defer
+			// queue-only mail. Recheck the boundary instead of reopening the turn
+			// solely because the stream was interrupted; user steering still
+			// reopens the current turn.
+			if responseDefersMailboxDelivery(response) && !l.steerMailbox.HasPendingUserInput(request.ThreadID, request.TurnID) {
+				l.steerMailbox.SetMailboxDeliveryPhase(request.ThreadID, request.TurnID, state.MailboxNextTurn)
+			}
+			mailboxPreempted := l.steerMailbox.AcceptsMailboxDeliveryForCurrentTurn(request.ThreadID, request.TurnID) &&
+				(l.steerMailbox.HasPendingMailboxItems(request.ThreadID, request.TurnID) || l.steerMailbox.HasPendingUserInput(request.ThreadID, request.TurnID))
+			if mailboxPreempted {
+				continue
+			}
+			// Only queue-only mail waits, so the drained response answered the
+			// turn. Keep its usage and run the same follow-up hook a completed
+			// response gets before finishing.
+			if request.SamplingFollowUp != nil {
+				followUp := request.SamplingFollowUp(&SamplingFollowUpContext{Response: response, Usage: result.Usage, Iteration: iteration, HasToolCalls: false})
+				if len(followUp) > 0 {
+					result.InputItems = append(result.InputItems, followUp...)
+					result.SamplingFollowUps++
+					endSamplingRequestSpan()
+					continue
+				}
+			}
+			result.Response = response
+			profile := timing.CompleteProfile(l.now())
+			result.TimingProfile = &profile
+			endSamplingRequestSpan()
+			return result, nil
 		}
 		if l.executedToolCalls != nil {
 			l.executedToolCalls.CommitAttachment(executedToolCallAttachment)
