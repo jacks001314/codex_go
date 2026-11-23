@@ -55192,9 +55192,33 @@
    "sha": "69477b3a77ed17eb207d2c9da7354b9a3a704114",
    "status": "not_applicable",
    "subject": "Specialize blocking OTLP/HTTP providers for single-signal export (#63406)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 139: not_applicable - Rust #63408 deletes a test-only thread summary helper and its test from codex-rs/app-server/src/request_processors/thread_processor.rs and thread_processor_tests.rs; no product code changes and Go has no such helper."
+   ],
+   "kind": "runtime",
+   "sha": "9c7103216fb7edfd9d30f015cc01d7371fb02ae5",
+   "status": "not_applicable",
+   "subject": "Remove the app-server's test-only thread summary helper (#63408)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 139: not_applicable - Rust #63409 deletes a redundant Responses WebSocket v2 beta-header assertion from codex-rs/core/tests/suite/client_websockets.rs; no runtime behavior changes."
+   ],
+   "kind": "runtime",
+   "sha": "8d867a0c7dcfa44b5d63709303e4e20abb864564",
+   "status": "not_applicable",
+   "subject": "Remove redundant Responses WebSocket v2 beta header test (#63409)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "69477b3a77ed17eb207d2c9da7354b9a3a704114",
+ "rustToInclusive": "8d867a0c7dcfa44b5d63709303e4e20abb864564",
  "schemaVersion": 1
 }
