@@ -54979,7 +54979,8 @@
     "codex_go"
    ],
    "evidence": [
-    "Batch 122: partial - Rust scopes Guardian v3 evidence subscriptions to live reviewers. Go's guardian v3 support is limited to configuration/guidance plus review retrieval (appserver/guardian_review_retrieval.go), without the reviewer-session subscription registry this commit narrows."
+    "Batch 122: partial - Rust scopes Guardian v3 evidence subscriptions to live reviewers. Go's guardian v3 support is limited to configuration/guidance plus review retrieval (appserver/guardian_review_retrieval.go), without the reviewer-session subscription registry this commit narrows.",
+    "Batch 265: Guardian live-delivery inboxes can now be retired, mirroring Rust #63357's inbox lifecycle (codex-rs/ext/guardian-v3/src/actor.rs ActorInbox::close). GuardianActorInbox gains Closed/Close: closing drops the queued evidence, fires the pending wake channel, and makes publish or Deliver fail with 'Guardian inbox is closed' so a delivery prepared before the close cannot admit anything afterwards. GuardianLiveDelivery.CloseInbox retires and forgets an actor's inbox, so a reviewer that reloads starts with an empty inbox, while a replacement conversation for a still-loaded agent reuses the same inbox and its queued references through Inbox. Tests: agentboard/guardian_inbox_close_like_rust_test.go (close drops the queue, wakes the reviewer, rejects publish and delivery; replacement conversation reuses the retained queue). Residual: channel subscriptions are still not stored in the live reviewer's inbox and reviewer tools do not manage them, so unsubscribe-preserving selected evidence and subscription scoping across reviewer generations remain to be ported."
    ],
    "kind": "runtime",
    "sha": "e00c64fb683b74e0b27dd082db1cf1745f44f82f",

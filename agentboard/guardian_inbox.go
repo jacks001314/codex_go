@@ -61,6 +61,20 @@ func (d *GuardianLiveDelivery) Inbox(actor string) *GuardianActorInbox {
 	return inbox
 }
 
+// CloseInbox retires an actor's inbox and forgets it, so a reviewer that
+// reloads starts with an empty inbox while a replacement conversation for a
+// still-loaded agent reuses the same inbox through Inbox (Rust #63357).
+func (d *GuardianLiveDelivery) CloseInbox(actor string) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	inbox := d.actors[actor]
+	delete(d.actors, actor)
+	d.mu.Unlock()
+	inbox.Close()
+}
+
 // Publish queues one committed original for every recipient, one post per
 // actor even when several subscribed channels carried the same original. The
 // housekeeper is the single root writer, so an ordinal that is not newer than
@@ -90,10 +104,19 @@ type GuardianActorInbox struct {
 	root  string
 	actor string
 
-	mu    sync.Mutex
-	posts []GuardianQueuedEvidence
-	wake  chan struct{}
+	mu     sync.Mutex
+	posts  []GuardianQueuedEvidence
+	wake   chan struct{}
+	closed bool
 }
+
+// guardianClosedWake is returned by Subscribe on a closed inbox so a waiting
+// reviewer wakes immediately and can notice the closure.
+var guardianClosedWake = func() chan struct{} {
+	closed := make(chan struct{})
+	close(closed)
+	return closed
+}()
 
 // Root is the board identity this inbox was opened with.
 func (i *GuardianActorInbox) Root() string {
@@ -109,6 +132,36 @@ func (i *GuardianActorInbox) Actor() string {
 		return ""
 	}
 	return i.actor
+}
+
+// Closed reports whether the inbox was retired. A closed inbox never admits
+// another original (Rust guardian-v3 ActorInbox::close, #63357).
+func (i *GuardianActorInbox) Closed() bool {
+	if i == nil {
+		return true
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.closed
+}
+
+// Close retires the inbox: queued evidence is dropped so it cannot reach a
+// later reviewer conversation for the same agent, and pending wakeups fire.
+func (i *GuardianActorInbox) Close() {
+	if i == nil {
+		return
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.closed {
+		return
+	}
+	i.closed = true
+	i.posts = nil
+	if i.wake != nil {
+		close(i.wake)
+		i.wake = nil
+	}
 }
 
 // Len is the number of queued originals, including ones a conversation already
@@ -130,6 +183,9 @@ func (i *GuardianActorInbox) Subscribe() <-chan struct{} {
 	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	if i.closed {
+		return guardianClosedWake
+	}
 	if i.wake == nil {
 		i.wake = make(chan struct{})
 	}
@@ -149,6 +205,9 @@ func (i *GuardianActorInbox) QueuedPosts() []GuardianQueuedEvidence {
 func (i *GuardianActorInbox) publish(id GuardianEvidenceID, messageID string) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	if i.closed {
+		return errors.New("Guardian inbox is closed")
+	}
 	if count := len(i.posts); count != 0 && i.posts[count-1].Ordinal >= id.Ordinal {
 		return errors.New("Guardian inbox received evidence out of source order")
 	}
@@ -179,6 +238,9 @@ func (i *GuardianActorInbox) Deliver(ctx context.Context, actor string, board Ag
 	}
 	if delivered == nil {
 		return errors.New("Guardian inbox delivery requires a cursor")
+	}
+	if i.Closed() {
+		return errors.New("Guardian inbox is closed")
 	}
 	if admit == nil {
 		return errors.New("evidence admission callback is required")
