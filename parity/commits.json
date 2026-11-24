@@ -55945,9 +55945,35 @@
    "sha": "c3186b5d954e1f0c0fdfa3d67c11f060df2ab033",
    "status": "complete",
    "subject": "Test thread previews through the app-server rollout path (#63603)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Rust 92a34573a0 (#63604) is test-only: it deletes the test that pinned MCP tool approval precedence (tool override beats the server default, an unconfigured tool uses the server default, an unknown server falls back to Auto).",
+    "Go verifier: mcp/tool_approval_test.go::TestMCPToolApprovalModeUsesServerDefaultWithToolOverrideLikeRust pins the same three cases through MCPService.ToolApprovalMode (docs/read -> approve from the server default, docs/search -> prompt from the tool override, unknown/search -> auto)."
+   ],
+   "kind": "test",
+   "sha": "92a34573a0fa979b349dc1cee24f460047001215",
+   "status": "complete",
+   "subject": "Remove the custom MCP tool approval precedence test (#63604)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Rust 32119bac26 (#63605) is test-only: the test-only render_plugins_section helper and its sole test are removed; the turn context renders generic plugin guidance through AvailablePluginsInstructions.",
+    "Batch 230 verifier: context/available_plugins_instructions_like_rust_test.go::TestAvailablePluginsInstructionsKeepsGuidanceWithoutListingPluginsLikeRust pins the exact <plugins_instructions> block (bundled guidance, no plugin listing), and context.PluginBundledGuidanceBody feeds the app-server plugin world-state hash; negative check: changing one bundled guidance line fails the test."
+   ],
+   "kind": "test",
+   "sha": "32119bac269b881d512b82df74af285e8c60adc2",
+   "status": "complete",
+   "subject": "Remove the test-only plugin guidance renderer (#63605)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "c3186b5d954e1f0c0fdfa3d67c11f060df2ab033",
+ "rustToInclusive": "32119bac269b881d512b82df74af285e8c60adc2",
  "schemaVersion": 1
 }
