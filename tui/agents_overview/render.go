@@ -67,6 +67,12 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 	if len(v.KeyChordHints) > 0 {
 		footerRows = v.keyChordHintRows(footerWidth)
 	}
+	// Rust #63146: initial discovery reports progress in the footer while the
+	// already-published tasks stay visible. The shorter label fits narrow
+	// layouts where the full label would wrap.
+	if label := v.discoveryProgressLabel(footerWidth); label != "" {
+		footerRows = [][]span{{{text: " ", style: spanPlain}, {text: label, style: spanDim}}}
+	}
 	// header + summary + divider + editor + footer rows
 	bodyHeight := termHeight - 4 - len(footerRows)
 	if bodyHeight < 3 {
@@ -144,6 +150,23 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 		}
 	}
 	return lines
+}
+
+// discoveryProgressLabel reports the footer progress label while initial
+// discovery is still running and no notice or key chord owns the footer
+// (Rust #63146). A narrow footer drops the "additional" qualifier.
+func (v *View) discoveryProgressLabel(width int) string {
+	if v == nil || v.State.Help || strings.TrimSpace(v.Notice) != "" {
+		return ""
+	}
+	if len(v.KeyChordHints) > 0 || !v.Loading || v.ShowMoreLoading() {
+		return ""
+	}
+	const fullLabel = "Loading additional tasks…"
+	if width >= runewidth.StringWidth(fullLabel)+2 {
+		return fullLabel
+	}
+	return "Loading tasks…"
 }
 
 // renderHelp renders the grouped task-shortcut reference (Rust #46882).

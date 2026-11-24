@@ -54384,7 +54384,8 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1271: partial - Rust shows per-task loading progress in the docked command center. Go's dashboard has an empty-state 'Loading tasks…' row and a 'Loading more…' show-more row (tui/agents_overview/render.go, SetShowMoreLoading) but no per-task discovery progress and no docked pane."
+    "Round 1271: partial - Rust shows per-task loading progress in the docked command center. Go's dashboard has an empty-state 'Loading tasks…' row and a 'Loading more…' show-more row (tui/agents_overview/render.go, SetShowMoreLoading) but no per-task discovery progress and no docked pane.",
+    "Batch 237 progress: the command center footer now reports initial discovery with Rust #63146's labels while the already-published tasks stay visible: \"Loading additional tasks…\" when the footer fits the full label and \"Loading tasks…\" in narrower layouts, with notices and key-chord footers keeping priority and a Show-more page request leaving the hints alone. Tests: tui/agents_overview/discovery_progress_like_rust_test.go. Remaining: the selected-row \"Opening…\" status and \"Opening task…\" footer during resume (including across backends), the outgoing frame staying visible until the destination is ready, and the docked pane itself (#62986)."
    ],
    "kind": "runtime",
    "sha": "227fa4e805d44988b0888390f41afe1358e9d24d",
