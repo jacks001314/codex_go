@@ -2702,6 +2702,12 @@ type Model struct {
 	// confirmed or possibly switched; its untagged catalog is unsafe for the
 	// rest of the session (Rust provider_writes is per backend).
 	modelProviderWriteChanged map[codextui.BackendID]bool
+	// modelPickerCatalogBackend names the backend whose picker catalog the
+	// fields above hold (Rust #63553 ModelCatalog::for_backend).
+	modelPickerCatalogBackend codextui.BackendID
+	// modelPickerCatalogsStash holds other backends' catalogs so a backend
+	// switch neither leaks nor discards them.
+	modelPickerCatalogsStash map[codextui.BackendID]modelPickerCatalogSnapshot
 	serviceTierCommands           []bottompane.ServiceTierCommand
 
 	// savedServiceTier is Rust's config.service_tier: the user's persisted
@@ -2753,6 +2759,9 @@ type Model struct {
 	defaultModelProvider string
 	nextModelsRequestID              uint64
 	pendingModelsRequestID           uint64
+	// pendingModelsRequestBackend records the backend a model catalog request
+	// was issued for, so a backend switch cannot apply its late response.
+	pendingModelsRequestBackend codextui.BackendID
 	nextMCPInventoryRequestID        uint64
 	pendingMCPInventoryRequestID     uint64
 	pendingMCPInventoryMessageIndex  int

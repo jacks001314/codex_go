@@ -141,3 +141,72 @@ func TestProviderSaveResultTransitionsLikeRust(t *testing.T) {
 		})
 	}
 }
+
+// TestProviderCatalogsAreScopedPerBackendLikeRust mirrors Rust #63553
+// ModelCatalog::for_backend: each backend keeps its own provider catalogs,
+// so switching backends neither leaks nor discards them.
+func TestProviderCatalogsAreScopedPerBackendLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-a")
+	m := NewModel(state, Options{Width: 100, Height: 30})
+	backendA := codextui.NewBackendID()
+	backendB := codextui.NewBackendID()
+	m.backendID = backendA
+	m.syncModelPickerCatalogBackend()
+	state.Provider = "acme"
+	m.pendingModelsRequestID = 1
+	m.applyModelsResult(ModelsResultMsg{
+		RequestID: 1,
+		Provider:  "acme",
+		Options:   []codextui.ModelPickerOption{{ID: "acme-model", Label: "Acme", AvailableCyberPrograms: []string{"standard"}}},
+	})
+	if len(m.modelPickerOpts) != 1 || m.modelPickerOpts[0].ID != "acme-model" {
+		t.Fatalf("backend A catalog = %#v", m.modelPickerOpts)
+	}
+
+	m.backendID = backendB
+	if got := m.modelPickerOptionsFor("acme"); len(got) != 0 {
+		t.Fatalf("backend B saw backend A's catalog: %#v", got)
+	}
+	if len(m.modelPickerOpts) != 0 {
+		t.Fatalf("backend B applied backend A's list: %#v", m.modelPickerOpts)
+	}
+
+	m.backendID = backendA
+	got := m.modelPickerOptionsFor("acme")
+	if len(got) != 1 || got[0].ID != "acme-model" || got[0].AvailableCyberPrograms == nil {
+		t.Fatalf("backend A catalog was not restored: %#v", got)
+	}
+}
+
+// TestProviderSettingsSaveHoldsThePickerLikeRust mirrors Rust #63553
+// write.rs holding provider_write for a settings write as well, without
+// marking the untagged catalog unsafe.
+func TestProviderSettingsSaveHoldsThePickerLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-a")
+	m := NewModel(state, Options{Width: 100, Height: 30})
+	browser := &configProviderBrowserState{generation: 4, editor: &configProviderEditorState{providerID: "acme"}}
+	cmd := m.writeConfigProviderEditorCmd(browser)
+	if cmd == nil {
+		t.Fatal("settings save did not start")
+	}
+	if !m.modelProviderWritePending[m.backendID] {
+		t.Fatal("settings save did not hold the provider-write lock")
+	}
+	if message := m.modelPickerUnavailable(); message != "Saving the default provider. Try /model after the save finishes." {
+		t.Fatalf("picker notice during settings save = %q", message)
+	}
+
+	updated, _ := m.Update(cmd())
+	m = updated.(*Model)
+	if m.modelProviderWritePending[m.backendID] {
+		t.Fatal("settings save did not release the lock")
+	}
+	if m.modelProviderWriteChanged[m.backendID] {
+		t.Fatal("settings save marked the catalog unsafe")
+	}
+	if message := m.modelPickerUnavailable(); message != "" {
+		t.Fatalf("picker stayed unavailable after the settings save: %q", message)
+	}
+}

@@ -11,7 +11,66 @@ import (
 	"codex_go/tui/history_cell"
 )
 
+// modelPickerCatalogSnapshot captures one backend's picker catalog
+// (Rust #63553 ModelCatalog is stored per backend).
+type modelPickerCatalogSnapshot struct {
+	applied        []codextui.ModelPickerOption
+	provider       string
+	byProvider     map[string][]codextui.ModelPickerOption
+	refreshPending bool
+}
+
+func cloneModelPickerProviderCatalogs(catalogs map[string][]codextui.ModelPickerOption) map[string][]codextui.ModelPickerOption {
+	if catalogs == nil {
+		return nil
+	}
+	cloned := make(map[string][]codextui.ModelPickerOption, len(catalogs))
+	for provider, options := range catalogs {
+		cloned[provider] = append([]codextui.ModelPickerOption(nil), options...)
+	}
+	return cloned
+}
+
+// syncModelPickerCatalogBackend moves the applied catalog and its provider
+// cache to the backend the TUI now displays, restoring that backend's own
+// snapshot. A catalog request issued for the previous backend can no longer
+// land here.
+func (m *Model) syncModelPickerCatalogBackend() {
+	if m == nil || m.modelPickerCatalogBackend == m.backendID {
+		return
+	}
+	if m.modelPickerCatalogBackend.IsZero() {
+		// The initial catalog belongs to the backend now displayed; adopt it
+		// instead of stashing it under the unset identity.
+		m.modelPickerCatalogBackend = m.backendID
+		return
+	}
+	if m.modelPickerCatalogsStash == nil {
+		m.modelPickerCatalogsStash = map[codextui.BackendID]modelPickerCatalogSnapshot{}
+	}
+	m.modelPickerCatalogsStash[m.modelPickerCatalogBackend] = modelPickerCatalogSnapshot{
+		applied:        append([]codextui.ModelPickerOption(nil), m.modelPickerOpts...),
+		provider:       m.modelPickerProvider,
+		byProvider:     cloneModelPickerProviderCatalogs(m.modelPickerOptsByProvider),
+		refreshPending: m.modelCatalogRefreshPending,
+	}
+	if snapshot, ok := m.modelPickerCatalogsStash[m.backendID]; ok {
+		m.modelPickerOpts = append([]codextui.ModelPickerOption(nil), snapshot.applied...)
+		m.modelPickerProvider = snapshot.provider
+		m.modelPickerOptsByProvider = cloneModelPickerProviderCatalogs(snapshot.byProvider)
+		m.modelCatalogRefreshPending = snapshot.refreshPending
+		delete(m.modelPickerCatalogsStash, m.backendID)
+	} else {
+		m.modelPickerOpts = nil
+		m.modelPickerProvider = ""
+		m.modelPickerOptsByProvider = nil
+		m.modelCatalogRefreshPending = false
+	}
+	m.modelPickerCatalogBackend = m.backendID
+}
+
 func (m *Model) openModelPicker() bubbletea.Cmd {
+	m.syncModelPickerCatalogBackend()
 	if message := m.modelPickerUnavailable(); message != "" {
 		// Rust #63553 model_picker_unavailable: a provider save in flight or a
 		// changed default makes this list unsafe to offer.
@@ -67,6 +126,7 @@ func (m *Model) modelPickerUnavailable() string {
 	if m == nil {
 		return ""
 	}
+	m.syncModelPickerCatalogBackend()
 	if m.modelProviderWritePending[m.backendID] {
 		return "Saving the default provider. Try /model after the save finishes."
 	}
@@ -116,6 +176,7 @@ func (m *Model) fetchModelsForPicker() bubbletea.Cmd {
 	m.nextModelsRequestID++
 	requestID := m.nextModelsRequestID
 	m.pendingModelsRequestID = requestID
+	m.pendingModelsRequestBackend = m.backendID
 	cwd := m.modelListCWD()
 	provider := m.modelListProvider()
 	return func() bubbletea.Msg {
@@ -147,6 +208,7 @@ func (m *Model) clearModelPickerCatalogs() {
 	if m == nil {
 		return
 	}
+	m.syncModelPickerCatalogBackend()
 	m.modelPickerOptsByProvider = nil
 }
 
@@ -172,6 +234,7 @@ func (m *Model) selectModelPickerProvider(provider string) {
 	if m == nil {
 		return
 	}
+	m.syncModelPickerCatalogBackend()
 	provider = strings.TrimSpace(provider)
 	if provider == m.modelPickerProvider {
 		return
@@ -251,7 +314,11 @@ func (m *Model) dismissStaleModelPicker() {
 // consumeModelCatalogRefresh issues the catalog fetch a provider switch
 // asked for (Rust #63553 refresh_account_scoped_models).
 func (m *Model) consumeModelCatalogRefresh() bubbletea.Cmd {
-	if m == nil || !m.modelCatalogRefreshPending {
+	if m == nil {
+		return nil
+	}
+	m.syncModelPickerCatalogBackend()
+	if !m.modelCatalogRefreshPending {
 		return nil
 	}
 	m.modelCatalogRefreshPending = false
@@ -266,6 +333,7 @@ func (m *Model) modelPickerOptionsFor(provider string) []codextui.ModelPickerOpt
 	if m == nil {
 		return nil
 	}
+	m.syncModelPickerCatalogBackend()
 	provider = strings.TrimSpace(provider)
 	if cached, ok := m.modelPickerOptsByProvider[provider]; ok {
 		return append([]codextui.ModelPickerOption(nil), cached...)
@@ -291,10 +359,21 @@ func (m *Model) modelListProvider() string {
 // refreshes an open model picker in place (Rust #41467). Stale, failed, and
 // empty responses are ignored.
 func (m *Model) applyModelsResult(msg ModelsResultMsg) {
-	if m == nil || msg.RequestID == 0 || msg.RequestID != m.pendingModelsRequestID {
+	if m == nil {
+		return
+	}
+	m.syncModelPickerCatalogBackend()
+	if msg.RequestID == 0 || msg.RequestID != m.pendingModelsRequestID {
+		return
+	}
+	if !m.pendingModelsRequestBackend.IsZero() && m.pendingModelsRequestBackend != m.backendID {
+		// The request belongs to a backend this TUI no longer displays.
+		m.pendingModelsRequestID = 0
+		m.pendingModelsRequestBackend = codextui.BackendID{}
 		return
 	}
 	m.pendingModelsRequestID = 0
+	m.pendingModelsRequestBackend = codextui.BackendID{}
 	if msg.Err != nil || len(msg.Options) == 0 {
 		// Rust on_models_loaded: a failed load replaces the loading view with an
 		// error instead of leaving it spinning.
@@ -337,6 +416,7 @@ func (m *Model) refreshServiceTierCommands() {
 	if m == nil || m.State == nil {
 		return
 	}
+	m.syncModelPickerCatalogBackend()
 	options := m.modelPickerOpts
 	if len(options) == 0 {
 		options = codextui.BundledModelPickerOptions()
@@ -447,6 +527,7 @@ func (m *Model) refreshModelPicker() {
 	if m == nil || m.modal == nil {
 		return
 	}
+	m.syncModelPickerCatalogBackend()
 	if m.modal.modelPickerLoading {
 		// Rust on_models_loaded dismisses the loading view and opens the fetched
 		// presets in place.

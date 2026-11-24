@@ -55,14 +55,22 @@ func (m *Model) modelSessionSecondaryAvailable() bool {
 // keymap and shorter wording from the current upstream UI.
 func (m *Model) modelSessionFooterHint(effort string) string {
 	parts := make([]string, 0, 3)
+	sessionOnly := m.modelSelectionIsSessionOnly()
 	if accept := m.listPrimaryHint("accept"); accept != "" {
 		label := " default"
-		if strings.EqualFold(strings.TrimSpace(effort), "ultra") {
+		if sessionOnly {
+			// Rust #63553 session_model_shortcut: an alternate provider (or an
+			// unscoped server catalog) applies choices to this session only, so
+			// accept is already the session action.
+			label = " session"
+		} else if strings.EqualFold(strings.TrimSpace(effort), "ultra") {
 			label = " apply"
 		}
 		parts = append(parts, accept+label)
 	}
-	parts = append(parts, modelSessionSecondaryKey+" session")
+	if !sessionOnly {
+		parts = append(parts, modelSessionSecondaryKey+" session")
+	}
 	if cancel := m.listPrimaryHint("cancel"); cancel != "" {
 		parts = append(parts, cancel+" back")
 	}

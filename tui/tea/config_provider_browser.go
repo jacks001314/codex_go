@@ -896,21 +896,30 @@ func (m *Model) writeConfigProviderEditorCmd(browser *configProviderBrowserState
 	}
 	browser.saving = true
 	browser.notice = "Saving model provider…"
+	// Rust #63553 write.rs holds provider_write for a settings write too; the
+	// saved provider may change its advertised catalog.
+	backend := m.backendID
+	m.markModelProviderWritePending(backend)
 	generation := browser.generation
 	providerID := browser.editor.providerID
 	writer := m.onWriteModelProviderConfig
 	return func() bubbletea.Msg {
 		if writer == nil {
-			return configPanelProviderWriteResultMsg{generation: generation, kind: "settings", providerID: providerID, err: errors.New("modelProvider/config/write is unavailable")}
+			return configPanelProviderWriteResultMsg{generation: generation, backend: backend, kind: "settings", providerID: providerID, err: errors.New("modelProvider/config/write is unavailable")}
 		}
 		_, err := writer(model.ProviderConfigWriteParams{Settings: patch})
-		return configPanelProviderWriteResultMsg{generation: generation, kind: "settings", providerID: providerID, err: err}
+		return configPanelProviderWriteResultMsg{generation: generation, backend: backend, kind: "settings", providerID: providerID, err: err}
 	}
 }
 
 func (m *Model) applyConfigPanelProviderWriteResult(msg configPanelProviderWriteResultMsg) bubbletea.Cmd {
 	if m == nil {
 		return nil
+	}
+	if msg.kind == "settings" {
+		// A settings write holds the same lock but never marks the untagged
+		// catalog unsafe (Rust write.rs Settings branch).
+		m.finishModelProviderWrite(msg.backend, false)
 	}
 	if msg.kind == "default" {
 		// Rust #63553 write.rs releases provider_write when the RPC finishes and

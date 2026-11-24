@@ -1,6 +1,7 @@
 package tea
 
 import (
+	"strings"
 	"testing"
 
 	codextui "codex_go/tui"
@@ -43,5 +44,27 @@ func TestAlternateProviderModelSelectionIsSessionOnlyLikeRust(t *testing.T) {
 	})
 	if !ok || len(persistent.Persist) != 1 || persistent.Persist[0].Label != modelSelectionPersistLabel {
 		t.Fatalf("persistent plan = %#v", persistent)
+	}
+}
+
+// TestSessionOnlyFooterDropsTheSecondaryHintLikeRust mirrors Rust #63553
+// session_model_shortcut: when the choice is session-only, accept already
+// means "session" and the redundant "s session" hint disappears.
+func TestSessionOnlyFooterDropsTheSecondaryHintLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.Provider = "acme"
+	m := NewModel(state, Options{DefaultModelProvider: "openai"})
+	hint := m.modelSessionFooterHint("high")
+	if !strings.Contains(hint, "enter session") {
+		t.Fatalf("session-only hint = %q, want enter session", hint)
+	}
+	if strings.Contains(hint, modelSessionSecondaryKey+" session") {
+		t.Fatalf("session-only hint kept the secondary shortcut: %q", hint)
+	}
+
+	state.Provider = "openai"
+	defaultHint := m.modelSessionFooterHint("high")
+	if !strings.Contains(defaultHint, "enter default") || !strings.Contains(defaultHint, modelSessionSecondaryKey+" session") {
+		t.Fatalf("default provider hint = %q", defaultHint)
 	}
 }
