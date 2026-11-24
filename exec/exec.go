@@ -429,6 +429,13 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		return nil, err
 	}
 	approvalPolicy := effectiveExecApprovalPolicy(cfg, req)
+	approvalsReviewer := effectiveExecApprovalsReviewer(cfg)
+	// Rust #63515: a resumed thread keeps the approvals it saved unless this
+	// run explicitly selected its own.
+	approvalPolicy, approvalsReviewer = resumeInheritedApprovals(cfg, req, resumePermissions, approvalPolicy, approvalsReviewer)
+	// Rust #63515: warn before an interactive approval could be requested;
+	// exec rejects it because it runs non-interactively.
+	warnIfHumanApproval(stderr, approvalPolicy, approvalsReviewer, true)
 	// Rust UnifiedExecProcessManager::new(config.background_terminal_max_timeout).
 	if r.UnifiedExec != nil {
 		r.UnifiedExec.SetMaxEmptyPollYieldTime(cfg.BackgroundTerminalMaxTimeoutMS())
@@ -504,7 +511,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		return nil, err
 	}
 	compactedThisTurn := false
-	if err := r.persistSessionTurnStart(req, threadID, turnID, prompt, requestInputs, resumeContext, modelID, providerID); err != nil {
+	if err := r.persistSessionTurnStart(req, threadID, turnID, prompt, requestInputs, resumeContext, modelID, providerID, approvalPolicy, approvalsReviewer); err != nil {
 		return nil, err
 	}
 	if resumeContext != nil && resumeContext.Record != nil {
@@ -2292,16 +2299,80 @@ func effectiveExecApprovalPolicy(cfg *config.Config, req *Request) sandbox.AskFo
 			}
 		}
 	}
-	if strings.EqualFold(stringConfigValue(cfg, "approvals_reviewer"), string(config.ApprovalsReviewerAutoReview)) {
-		if value := strings.TrimSpace(stringConfigValue(cfg, "approval_policy")); value != "" {
-			switch sandbox.AskForApproval(value) {
-			case sandbox.ApprovalUnlessTrusted, sandbox.ApprovalOnRequest, sandbox.ApprovalGranular, sandbox.ApprovalNever:
-				return sandbox.AskForApproval(value)
-			}
-		}
-		return sandbox.ApprovalOnRequest
+	// Rust #63515: exec used to force `never` here, overriding configured
+	// approvals. The thread now keeps its configured setting and only falls
+	// back to the protocol default (`on-request`) when none is configured.
+	if policy, ok := approvalPolicyFromConfigValue(stringConfigValue(cfg, "approval_policy")); ok {
+		return policy
 	}
-	return sandbox.ApprovalNever
+	return sandbox.ApprovalOnRequest
+}
+
+// approvalPolicyFromConfigValue converts one configured approval policy string,
+// treating the `on-failure` alias exactly like the protocol parse does.
+func approvalPolicyFromConfigValue(value string) (sandbox.AskForApproval, bool) {
+	switch policy := sandbox.AskForApproval(strings.TrimSpace(value)); policy {
+	case sandbox.ApprovalUnlessTrusted, sandbox.ApprovalOnRequest, sandbox.ApprovalGranular, sandbox.ApprovalNever:
+		return policy, true
+	case "on-failure":
+		return sandbox.ApprovalOnRequest, true
+	}
+	return "", false
+}
+
+// effectiveExecApprovalsReviewer resolves who reviews approval requests for
+// this exec run (Rust #63515). `--approve-for-me` already arrives as a config
+// override, so the configured value covers both cases, and an unset reviewer
+// means the user, like the rest of the CLI.
+func effectiveExecApprovalsReviewer(cfg *config.Config) string {
+	value := firstNonEmpty(
+		stringConfigValue(cfg, "approvals_reviewer"),
+		stringConfigValue(cfg, "approvalsReviewer"),
+	)
+	if strings.TrimSpace(value) == "" {
+		return string(config.ApprovalsReviewerUser)
+	}
+	return strings.TrimSpace(value)
+}
+
+// execApprovalPolicyExplicitByCLI reports whether this command line chose an
+// approval policy, which a resume must not replace with the saved one.
+func execApprovalPolicyExplicitByCLI(req *Request) bool {
+	if req == nil {
+		return false
+	}
+	return strings.TrimSpace(req.Exec.Shared.ApprovalPolicy) != "" ||
+		strings.TrimSpace(req.Root.Shared.ApprovalPolicy) != ""
+}
+
+// execApprovalsReviewerExplicitByCLI reports whether this command line chose a
+// reviewer (`--approve-for-me`) instead of inheriting the saved one.
+func execApprovalsReviewerExplicitByCLI(req *Request) bool {
+	if req == nil {
+		return false
+	}
+	return req.Exec.Shared.ApproveForMe || req.Root.Shared.ApproveForMe
+}
+
+// resumeInheritedApprovals keeps a resumed thread's saved approval policy and
+// reviewer when neither this run's flags nor its configuration selected one
+// (Rust #63515 inherited_thread_permissions).
+func resumeInheritedApprovals(cfg *config.Config, req *Request, state *execResumePermissionState, policy sandbox.AskForApproval, reviewer string) (sandbox.AskForApproval, string) {
+	if state == nil || !state.Found {
+		return policy, reviewer
+	}
+	explicitPolicy := execApprovalPolicyExplicitByCLI(req) || strings.TrimSpace(stringConfigValue(cfg, "approval_policy")) != ""
+	if !explicitPolicy {
+		if inherited, ok := approvalPolicyFromConfigValue(state.ApprovalPolicy); ok {
+			policy = inherited
+		}
+	}
+	explicitReviewer := execApprovalsReviewerExplicitByCLI(req) ||
+		firstNonEmpty(stringConfigValue(cfg, "approvals_reviewer"), stringConfigValue(cfg, "approvalsReviewer")) != ""
+	if !explicitReviewer && strings.TrimSpace(state.ApprovalsReviewer) != "" {
+		reviewer = strings.TrimSpace(state.ApprovalsReviewer)
+	}
+	return policy, reviewer
 }
 
 func (r *Runner) agentForRun(cfg *config.Config, resolvedAuth *auth.ResolvedAuth, providerID string, storeOptions *auth.StoreOptions) (model.AgentRunner, error) {
@@ -5209,7 +5280,7 @@ func execSessionItemIdentity(item *session.Item) string {
 	return strings.Join([]string{strings.TrimSpace(item.ID), strings.TrimSpace(item.Type), strings.TrimSpace(item.Role), turnID, strings.TrimSpace(item.Text)}, "\x00")
 }
 
-func (r *Runner) persistSessionTurnStart(req *Request, threadID string, turnID string, userPrompt string, userInputs []turn.TurnUserInput, resumeContext *execResumeContext, modelID string, providerID string) error {
+func (r *Runner) persistSessionTurnStart(req *Request, threadID string, turnID string, userPrompt string, userInputs []turn.TurnUserInput, resumeContext *execResumeContext, modelID string, providerID string, approvalPolicy sandbox.AskForApproval, approvalsReviewer string) error {
 	if r == nil || req == nil || req.Exec.Ephemeral {
 		return nil
 	}
@@ -5299,6 +5370,17 @@ func (r *Runner) persistSessionTurnStart(req *Request, threadID string, turnID s
 		priorRecord := *record
 		priorRecord.Items = priorItems
 		if err := rollout.AppendSessionItems(recorder, execRolloutItems(&priorRecord), now); err != nil {
+			return err
+		}
+	}
+	// Rust #63515: an explicit CLI choice is saved on the resulting thread so a
+	// later resume inherits it instead of the process default.
+	if execApprovalPolicyExplicitByCLI(req) || execApprovalsReviewerExplicitByCLI(req) {
+		if err := recorder.AppendThreadSettingsAppliedSnapshot(threadID, rollout.ThreadSettingsApplied{
+			ApprovalPolicy:    string(approvalPolicy),
+			ApprovalsReviewer: approvalsReviewer,
+			CWD:               requestCWD(req),
+		}, now); err != nil {
 			return err
 		}
 	}

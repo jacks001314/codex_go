@@ -22,6 +22,11 @@ type execResumePermissionState struct {
 	// Unnamed is the raw inferred permission profile recorded for a thread
 	// that used no named selection.
 	Unnamed json.RawMessage
+	// ApprovalPolicy and ApprovalsReviewer are the approvals the thread last
+	// saved, which a resume inherits unless this run selects its own
+	// (Rust #63515).
+	ApprovalPolicy    string
+	ApprovalsReviewer string
 }
 
 // execResumePermissionState loads the saved permission selection for a resumed
@@ -45,6 +50,8 @@ func (r *Runner) execResumePermissionState(record *session.Record) execResumePer
 		return state
 	}
 	state.Found = true
+	state.ApprovalPolicy = strings.TrimSpace(persisted.ApprovalPolicy)
+	state.ApprovalsReviewer = strings.TrimSpace(persisted.ApprovalsReviewer)
 	if len(persisted.ActivePermissionProfile) > 0 {
 		var active sandbox.ActivePermissionProfile
 		if err := json.Unmarshal(persisted.ActivePermissionProfile, &active); err == nil {

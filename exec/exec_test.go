@@ -1008,7 +1008,7 @@ func TestRunHumanPrintsTokenUsageToStderr(t *testing.T) {
 	for _, want := range []string{
 		"gcode v",
 		"workdir:",
-		"approval: never",
+		"approval: on-request",
 		"sandbox: read-only",
 		"session id:",
 		"user\nhello",
@@ -1637,7 +1637,7 @@ func TestRunHumanPrintsFinalMessageToStderrWhenBothStreamsAreTTY(t *testing.T) {
 	// body unstyled, mirroring event_processor_with_human_output.rs.
 	for _, want := range []string{
 		"gcode v",
-		"approval: never",
+		"approval: on-request",
 		"tokens used\n15\n",
 		"\x1b[3m\x1b[35mcodex\x1b[0m\ndone\n",
 	} {
@@ -3095,7 +3095,7 @@ func TestRunExecResumeHumanConfigSummaryUsesCLIOverridesLikeRust(t *testing.T) {
 	}
 	for _, want := range []string{
 		"model: gpt-5.1-high",
-		"approval: never",
+		"approval: on-request",
 		"sandbox: workspace-write",
 		"user\ncontinue with overrides",
 	} {
@@ -3149,27 +3149,60 @@ func TestRequestCWDUsesExecBeforeRoot(t *testing.T) {
 	}
 }
 
-func TestEffectiveExecApprovalPolicyMatchesRustHeadless(t *testing.T) {
-	autoReviewConfig := &config.Config{Values: map[string]any{
-		"approval_policy":    string(sandbox.ApprovalOnRequest),
-		"approvals_reviewer": string(config.ApprovalsReviewerAutoReview),
-	}}
-	if got := effectiveExecApprovalPolicy(autoReviewConfig, &Request{}); got != sandbox.ApprovalOnRequest {
-		t.Fatalf("auto-review approval policy = %q, want on-request", got)
-	}
-
-	defaultConfig := &config.Config{Values: map[string]any{
+func TestEffectiveExecApprovalPolicyKeepsConfiguredApprovalsLikeRust(t *testing.T) {
+	// Rust #63515: exec keeps the configured approval policy for new threads
+	// instead of forcing `never`, and the protocol default applies when the
+	// config sets none.
+	onRequest := &config.Config{Values: map[string]any{
 		"approval_policy": string(sandbox.ApprovalOnRequest),
 	}}
-	if got := effectiveExecApprovalPolicy(defaultConfig, &Request{}); got != sandbox.ApprovalNever {
-		t.Fatalf("headless approval policy = %q, want never", got)
+	if got := effectiveExecApprovalPolicy(onRequest, &Request{}); got != sandbox.ApprovalOnRequest {
+		t.Fatalf("configured approval policy = %q, want on-request", got)
+	}
+	if got := effectiveExecApprovalPolicy(&config.Config{Values: map[string]any{}}, &Request{}); got != sandbox.ApprovalOnRequest {
+		t.Fatalf("unconfigured approval policy = %q, want the protocol default on-request", got)
+	}
+	unlessTrusted := &config.Config{Values: map[string]any{
+		"approval_policy": string(sandbox.ApprovalUnlessTrusted),
+	}}
+	if got := effectiveExecApprovalPolicy(unlessTrusted, &Request{}); got != sandbox.ApprovalUnlessTrusted {
+		t.Fatalf("untrusted approval policy = %q, want unless-trusted", got)
+	}
+	never := &config.Config{Values: map[string]any{
+		"approval_policy": string(sandbox.ApprovalNever),
+	}}
+	if got := effectiveExecApprovalPolicy(never, &Request{}); got != sandbox.ApprovalNever {
+		t.Fatalf("never approval policy = %q, want never", got)
+	}
+	// `on-failure` is the protocol alias for on-request.
+	alias := &config.Config{Values: map[string]any{"approval_policy": "on-failure"}}
+	if got := effectiveExecApprovalPolicy(alias, &Request{}); got != sandbox.ApprovalOnRequest {
+		t.Fatalf("on-failure alias = %q, want on-request", got)
 	}
 
 	req := &Request{
 		Exec: cli.ExecOptions{Shared: cli.SharedOptions{DangerouslyBypassApprovalsAndSandbox: true}},
 	}
-	if got := effectiveExecApprovalPolicy(autoReviewConfig, req); got != sandbox.ApprovalNever {
+	if got := effectiveExecApprovalPolicy(onRequest, req); got != sandbox.ApprovalNever {
 		t.Fatalf("bypass approval policy = %q, want never", got)
+	}
+}
+
+func TestEffectiveExecApprovalsReviewerLikeRust(t *testing.T) {
+	if got := effectiveExecApprovalsReviewer(&config.Config{Values: map[string]any{}}); got != "user" {
+		t.Fatalf("default reviewer = %q, want user", got)
+	}
+	autoReview := &config.Config{Values: map[string]any{
+		"approvals_reviewer": string(config.ApprovalsReviewerAutoReview),
+	}}
+	if got := effectiveExecApprovalsReviewer(autoReview); got != string(config.ApprovalsReviewerAutoReview) {
+		t.Fatalf("configured reviewer = %q, want auto_review", got)
+	}
+	// --approve-for-me arrives as a config override, so the camel-case key the
+	// config merge can produce resolves the same way.
+	camel := &config.Config{Values: map[string]any{"approvalsReviewer": "auto_review"}}
+	if got := effectiveExecApprovalsReviewer(camel); got != "auto_review" {
+		t.Fatalf("camel-case reviewer = %q, want auto_review", got)
 	}
 }
 
@@ -3206,7 +3239,7 @@ func TestEffectiveExecApprovalPolicyReviewForcesNeverLikeRust(t *testing.T) {
 	}
 }
 
-func TestToolRouterUsesExecHeadlessApprovalPolicyLikeRust(t *testing.T) {
+func TestToolRouterUsesExecConfiguredApprovalPolicyLikeRust(t *testing.T) {
 	runner := NewLocalRunner(t.TempDir())
 	req := &Request{Exec: cli.ExecOptions{Prompt: "hello"}}
 	invocation := &tool.Invocation{
@@ -3218,8 +3251,10 @@ func TestToolRouterUsesExecHeadlessApprovalPolicyLikeRust(t *testing.T) {
 		},
 	}
 
+	// A configured `never` policy rejects the escalation before any approval.
+	neverConfig := &config.Config{Values: map[string]any{"approval_policy": string(sandbox.ApprovalNever)}}
 	router, err := runner.toolRouterForRequest(req, &agentRunConfig{
-		ApprovalPolicy: effectiveExecApprovalPolicy(&config.Config{Values: map[string]any{}}, req),
+		ApprovalPolicy: effectiveExecApprovalPolicy(neverConfig, req),
 	})
 	if err != nil {
 		t.Fatalf("toolRouterForRequest returned error: %v", err)
@@ -3230,13 +3265,30 @@ func TestToolRouterUsesExecHeadlessApprovalPolicyLikeRust(t *testing.T) {
 		t.Fatalf("Dispatch error = %#v, want model-visible never-policy rejection", err)
 	}
 
+	// Rust #63515: the unconfigured default keeps the configured policy, so the
+	// request reaches approval and exec (which has no approval UI) rejects it
+	// with the approval-required output instead of the never-policy error.
+	router, err = runner.toolRouterForRequest(req, &agentRunConfig{
+		ApprovalPolicy: effectiveExecApprovalPolicy(&config.Config{Values: map[string]any{}}, req),
+	})
+	if err != nil {
+		t.Fatalf("toolRouterForRequest default returned error: %v", err)
+	}
+	output, err := router.Dispatch(context.Background(), invocation)
+	if err != nil {
+		t.Fatalf("Dispatch default returned error: %v", err)
+	}
+	if output == nil || output.Success || output.Data["approval_required"] != true || !strings.Contains(output.Body, "Approval required") {
+		t.Fatalf("default output = %#v, want an approval request", output)
+	}
+
 	router, err = runner.toolRouterForRequest(req, &agentRunConfig{
 		ApprovalPolicy: sandbox.ApprovalOnRequest,
 	})
 	if err != nil {
 		t.Fatalf("toolRouterForRequest auto-review returned error: %v", err)
 	}
-	output, err := router.Dispatch(context.Background(), invocation)
+	output, err = router.Dispatch(context.Background(), invocation)
 	if err != nil {
 		t.Fatalf("Dispatch auto-review returned error: %v", err)
 	}
