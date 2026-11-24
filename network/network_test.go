@@ -55,9 +55,14 @@ func TestManagedHardDenyDisallowsAllowlistExpansion(t *testing.T) {
 	if !spec.HardDenyAllowlistMisses() {
 		t.Fatalf("HardDenyAllowlistMisses() = false, want true")
 	}
+	// Rust #60046: the stale grant is dropped and the managed allowlist stands,
+	// so the batch no longer fails the way a hard constraint violation did.
 	next, err := spec.WithExecPolicyNetworkRules([]NetworkRule{{Host: "other.example.com", Decision: DomainAllow}})
-	if err == nil {
-		t.Fatalf("WithExecPolicyNetworkRules(extra allow) = %#v, want constraint error", next)
+	if err != nil {
+		t.Fatalf("WithExecPolicyNetworkRules(extra allow) error = %v, want the grant dropped", err)
+	}
+	if next.Config().Domains["other.example.com"] == DomainAllow {
+		t.Fatalf("stale grant survived: %v", next.Config().Domains)
 	}
 }
 

@@ -390,10 +390,30 @@ func (s *Spec) WithExecPolicyNetworkRules(rules []NetworkRule) (*Spec, error) {
 	next := *s
 	next.config = cloneConfig(&s.config)
 	ApplyExecPolicyNetworkRules(&next.config, rules)
+	if ValidateAgainstConstraints(&next.config, &next.constraints) == nil {
+		return &next, nil
+	}
+	// Rust #60046: a stale saved grant cannot invalidate saved denials. Restore
+	// the configured deny set and re-apply only the denials from this batch, so
+	// managed restrictions survive a grant that no longer fits them.
+	next.config = cloneConfig(&s.config)
+	ApplyExecPolicyNetworkRules(&next.config, execPolicyDenials(rules))
 	if err := ValidateAgainstConstraints(&next.config, &next.constraints); err != nil {
 		return nil, err
 	}
 	return &next, nil
+}
+
+// execPolicyDenials keeps the deny decisions of a saved rule batch. Grants are
+// dropped when the batch as a whole violates the managed constraints.
+func execPolicyDenials(rules []NetworkRule) []NetworkRule {
+	var denials []NetworkRule
+	for _, rule := range rules {
+		if rule.Decision == DomainDeny {
+			denials = append(denials, rule)
+		}
+	}
+	return denials
 }
 
 func (s *Spec) HardDenyAllowlistMisses() bool {
