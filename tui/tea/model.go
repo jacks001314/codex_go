@@ -4842,6 +4842,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, m.refreshStatusControlsCmd()
 	case CloudStreamReconnectedMsg:
 		return m, m.applyCloudStreamReconnected(msg)
+	case CloudConversationResyncMsg:
+		return m, m.applyCloudConversationResync(msg)
 	case ModelRetryStatusMsg:
 		if msg.Active {
 			m.retryActivityMessage = strings.TrimSpace(msg.Message)
@@ -8447,6 +8449,11 @@ func (m *Model) applyCloudStreamReconnected(msg CloudStreamReconnectedMsg) bubbl
 	threadID := strings.TrimSpace(msg.ThreadID)
 	if threadID == "" || threadID != m.cloudStreamDisconnectedThreadID {
 		return nil
+	}
+	// Rust #63211: reattach the displayed conversation in the background so
+	// replies saved while the stream was down appear in the transcript.
+	if resync := m.beginCloudConversationResync(threadID); resync != nil {
+		return resync
 	}
 	m.cloudStreamDisconnectedThreadID = ""
 	if m.notice == "Reconnecting to the Cloud conversation\u2026" {
