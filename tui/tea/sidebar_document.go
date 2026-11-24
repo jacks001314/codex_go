@@ -102,6 +102,12 @@ type sidebarDocumentTab struct {
 	// readScroll is the text reading position a reload restores, so a failed
 	// read does not lose the place the user was reading (Rust #62583).
 	readScroll int
+	// Snapshot marks a preview the model asked to show (Rust
+	// DocumentAccess::Model): Enter turns it into a live, watched document.
+	Snapshot bool
+	// AwaitingOpen marks a model request this backend cannot permission-check
+	// itself (Rust State::AwaitingOpen), so the pane asks before reading it.
+	AwaitingOpen bool
 
 	renderWidth int
 	renderLines []string
@@ -780,6 +786,12 @@ func (m *Model) updateSidebarDocumentKey(msg keymsg.KeyMsg) (bool, bubbletea.Cmd
 		m.suppressCurrentViewKeyUntilRelease()
 		return true, m.closeSidebarDocumentTab(tab.ID)
 	case "accept":
+		// Rust #63184: plain Enter on a model snapshot with no selected link
+		// (and on a tab awaiting the user's confirmation) subscribes the tab as
+		// a live, watched document.
+		if tab.AwaitingOpen || (tab.Snapshot && tab.Link < 0) {
+			return true, m.openSidebarModelDocumentLive(tab)
+		}
 		if cmd := m.followSidebarDocumentLink(tab); cmd != nil {
 			return true, cmd
 		}
@@ -1178,6 +1190,17 @@ func (m *Model) renderSidebarDocument(width int, height int) string {
 	footerRows := m.sidebarDocumentFooterRows(width, height, tab)
 	contentHeight := max(height-1-len(footerRows), 0)
 	bodyWidth := max(width-2, 1)
+	if tab.AwaitingOpen {
+		m.renderSidebarDocumentAwaitingOpen(rows, width, height, footerRows, tab)
+		return strings.Join(rows, "\n")
+	}
+	top := 1
+	if tab.Snapshot && !tab.Loading && tab.View.Err == "" && contentHeight > 1 {
+		// Rust paints the snapshot notice above the body it previews.
+		rows[1] = " " + codextui.TruncateToWidth(m.sidebarDocumentDimText(sidebarDocumentSnapshotHint), bodyWidth)
+		top = 2
+		contentHeight--
+	}
 	lines := m.sidebarDocumentLines(tab, bodyWidth)
 	tab.Scroll = clampModalInt(tab.Scroll, 0, max(len(lines)-contentHeight, 0))
 	targetRow := -1
@@ -1218,12 +1241,92 @@ func (m *Model) renderSidebarDocument(width int, height int) string {
 		if row == matchRow {
 			line = reverseVideoTranscriptLine(line)
 		}
-		rows[1+index] = " " + codextui.TruncateToWidth(line, bodyWidth)
+		rows[top+index] = " " + codextui.TruncateToWidth(line, bodyWidth)
 	}
 	for index, line := range footerRows {
 		rows[height-len(footerRows)+index] = " " + line
 	}
 	return strings.Join(rows, "\n")
+}
+
+// sidebarDocumentSnapshotHint is Rust's model-snapshot banner (#63184).
+const sidebarDocumentSnapshotHint = "Snapshot · Enter to open live"
+
+// sidebarDocumentDimText paints Rust's dim styling for pane hints.
+func (m *Model) sidebarDocumentDimText(text string) string {
+	if m == nil || text == "" {
+		return text
+	}
+	dim := m.styles().Chat.DimText
+	if dim == "" {
+		return text
+	}
+	return dim + text + "\x1b[0m"
+}
+
+// renderSidebarDocumentAwaitingOpen paints Rust's State::AwaitingOpen (#63184):
+// the pane asks before reading a file this backend cannot permission-check on
+// its own.
+func (m *Model) renderSidebarDocumentAwaitingOpen(rows []string, width int, height int, footerRows []string, tab *sidebarDocumentTab) {
+	bodyWidth := max(width-2, 1)
+	title := "Open " + tab.Path + "?"
+	if tab.Location != nil && tab.Location.Line > 0 {
+		title = fmt.Sprintf("Open %s at line %d?", tab.Path, tab.Location.Line)
+	}
+	// Rust wraps both the question and the hint with textwrap, so a narrow pane
+	// keeps the whole sentence instead of cutting it off.
+	prompts := []struct {
+		text string
+		dim  bool
+	}{
+		{text: title},
+		{text: "Focus this pane and press Enter to open.", dim: true},
+	}
+	available := height - len(footerRows)
+	row := 1
+	for _, prompt := range prompts {
+		for _, line := range sidebarDocumentWrapPrompt(prompt.text, bodyWidth) {
+			if row >= available || row >= height {
+				break
+			}
+			if prompt.dim {
+				line = m.sidebarDocumentDimText(line)
+			}
+			rows[row] = " " + line
+			row++
+		}
+	}
+	for index, line := range footerRows {
+		rows[height-len(footerRows)+index] = " " + line
+	}
+}
+
+// sidebarDocumentWrapPrompt wraps one confirmation line to the pane width,
+// like Rust's textwrap over the AwaitingOpen question and hint.
+func sidebarDocumentWrapPrompt(text string, width int) []string {
+	if width <= 0 || codextui.DisplayWidth(text) <= width {
+		return []string{text}
+	}
+	var lines []string
+	current := ""
+	for _, word := range strings.Fields(text) {
+		candidate := word
+		if current != "" {
+			candidate = current + " " + word
+		}
+		if codextui.DisplayWidth(candidate) <= width {
+			current = candidate
+			continue
+		}
+		if current != "" {
+			lines = append(lines, current)
+		}
+		current = word
+	}
+	if current != "" {
+		lines = append(lines, current)
+	}
+	return lines
 }
 
 // sidebarDocumentFooter mirrors Rust's reader hints: close or clear highlight,

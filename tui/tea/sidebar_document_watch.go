@@ -89,7 +89,7 @@ func (m *Model) sidebarDocumentReloadChangedCmds() []bubbletea.Cmd {
 	}
 	cmds := make([]bubbletea.Cmd, 0, 2)
 	for _, tab := range m.sidebarDocumentTabs() {
-		if tab == nil || tab.Loading || strings.TrimSpace(tab.Path) == "" {
+		if tab == nil || tab.Snapshot || tab.AwaitingOpen || tab.Loading || strings.TrimSpace(tab.Path) == "" {
 			continue
 		}
 		stamp := m.sidebarDocumentStamp(tab.Path)

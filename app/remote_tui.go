@@ -755,12 +755,17 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		LoadOlderHistory:            interactiveRemoteOlderHistoryLoader(ctx, endpoint),
 		OnSidebarFiles:              onSidebarFiles,
 		OnSidebarDocument:           onSidebarDocument,
-		OnAcknowledgeSessionRead:    interactiveRemoteSessionReadAcknowledgeHandler(ctx, endpoint),
-		OnRenameThread:              renameThreadHandler,
-		OnUpdateDaybreak:            interactiveRemoteDaybreakUpdateHandler(ctx, endpoint),
-		OnLogout:                    interactiveRemoteLogoutHandler(ctx, endpoint),
-		KeymapConfig:                keymapConfig,
-		OnKeymapEdit:                interactiveRemoteKeymapEditHandler(ctx, endpoint),
+		// Rust #63184: a remote backend has no in-process permissions reader,
+		// so a model-requested preview asks the user before reading.
+		OnSidebarDocumentNeedsConfirmation: func(codextea.SidebarDocumentRequest) bool {
+			return onSidebarDocument != nil
+		},
+		OnAcknowledgeSessionRead: interactiveRemoteSessionReadAcknowledgeHandler(ctx, endpoint),
+		OnRenameThread:           renameThreadHandler,
+		OnUpdateDaybreak:         interactiveRemoteDaybreakUpdateHandler(ctx, endpoint),
+		OnLogout:                 interactiveRemoteLogoutHandler(ctx, endpoint),
+		KeymapConfig:             keymapConfig,
+		OnKeymapEdit:             interactiveRemoteKeymapEditHandler(ctx, endpoint),
 		OnReadAgents: func(currentThreadID string) ([]codextui.AgentThreadEntry, error) {
 			if strings.TrimSpace(currentThreadID) == "" && state != nil {
 				currentThreadID = state.ThreadID

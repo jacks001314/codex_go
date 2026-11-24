@@ -1877,6 +1877,11 @@ type Options struct {
 	// OnSidebarDocumentStat reports a preview's change stamp so the pane can
 	// refresh an edited file (Rust #62583 watch.rs). Nil stats the local path.
 	OnSidebarDocumentStat func(path string) (string, error)
+	// OnSidebarDocumentNeedsConfirmation reports whether a preview the model
+	// asked to show must wait for the user's confirmation first, because the
+	// backend has no in-process permissions reader (Rust #63184
+	// State::AwaitingOpen). Nil opens model requests directly.
+	OnSidebarDocumentNeedsConfirmation func(request SidebarDocumentRequest) bool
 	// OnOpenSideChat attaches a saved side chat that is not retained in memory.
 	OnOpenSideChat       SideOpenFunc
 	OnReadReviewBranches ReviewBranchesReaderFunc
@@ -3216,6 +3221,7 @@ type Model struct {
 	onSidebarFiles                    SidebarFilesFunc
 	onSidebarDocument                 SidebarDocumentFunc
 	onSidebarDocumentStat             func(path string) (string, error)
+	onSidebarDocumentNeedsConfirmation func(request SidebarDocumentRequest) bool
 	// sidebarDocumentWatchScheduled keeps at most one refresh sweep armed so a
 	// load never stacks a second timer chain.
 	sidebarDocumentWatchScheduled bool
@@ -4084,6 +4090,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onSidebarFiles:                   options.OnSidebarFiles,
 		onSidebarDocument:                options.OnSidebarDocument,
 		onSidebarDocumentStat:            options.OnSidebarDocumentStat,
+		onSidebarDocumentNeedsConfirmation: options.OnSidebarDocumentNeedsConfirmation,
 		onOpenSideChat:                   options.OnOpenSideChat,
 		onReadReviewBranches:             options.OnReadReviewBranches,
 		onReadReviewCommits:              options.OnReadReviewCommits,

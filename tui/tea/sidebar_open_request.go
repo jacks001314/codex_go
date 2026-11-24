@@ -85,30 +85,69 @@ func (m *Model) openModelSidebarDocument(source string, request sidebarOpenReque
 		m.sidebarChooserFocused = focused
 		return cmd
 	}
+	docRequest := SidebarDocumentRequest{
+		ParentThreadID: parent,
+		SourceThreadID: source,
+		Path:           request.Path,
+		Link:           -1,
+		Location:       location,
+	}
+	// Rust #63184: a backend without an in-process permissions reader cannot
+	// authorize the read itself, so the tab waits for the user's confirmation.
+	awaitingOpen := m.onSidebarDocumentNeedsConfirmation != nil && m.onSidebarDocumentNeedsConfirmation(docRequest)
 	m.sidebarDocumentCounter++
 	m.recordSidebarOpenedFile(parent, request.Path)
 	id := "document-" + strconv.FormatUint(m.sidebarDocumentCounter, 10)
 	tab := &sidebarDocumentTab{
-		ID:        id,
-		Parent:    parent,
-		Source:    source,
-		Link:      -1,
-		HoverLink: -1,
-		Path:      request.Path,
-		Location:  location,
-		Loading:   true,
-		Started:   time.Now(),
+		ID:           id,
+		Parent:       parent,
+		Source:       source,
+		Link:         -1,
+		HoverLink:    -1,
+		Path:         request.Path,
+		Location:     location,
+		Loading:      !awaitingOpen,
+		Started:      time.Now(),
+		Snapshot:     true,
+		AwaitingOpen: awaitingOpen,
 	}
 	m.sidebarDocuments[parent] = append(m.sidebarDocuments[parent], tab)
 	m.sidebarDocumentActive = id
 	m.sidebarTabHover = -1
 	m.sidebarAddHover = false
 	m.refreshTranscript()
+	if awaitingOpen {
+		return nil
+	}
 	open := m.onSidebarDocument
+	return func() bubbletea.Msg {
+		return SidebarDocumentLoadedMsg{ParentThreadID: parent, ID: id, View: open(docRequest)}
+	}
+}
+
+// openSidebarModelDocumentLive turns a model-requested preview into a live,
+// watched document (Rust #63184: Enter in the focused snapshot subscribes the
+// tab). An AwaitingOpen tab starts the read the user just confirmed.
+func (m *Model) openSidebarModelDocumentLive(tab *sidebarDocumentTab) bubbletea.Cmd {
+	if m == nil || tab == nil || m.onSidebarDocument == nil {
+		return nil
+	}
+	tab.Snapshot = false
+	tab.AwaitingOpen = false
+	tab.Loading = true
+	tab.Started = time.Now()
+	tab.rendered = false
+	tab.renderLines = nil
+	tab.linkRowsSet = false
+	m.recordSidebarOpenedFile(tab.Parent, tab.Path)
+	m.refreshTranscript()
+	open := m.onSidebarDocument
+	parent, id, source, path := tab.Parent, tab.ID, tab.Source, tab.Path
+	location := tab.Location
 	docRequest := SidebarDocumentRequest{
 		ParentThreadID: parent,
 		SourceThreadID: source,
-		Path:           request.Path,
+		Path:           path,
 		Link:           -1,
 		Location:       location,
 	}
