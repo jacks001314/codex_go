@@ -26,9 +26,18 @@ func (r *RuntimeRouter) inferredWorkspaceKind(connectionID string, params *turn.
 	if threadID == "" || r.services.StateRuntime == nil {
 		return ""
 	}
-	assigned, err := r.services.StateRuntime.ThreadHasProject(context.Background(), threadID, nil)
+	ctx := context.Background()
+	// A thread/start project reaches the first composer turn through the
+	// staged value; once the thread row exists the row is authoritative.
+	stagedProject := r.pendingThreadProject(threadID)
+	assigned, err := r.services.StateRuntime.ThreadHasProject(ctx, threadID, stagedProject)
 	if err != nil {
 		return ""
+	}
+	if stagedProject != nil {
+		if exists, existsErr := r.services.StateRuntime.ThreadRowExists(ctx, threadID); existsErr == nil && exists {
+			r.clearPendingThreadProject(threadID)
+		}
 	}
 	if assigned {
 		return "project"

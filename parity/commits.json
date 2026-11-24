@@ -55840,11 +55840,12 @@
    "evidence": [
     "Partial: turn metadata already carries WorkspaceKind read from client extra metadata, but the app server does not infer it from the threads staged or persisted project assignment, so a TUI composer turn without the field still reports none.",
     "Batch 226: TUI composer workspace kind inferred - state.StateRuntime.ThreadHasProject mirrors Rust's thread_has_project (a thread row's project_id wins; a staged project applies only when the thread has no row), and the app server infers workspace_kind for a codex-tui connection whose turn carries a client message id: project when assigned, projectless otherwise. The inferred value is injected into the turn's request metadata only when the client did not send one, so it never enters the client metadata that tools and child agents inherit. Tests: TestThreadHasProjectLikeRust, TestInferredWorkspaceKindLikeRust and TestTurnStartReportsInferredWorkspaceKindLikeRust (a composer turn reports projectless, a helper turn reports none); removing the injection fails the turn test and forcing ThreadHasProject to false fails the state test.",
-    "Batch 226 residual: Go stores no pending thread metadata, so a project supplied at thread start (ThreadStartParams.ProjectID, currently unused) is not visible to the first composer turn; every thread whose assignment is persisted in SQLite is inferred correctly."
+    "Batch 226 residual: Go stores no pending thread metadata, so a project supplied at thread start (ThreadStartParams.ProjectID, currently unused) is not visible to the first composer turn; every thread whose assignment is persisted in SQLite is inferred correctly.",
+    "Batch 231: thread/start now stages its project in the router (RuntimeRouter.recordPendingThreadProject) and appserver.inferredWorkspaceKind passes it to StateRuntime.ThreadHasProject, so the first TUI composer turn reports workspace_kind=project before the thread row exists; once the row exists it wins and the staged value is dropped (StateRuntime.ThreadRowExists). Thread delete and a rolled-back start drop the staged value. Tests: TestInferredWorkspaceKindUsesStagedThreadStartProjectLikeRust and TestTurnStartReportsStagedThreadStartProjectLikeRust (negative check: passing nil as the staged project fails both). Daybreak-enabled staging is unnecessary in Go because the thread record metadata already carries that flag."
    ],
    "kind": "runtime",
    "sha": "baf9b39b16dc73e3b826cb0edde199a25a3e15f3",
-   "status": "partial",
+   "status": "complete",
    "subject": "Report workspace kind on TUI composer turns (#63545)"
   },
   {

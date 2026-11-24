@@ -384,6 +384,12 @@ type RuntimeRouter struct {
 	// mcpLaunchCwds holds the host's process-local stdio launch directories
 	// (Rust #61444). The app server never writes them to shared configuration.
 	mcpLaunchCwds *config.MCPLaunchCwds
+	// pendingThreadProjectMu guards pendingThreadProjects, the thread/start
+	// project assignment recorded before the thread has a state row
+	// (Rust #63545 stage_pending_thread_metadata). Runtime-only: a reload
+	// relies on the persisted row.
+	pendingThreadProjectMu sync.Mutex
+	pendingThreadProjects  map[string]string
 	// audioStateMu guards audioDurations, the runtime-only measured-duration
 	// cache for uploaded audio (Rust #59268 SessionState::file_audio_durations).
 	audioStateMu   sync.Mutex
@@ -6378,6 +6384,10 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 	// breakdown ("thread_start_create_thread" and "thread_start_total").
 	threadStartStartedAt := time.Now().UTC()
 	createThreadStartedAt := threadStartStartedAt
+	// startedProjectID carries the project thread/start staged so the first
+	// composer turn can report it before the thread row exists (Rust #63545
+	// ThreadStore::stage_pending_thread_metadata).
+	var startedProjectID *string
 	if request.Method == MethodThreadStart {
 		var params ThreadStartParams
 		if err := request.DecodeParams(&params); err != nil {
@@ -6399,6 +6409,7 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 		} else if _, timeErr := r.resolveTimeProviderForConfig(cfg); timeErr != nil {
 			return nil, timeErr
 		}
+		startedProjectID = params.ProjectID
 		if params.ProjectID != nil {
 			if strings.TrimSpace(*params.ProjectID) == "" {
 				return nil, jsonRPCInvalidRequest("projectId must not be empty")
@@ -6477,6 +6488,9 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 				}
 			}
 			r.applyThreadStartConfigSnapshot(response, request)
+			if request.Method == MethodThreadStart && !response.Thread.Ephemeral {
+				r.recordPendingThreadProject(response.Thread.ID, startedProjectID)
+			}
 			if strings.TrimSpace(response.Model) == "" && r.threadStartUsesExplicitProviderCatalog(request) {
 				r.rollbackThreadStartInitialization(response.Thread.ID)
 				return nil, jsonRPCInvalidRequest("No models are available. Set `model` explicitly or check your model catalog configuration.")
@@ -6582,6 +6596,7 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 	case MethodThreadDelete:
 		for _, threadID := range session.DeleteOrderForSubtree(lifecycleIDsWithFallback(request, lifecycleIDs)) {
 			r.discardRuntimeAgentMessages(string(threadID))
+			r.clearPendingThreadProject(string(threadID))
 			r.deleteExecutedToolCallRecorder(string(threadID))
 			r.runSessionEndHookOnce(lifecycleRecords[string(threadID)], "delete")
 			r.markThreadUnloaded(string(threadID))
@@ -8111,6 +8126,7 @@ func (r *RuntimeRouter) rollbackThreadStartInitialization(threadID string) {
 			slog.Warn("failed to roll back thread after MCP initialization failure", "thread_id", threadID, "error", err)
 		}
 	}
+	r.clearPendingThreadProject(threadID)
 	r.closeThreadMCPRuntime(threadID)
 }
 

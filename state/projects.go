@@ -107,6 +107,23 @@ func (r *StateRuntime) ThreadHasProject(ctx context.Context, threadID string, st
 	return assigned, nil
 }
 
+// ThreadRowExists reports whether a thread already has a state row, which
+// makes a staged project assignment redundant (Rust #63545: pending thread
+// metadata is consumed by the persisted row).
+func (r *StateRuntime) ThreadRowExists(ctx context.Context, threadID string) (bool, error) {
+	if r == nil || r.stateDB == nil {
+		return false, errors.New("state runtime is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var exists bool
+	if err := r.stateDB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM threads WHERE id = ?)`, strings.TrimSpace(threadID)).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
 // SetThreadProject assigns (or clears) a thread's project assignment. It
 // returns (previous, true) when the thread exists, (nil, false) when the
 // thread is unknown, and an error when the project does not exist (Rust
