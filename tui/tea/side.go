@@ -180,6 +180,12 @@ func (m *Model) focusSidebarContent() bubbletea.Cmd {
 		m.suppressCurrentViewKeyUntilRelease()
 		return m.activateRetainedSideConversation(side, "")
 	}
+	if watchOnlySidePane(m.activeSide) {
+		// Rust #62157: leaving the watch-only reader returns to the subagent
+		// list with the reader's agent still selected.
+		m.suppressCurrentViewKeyUntilRelease()
+		return m.openSidebarChooser()
+	}
 	if m.activeSide.ShowingSide {
 		return nil
 	}

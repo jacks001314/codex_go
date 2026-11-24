@@ -140,6 +140,7 @@ func newSidebarSubagentPaneModel(t *testing.T) (*Model, *int) {
 	model.mergeSidebarAgentEntries("parent-a", []codextui.AgentThreadEntry{
 		{ThreadID: "parent-a", IsPrimary: true},
 		{ThreadID: "agent-1", ParentThreadID: "parent-a", AgentNickname: "Scout", AgentRole: "worker"},
+		{ThreadID: "agent-2", ParentThreadID: "parent-a", AgentNickname: "Scout2", AgentRole: "worker"},
 	})
 	model.refreshTranscript()
 	return model, &closed

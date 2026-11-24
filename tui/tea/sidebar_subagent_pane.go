@@ -86,6 +86,11 @@ func (m *Model) applySidebarSubagentTranscript(open *sidebarSubagentOpen, messag
 		ShowingSide: false,
 	}
 	m.closeSidebarChooser()
+	if previous := m.retainedSideConversationForParent(open.ParentThreadID); watchOnlySidePane(previous) && previous.SideThreadID != open.ThreadID {
+		// The reader shows one agent at a time; choosing another row replaces
+		// the transcript instead of stacking tabs (Rust agents.detail).
+		m.closeSidebarSubagentTranscript(previous)
+	}
 	m.retainSideConversation(side)
 	m.activeSide = side
 	m.resetSidePaneViewState()

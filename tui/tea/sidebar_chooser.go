@@ -316,6 +316,10 @@ func (m *Model) openSidebarChooser() bubbletea.Cmd {
 	}
 	if index := m.sidebarChooserChoiceIndex(selected); index > 0 {
 		m.sidebarChoice = index
+	} else if index := m.sidebarChooserAgentIndex(selected); index > 0 {
+		// A watch-only subagent reader returns to its own Subagents row
+		// (Rust #62157 keeps the agent selected when Esc leaves the reader).
+		m.sidebarChoice = index
 	}
 	// Rust paints the chooser in the side pane without a notice in the main
 	// conversation, so opening it leaves the parent pane untouched.
@@ -1908,6 +1912,13 @@ func (m *Model) applySideChatsLoaded(msg SideChatsLoadedMsg) bubbletea.Cmd {
 	selected := m.sidebarChooserSelectedThreadID()
 	selectedFile := m.sidebarChooserSelectedFilePath()
 	keepNew := m.sidebarChoice == 0 && len(m.sidebarChooserChoices()) > 0
+	// A discovery result renumbers the saved-chat rows, so a Subagents row has
+	// to be restored by agent id instead of by its old index (Rust #62157 keeps
+	// the reader's agent selected while the list refreshes).
+	selectedAgent := ""
+	if row, ok := m.sidebarChooserSelectedAgent(); ok {
+		selectedAgent = row.ThreadID
+	}
 	if msg.Err != nil {
 		m.sidebarDiscovery = SideChatDiscoveryFailed
 		// Rust paints Discovery::Failed(error) verbatim in red; the error text
@@ -1922,9 +1933,12 @@ func (m *Model) applySideChatsLoaded(msg SideChatsLoadedMsg) bubbletea.Cmd {
 	}
 	m.sidebarChoices = mergeSideChatChoices(nil, msg.Choices)
 	m.sidebarDiscovery = SideChatDiscoveryIdle
-	if index := m.sidebarChooserChoiceIndex(selected); selected != "" && index > 0 {
-		m.sidebarChoice = index
-	} else if !keepNew {
+	switch {
+	case selected != "" && m.sidebarChooserChoiceIndex(selected) > 0:
+		m.sidebarChoice = m.sidebarChooserChoiceIndex(selected)
+	case selectedAgent != "" && m.sidebarChooserAgentIndex(selectedAgent) > 0:
+		m.sidebarChoice = m.sidebarChooserAgentIndex(selectedAgent)
+	case !keepNew:
 		m.sidebarChoice = 0
 	}
 	m.restoreSidebarFileSelection(selectedFile)
@@ -2297,7 +2311,10 @@ func (m *Model) sidebarChooserChoices() []SideChatChoice {
 		seen[choice.ThreadID] = true
 	}
 	for _, tab := range m.sidebarTabsFor(m.sidebarChooserParent) {
-		if tab == nil {
+		if tab == nil || tab.WatchOnly {
+			// A watch-only subagent reader is a Subagents row, not a saved side
+			// chat, so it must not become a chat entry in the list (Rust #62157
+			// keeps the reader in the Subagents tab kind).
 			continue
 		}
 		threadID := strings.TrimSpace(tab.SideThreadID)
