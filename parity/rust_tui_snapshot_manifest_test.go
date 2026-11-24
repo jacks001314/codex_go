@@ -61,8 +61,11 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	// Re-anchored to upstream 0c7efeb50d: the disconnected slash-command and
 	// terminal-progress redraw work (#63258/#63278) added two goldens
 	// (1579 -> 1581).
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1581 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1581", got)
+	// Re-anchored to upstream 8e757686c1: the provider-scoped model picker
+	// (#63553) added the alternate-provider and unscoped-remote picker
+	// goldens (1581 -> 1583).
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1583 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1583", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -348,7 +351,9 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// pets-unavailable notice; #48015 added the declined-tool-suggestion
 			// snapshot; #48116 added the two Max-reasoning footer snapshots.
 			// Re-anchored to a7a9d82f: the rate-limit recovery notice (#60435) and one more golden landed.
-			Files:    344,
+			// Re-anchored to 8e757686c1: the provider-scoped model picker added
+			// the alternate-provider and unscoped-remote picker goldens (346).
+			Files:    346,
 			Owner:    "tui/chatwidget, tui/tea",
 			Focus:    "main chat widget terminal snapshots for status lines, approvals, plugins, hooks, review, usage, and unified exec",
 			Priority: []string{"approval", "status", "history", "unified-exec", "review"},

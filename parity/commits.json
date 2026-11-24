@@ -55816,9 +55816,117 @@
    "sha": "96681d86f08f880ed12ba29044e855002809e0d1",
    "status": "complete",
    "subject": "Deduplicate MCP text fallbacks in Code Mode output (#63540)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not applicable: Go links a native keyring backend only on Windows (keyring/keyring_unsupported.go reports ErrUnavailable elsewhere and callers fall back to the credentials file), so there is no Linux Secret Service read that could raise a graphical unlock prompt."
+   ],
+   "kind": "test",
+   "sha": "a90526e8a751628092aa766a7477e64db3ed2117",
+   "status": "not_applicable",
+   "subject": "Avoid keyring unlock prompts on headless Linux (#63544)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Partial: turn metadata already carries WorkspaceKind read from client extra metadata, but the app server does not infer it from the threads staged or persisted project assignment, so a TUI composer turn without the field still reports none."
+   ],
+   "kind": "runtime",
+   "sha": "baf9b39b16dc73e3b826cb0edde199a25a3e15f3",
+   "status": "partial",
+   "subject": "Report workspace kind on TUI composer turns (#63545)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Partial: the TUI model picker fetches the servers single model list (tui/model_picker.go) and has no provider-scoped catalog cache or account-change invalidation, so a resumed thread on a non-default provider still shows the default catalog."
+   ],
+   "kind": "runtime",
+   "sha": "9038698ffa548b7b7b382a248166b9191efd8a69",
+   "status": "partial",
+   "subject": "Use the active threads provider in the TUI model picker (#63553)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not applicable: Gos prompt image preparation (eventmap/image_prep.go) builds per-request containers and lets the GC reclaim the source buffers; it has no shared prompt-image cache whose unchanged entries would be released."
+   ],
+   "kind": "runtime",
+   "sha": "f64f003d985ae59e82b4c63b37fe8c494d203ce9",
+   "status": "not_applicable",
+   "subject": "Release unchanged prompt image buffers when callers drop them (#63563)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not applicable: the change only reshapes Rusts selected_capability_stack integration test to avoid a port race; Go has no equivalent suite."
+   ],
+   "kind": "test",
+   "sha": "74f208237b19ef4460121b60e4b9d940564707f4",
+   "status": "not_applicable",
+   "subject": "Avoid exec-server port races in selected capability tests (#63588)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Partial: Go parses --approve-for-me and applies it to the launch configuration, but it does not resolve the preset against the selected conversations workspace and managed requirements or read back an already-loaded conversations settings before the initial prompt, so a resumed conversation can miss or retain the override."
+   ],
+   "kind": "runtime",
+   "sha": "7ce4437488c69950fe87f1d8ab4b00bdb4bbd193",
+   "status": "partial",
+   "subject": "Scope `resume --approve-for-me` to the initial conversation (#63589)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Not applicable: deletes Rusts test-only summary_from_state_db_metadata helpers and their unit test; Go has no such helpers."
+   ],
+   "kind": "test",
+   "sha": "d4b84f9bb0d2a418fbf97e5acf6b992edecc0c38",
+   "status": "not_applicable",
+   "subject": "Remove legacy thread summary test helpers from the app server (#63593)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Partial: Go registers the under-development, off-by-default features.defer_image_generation key (TestDeferImageGenerationRegisteredLikeRust), but code mode does not yet expose image_gen through ALL_TOOLS while omitting its definition from the initial model request."
+   ],
+   "kind": "runtime",
+   "sha": "37aeac06b3f49ab4b96dea01c974971d9391c2ef",
+   "status": "partial",
+   "subject": "Add opt-in deferred image generation in code mode (#63594)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Partial: Go tracks remote connection status and reconnect handlers (tui/status/remote_connection.go, tui/app/event_dispatch.go), but there is no Ctrl+R retry binding in a disconnected conversation, no footer retry hint, and no fresh reconnect timer."
+   ],
+   "kind": "runtime",
+   "sha": "8e757686c1ba2d4dc0864edfb8aa286f7029d90d",
+   "status": "partial",
+   "subject": "Let users retry a failed TUI reconnect with Ctrl+R (#63599)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "96681d86f08f880ed12ba29044e855002809e0d1",
+ "rustToInclusive": "8e757686c1ba2d4dc0864edfb8aa286f7029d90d",
  "schemaVersion": 1
 }

@@ -495,6 +495,10 @@ var Registry = []Spec{
 	// text fallback that duplicates structuredContent when Code Mode prints
 	// the original result. Under development and off by default.
 	{Key: "code_mode_mcp_result_dedup", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs 8e757686c1 #63594): let code mode
+	// discover the image generation tool through ALL_TOOLS while the initial
+	// model request omits its definition. Under development and off by default.
+	{Key: "defer_image_generation", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs 58ae3ba611 #50687): keep third-party
 	// tools deferred in strict Code Mode Only.
 	{Key: "code_mode_only_strict_3p_tools", Stage: StageUnderDevelopment, DefaultEnabled: false},
