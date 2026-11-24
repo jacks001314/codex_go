@@ -132,6 +132,7 @@ func (m *Model) focusMainComposerWithOptions(clearInteraction bool) bubbletea.Cm
 	if m.activeSide == nil {
 		return nil
 	}
+	m.sidebarReaderFocused = false
 	var cmd bubbletea.Cmd
 	if m.activeSide.ShowingSide {
 		cmd = m.toggleSideConversation()
@@ -159,6 +160,13 @@ func (m *Model) focusSidebarContent() bubbletea.Cmd {
 	if m.sidebarChooserVisible() {
 		m.suppressCurrentViewKeyUntilRelease()
 		return m.closeSidebarChooser()
+	}
+	if watchOnlySidePane(m.activeSide) && m.focusSidebarReader() {
+		// A retained reader keeps input focus instead of jumping to the list;
+		// Escape is the reader's way back to the Subagents list.
+		m.suppressCurrentViewKeyUntilRelease()
+		m.refreshTranscript()
+		return nil
 	}
 	// Rust #59458 applies even with side retention disabled: wait for the
 	// queued side-conversation start before moving focus.

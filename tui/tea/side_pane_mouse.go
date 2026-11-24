@@ -254,6 +254,12 @@ func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd)
 		}
 		if msg.X > dividerEnd {
 			if !m.activeSide.ShowingSide {
+				if m.focusSidebarReader() {
+					// Rust #62157: a press on the reader focuses it so arrows
+					// read the transcript; Escape returns to the list.
+					m.refreshTranscript()
+					return true, nil
+				}
 				return true, m.focusSidebarContent()
 			}
 			return false, nil

@@ -3309,6 +3309,9 @@ type Model struct {
 	sideExactWidth sideExactWidth
 	// sideResize is the active keyboard resize preview, if any.
 	sideResize *sidePaneResize
+	// sidebarReaderFocused marks the watch-only subagent reader as the input
+	// owner, so arrows scroll its transcript (Rust #62157 pane focus).
+	sidebarReaderFocused bool
 	// paneMotion drives the sidebar open/close slide (Rust #59739).
 	paneMotion paneMotionState
 	// sidebarClosingLines retains the last settled right column so a closing
@@ -5741,6 +5744,11 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			// Rust #59767: the chooser owns input while focused, so completion
 			// popups and repeated activation keys never consume its keys.
 			return m, nil
+		}
+		if m.sidebarReaderFocused {
+			if cmd, handled := m.updateSidebarReaderKey(msg); handled {
+				return m, cmd
+			}
 		}
 		if m.windowsSandboxSetupActive {
 			return m, nil

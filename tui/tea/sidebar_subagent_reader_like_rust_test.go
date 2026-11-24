@@ -4,9 +4,11 @@ import (
 	"testing"
 )
 
-// Rust #62157: leaving the watch-only reader returns to the subagent list with
-// the reader's agent still selected, and the parent conversation stays active.
-func TestSidebarSubagentReaderReturnsToListLikeRust(t *testing.T) {
+// Rust #62157 side_focus: focus_sidebar_content selects the docked agent, so an
+// open watch-only reader keeps its transcript and gains keyboard focus. Escape
+// is the reader's way back to the Subagents list, and the parent conversation
+// stays active throughout.
+func TestSidebarSubagentReaderKeepsFocusLikeRust(t *testing.T) {
 	model, _ := newSidebarSubagentPaneModel(t)
 	runTeaCmd(t, model, model.switchToSidebarAgent("agent-1"))
 	if model.activeSide == nil || !model.activeSide.WatchOnly {
@@ -15,12 +17,11 @@ func TestSidebarSubagentReaderReturnsToListLikeRust(t *testing.T) {
 
 	runTeaCmd(t, model, model.focusSidebarContent())
 
-	if !model.sidebarChooserVisible() || !model.sidebarChooserFocused {
-		t.Fatalf("chooser = open %t focused %t, want the subagent list", model.sidebarChooserOpen, model.sidebarChooserFocused)
+	if model.sidebarChooserVisible() {
+		t.Fatal("focusing the sidebar replaced the reader with the subagent list")
 	}
-	row, ok := model.sidebarChooserSelectedAgent()
-	if !ok || row.ThreadID != "agent-1" {
-		t.Fatalf("selected row = %#v ok=%t, want the reader's agent", row, ok)
+	if !model.sidebarReaderFocused {
+		t.Fatal("focusing the sidebar left the reader without keyboard focus")
 	}
 	if model.State.ThreadID != "parent-a" {
 		t.Fatalf("main thread = %q, want the parent conversation", model.State.ThreadID)

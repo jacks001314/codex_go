@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	bubbletea "charm.land/bubbletea/v2"
+
+	"codex_go/tui/keymsg"
 )
 
 // Rust parity: codex-rs/tui/src/app/sidebar_subagents.rs (#62157). Selecting a
@@ -93,6 +95,7 @@ func (m *Model) applySidebarSubagentTranscript(open *sidebarSubagentOpen, messag
 	}
 	m.retainSideConversation(side)
 	m.activeSide = side
+	m.sidebarReaderFocused = false
 	m.resetSidePaneViewState()
 	m.notice = label + " transcript"
 	m.refreshTranscript()
@@ -113,6 +116,7 @@ func (m *Model) closeSidebarSubagentTranscript(side *activeSideConversation) bub
 	}
 	if m.activeSide == side {
 		m.activeSide = nil
+		m.sidebarReaderFocused = false
 		m.resetSidePaneViewState()
 	}
 	m.notice = "Closed subagent transcript."
@@ -144,6 +148,63 @@ func (m *Model) sidebarSubagentLabel(parent string, threadID string) string {
 // transcript (Rust #62157 has no composer or status line in this reader).
 func watchOnlySidePane(side *activeSideConversation) bool {
 	return side != nil && side.WatchOnly
+}
+
+// focusSidebarReader gives the watch-only reader input focus so its transcript
+// can be read with the keyboard (Rust #62157 pane focus).
+func (m *Model) focusSidebarReader() bool {
+	if m == nil || !watchOnlySidePane(m.activeSide) || m.activeSide.ShowingSide {
+		return false
+	}
+	m.sidebarReaderFocused = true
+	return true
+}
+
+// updateSidebarReaderKey scrolls the focused reader. Escape leaves it for the
+// Subagents list, and every other key is consumed so the parent composer never
+// receives input while the reader owns focus.
+func (m *Model) updateSidebarReaderKey(msg keymsg.KeyMsg) (bubbletea.Cmd, bool) {
+	if m == nil || !m.sidebarReaderFocused {
+		return nil, false
+	}
+	if !watchOnlySidePane(m.activeSide) || m.activeSide.ShowingSide ||
+		m.sidebarChooserVisible() || m.sidebarDocumentVisible() {
+		// Another surface owns the sidebar now.
+		m.sidebarReaderFocused = false
+		return nil, false
+	}
+	page := max(m.transcript.Height-1, 1)
+	switch msg.Type {
+	case keymsg.KeyEsc:
+		m.sidebarReaderFocused = false
+		cmd, _ := m.escapeWatchOnlyReader()
+		m.suppressCurrentViewKeyUntilRelease()
+		return cmd, true
+	case keymsg.KeyUp:
+		return m.scrollSidebarReader(-1), true
+	case keymsg.KeyDown:
+		return m.scrollSidebarReader(1), true
+	case keymsg.KeyPgUp:
+		return m.scrollSidebarReader(-page), true
+	case keymsg.KeyPgDown:
+		return m.scrollSidebarReader(page), true
+	}
+	return nil, true
+}
+
+// scrollSidebarReader moves the reader's own transcript window.
+func (m *Model) scrollSidebarReader(delta int) bubbletea.Cmd {
+	side := m.activeSide
+	if side == nil || delta == 0 {
+		return nil
+	}
+	offset, saved := &side.SideScroll, &side.SideInteractionSaved
+	if !*saved {
+		*offset, *saved = side.SideViewMax, true
+	}
+	*offset = clampViewportOffset(*offset+delta, 0, side.SideViewMax)
+	m.refreshTranscript()
+	return nil
 }
 
 // watchOnlyReaderHeading is the dim top row Rust #62157 paints above the
