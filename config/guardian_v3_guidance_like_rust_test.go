@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGuardianV3GuidanceConfigLikeRust(t *testing.T) {
@@ -117,6 +118,63 @@ func TestGuardianV3GuidanceRejectsBadFieldsLikeRust(t *testing.T) {
 				t.Fatalf("error = %v, want it to mention %s", err, testCase.want)
 			}
 		})
+	}
+}
+
+// TestGuardianV3InstructionTokenCapLikeRust checks
+// features.guardianv3.max_instruction_tokens: each custom prompt is trimmed,
+// estimated with the shared token count and rejected above the cap (#62372).
+func TestGuardianV3InstructionTokenCapLikeRust(t *testing.T) {
+	long := strings.Repeat("word ", 100)
+	body := "[features.guardianv3]\nmax_instruction_tokens = 10\n\n[features.guardianv3.housekeeper]\nrouting_instructions = \"" + long + "\"\n"
+	dir := t.TempDir()
+	if err := os.WriteFile(ConfigPath(dir), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true}); err == nil {
+		t.Fatal("an oversized routing prompt loaded without an error")
+	} else if !strings.Contains(err.Error(), "features.guardianv3.housekeeper.routing_instructions is") ||
+		!strings.Contains(err.Error(), "exceeding max_instruction_tokens = 10") {
+		t.Fatalf("error = %v, want the token-cap message", err)
+	}
+
+	retrieval := "[features.guardianv3]\nmax_instruction_tokens = 10\n\n[features.guardianv3.reviewer]\nretrieval_instructions = \"" + long + "\"\n"
+	dir = t.TempDir()
+	if err := os.WriteFile(ConfigPath(dir), []byte(retrieval), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true}); err == nil {
+		t.Fatal("an oversized retrieval prompt loaded without an error")
+	} else if !strings.Contains(err.Error(), "features.guardianv3.reviewer.retrieval_instructions is") {
+		t.Fatalf("error = %v, want the retrieval key", err)
+	}
+
+	// A prompt at or under the cap loads, and whitespace does not count.
+	fits := "[features.guardianv3]\nmax_instruction_tokens = 10\n\n[features.guardianv3.housekeeper]\nrouting_instructions = \"   keep evidence routed   \"\n"
+	dir = t.TempDir()
+	if err := os.WriteFile(ConfigPath(dir), []byte(fits), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true})
+	if err != nil {
+		t.Fatalf("a capped prompt was rejected: %v", err)
+	}
+	if limit, ok := cfg.GuardianV3MaxInstructionTokens(); !ok || limit != 10 {
+		t.Fatalf("max instruction tokens = %d, %v", limit, ok)
+	}
+}
+
+// TestGuardianV3HousekeeperBatchTimeoutLikeRust keeps Rust's 90 second default
+// and applies a configured positive batch_timeout_ms.
+func TestGuardianV3HousekeeperBatchTimeoutLikeRust(t *testing.T) {
+	if got := (&Config{Values: map[string]any{}}).GuardianV3HousekeeperBatchTimeout(); got != 90*time.Second {
+		t.Fatalf("default batch timeout = %v, want 90s", got)
+	}
+	cfg := &Config{Values: map[string]any{"features": map[string]any{"guardianv3": map[string]any{
+		"housekeeper": map[string]any{"batch_timeout_ms": int64(15000)},
+	}}}}
+	if got := cfg.GuardianV3HousekeeperBatchTimeout(); got != 15*time.Second {
+		t.Fatalf("configured batch timeout = %v, want 15s", got)
 	}
 }
 

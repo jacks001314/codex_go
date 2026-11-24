@@ -19,6 +19,7 @@ import (
 	"codex_go/codexapi"
 	"codex_go/keymapschema"
 	"codex_go/network"
+	"codex_go/utils"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -1841,6 +1842,26 @@ func validateKnownFeatureFieldsAt(value any, prefix string) error {
 			}
 		}
 	}
+	// Rust #62372: max_instruction_tokens caps each custom prompt separately,
+	// trimmed and measured with the shared approximate token count.
+	if guardianV3, ok := features["guardianv3"].(map[string]any); ok {
+		if limit, hasLimit := guardianV3Count(guardianV3["max_instruction_tokens"], false); hasLimit {
+			for _, capped := range []struct{ key, section, field string }{
+				{"housekeeper.routing_instructions", "housekeeper", "routing_instructions"},
+				{"reviewer.retrieval_instructions", "reviewer", "retrieval_instructions"},
+			} {
+				table, _ := guardianV3[capped.section].(map[string]any)
+				prompt, ok := table[capped.field].(string)
+				if !ok {
+					continue
+				}
+				tokens := utils.ApproxTokensFromByteCount(len(strings.TrimSpace(prompt)))
+				if tokens > uint64(limit) {
+					return fmt.Errorf("%s.guardianv3.%s is %d estimated tokens, exceeding max_instruction_tokens = %d", prefix, capped.key, tokens, limit)
+				}
+			}
+		}
+	}
 	if tokenBudget, ok := features["token_budget"].(map[string]any); ok {
 		known := map[string]bool{
 			"enabled":                             true,
@@ -2350,6 +2371,57 @@ func (c *Config) GuardianV3RoutingInstructions() (string, bool) {
 // replaces the reviewer's built-in board retrieval sentence (Rust #62372).
 func (c *Config) GuardianV3RetrievalInstructions() (string, bool) {
 	return guardianV3StringSetting(c, "reviewer", "retrieval_instructions")
+}
+
+// GuardianV3MaxInstructionTokens returns
+// features.guardianv3.max_instruction_tokens, the per-prompt estimated token
+// cap applied at load time (Rust #62372).
+func (c *Config) GuardianV3MaxInstructionTokens() (int, bool) {
+	if c == nil {
+		return 0, false
+	}
+	features, ok := c.Values["features"].(map[string]any)
+	if !ok {
+		return 0, false
+	}
+	guardianV3, ok := features["guardianv3"].(map[string]any)
+	if !ok {
+		return 0, false
+	}
+	value, ok := guardianV3Count(guardianV3["max_instruction_tokens"], false)
+	if !ok {
+		return 0, false
+	}
+	return int(value), true
+}
+
+// guardianV3DefaultBatchTimeout is Rust's routing budget when
+// housekeeper.batch_timeout_ms is unset.
+const guardianV3DefaultBatchTimeout = 90 * time.Second
+
+// GuardianV3HousekeeperBatchTimeout returns the per-batch routing budget.
+// Rust defaults it to 90 seconds when the setting is absent (#62372).
+func (c *Config) GuardianV3HousekeeperBatchTimeout() time.Duration {
+	if c == nil {
+		return guardianV3DefaultBatchTimeout
+	}
+	features, ok := c.Values["features"].(map[string]any)
+	if !ok {
+		return guardianV3DefaultBatchTimeout
+	}
+	guardianV3, ok := features["guardianv3"].(map[string]any)
+	if !ok {
+		return guardianV3DefaultBatchTimeout
+	}
+	housekeeper, ok := guardianV3["housekeeper"].(map[string]any)
+	if !ok {
+		return guardianV3DefaultBatchTimeout
+	}
+	value, ok := guardianV3Count(housekeeper["batch_timeout_ms"], true)
+	if !ok || value <= 0 {
+		return guardianV3DefaultBatchTimeout
+	}
+	return time.Duration(value) * time.Millisecond
 }
 
 // guardianV3StringSetting reads one string under features.guardianv3.<section>.

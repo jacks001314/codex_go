@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func guardianHousekeeperFixture(t *testing.T) (context.Context, *LocalAgentMessageBoard, *GuardianLiveDelivery, string, string) {
@@ -238,6 +239,27 @@ func TestGuardianHousekeeperPromptRoutingInstructionsLikeRust(t *testing.T) {
 		if got := GuardianHousekeeperPrompt(blank); got != GuardianHousekeeperInstructions {
 			t.Fatalf("blank routing %q produced %q", blank, got)
 		}
+	}
+}
+
+// TestGuardianHousekeeperBatchTimeoutLikeRust bounds one routing decision with
+// features.guardianv3.housekeeper.batch_timeout_ms (Rust #62372): a stalled
+// decider ends the pass instead of holding the board open.
+func TestGuardianHousekeeperBatchTimeoutLikeRust(t *testing.T) {
+	ctx, board, delivery, root, _ := guardianHousekeeperFixture(t)
+	housekeeper, err := NewGuardianHousekeeperWithOptions(board, root, delivery, func(decideCtx context.Context, _ GuardianRoutingBatch) (GuardianRoutingDecision, error) {
+		<-decideCtx.Done()
+		return GuardianRoutingDecision{}, decideCtx.Err()
+	}, GuardianHousekeeperOptions{BatchTimeout: 20 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("NewGuardianHousekeeperWithOptions() error = %v", err)
+	}
+	sources := []GuardianRoutingSource{{ID: GuardianEvidenceID{Ordinal: 1}, Text: guardianEvidenceText(1, "one")}}
+	if _, err := housekeeper.RouteNext(ctx, sources); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("RouteNext() error = %v, want the batch deadline", err)
+	}
+	if _, err := housekeeper.RouteNext(ctx, sources); err == nil {
+		t.Fatal("a timed-out housekeeper accepted another batch")
 	}
 }
 

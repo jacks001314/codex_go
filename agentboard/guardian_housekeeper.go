@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // guardianRouteSourcesInstruction is Rust's default routing strategy: related
@@ -96,12 +97,27 @@ type GuardianHousekeeper struct {
 	owner    string
 	delivery *GuardianLiveDelivery
 	decide   GuardianRoutingDecider
-	stopped  bool
+	// batchTimeout bounds one routing decision; zero means no deadline.
+	batchTimeout time.Duration
+	stopped      bool
 }
 
 // NewGuardianHousekeeper binds one routing pass to a Guardian board, its root
 // thread and the inboxes that carry the routed originals.
 func NewGuardianHousekeeper(board AgentMessageBoard, owner string, delivery *GuardianLiveDelivery, decide GuardianRoutingDecider) (*GuardianHousekeeper, error) {
+	return NewGuardianHousekeeperWithOptions(board, owner, delivery, decide, GuardianHousekeeperOptions{})
+}
+
+// GuardianHousekeeperOptions carries the per-batch routing budget
+// (features.guardianv3.housekeeper.batch_timeout_ms, Rust #62372).
+type GuardianHousekeeperOptions struct {
+	// BatchTimeout bounds one routing decision. Zero keeps the caller's
+	// context as the only deadline.
+	BatchTimeout time.Duration
+}
+
+// NewGuardianHousekeeperWithOptions binds a routing pass with a batch budget.
+func NewGuardianHousekeeperWithOptions(board AgentMessageBoard, owner string, delivery *GuardianLiveDelivery, decide GuardianRoutingDecider, options GuardianHousekeeperOptions) (*GuardianHousekeeper, error) {
 	if board == nil {
 		return nil, errors.New("housekeeper requires a board")
 	}
@@ -114,7 +130,13 @@ func NewGuardianHousekeeper(board AgentMessageBoard, owner string, delivery *Gua
 	if board.Identity() != owner || delivery == nil || delivery.Root() != owner {
 		return nil, errors.New("housekeeper root mismatch")
 	}
-	return &GuardianHousekeeper{board: board, owner: owner, delivery: delivery, decide: decide}, nil
+	return &GuardianHousekeeper{
+		board:        board,
+		owner:        owner,
+		delivery:     delivery,
+		decide:       decide,
+		batchTimeout: options.BatchTimeout,
+	}, nil
 }
 
 // Owner is the root thread whose evidence this pass routes.
@@ -151,7 +173,15 @@ func (h *GuardianHousekeeper) routeNext(ctx context.Context, sources []GuardianR
 	if err != nil {
 		return 0, err
 	}
-	decision, err := h.decide(ctx, GuardianRoutingBatch{Catalog: catalog, Sources: sources})
+	decisionCtx := ctx
+	if h.batchTimeout > 0 {
+		// Rust bounds one routing batch with ReviewDeadline::from_timeout, so a
+		// stalled sampler stops the pass instead of holding the board open.
+		var cancel context.CancelFunc
+		decisionCtx, cancel = context.WithTimeout(ctx, h.batchTimeout)
+		defer cancel()
+	}
+	decision, err := h.decide(decisionCtx, GuardianRoutingBatch{Catalog: catalog, Sources: sources})
 	if err != nil {
 		return 0, err
 	}
