@@ -95,3 +95,32 @@ func TestActivationKeyGuardSwallowsHeldEnterAcrossPickerLikeRust(t *testing.T) {
 		t.Fatalf("settings writes = %#v", writes)
 	}
 }
+
+// Rust #63146 activation_key_guard_tests: a replay that outlasts the initial
+// press window rearms the guard so a held selection key cannot act on an
+// approval dialog the destination opens.
+func TestActivationKeyGuardRearmExtendsReplayWindowLikeRust(t *testing.T) {
+	start := time.Unix(1_700_000_000, 0)
+	guard := newActivationKeyGuard(guardEnter, start)
+	guard.rearm(start.Add(900 * time.Millisecond))
+	if !guard.consume(guardEnter, false, start.Add(1_500*time.Millisecond)) {
+		t.Fatal("a press inside the rearmed window was not swallowed")
+	}
+
+	// Rearming never shortens an existing block.
+	longer := newActivationKeyGuard(guardEnter, start)
+	longer.rearm(start.Add(2 * time.Second))
+	if until := longer.blockUntil; !until.Equal(start.Add(3 * time.Second)) {
+		t.Fatalf("blockUntil = %v, want the later deadline", until.Sub(start))
+	}
+
+	// A released guard stays inactive.
+	released := newActivationKeyGuard(guardEnter, start)
+	if !released.consume(guardEnter, true, start) {
+		t.Fatal("release inside the window was not consumed")
+	}
+	released.rearm(start.Add(500 * time.Millisecond))
+	if released.consume(guardEnter, false, start.Add(500*time.Millisecond)) {
+		t.Fatal("rearm reactivated a released guard")
+	}
+}

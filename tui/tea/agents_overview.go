@@ -1541,6 +1541,9 @@ func (m *Model) openAgentsOverviewThread(threadID string) bubbletea.Cmd {
 		m.refreshTranscript()
 		return nil
 	}
+	// Rust #63146: the destination's replay can outlast the press window, so
+	// extend the held-key guard before the switch stops painting the dashboard.
+	m.rearmActivationKeyGuard()
 	// Rust #44424: explicitly resuming a task clears its local hide.
 	if m.agentsOverview != nil {
 		m.agentsOverview.UnhideThread(threadID)
