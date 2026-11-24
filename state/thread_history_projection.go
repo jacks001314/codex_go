@@ -111,6 +111,8 @@ func MaterializeThreadHistory(ctx context.Context, db *sql.DB, threadID string, 
 // MaterializeThreadHistory projects one rollout suffix under the runtime's
 // single-writer admission.
 func (r *StateRuntime) MaterializeThreadHistory(ctx context.Context, db *sql.DB, threadID string, rolloutPath string, initialOrdinal uint64, subagentHistoryStartOrdinal *uint64) error {
+	ctx, cancel := r.historyAcquireContext(ctx)
+	defer cancel()
 	return materializeThreadHistory(ctx, db, r.acquireHistoryWriter, threadID, rolloutPath, func() (uint64, *uint64, error) {
 		return initialOrdinal, subagentHistoryStartOrdinal, nil
 	}, nil)
@@ -127,6 +129,8 @@ func MaterializeThreadHistoryDurableSuffix(ctx context.Context, db *sql.DB, thre
 // MaterializeThreadHistoryDurableSuffix projects one flushed rollout suffix
 // under the runtime's single-writer admission.
 func (r *StateRuntime) MaterializeThreadHistoryDurableSuffix(ctx context.Context, db *sql.DB, threadID string, rolloutPath string, flushedLen *uint64) error {
+	ctx, cancel := r.historyAcquireContext(ctx)
+	defer cancel()
 	return materializeThreadHistory(ctx, db, r.acquireHistoryWriter, threadID, rolloutPath, threadHistoryOrdinalsFromRollout(rolloutPath), flushedLen)
 }
 

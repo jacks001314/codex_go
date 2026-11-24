@@ -45,6 +45,11 @@ const (
 	// sqliteRollbackJournalBusyTimeoutMS lets a rollback-journal pool ride out a
 	// long NFS write instead of surfacing SQLITE_BUSY (Rust #63456).
 	sqliteRollbackJournalBusyTimeoutMS = 60000
+	// sqliteRollbackJournalAcquireTimeout bounds how long a rollback-journal
+	// pool may wait for a free connection (Rust #63456 sets a 120-second pool
+	// acquire timeout). database/sql exposes no acquire timeout, so history
+	// operations bound their context instead.
+	sqliteRollbackJournalAcquireTimeout = 120 * time.Second
 
 	// sqliteJournalModeDelete is SQLite's rollback-journal mode. Rust #54389
 	// (`1ef30bcb`) preserves the journal mode of an initialized database and
@@ -217,6 +222,32 @@ func (c SqliteConfig) EnforcesNFSDelete() bool {
 func (c SqliteConfig) PrefersRollbackJournal() bool {
 	nfs, err := c.IsNFS()
 	return err == nil && nfs
+}
+
+// AcquireTimeout reports the pool acquire timeout for this home (Rust #63456).
+// A rollback-journal pool can have every connection parked behind a network
+// filesystem journal lock, so its acquirers wait at most two minutes.
+func (c SqliteConfig) AcquireTimeout() time.Duration {
+	if c.PrefersRollbackJournal() {
+		return sqliteRollbackJournalAcquireTimeout
+	}
+	return 0
+}
+
+// AcquireContext bounds ctx with the pool's acquire timeout when it has one and
+// the caller has not already set a deadline.
+func (c SqliteConfig) AcquireContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timeout := c.AcquireTimeout()
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 func NewSqliteConfig(sqliteHome string) (SqliteConfig, error) {

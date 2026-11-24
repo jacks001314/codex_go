@@ -336,6 +336,19 @@ func (r *StateRuntime) acquireHistoryWriter(ctx context.Context) (func(), error)
 	}
 }
 
+// historyAcquireContext bounds a thread-history operation with the pool's
+// acquire timeout (Rust #63456); a runtime built without SQLite settings keeps
+// the caller's context unchanged.
+func (r *StateRuntime) historyAcquireContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if r == nil {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		return ctx, func() {}
+	}
+	return r.sqlite.AcquireContext(ctx)
+}
+
 func (r *StateRuntime) ThreadHistoryDB(ctx context.Context) (*sql.DB, error) {
 	if r == nil {
 		return nil, errors.New("state runtime is nil")
@@ -343,6 +356,8 @@ func (r *StateRuntime) ThreadHistoryDB(ctx context.Context) (*sql.DB, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx, cancel := r.historyAcquireContext(ctx)
+	defer cancel()
 	r.threadHistoryMu.Lock()
 	defer r.threadHistoryMu.Unlock()
 	if r.closed {

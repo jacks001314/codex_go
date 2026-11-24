@@ -777,7 +777,15 @@ func (r *Router) materializeThreadHistory(threadID session.ThreadID, path string
 		return r.state.MaterializeThreadHistoryDurableSuffix(context.Background(), db, string(threadID), path, flushedLen)
 	}
 	sqliteHome := rustSQLiteHome(codexHome)
-	db, err := state.OpenThreadHistoryDB(context.Background(), sqliteHome)
+	// Rust #63456 bounds a rollback-journal pool's acquire wait; outside a
+	// runtime the history database is opened directly, so apply the same bound
+	// here.
+	ctx, cancel := context.Background(), func() {}
+	if config, err := state.NewSqliteConfig(sqliteHome); err == nil {
+		ctx, cancel = config.AcquireContext(ctx)
+	}
+	defer cancel()
+	db, err := state.OpenThreadHistoryDB(ctx, sqliteHome)
 	if err != nil {
 		return err
 	}
