@@ -20,10 +20,19 @@ import (
 	"google.golang.org/grpc/keepalive"
 )
 
+// grpcHostIdleGrace is Rust's HOST_IDLE_GRACE (#63537): a host stays alive
+// this long after its last session lease and operation RPC drain, so nearby
+// sessions can reuse the process before it is released.
+var grpcHostIdleGrace = 5 * time.Second
+
 // GrpcProcessProvider mirrors Rust's ProcessOwnedGrpcCodeModeSessionProvider
 // (#52723): one lazy host process serves a shared HTTP/2 channel, and sessions
 // stay isolated. A dead or unresponsive host is reaped and respawned on the
 // next connect.
+//
+// Rust #63537 keeps the host alive while session leases or operation RPCs are
+// in flight and retires it after grpcHostIdleGrace once they drain. Metrics
+// sampling only observes a running host and never extends its life.
 type GrpcProcessProvider struct {
 	program     string
 	completions *completionWindow
@@ -38,6 +47,13 @@ type GrpcProcessProvider struct {
 	nextCellGeneration atomic.Uint64
 	warned             atomic.Bool
 	available          error
+
+	// leases counts the session leases and in-flight operation RPCs that keep
+	// the current host alive; hostEpoch identifies the generation an idle
+	// timer may retire.
+	leases    int
+	hostEpoch uint64
+	idleTimer *time.Timer
 }
 
 func NewGrpcProcessProvider(program string) *GrpcProcessProvider {
@@ -150,6 +166,13 @@ func (p *GrpcProcessProvider) connect(ctx context.Context) (*remoteConnection, e
 		reapProcess(cmd)
 		return nil, err
 	}
+	// A fresh host owns a new generation, so an idle timer armed for the
+	// previous process can no longer retire it.
+	p.hostEpoch++
+	if p.idleTimer != nil {
+		p.idleTimer.Stop()
+		p.idleTimer = nil
+	}
 	p.connection = connection
 	p.grpcConn = grpcConn
 	p.process = cmd
@@ -158,12 +181,69 @@ func (p *GrpcProcessProvider) connect(ctx context.Context) (*remoteConnection, e
 	return connection, nil
 }
 
+// retainHostActivity keeps the current host alive until the returned release
+// runs (Rust #63537's session lease / operation RPC guard). Overlapping holders
+// share the host; the grace period starts when the last one releases.
+func (p *GrpcProcessProvider) retainHostActivity() func() {
+	if p == nil {
+		return func() {}
+	}
+	p.mu.Lock()
+	p.leases++
+	if p.idleTimer != nil {
+		p.idleTimer.Stop()
+		p.idleTimer = nil
+	}
+	p.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(p.releaseHostActivity)
+	}
+}
+
+func (p *GrpcProcessProvider) releaseHostActivity() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.leases > 0 {
+		p.leases--
+	}
+	if p.leases == 0 {
+		p.armIdleRetirementLocked()
+	}
+}
+
+// armIdleRetirementLocked starts the grace timer for the current host
+// generation. A timer that fires after new activity or after a fresh host
+// spawned finds a different lease count or epoch and leaves that host alone.
+func (p *GrpcProcessProvider) armIdleRetirementLocked() {
+	if p.connection == nil {
+		return
+	}
+	epoch := p.hostEpoch
+	if p.idleTimer != nil {
+		p.idleTimer.Stop()
+	}
+	p.idleTimer = time.AfterFunc(grpcHostIdleGrace, func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if p.leases != 0 || p.hostEpoch != epoch {
+			return
+		}
+		p.idleTimer = nil
+		_ = p.stopLocked()
+	})
+}
+
 func (p *GrpcProcessProvider) Close() error {
 	if p == nil {
 		return nil
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.idleTimer != nil {
+		p.idleTimer.Stop()
+		p.idleTimer = nil
+	}
 	return p.stopLocked()
 }
 

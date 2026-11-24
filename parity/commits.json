@@ -55747,9 +55747,21 @@
    "sha": "1985925638538b75d5c6058ed3c18afcf1fe21cc",
    "status": "complete",
    "subject": "Refresh the model catalog from Responses WebSocket handshakes (#63533)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 182: complete - Rust reaps the local code-mode host once its session leases and operation RPCs drain, keeping it for HOST_IDLE_GRACE (5s) so nearby sessions reuse the process; process metrics only sample an existing host and leave the idle timer alone, and opening a session after retirement starts a fresh host. Go's codemode.GrpcProcessProvider now tracks live activity and a host generation: retainHostActivity keeps the current host alive and cancels a pending idle timer, the last release arms a 5s timer (grpcHostIdleGrace) that retires only the generation it was armed for, remoteSession attaches a lease on session open and detaches it on Close, and Execute/Wait/Terminate plus the shutdown request hold a transient lease so a closing session cannot reap the host mid-RPC. Provider Close stops a pending timer and reaps as before."
+   ],
+   "kind": "runtime",
+   "sha": "714bc44f0dd9787632ed9d294fa0d6cb1fb844c8",
+   "status": "complete",
+   "subject": "Reap idle local code-mode hosts after five seconds (#63537)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "1985925638538b75d5c6058ed3c18afcf1fe21cc",
+ "rustToInclusive": "714bc44f0dd9787632ed9d294fa0d6cb1fb844c8",
  "schemaVersion": 1
 }

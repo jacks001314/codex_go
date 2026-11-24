@@ -66,6 +66,13 @@ type remoteSessionProvider interface {
 	nextGeneration() uint64
 }
 
+// hostActivityRetainer keeps a provider-owned local host alive while a session
+// lease or an operation RPC is in flight (Rust #63537). Providers that do not
+// own a host process return no activity.
+type hostActivityRetainer interface {
+	retainHostActivity() func()
+}
+
 type remoteTransport interface {
 	Read(context.Context, any) (bool, error)
 	Write(context.Context, any) error
@@ -278,6 +285,9 @@ type remoteSession struct {
 	// #61846); a reconnect starts a fresh binding and resets it.
 	catalog *codeModeCatalogCache
 	closed  bool
+	// releaseHost drops the lease that keeps the provider's local host alive
+	// while this session is open (Rust #63537).
+	releaseHost func()
 }
 
 // NewSessionWithOptions mirrors Rust's create_session_with_options: the
@@ -367,6 +377,8 @@ func (s *remoteSession) existingConnection() (*remoteConnection, error) {
 }
 
 func (s *remoteSession) Execute(ctx context.Context, request tool.CodeModeRemoteExecuteRequest, preempt *tool.YieldSignal) (tool.CodeModeRemoteResponse, error) {
+	releaseActivity := s.holdHostActivity()
+	defer releaseActivity()
 	generation, hadBinding := s.bindingGeneration()
 	connection, err := s.connection(ctx)
 	if err != nil {
@@ -428,6 +440,8 @@ func (s *remoteSession) Execute(ctx context.Context, request tool.CodeModeRemote
 }
 
 func (s *remoteSession) Wait(ctx context.Context, cellID string, yieldTimeMS uint64, maxOutputTokens *int, preempt *tool.YieldSignal) (tool.CodeModeRemoteResponse, error) {
+	releaseActivity := s.holdHostActivity()
+	defer releaseActivity()
 	generation, hadBinding := s.bindingGeneration()
 	connection, err := s.connection(ctx)
 	if err != nil {
@@ -461,6 +475,8 @@ func (s *remoteSession) Wait(ctx context.Context, cellID string, yieldTimeMS uin
 }
 
 func (s *remoteSession) Terminate(ctx context.Context, cellID string, maxOutputTokens *int) (tool.CodeModeRemoteResponse, error) {
+	releaseActivity := s.holdHostActivity()
+	defer releaseActivity()
 	connection, err := s.existingConnection()
 	if err != nil {
 		return tool.CodeModeRemoteResponse{}, err
@@ -536,12 +552,16 @@ func (s *remoteSession) Close() error {
 	s.openedOn = nil
 	s.mu.Unlock()
 	if connection == nil {
+		s.detachHostLease()
 		return nil
 	}
 	connection.RemoveDelegate(s.id)
 	ctx, cancel := context.WithTimeout(context.Background(), WebSocketCloseTimeout)
 	defer cancel()
+	releaseActivity := s.holdHostActivity()
 	_, err := connection.Request(ctx, ShutdownSessionRequest(s.id))
+	releaseActivity()
+	s.detachHostLease()
 	return err
 }
 
@@ -661,7 +681,51 @@ func (s *remoteSession) admit(ctx context.Context) (*remoteConnection, error) {
 	s.generation = s.provider.nextGeneration()
 	s.mu.Unlock()
 	connection.SetDelegate(s.id, s.delegateForGeneration(s.generation))
+	s.attachHostLease()
 	return connection, nil
+}
+
+// attachHostLease holds the provider host open for this session and drops the
+// lease of a binding it replaced, so a reconnect cannot accumulate leases.
+func (s *remoteSession) attachHostLease() {
+	retainer, ok := s.provider.(hostActivityRetainer)
+	if !ok {
+		return
+	}
+	release := retainer.retainHostActivity()
+	s.mu.Lock()
+	previous := s.releaseHost
+	s.releaseHost = release
+	s.mu.Unlock()
+	if previous != nil {
+		previous()
+	}
+}
+
+// detachHostLease releases this session's host lease; the host may retire once
+// no other lease or operation RPC remains.
+func (s *remoteSession) detachHostLease() {
+	s.mu.Lock()
+	release := s.releaseHost
+	s.releaseHost = nil
+	s.mu.Unlock()
+	if release != nil {
+		release()
+	}
+}
+
+// holdHostActivity keeps the host alive for one operation RPC (Rust #63537),
+// so a session closing underneath a running execute/wait/terminate cannot
+// retire the process before its response arrives.
+func (s *remoteSession) holdHostActivity() func() {
+	if s == nil {
+		return func() {}
+	}
+	retainer, ok := s.provider.(hostActivityRetainer)
+	if !ok {
+		return func() {}
+	}
+	return retainer.retainHostActivity()
 }
 
 func publicRemoteResponseForGeneration(response RuntimeResponse, generation uint64) tool.CodeModeRemoteResponse {
