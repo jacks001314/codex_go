@@ -41,6 +41,9 @@ func (r *RuntimeRouter) startRealtimeConversationAsync(params realtime.StartPara
 				// previous one was retired by a misalignment violation.
 				r.clearVoiceHandoffsRetired(params.ThreadID)
 				r.recordVoiceMetric(voiceSessionStartMetric, 1)
+				// Rust #62299: a reattached call restores speech that a previous
+				// call saved at hangup, before any newly captured speech.
+				r.restoreRealtimeSessionEndSpeech(params.ThreadID)
 				r.notifyRealtime(notifications)
 				return
 			}
@@ -864,6 +867,59 @@ func (r *RuntimeRouter) routeRealtimeHandoffTurn(threadID string, event realtime
 		RealtimeHandoffProvenance: r.realtimeHandoffProvenance(threadID, event, realtime.RealtimeHandoffModeStart),
 	}))
 	return err
+}
+
+// restoreRealtimeSessionEndSpeech seeds the open call with the pending speech
+// its previous call saved at hangup (Rust #62299). Speech that a later turn
+// already consumed has no session-end receipt, so only the newest call's
+// receipt is considered.
+func (r *RuntimeRouter) restoreRealtimeSessionEndSpeech(threadID string) {
+	if r == nil || r.services.StateRuntime == nil || r.services.Realtime == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	ctx := context.Background()
+	sessionID, found, err := r.services.StateRuntime.LatestThreadRealtimeSession(ctx, threadID)
+	if err != nil || !found {
+		return
+	}
+	session, err := r.services.StateRuntime.LoadThreadRealtimeSession(ctx, threadID, sessionID)
+	if err != nil || session == nil {
+		return
+	}
+	text, observedAt := realtimeSessionEndReceipt(session)
+	if text == "" {
+		return
+	}
+	r.requireRealtime().SeedRealtimeSessionEndSpeech(threadID, text, observedAt)
+}
+
+// realtimeSessionEndReceipt finds the newest session-end speech in one
+// persisted call. Newly captured speech and the closing marker can follow the
+// receipt, so the scan walks backward to the newest receipt.
+func realtimeSessionEndReceipt(session *state.ThreadRealtimeSession) (string, *int64) {
+	if session == nil {
+		return "", nil
+	}
+	for index := len(session.Items) - 1; index >= 0; index-- {
+		var item struct {
+			Type       string `json:"type"`
+			Reason     string `json:"reason"`
+			Input      string `json:"input"`
+			ObservedAt *int64 `json:"observed_at_ms"`
+		}
+		if err := json.Unmarshal(session.Items[index].ItemJSON, &item); err != nil {
+			continue
+		}
+		if item.Type != "session_input_saved" || item.Reason != "session_end" || strings.TrimSpace(item.Input) == "" {
+			continue
+		}
+		return item.Input, item.ObservedAt
+	}
+	return "", nil
 }
 
 // realtimeTranscriptTailKind tags the history item recorded from a realtime

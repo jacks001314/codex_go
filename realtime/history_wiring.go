@@ -240,6 +240,15 @@ func (m *Manager) ReleaseRealtimeHandoff(threadID, id string) bool {
 	return m.historyFor(threadID).ReleaseHandoff(id)
 }
 
+// SeedRealtimeSessionEndSpeech restores persisted session-end speech ahead of
+// newly captured speech when a call reattaches (Rust #62299).
+func (m *Manager) SeedRealtimeSessionEndSpeech(threadID, text string, observedAtMS *int64) bool {
+	if m == nil {
+		return false
+	}
+	return m.historyFor(threadID).SeedSessionEndSpeech(text, observedAtMS)
+}
+
 // BindTurnSession records which realtime session produced a turn. The app-server
 // calls it when the backing turn starts.
 func (m *Manager) BindTurnSession(threadID, turnID string) {

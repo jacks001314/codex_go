@@ -1061,8 +1061,11 @@ type RealtimeHistoryState struct {
 	// claimed. Overlapping handoffs must not consume the same transcript twice,
 	// and a definite rejection releases the claim (Rust #62288 reserve_handoff).
 	reservedHandoffs map[string]string
-	failed           bool
-	newID            func() string
+	// turnConsumedUserSpeech records that a receiving turn already took the
+	// user speech of this session, so closing the call has nothing pending.
+	turnConsumedUserSpeech bool
+	failed                 bool
+	newID                  func() string
 }
 
 // SetIDGenerator overrides item identifier generation, primarily for tests.
@@ -1163,10 +1166,15 @@ func (s *RealtimeHistoryState) BindTurnSession(turnID string) {
 	if sessionID == "" {
 		return
 	}
+	consumedClaim := false
 	for id, reserved := range s.reservedHandoffs {
 		if reserved == sessionID {
 			delete(s.reservedHandoffs, id)
+			consumedClaim = true
 		}
+	}
+	if consumedClaim {
+		s.turnConsumedUserSpeech = true
 	}
 	turns := s.sessionByTurnLocked()
 	if _, exists := turns[turnID]; !exists {
@@ -1305,8 +1313,12 @@ func (s *RealtimeHistoryState) SessionClosed() RealtimeEventEffects {
 	}
 	sessionID := s.activeSessionID
 	s.activeSessionID = ""
+	// Rust #62299: speech captured but never consumed by a turn becomes context
+	// for the next turn instead of being lost with the call.
+	pendingText, pendingObservedAt := s.pendingUserSpeech()
 	var items []RealtimeItem
 	s.sealSegments(&items, false)
+	s.turnConsumedUserSpeech = false
 	outcome := RealtimeSessionOutcomeEnded
 	if s.failed {
 		outcome = RealtimeSessionOutcomeFailed
@@ -1316,6 +1328,24 @@ func (s *RealtimeHistoryState) SessionClosed() RealtimeEventEffects {
 	if s.framesEnabled() {
 		value := s.observeNow()
 		observedAt = &value
+	}
+	if pendingText != "" {
+		receiptObservedAt := observedAt
+		if pendingObservedAt != nil {
+			receiptObservedAt = pendingObservedAt
+		}
+		items = append(items, RealtimeItem{
+			ID:                s.nextID(),
+			RealtimeSessionID: sessionID,
+			ObservedAtMS:      receiptObservedAt,
+			Content: RealtimeItemContent{
+				Kind:         RealtimeItemKindSessionInput,
+				InputReason:  RealtimeSessionInputReasonSessionEnd,
+				SourceEvents: []string{},
+				InputItemID:  sessionID + ":session-end",
+				Input:        pendingText,
+			},
+		})
 	}
 	items = append(items, RealtimeItem{
 		ID:                s.nextID(),
@@ -1454,6 +1484,10 @@ func (s *RealtimeHistoryState) addDelta(role RealtimeTranscriptRole, delta strin
 	slot := s.segments.slot(role)
 	if *slot == nil {
 		*slot = &activeSegment{sessionID: sessionID, id: s.nextID(), role: role}
+		if role == RealtimeTranscriptRoleUser {
+			// Fresh speech has not reached a turn yet.
+			s.turnConsumedUserSpeech = false
+		}
 	}
 	segment := *slot
 	frames := s.framesEnabled()
@@ -1497,6 +1531,48 @@ func (s *RealtimeHistoryState) finishSegment(items *[]RealtimeItem, role Realtim
 		s.sealActiveSegment(items, segment, false)
 	}
 	return stream
+}
+
+// pendingUserSpeech reports user speech captured in this session that has not
+// reached a turn. Rust #62299 keeps it as session-end context only when
+// realtime frame history is enabled, because that history carries the receipt.
+func (s *RealtimeHistoryState) pendingUserSpeech() (string, *int64) {
+	if !s.framesEnabled() || s.turnConsumedUserSpeech {
+		return "", nil
+	}
+	segment := s.segments.user
+	if segment == nil || strings.TrimSpace(segment.text) == "" {
+		return "", nil
+	}
+	return segment.text, segment.observedAtMS
+}
+
+// SeedSessionEndSpeech restores persisted session-end speech into the open
+// session so newly captured speech follows it (Rust #62299 reconnect ordering).
+func (s *RealtimeHistoryState) SeedSessionEndSpeech(text string, observedAtMS *int64) bool {
+	if s == nil || strings.TrimSpace(text) == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.framesEnabled() || s.activeSessionID == "" {
+		return false
+	}
+	if segment := s.segments.user; segment != nil && strings.TrimSpace(segment.text) != "" {
+		return false
+	}
+	s.segments.user = &activeSegment{
+		sessionID:    s.activeSessionID,
+		id:           s.nextID(),
+		role:         RealtimeTranscriptRoleUser,
+		text:         text,
+		observedAtMS: observedAtMS,
+	}
+	if s.segments.firstActiveRole == "" {
+		s.segments.firstActiveRole = RealtimeTranscriptRoleUser
+	}
+	s.turnConsumedUserSpeech = false
+	return true
 }
 
 func (s *RealtimeHistoryState) sealSegments(items *[]RealtimeItem, continuation bool) {
