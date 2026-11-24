@@ -1234,6 +1234,8 @@ func (m *Model) renderSidebarDocument(width int, height int) string {
 	if match, ok := tab.Find.selected(); ok {
 		matchRow = match
 	}
+	atTop := tab.Scroll <= 0
+	atBottom := tab.Scroll+contentHeight >= len(lines)
 	for index := 0; index < contentHeight && tab.Scroll+index < len(lines); index++ {
 		row := tab.Scroll + index
 		line := lines[row]
@@ -1256,10 +1258,30 @@ func (m *Model) renderSidebarDocument(width int, height int) string {
 		}
 		rows[top+index] = " " + codextui.TruncateToWidth(line, bodyWidth)
 	}
+	// Rust TranscriptView::paint_document_scroll_indicators paints the arrow in
+	// the body's last column, so a preview scrolled away from either end shows
+	// which way more text lies.
+	if bodyWidth >= 3 && contentHeight > 0 {
+		if !atTop {
+			rows[top] = paintSidebarDocumentScrollIndicator(rows[top], bodyWidth, "\u2191")
+		}
+		if !atBottom {
+			rows[top+contentHeight-1] = paintSidebarDocumentScrollIndicator(rows[top+contentHeight-1], bodyWidth, "\u2193")
+		}
+	}
 	for index, line := range footerRows {
 		rows[height-len(footerRows)+index] = " " + line
 	}
 	return strings.Join(rows, "\n")
+}
+
+// paintSidebarDocumentScrollIndicator replaces the body's last cell with the
+// dim scroll arrow (Rust paint_document_scroll_indicators).
+func paintSidebarDocumentScrollIndicator(row string, bodyWidth int, arrow string) string {
+	total := 1 + bodyWidth
+	prefix := codextui.TruncateToWidth(row, total-1)
+	padding := max(total-1-ansi.StringWidth(prefix), 0)
+	return prefix + strings.Repeat(" ", padding) + "\x1b[2m" + arrow + "\x1b[22m"
 }
 
 // sidebarDocumentSnapshotHint is Rust's model-snapshot banner (#63184).
