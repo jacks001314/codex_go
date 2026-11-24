@@ -1162,15 +1162,18 @@ func (r *RuntimeRouter) rolloutBudgetFollowUp(threadID string) turn.SamplingFoll
 
 // SessionModelIDs returns the alias authority this store exposes, mirroring
 // Rust #61339 ThreadStore::model_ids. Local SQLite storage is authoritative
-// unless a caller installs a different implementation.
-func (s RuntimeServices) SessionModelIDs() state.SessionModelIDStore {
+// unless a caller installs a different implementation. Rust #63525 requires
+// every thread store to provide the alias store and to fail instead of
+// returning nothing when its state database is uninitialized, so a session
+// alias can never silently lose its assignments across a restart.
+func (s RuntimeServices) SessionModelIDs() (state.SessionModelIDStore, error) {
 	if s.ModelIDs != nil {
-		return s.ModelIDs
+		return s.ModelIDs, nil
 	}
 	if s.StateRuntime != nil {
-		return s.StateRuntime
+		return s.StateRuntime, nil
 	}
-	return nil
+	return nil, errors.New("session model IDs require an initialized state database")
 }
 
 func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {

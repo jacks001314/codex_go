@@ -70,7 +70,10 @@ func (r *RuntimeRouter) markThreadPendingSessionStartSource(threadID string, sou
 	return r.runtimeSaveThreadRecord(record)
 }
 
-func (r *RuntimeRouter) consumePendingSessionStartSource(threadID string) (SessionStartSource, *session.Record, bool, error) {
+// peekPendingSessionStartSource reads the queued SessionStart event without
+// consuming it. Rust #63523 keeps the event queued until its outcome has been
+// handled, so an interrupted attempt is retried by the next turn.
+func (r *RuntimeRouter) peekPendingSessionStartSource(threadID string) (SessionStartSource, *session.Record, bool, error) {
 	threadID = strings.TrimSpace(threadID)
 	if r == nil || threadID == "" {
 		return "", nil, false, nil
@@ -83,55 +86,90 @@ func (r *RuntimeRouter) consumePendingSessionStartSource(threadID string) (Sessi
 	if !ok {
 		return "", record, false, nil
 	}
+	return source, record, true, nil
+}
+
+// clearPendingSessionStartSource drops a SessionStart event whose outcome was
+// handled.
+func (r *RuntimeRouter) clearPendingSessionStartSource(threadID string) error {
+	threadID = strings.TrimSpace(threadID)
+	if r == nil || threadID == "" {
+		return nil
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
+	if err != nil {
+		return err
+	}
 	extra := cloneAnyMapForRouter(record.Metadata.Extra)
 	delete(extra, pendingSessionStartSourceExtraKey)
 	if len(extra) == 0 {
 		extra = nil
 	}
 	record.Metadata.Extra = extra
-	if err := r.runtimeSaveThreadRecord(record); err != nil {
-		return "", nil, false, err
+	return r.runtimeSaveThreadRecord(record)
+}
+
+// runQueuedSessionStartHook runs one queued event and clears it only once the
+// attempt reports a handled outcome. A retryable failure leaves the event
+// queued so the next turn runs it again (Rust #63523).
+func (r *RuntimeRouter) runQueuedSessionStartHook(threadID string, run func(SessionStartSource, *session.Record) (retry bool, err error)) error {
+	source, record, ok, err := r.peekPendingSessionStartSource(threadID)
+	if err != nil || !ok {
+		return err
 	}
-	return source, record, true, nil
+	retry, runErr := run(source, record)
+	if retry {
+		return runErr
+	}
+	if clearErr := r.clearPendingSessionStartSource(threadID); clearErr != nil {
+		if runErr != nil {
+			return runErr
+		}
+		return clearErr
+	}
+	return runErr
 }
 
 func (r *RuntimeRouter) runPendingSessionStartHook(ctx context.Context, params *turn.TurnStartParams) error {
 	if r == nil || params == nil {
 		return nil
 	}
-	source, record, ok, err := r.consumePendingSessionStartSource(params.ThreadID)
-	if err != nil || !ok {
-		return err
-	}
-	if !r.hookRunnerConfigured() {
-		return nil
-	}
-	cwd := firstNonEmpty(params.CWD, record.Metadata.CWD, r.services.DefaultCWD, ".")
-	hooks := r.hooksForTurn(params)
-	if len(hooks) == 0 {
-		return nil
-	}
-	result, err := r.requireHookRunner().RunSessionStart(ctx, &HookSessionStartRequest{
-		ThreadID:       params.ThreadID,
-		CWD:            cwd,
-		TranscriptPath: r.sessionStartTranscriptPath(record),
-		Model:          firstNonEmpty(params.Model, record.Metadata.Model),
-		PermissionMode: r.hookPermissionModeForTurn(params),
-		Source:         source,
-		Hooks:          hooks,
+	return r.runQueuedSessionStartHook(params.ThreadID, func(source SessionStartSource, record *session.Record) (bool, error) {
+		if !r.hookRunnerConfigured() {
+			return false, nil
+		}
+		if record == nil {
+			record = &session.Record{}
+		}
+		cwd := firstNonEmpty(params.CWD, record.Metadata.CWD, r.services.DefaultCWD, ".")
+		hooks := r.hooksForTurn(params)
+		if len(hooks) == 0 {
+			return false, nil
+		}
+		result, err := r.requireHookRunner().RunSessionStart(ctx, &HookSessionStartRequest{
+			ThreadID:       params.ThreadID,
+			CWD:            cwd,
+			TranscriptPath: r.sessionStartTranscriptPath(record),
+			Model:          firstNonEmpty(params.Model, record.Metadata.Model),
+			PermissionMode: r.hookPermissionModeForTurn(params),
+			Source:         source,
+			Hooks:          hooks,
+		})
+		if err != nil {
+			// The runner failed or the turn was torn down mid-hook: keep the
+			// event queued so the next turn retries it (Rust #63523).
+			return true, err
+		}
+		if result != nil && result.Stopped {
+			return false, fmt.Errorf("%w: SessionStart hook stopped execution: %s", ErrInvalidHook, strings.TrimSpace(result.StopReason))
+		}
+		if result != nil && result.Blocked {
+			return false, fmt.Errorf("%w: SessionStart hook blocked execution: %s", ErrInvalidHook, strings.TrimSpace(result.BlockReason))
+		}
+		mergeSessionStartAdditionalContext(params, result)
+		mergeSessionStartEncryptedContext(params, result)
+		return false, nil
 	})
-	if err != nil {
-		return err
-	}
-	if result != nil && result.Stopped {
-		return fmt.Errorf("%w: SessionStart hook stopped execution: %s", ErrInvalidHook, strings.TrimSpace(result.StopReason))
-	}
-	if result != nil && result.Blocked {
-		return fmt.Errorf("%w: SessionStart hook blocked execution: %s", ErrInvalidHook, strings.TrimSpace(result.BlockReason))
-	}
-	mergeSessionStartAdditionalContext(params, result)
-	mergeSessionStartEncryptedContext(params, result)
-	return nil
 }
 
 // mergeSessionStartEncryptedContext hands the ciphertext a synchronous MCP
