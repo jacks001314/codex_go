@@ -174,6 +174,7 @@ func (m *Model) renderSideWorkspace(width int, height int) (string, bool) {
 		return "", false
 	}
 	height = max(height, 1)
+	m.sidePaneThreadLinks = nil
 	resizing := m.sideResize != nil
 	if resizing && height > 1 {
 		height--
@@ -249,10 +250,16 @@ func (m *Model) renderSideWorkspace(width int, height int) (string, bool) {
 		side.SideScroll = sideFirst
 		side.ParentScroll = m.transcript.YOffset
 	}
+	stripOffset := 0
 	if strip {
 		stripRow := padSidePaneLine(m.renderSidebarTabStrip(rightWidth), rightWidth)
 		rightLines = append([]string{stripRow}, rightLines...)
 		m.sidebarTabStripTop = 0
+		stripOffset = 1
+	}
+	if !sideFocused {
+		// The passive column is the only one that can hold a watch-only reader.
+		m.recordSidePaneThreadLinks(side, rightLines[stripOffset:], leftWidth+ansi.StringWidth(sideWorkspaceDivider), stripOffset)
 	}
 	rendered := m.zipSidePanes(leftLines, rightLines, leftWidth, height)
 	if resizing {
@@ -743,4 +750,30 @@ func sidePaneWindow(content string, limit int, first int) ([]string, int, int) {
 	first = min(max(first, 0), maxFirst)
 	end := min(first+limit, len(lines))
 	return lines[first:end], first, maxFirst
+}
+
+// recordSidePaneThreadLinks keeps the saved-conversation links painted in the
+// passive side pane. The pane is composited from pre-padded rows, so the links
+// are shifted into absolute frame coordinates for the pointer hit test.
+func (m *Model) recordSidePaneThreadLinks(side *activeSideConversation, rows []string, x int, y int) {
+	if m == nil || side == nil || !side.WatchOnly || len(rows) == 0 {
+		return
+	}
+	links := threadLinkRanges(strings.Join(rows, "\n"))
+	if len(links) == 0 {
+		return
+	}
+	out := make(map[int][]regionThreadLink, len(links))
+	for row, rowLinks := range links {
+		for _, link := range rowLinks {
+			out[y+row] = append(out[y+row], regionThreadLink{
+				Start:    x + link.Start,
+				End:      x + link.End,
+				ThreadID: link.ThreadID,
+			})
+		}
+	}
+	if len(out) > 0 {
+		m.sidePaneThreadLinks = out
+	}
 }

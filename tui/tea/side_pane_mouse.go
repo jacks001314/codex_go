@@ -85,6 +85,13 @@ func (m *Model) selectSidebarTab(index int) bubbletea.Cmd {
 }
 
 func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd) {
+	if msg.Action == mousemsg.MouseActionPress && msg.Button == mousemsg.MouseButtonLeft && msg.Ctrl {
+		// Rust #62159 opens a link painted in the unfocused pane, so the
+		// reader's links win before the sidebar treats the press as focus.
+		if threadID, ok := m.sidePaneThreadLinkAt(msg.X, msg.Y); ok {
+			return true, m.openThreadLink(threadID)
+		}
+	}
 	if handled, cmd := m.handleSidebarTabStripMouse(msg); handled {
 		return true, cmd
 	}

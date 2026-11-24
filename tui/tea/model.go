@@ -3380,6 +3380,11 @@ type Model struct {
 	// Subagents list; its AgentSwitchResultMsg opens the watch-only pane
 	// instead of switching the main conversation (Rust #62157).
 	pendingSidebarSubagent *sidebarSubagentOpen
+	// sidePaneThreadLinks holds the saved-conversation links painted in the
+	// passive side pane, in absolute frame coordinates, so a Ctrl-click inside
+	// a watch-only reader opens the linked agent (Rust #62159's unfocused-pane
+	// source).
+	sidePaneThreadLinks map[int][]regionThreadLink
 	sidebarAgentRequest uint64
 	// pendingSideTabCloseThreadID holds the tab waiting on the close
 	// confirmation, so a replaced dialog cannot close a different chat.

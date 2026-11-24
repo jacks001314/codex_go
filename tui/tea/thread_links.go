@@ -38,6 +38,9 @@ func (m *Model) handleThreadLinkClick(msg mousemsg.MouseMsg) (bool, bubbletea.Cm
 // transcript region carries the conversation rows in the fullscreen view; the
 // painted status, footer, and tip regions carry their own app-owned links.
 func (m *Model) threadLinkAt(x, y int) (string, bool) {
+	if threadID, ok := m.sidePaneThreadLinkAt(x, y); ok {
+		return threadID, true
+	}
 	if region, ok := m.transcriptSelectionRegionAt(x, y); ok {
 		if threadID, ok := threadLinkInRanges(region.links, x-region.x, y-region.y); ok {
 			return threadID, true
@@ -85,4 +88,19 @@ func (m *Model) openThreadLink(threadID string) bubbletea.Cmd {
 		return nil
 	}
 	return m.openAgentTranscript(threadID)
+}
+
+// sidePaneThreadLinkAt resolves a saved-conversation link painted in the
+// passive side pane. Rust #62159 activates links from an unfocused pane, so the
+// sidebar's press handlers check this before they treat the press as focus.
+func (m *Model) sidePaneThreadLinkAt(x, y int) (string, bool) {
+	if m == nil {
+		return "", false
+	}
+	for _, link := range m.sidePaneThreadLinks[y] {
+		if x >= link.Start && x < link.End {
+			return link.ThreadID, true
+		}
+	}
+	return "", false
 }
