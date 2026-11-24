@@ -9645,6 +9645,7 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 	}
 	instructions = r.instructionsWithMemoryToolContext(cfg, instructions)
 	sessionItems := additionalContextSessionItems(turnID, additionalContextItems, time.UnixMilli(startedAtMS).UTC())
+	sessionItems = append(sessionItems, hookEncryptedContextSessionItems(turnID, params.HookEncryptedContexts, time.UnixMilli(startedAtMS).UTC())...)
 	sessionItems = append(sessionItems, appsGuidanceItems...)
 	sessionItems = append(sessionItems, currentTimeSessionItems...)
 	sessionItems = append(sessionItems, realtimeStateSessionItems...)

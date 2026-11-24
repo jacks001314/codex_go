@@ -212,6 +212,67 @@ func hookEncryptedContextInputItems(contexts []turn.HookEncryptedContext) []any 
 	return items
 }
 
+// hookEncryptedContextSessionItems records the ciphertext a synchronous MCP
+// SessionStart hook returned so a resumed thread replays the same encrypted
+// content item once. The payload lives in `content_items`, which
+// `toolOutputInputItem` replays verbatim, and Text stays empty so no replay path
+// can turn the ciphertext into plaintext tool output (Rust #63474).
+func hookEncryptedContextSessionItems(turnID string, contexts []turn.HookEncryptedContext, createdAt time.Time) []session.Item {
+	if len(contexts) == 0 {
+		return nil
+	}
+	items := make([]session.Item, 0, len(contexts))
+	for index, context := range contexts {
+		if strings.TrimSpace(context.Content) == "" {
+			continue
+		}
+		name := strings.TrimSpace(context.Name)
+		namespace := strings.TrimSpace(context.Namespace)
+		contentItems := []map[string]any{{
+			"type":              "encrypted_content",
+			"encrypted_content": context.Content,
+		}}
+		data := map[string]any{
+			"name":          name,
+			"output":        "",
+			"content_items": contentItems,
+			"harness_metadata": map[string]any{
+				"hook_encrypted_context": true,
+			},
+		}
+		if namespace != "" {
+			data["namespace"] = namespace
+		}
+		payload, _ := json.Marshal(hookEncryptedContextModelItem(name, namespace, contentItems))
+		items = append(items, session.Item{
+			ID:        "hook-encrypted-context-" + safeIdentifier(turnID) + "-" + strconv.Itoa(index+1),
+			Type:      "function_call_output",
+			Name:      name,
+			Namespace: namespace,
+			CreatedAt: createdAt,
+			Data:      data,
+			Metadata:  appTurnMetadata(turnID, nil),
+			Raw:       payload,
+		})
+	}
+	return items
+}
+
+// hookEncryptedContextModelItem is the request item the persisted session item
+// replays as: a standalone tool output whose payload is an encrypted content
+// item.
+func hookEncryptedContextModelItem(name string, namespace string, contentItems []map[string]any) map[string]any {
+	item := map[string]any{
+		"type":   "function_call_output",
+		"name":   name,
+		"output": contentItems,
+	}
+	if namespace != "" {
+		item["namespace"] = namespace
+	}
+	return item
+}
+
 func additionalContextToolOutputModelItem(name string, value string) map[string]any {
 	return map[string]any{
 		"type":      "function_call_output",
