@@ -708,6 +708,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		// enables them (Rust #43120/#43286, #54175).
 		WorktreesEnabled: false,
 		// Rust #43340: the connected server owns named permission profiles.
+		OnListModels:                interactiveRemoteListModels(ctx, endpoint),
 		OnListPermissionProfiles:    interactiveRemoteListPermissionProfiles(ctx, endpoint),
 		OnListModelProviders:        interactiveRemoteModelProviderList(ctx, endpoint),
 		OnWriteModelProviderConfig:  interactiveRemoteModelProviderWriter(ctx, endpoint),
