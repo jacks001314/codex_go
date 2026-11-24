@@ -292,6 +292,11 @@ func mcpToolCatalogIdentity(name string, config *ServerConfig) (ToolCatalogIdent
 	if strings.TrimSpace(config.HTTPHeadersHelper) != "" {
 		return ToolCatalogIdentity{}, false
 	}
+	// Rust #63532: the shared startup catalog cannot describe a server whose
+	// headers are chosen by an in-process provider.
+	if config.RequestAuthProvider != nil {
+		return ToolCatalogIdentity{}, false
+	}
 	if strings.TrimSpace(config.URL) != "" &&
 		(strings.TrimSpace(config.OAuthClientID) != "" ||
 			strings.TrimSpace(config.OAuthClientSecret) != "" ||

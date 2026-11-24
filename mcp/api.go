@@ -2911,6 +2911,11 @@ func mcpToolCatalogCacheEligible(config *ServerConfig, oauthCredentialsResolved 
 	if config == nil || strings.TrimSpace(config.URL) == "" {
 		return true
 	}
+	// Rust #63532: a provider-backed server can rotate credentials per request,
+	// so it bypasses the shared startup tool catalog and always lists live.
+	if config.RequestAuthProvider != nil {
+		return false
+	}
 	if strings.TrimSpace(config.OAuthClientID) != "" || strings.TrimSpace(config.OAuthResource) != "" || config.ScopesConfigured {
 		return false
 	}

@@ -76,6 +76,9 @@ type ResolvedServer struct {
 	PluginAttribution *PluginAttribution
 	Config            ServerConfig
 	CredentialPolicy  CredentialPolicy
+	// RequestAuthProvider is the provider carried by the winning registration
+	// (Rust #63532). It is nil for every registration that did not set one.
+	RequestAuthProvider *McpRequestAuthProvider
 }
 
 // CatalogConflict represents a same-tier name collision and the final outcome.
@@ -204,10 +207,11 @@ func ResolveCatalogWithState(initialDisabled map[string]bool, initialRequirement
 			}
 		}
 		servers[name] = ResolvedServer{
-			Source:            action.Source,
-			PluginAttribution: action.PluginAttribution,
-			Config:            config,
-			CredentialPolicy:  EffectiveCredentialPolicy(action.CredentialPolicy),
+			Source:              action.Source,
+			PluginAttribution:   action.PluginAttribution,
+			Config:              config,
+			CredentialPolicy:    EffectiveCredentialPolicy(action.CredentialPolicy),
+			RequestAuthProvider: config.RequestAuthProvider,
 		}
 	}
 
@@ -217,6 +221,55 @@ func ResolveCatalogWithState(initialDisabled map[string]bool, initialRequirement
 		DisabledServerNames:             disabled,
 		RequirementsDisabledServerNames: requirementsDisabled,
 	}
+}
+
+// WithMaterializedServers replaces the resolved server set with live
+// configurations while preserving each name's winning source, plugin
+// attribution and credential policy (Rust
+// McpResolvedCatalog::with_materialized_servers). Names that have no existing
+// registration are ignored.
+//
+// A provider-backed registration carries its request auth provider only while
+// the transport is unchanged: a materialized registration cannot retarget
+// in-process credentials, so a changed transport disables it instead (Rust
+// #63532).
+func (c *ResolvedCatalog) WithMaterializedServers(servers map[string]ServerConfig) *ResolvedCatalog {
+	if c == nil {
+		return nil
+	}
+	names := make([]string, 0, len(servers))
+	for name := range servers {
+		if _, ok := c.Servers[name]; ok {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	actions := make([]CatalogAction, 0, len(names))
+	for i, name := range names {
+		previous := c.Servers[name]
+		config := servers[name]
+		if previous.RequestAuthProvider != nil {
+			if mcpServerTransportEqual(previous.Config, config) {
+				config.RequestAuthProvider = previous.RequestAuthProvider
+				if config.RequestAuthSession == nil {
+					config.RequestAuthSession = previous.Config.RequestAuthSession
+				}
+			} else {
+				config.Enabled = false
+				config.RequestAuthProvider = nil
+				config.RequestAuthSession = nil
+			}
+		}
+		actions = append(actions, CatalogAction{
+			Name:              name,
+			Source:            previous.Source,
+			PluginAttribution: previous.PluginAttribution,
+			Config:            config,
+			RegistrationOrder: i,
+			CredentialPolicy:  previous.CredentialPolicy,
+		})
+	}
+	return ResolveCatalogWithState(c.DisabledServerNames, c.RequirementsDisabledServerNames, actions)
 }
 
 // isHostOwnedAppsSource mirrors McpServerSource::is_host_owned_apps for a
