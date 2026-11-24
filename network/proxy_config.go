@@ -217,6 +217,58 @@ func (s *ProxySettings) SetDeniedDomains(domains []string) {
 	s.setDomainEntries(domains, ProxyDomainDeny)
 }
 
+// ApplySavedDomainRules applies saved exec-policy network rules to the
+// effective proxy configuration (Rust #60046
+// network-proxy/src/config.rs::apply_saved_domain_rules).
+//
+// A malformed batch invalidates its grants, but every valid saved denial still
+// applies. Denials are upserted after grants and compared case-insensitively so
+// a stale saved grant cannot shadow a saved denial for the same selector.
+func (s *ProxySettings) ApplySavedDomainRules(allowed []string, denied []string) {
+	if s == nil {
+		return
+	}
+	validDenials := savedDomainRuleBatchValid(denied, true)
+	if validDenials && savedDomainRuleBatchValid(allowed, false) {
+		for _, host := range allowed {
+			s.UpsertDomainPermission(host, ProxyDomainAllow, NormalizeProxyHost)
+		}
+	}
+	for _, host := range denied {
+		if !validDenials && !savedDomainRuleBatchValid([]string{host}, true) {
+			continue
+		}
+		s.UpsertDomainPermission(host, ProxyDomainDeny, lowerASCIIDomain)
+	}
+}
+
+// savedDomainRuleBatchValid reports whether every selector in the batch compiles
+// as an allow or deny rule, mirroring Rust's compile_allowlist and
+// compile_denylist.
+func savedDomainRuleBatchValid(patterns []string, deny bool) bool {
+	for _, pattern := range patterns {
+		if _, err := validateProxyDomainPattern(pattern, deny); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// lowerASCIIDomain lowercases ASCII bytes only, mirroring Rust's
+// str::to_ascii_lowercase for deny-rule identity comparisons.
+func lowerASCIIDomain(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
 func (s *ProxySettings) UpsertDomainPermission(host string, permission ProxyDomainPermission, normalize func(string) string) {
 	if normalize == nil {
 		normalize = NormalizeProxyHost

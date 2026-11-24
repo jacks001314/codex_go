@@ -1691,9 +1691,19 @@ func applyExecPolicyNetworkRules(proxyConfig *network.ProxyConfig, codexHome str
 	if err != nil {
 		return err
 	}
+	allowed := make([]string, 0, len(rules))
+	denied := make([]string, 0, len(rules))
 	for _, rule := range rules {
-		proxyConfig.Network.UpsertDomainPermission(rule.Host, rule.Permission, network.NormalizeProxyHost)
+		switch rule.Permission {
+		case network.ProxyDomainAllow:
+			allowed = append(allowed, rule.Host)
+		case network.ProxyDomainDeny:
+			denied = append(denied, rule.Host)
+		}
 	}
+	// Rust #60046 keeps saved denials effective even when the saved file also
+	// carries a stale grant for the same selector.
+	proxyConfig.Network.ApplySavedDomainRules(allowed, denied)
 	return nil
 }
 

@@ -409,12 +409,19 @@ func ApplyExecPolicyNetworkRules(config *Config, rules []NetworkRule) {
 	if config.Domains == nil {
 		config.Domains = map[string]DomainPermission{}
 	}
-	for _, rule := range rules {
-		host := NormalizeHost(rule.Host)
-		if host == "" {
-			continue
+	// Denials win over grants for the same host regardless of file order
+	// (Rust #60046 preserves saved denials).
+	for _, decision := range []DomainPermission{DomainAllow, DomainDeny} {
+		for _, rule := range rules {
+			if rule.Decision != decision {
+				continue
+			}
+			host := NormalizeHost(rule.Host)
+			if host == "" {
+				continue
+			}
+			config.Domains[host] = rule.Decision
 		}
-		config.Domains[host] = rule.Decision
 	}
 }
 

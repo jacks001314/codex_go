@@ -44625,7 +44625,11 @@
    "evidence": [
     "缺 MCP 网络策略推导与保留已保存拒绝：Rust 本条里 mcp_network_policy 是 dead_code、接线在后续提交，验收口径按后续 PR 一起算",
     "Go 锚点：network/、execpolicy/、appserver/、mcp/",
-    "plan: update/plan_2026_11_08_mcp_lazy.md（#60046），契约 mcp-network-policy-derivation（保持 partial）"
+    "plan: update/plan_2026_11_08_mcp_lazy.md（#60046），契约 mcp-network-policy-derivation（保持 partial）",
+    "Batch 228: network/proxy_config.go adds ProxySettings.ApplySavedDomainRules mirroring Rust network-proxy/src/config.rs::apply_saved_domain_rules. A malformed deny batch invalidates the batch's grants while each valid denial still applies, a malformed allow batch drops only grants, and denials are upserted last with ASCII-only lowercasing so a stale saved grant cannot shadow a saved denial.",
+    "Batch 228: network/proxy_constraints.go ProxySpec.WithNetworkRules, network/network.go ApplyExecPolicyNetworkRules and appserver/network_approval.go applyExecPolicyNetworkRules all split saved rules into allow/deny batches and reuse that ordering, so the managed proxy overlay and the direct proxy config agree with Rust.",
+    "Batch 228 verifier: network/saved_domain_rules_like_rust_test.go::TestProxySettingsApplySavedDomainRulesDenialOverridesStaleGrantLikeRust / TestProxySettingsApplySavedDomainRulesKeepsValidDenialsForMalformedBatchLikeRust / TestProxySettingsApplySavedDomainRulesKeepsDenialsForMalformedAllowBatchLikeRust / TestProxySpecWithNetworkRulesKeepsSavedDenialOverStaleGrantLikeRust and appserver/network_approval_saved_denials_like_rust_test.go::TestApplyExecPolicyNetworkRulesKeepsSavedDenialOverLaterGrantLikeRust (negative check: reordering denies before grants fails the settings and ProxySpec tests).",
+    "Residual: McpNetworkRoute/mcp_network_policy derivation and production provider injection still absent; Rust marks mcp_network_policy expect(dead_code) and wires it in a later PR. Go's runtime proxy update on an approved amendment still flows through the networkApproval in-memory allow/deny sets instead of mutating ProxySettings."
    ],
    "kind": "security",
    "sha": "b7d2321ef7b2405b72a4186447c810756866896b",

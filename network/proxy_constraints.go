@@ -215,12 +215,19 @@ func (s *ProxySpec) WithNetworkRules(rules []ProxyNetworkRule) (*ProxySpec, erro
 	}
 	next := *s
 	next.config = cloneProxyConfig(s.config)
+	allowed := make([]string, 0, len(rules))
+	denied := make([]string, 0, len(rules))
 	for _, rule := range rules {
 		switch rule.Permission {
-		case ProxyDomainAllow, ProxyDomainDeny:
-			next.config.Network.UpsertDomainPermission(rule.Host, rule.Permission, NormalizeProxyHost)
+		case ProxyDomainAllow:
+			allowed = append(allowed, rule.Host)
+		case ProxyDomainDeny:
+			denied = append(denied, rule.Host)
 		}
 	}
+	// Rust #60046 keeps saved denials effective even when a stale grant or a
+	// malformed batch arrives in the same file.
+	next.config.Network.ApplySavedDomainRules(allowed, denied)
 	if err := ValidateProxyPolicyAgainstConstraints(next.config, next.constraints); err != nil {
 		return nil, fmt.Errorf("network proxy constraints are invalid: %w", err)
 	}
