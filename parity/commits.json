@@ -56030,9 +56030,23 @@
    "sha": "8b096dce07b94aa4428ca310b871e5a873c8d2a2",
    "status": "complete",
    "subject": "Remove the TUI snapshot test for `/mcp` secret masking (#63619)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Rust a0d5b0a661 (#63621) stops auto-subscribing connections initialized with clientInfo.name `codex_message_board` to newly created threads, so the message board can inject mail without pinning idle child threads; it adds the shared MESSAGE_BOARD_CLIENT_NAME constant and a WebSocket regression test where the child closes after the owner unsubscribes while the board stays connected.",
+    "Go's app server has no broadcast thread-listener attach: subscriptions are explicit per connection (subscribeThreadConnection / markResponseThreadLoaded), and the Go message-board MCP client (cmd/codex-message-board-mcp) only initializes and calls thread/inject_items, which never joins the injecting connection. The equivalent end state is pinned by appserver/message_board_idle_unload_like_rust_test.go: a board connection initializes and injects a developer message into a child thread, only the owner connection remains a subscriber, the child survives an idle-unload schedule while subscribed, and it unloads after the owner unsubscribes.",
+    "Batch 235 verifier: go test ./appserver -run TestMessageBoardConnectionDoesNotKeepIdleChildLoadedLikeRust -count=1 passes. Negative check: adding the board connection as a child subscriber keeps the child resident and waitForIdleUnload fails with \"thread child was not unloaded\"."
+   ],
+   "kind": "runtime",
+   "sha": "a0d5b0a661db3b34cd87bdf1c93736b90fd3694b",
+   "status": "complete",
+   "subject": "Let idle child threads unload while the message board is connected (#63621)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "8b096dce07b94aa4428ca310b871e5a873c8d2a2",
+ "rustToInclusive": "a0d5b0a661db3b34cd87bdf1c93736b90fd3694b",
  "schemaVersion": 1
 }

@@ -375,6 +375,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// Re-anchored to upstream 188940258d (#63484): Cargo.toml gained the
 		// plugin-archive-verification member, and exec/src/lib.rs and
 		// core/src/client.rs advanced in the same window.
+		// Re-anchored to upstream a0d5b0a661 (#63621): app-server-protocol/src/protocol/common.rs gained MESSAGE_BOARD_CLIENT_NAME; every other pin below is unchanged at that head.
 		{Path: "Cargo.toml", SHA256: "8c7c9e5cb226c97f756f99ec408fe1025c79d22d29b175c5db8ef65b08e03487"},
 		{Path: "cli/src/lib.rs", SHA256: "4b67417ded45ae654415e1b46c18c2716810f5fc58be141766da64427e1522ed"},
 		// Re-pinned to upstream 8ae55c863d (#47411): the shared network policy
@@ -414,7 +415,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// executor bearer-token requests.
 		// Round-112 re-anchor to 8196bcdc18: thread/sample/cancel joined the
 		// client request definitions.
-		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "c31b60e8c6ba993e1406a7d64e884744529a21f300b999c1d47008f003534aaa"},
+		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "dfb55f436dee070db61c6fe70e6e07efb8b0b405f9dc50965ae546507de325b1"},
 		// Re-pinned to upstream 8ae55c863d (#46917/#47028/#47207/#47407): the
 		// provider-requirements, message-board, gateway-auth and network-policy
 		// suites joined the module list.
