@@ -196,3 +196,28 @@ func TestOpenSidebarDocumentKeepsReadFailuresLikeRust(t *testing.T) {
 		t.Fatalf("state = %v err = %q, want the missing workspace note", document.state, document.readErr)
 	}
 }
+
+// Rust #61887 `read_preview_file`: a workspace switch between resolution and
+// read invalidates the preview instead of showing bytes from another tree.
+func TestOpenSidebarDocumentRejectsWorkspaceChangeLikeRust(t *testing.T) {
+	reads := 0
+	client, _ := newPreviewStubClient(func(method string, _ json.RawMessage) (any, string) {
+		switch method {
+		case string(appserver.MethodThreadRead):
+			reads++
+			// The workspace switches only after the file read, so the
+			// post-read check is the one that must reject the preview.
+			if reads > 2 {
+				return previewThreadResult("/workspace/other"), ""
+			}
+			return previewThreadResult("/workspace/repo"), ""
+		case string(appserver.MethodFSReadFile):
+			return previewFileResult([]byte("package main\n")), ""
+		}
+		return nil, "unexpected method " + method
+	})
+	document := openSidebarDocument(context.Background(), client, "thread-source", "main.go", 0, nil)
+	if document.state != sidebarDocumentFailed || document.readErr != remotePreviewWorkspaceChanged {
+		t.Fatalf("state = %v err = %q, want the workspace-changed note", document.state, document.readErr)
+	}
+}

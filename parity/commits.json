@@ -7712,7 +7712,7 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1059: Go now honors CODEX_APP_SERVER_LOGIN_ISSUER for app-server account and workspace login regardless of build type. auth/oauth.go exports LoginIssuerEnvOverride; appserver/runtime_router.go:applyLoginIssuerOverride overwrites the configured or caller-supplied issuer only when the trimmed env value is non-empty, in both accountOAuthOptions branches, matching Rust #42811 (the debug-only open-app redirect override remains intentionally unported). Regression contract: appserver/account_login_issuer_override_like_rust_test.go:TestAccountOAuthOptionsHonorPackagedLoginIssuerOverrideLikeRust. Verified with go test ./auth -count=1, go test ./appserver -run AccountOAuthOptions -count=1, and go build ./...."
+    "Round 1059: Go now honors CODEX_APP_SERVER_LOGIN_ISSUER for app-server account and workspace login regardless of build type. auth/oauth.go exports LoginIssuerEnvOverride; appserver/runtime_router.go:applyLoginIssuerOverride overwrites the configured or caller-supplied issuer only when the trimmed env value is non-empty, in both accountOAuthOptions branches, matching Rust #42811 (the debug-only open-app redirect override remains intentionally unported). Regression contract: appserver/account_login_issuer_override_like_rust_test.go:TestAccountOAuthOptionsHonorPackagedLoginIssuerOverrideLikeRust. Verified with go test ./auth -count=1, go test ./appserver -run AccountOAuthOptions -count=1, and go build ./..."
    ],
    "kind": "runtime",
    "sha": "86b1b359cf89b65c136eda8c84e5ee544a6c2cf2",
@@ -7750,7 +7750,7 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1061: Go doctor now names the managed [permissions.filesystem] source like Rust #42821. config.Config tracks whether the local requirements.toml (system), an enterprise-managed cloud fragment (cloud), or both (multiple layers) supplied the filesystem requirement; Config.FilesystemRequirementsSource reports none/system/cloud/multiple layers/unknown, and applyCloudConfigBundleWithFilesystemSource reports the cloud contribution while the existing applyCloudConfigBundle wrapper keeps test callers intact. doctor.sandboxCheck uses that method without exposing denied paths, and configCheck adds the configuration scope, active-thread limitation, and configuration load ms details. Tests: config/filesystem_requirements_source_like_rust_test.go and doctor/filesystem_requirements_source_like_rust_test.go. Verified with go test ./config -count=1, go test ./doctor -count=1, go build ./...."
+    "Round 1061: Go doctor now names the managed [permissions.filesystem] source like Rust #42821. config.Config tracks whether the local requirements.toml (system), an enterprise-managed cloud fragment (cloud), or both (multiple layers) supplied the filesystem requirement; Config.FilesystemRequirementsSource reports none/system/cloud/multiple layers/unknown, and applyCloudConfigBundleWithFilesystemSource reports the cloud contribution while the existing applyCloudConfigBundle wrapper keeps test callers intact. doctor.sandboxCheck uses that method without exposing denied paths, and configCheck adds the configuration scope, active-thread limitation, and configuration load ms details. Tests: config/filesystem_requirements_source_like_rust_test.go and doctor/filesystem_requirements_source_like_rust_test.go. Verified with go test ./config -count=1, go test ./doctor -count=1, go build ./..."
    ],
    "kind": "security",
    "sha": "387bc6ba597fb38f73d8b1af73138c279e440c3c",
@@ -14340,7 +14340,7 @@
     "codex_go"
    ],
    "evidence": [
-    "Rust 4d2807023aae (#45807) records interrupted regular turns in the managed daemon recovery snapshot and skips completed, cancelled, review, and compaction tasks. Go already had the snapshot file format (daemonrecovery WriteSnapshot/ReadSnapshot with the codex-interrupted-v1 metadata entry), the producer (appserver/daemon_recovery_snapshot.go DaemonRecoverySnapshot plus DaemonRecoverySink), and the restore/continue consumers. The remaining gap was the task-kind filter: only review turns were excluded, so a thread/compact/start task (Originator compact, appserver/runtime_router.go handleThreadCompactStartRuntime) was captured as an interrupted turn and would be auto-continued after a restart. Added turnStartCompactionRuntime in appserver/turn_runtime.go and made daemonRecoveryInterruptedTurn skip it alongside review turns, mirroring Rust TaskKind::Regular. Added appserver/daemon_recovery_turns_like_rust_test.go TestDaemonRecoverySnapshotTurnStatesLikeRust covering running (recorded), completed (consumed), cancelled (cancelActiveRuntimeTurn), and compacting (skipped) turns. Verified: go test ./appserver -run DaemonRecovery and go build ./...."
+    "Rust 4d2807023aae (#45807) records interrupted regular turns in the managed daemon recovery snapshot and skips completed, cancelled, review, and compaction tasks. Go already had the snapshot file format (daemonrecovery WriteSnapshot/ReadSnapshot with the codex-interrupted-v1 metadata entry), the producer (appserver/daemon_recovery_snapshot.go DaemonRecoverySnapshot plus DaemonRecoverySink), and the restore/continue consumers. The remaining gap was the task-kind filter: only review turns were excluded, so a thread/compact/start task (Originator compact, appserver/runtime_router.go handleThreadCompactStartRuntime) was captured as an interrupted turn and would be auto-continued after a restart. Added turnStartCompactionRuntime in appserver/turn_runtime.go and made daemonRecoveryInterruptedTurn skip it alongside review turns, mirroring Rust TaskKind::Regular. Added appserver/daemon_recovery_turns_like_rust_test.go TestDaemonRecoverySnapshotTurnStatesLikeRust covering running (recorded), completed (consumed), cancelled (cancelActiveRuntimeTurn), and compacting (skipped) turns. Verified: go test ./appserver -run DaemonRecovery and go build ./..."
    ],
    "kind": "runtime",
    "sha": "4d2807023aae3ee317d39a9868fb187618699df2",
@@ -17188,7 +17188,7 @@
     "Remote safety: app/prompt_edit.go rejects a prompt carrying local image paths or leading / or ! before any remote request, returning tea.UnsafePromptRestoreError with Rust's message; tea shows the error without repopulating the composer instead of using the ordinary revert-failure restore path.",
     "Regression coverage: tui/tea/prompt_browsing_like_rust_test.go covers compact details, in-place toggle, h/l, owned and inline bookmark restoration, remapped open_transcript chords, footer widths, and unsafe remote restoration; tui/tea/composer_hints_like_rust_test.go covers the tip rotation/settings/draft/width gates; app/prompt_edit_test.go covers the remote safety guard. Existing startup/turn-tip tests now distinguish contextual composer tips from startup and turn tips. Verified with go test ./tui/chatwidget ./tui/tea -count=1, go test ./app -count=1, go build ./..., and go vet ./tui/tea ./tui/chatwidget ./app.",
     "Pinned prompt header (Rust transcript_view::prompt_header, #46739): tui/chatwidget/transcript_overlay.go installs a presentation-only header row that reserves one chrome row above the content and shifts mouse row mapping by it, so copy, find and export keep reading the transcript lines only. tui/tea/prompt_header.go maps the overlay offset through the transcript layout ranges to the first visible message, yields when that message is a user prompt with content, and otherwise pins the nearest preceding prompt (width >= 16, four content rows). tui/history_cell/messages.go PinnedPromptHeaderLine sanitizes user control sequences, collapses whitespace, caps the prompt at 512 runes, truncates to width-1 with an ellipsis, and reuses the submitted-prompt surface style and spoken chevron.",
-    "Header coverage: tui/tea/prompt_header_like_rust_test.go covers tracking the answer under the cursor, yielding to a visible prompt, no preceding prompt, narrow and short views, and the sanitize/truncate/attachment fallback; tui/chatwidget/transcript_overlay_prompt_header_like_rust_test.go covers the reserved chrome row, unchanged content and offset, tail following across header changes, and clearing. Verified with go test ./tui/tea ./tui/chatwidget -count=1, go test ./tui/... -count=1, go build ./....",
+    "Header coverage: tui/tea/prompt_header_like_rust_test.go covers tracking the answer under the cursor, yielding to a visible prompt, no preceding prompt, narrow and short views, and the sanitize/truncate/attachment fallback; tui/chatwidget/transcript_overlay_prompt_header_like_rust_test.go covers the reserved chrome row, unchanged content and offset, tail following across header changes, and clearing. Verified with go test ./tui/tea ./tui/chatwidget -count=1, go test ./tui/... -count=1, go build ./...",
     "Older-history pagination (Rust app/history_pagination.rs): tui/tea/history_pagination.go adds LoadOlderHistory/OlderHistoryPage, fetches the next page when the reader reaches the top row of the inline transcript or the transcript overlay, splices it above the window, keeps the reading anchor, and shifts backtrack.NthUserMessage by the inserted prompts; tui/state.go InsertMessages marks the layout changed from the insertion point. SessionResumeResponse/AgentThreadSwitchResponse carry OlderHistoryCursor. The embedded resume opens the store's newest 60 items (interactiveResumeInitialItemBudget) and pages older items through session.Store.ListItems; the daemon-owned read-only summary snapshot pages older turns through thread/turns/list with the same chronological replay.",
     "Pagination coverage: tui/tea/history_pagination_like_rust_test.go covers the top-row trigger, prepend + anchor + ordinal shift, completion, and stale-thread pages; app/interactive_history_pagination_like_rust_test.go covers the store window and page order; app/remote_history_pagination_like_rust_test.go covers the turn-summary request, ordering and cursor. Verified with go test ./tui/tea ./tui/chatwidget ./app ./parity -count=1, go test ./tui/... -count=1, go build ./..., and go vet ./app ./appserver ./tui/....",
     "Residual: the resumed window is bounded by an item count (60 items) rather than Rust's screen-row and item-scan budget, and every page read stays resident afterwards."
@@ -21456,7 +21456,7 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1108: implemented #47956. codexapi.ImageEditRequest now carries ImageReference values, each serializing exactly one of image_url or file_id; turn/image_generation.go recentImageReferences walks history newest-first, keeps file-backed images in the selected window, and passes inline and file references through in chronological selection order instead of rejecting the window. Tests: codexapi/images_like_rust_test.go checks mixed-reference JSON, TestRecentImageReferencesPassesFileBackedWindowsLikeRust covers inline, file_id, camelCase and tool-output references, and TestImageGenerationEditPassesFileBackedRecentWindow drives the tool path. Validation: go test ./codexapi -run ImageEditRequest -count=1; go test ./turn -run Image -count=1; go build ./...."
+    "Round 1108: implemented #47956. codexapi.ImageEditRequest now carries ImageReference values, each serializing exactly one of image_url or file_id; turn/image_generation.go recentImageReferences walks history newest-first, keeps file-backed images in the selected window, and passes inline and file references through in chronological selection order instead of rejecting the window. Tests: codexapi/images_like_rust_test.go checks mixed-reference JSON, TestRecentImageReferencesPassesFileBackedWindowsLikeRust covers inline, file_id, camelCase and tool-output references, and TestImageGenerationEditPassesFileBackedRecentWindow drives the tool path. Validation: go test ./codexapi -run ImageEditRequest -count=1; go test ./turn -run Image -count=1; go build ./..."
    ],
    "kind": "runtime",
    "sha": "51d66fdd3b75e1d34fdb82616e7e9c4089684b56",
@@ -49675,12 +49675,11 @@
     "codex_go"
    ],
    "evidence": [
-    "codex_go 5a56841d: app/remote_file_preview.go landed (POSIX resolve, fs/readFile, pre/post workspace re-check, UTF-8/control validation).",
-    "Residual: the sidebar UI does not consume the helper yet; plan batch 75."
+    "Batch 172: verified complete - the app-side sidebar preview helpers now exist. Rust #61887 resolves a preview path against the source thread's workspace on the app-server host and reads bytes through `fs/readFile`, requires a workspace, restricts reads to POSIX paths, and rejects a read when the workspace changed between resolution and read; inverse text validation rejects invalid UTF-8 and control characters other than tabs and line endings. Go's `app/remote_file_preview.go` implements the same contract: `resolveRemoteThreadFile`/`remotePreviewWorkspace` read only the source thread's environment CWD (error `File previews require a workspace on the app-server host`), `resolveRemotePreviewPath` resolves legacy paths and hostless `file://` URLs against the workspace and rejects host-named URLs, `readRemotePreviewFile` requires the POSIX convention, re-resolves the original path before the read and re-reads the workspace afterwards (`Workspace changed. Reopen the file to try again.`), and `documentTextFromBytes` rejects non-UTF-8 (`Not a UTF-8 text file`) and other control characters (`Not a text file`). `app/sidebar_document_host.go` wires the same reader for the embedded workspace and `app/sidebar_document.go` serves it to the TUI's document tabs, so the helper the earlier residual said was unconsumed is the live preview path. Tests: TestOpenSidebarDocumentReadsThroughAppServerLikeRust (thread metadata + `fs/readFile` request shape), TestOpenSidebarDocumentKeepsReadFailuresLikeRust, TestOpenSidebarDocumentRejectsWorkspaceChangeLikeRust (fails when the post-read workspace check is removed), TestEmbeddedSidebarDocumentHostReadsWorkspaceLikeRust, TestEmbeddedSidebarDocumentHostRejectsNonTextLikeRust, TestSidebarDocumentSourceLinesMatchRustLinesLikeRust. Verified: go test ./app -run 'SidebarDocument' -count=1, go test ./tui/tea -run 'SidebarDocument' -count=1, go build ./..."
    ],
    "kind": "protocol",
    "sha": "59d8c797896c422afe8bff56bcc6207d2114fd7e",
-   "status": "partial",
+   "status": "complete",
    "subject": "Add app-server file preview read helpers (#61887)"
   },
   {
@@ -49688,12 +49687,11 @@
     "codex_go"
    ],
    "evidence": [
-    "codex_go 01304b7a: app/sidebar_document.go landed (1 MiB/10000-line source limits, str::lines offsets, clamped grapheme target, connection replacement).",
-    "Residual: TranscriptView-based rendering and document tabs; plan batch 80."
+    "Batch 172: verified complete - the TUI sidebar renders read-only document previews. Rust #61888 opens a selected chooser row in its own sidebar tab, renders Markdown as Markdown, shows source with a line-number gutter, caps source previews at 1 MiB / 10 000 lines, and keeps read failures on the pane. Go's `tui/tea/sidebar_document.go` records loaded documents as tabs with titles in the tab strip (`sidebarDocuments`, `SidebarDocumentView`), renders Markdown through `tui/markdown` and source through the code gutter with `LineStarts`/`Language`, clamps link targets to the file, stops at the same limits (`Source preview limit is 1 MiB`, `Source preview limit is 10000 lines`), and paints the failure reason instead of retrying. Tests: TestSidebarChooserOpensDocumentTabLikeRust, TestSidebarDocumentCodeGutterLikeRust, TestSidebarDocumentTabTitlesLikeRust, TestSidebarDocumentTabPaintsInStripLikeRust, TestSidebarDocumentTabStepLikeRust, TestSidebarDocumentPaintsInWorkspaceLikeRust, TestEmbeddedSidebarDocumentHostLimitsLikeRust, TestSidebarDocumentFailuresKeepTheirReasonLikeRust. Verified: go test ./tui/tea -run 'SidebarDocument' -count=1, go test ./app -run 'SidebarDocument' -count=1."
    ],
    "kind": "runtime",
    "sha": "be5db96264e2f4b68cf01488fc984c3c024eb48e",
-   "status": "partial",
+   "status": "complete",
    "subject": "Add read-only document previews to the TUI sidebar (#61888)"
   },
   {
@@ -49896,12 +49894,11 @@
     "codex_go"
    ],
    "evidence": [
-    "codex_go f1693858 2bfb3c97 c0a4fe0b: sidebar file link extraction, inventory pages and single-flight scan landed.",
-    "Residual: chooser Files rows/tabs; plan batches 76-78."
+    "Batch 172: verified complete - the chooser tracks conversation files. Rust #61920 adds a sidebar file inventory fed by links in the conversation, host-provided files, and promoted patch files, shown as a Files group with rows and paging. Go's `tui/tea/sidebar_chooser.go` merges transcript links (`sidebarFiles` built from history links), host files (`mergeSidebarFileLinks` over the host snapshot), and promoted patch files, renders the `Files  N` header with wide and narrow rows, keeps the selection across inventory changes, pages the list, and records files opened from previews back into the inventory. Tests: TestSidebarChooserFilesGroupLikeRust, TestSidebarChooserNarrowFileRowsLikeRust, TestSidebarChooserMarkdownFilesHeaderLikeRust, TestSidebarChooserKeepsFileSelectionWhenInventoryChangesLikeRust, TestSidebarChooserListsTranscriptLinksLikeRust, TestSidebarChooserMergesHostFilesLikeRust, TestSidebarChooserPromotesPatchFilesLikeRust, TestSidebarChooserChainsSidebarFilePagesLikeRust, TestSidebarDocumentRecordsOpenedFilesLikeRust. Verified: go test ./tui/tea -run 'SidebarChooserFiles|SidebarFiles' -count=1, go test ./tui/tea -count=1."
    ],
    "kind": "runtime",
    "sha": "fd05a402b294fe115d1459276e7bce00e8a44d05",
-   "status": "partial",
+   "status": "complete",
    "subject": "Track conversation files for the TUI sidebar (#61920)"
   },
   {
