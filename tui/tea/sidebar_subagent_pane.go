@@ -35,9 +35,13 @@ func (m *Model) openSidebarSubagentTranscript(threadID string) (bubbletea.Cmd, b
 	if parent == "" || threadID == parent {
 		return nil, false
 	}
-	tree := m.sidebarAgentTreeFor(parent, false)
-	if tree == nil || !tree.isMember(threadID) {
+	if !m.sidebarAgentIsParentOwned(parent, threadID) {
 		return nil, false
+	}
+	if tree := m.sidebarAgentTreeFor(parent, false); tree == nil || !tree.isMember(threadID) {
+		// Discovery may not have reached the sidebar list yet, but the linked
+		// agent's spawn ancestry already proves it belongs to this conversation.
+		m.registerSidebarAgent(parent, threadID)
 	}
 	switcher := m.onSwitchAgent
 	if switcher == nil {
@@ -135,4 +139,54 @@ func (m *Model) sidebarSubagentLabel(parent string, threadID string) string {
 // transcript (Rust #62157 has no composer or status line in this reader).
 func watchOnlySidePane(side *activeSideConversation) bool {
 	return side != nil && side.WatchOnly
+}
+
+// sidebarAgentIsParentOwned reports whether threadID is a descendant of parent
+// in the discovered spawn tree. A transcript link can name an agent the sidebar
+// has not listed yet, so the agent list's spawn ancestry is the fallback
+// (Rust #62159 backend ancestry confirmation).
+func (m *Model) sidebarAgentIsParentOwned(parent string, threadID string) bool {
+	parent = strings.TrimSpace(parent)
+	threadID = strings.TrimSpace(threadID)
+	if m == nil || parent == "" || threadID == "" || threadID == parent {
+		return false
+	}
+	if tree := m.sidebarAgentTreeFor(parent, false); tree != nil && tree.isMember(threadID) {
+		return true
+	}
+	seen := map[string]struct{}{}
+	current := threadID
+	for steps := 0; steps < 64; steps++ {
+		if _, ok := seen[current]; ok {
+			return false
+		}
+		seen[current] = struct{}{}
+		entry, ok := m.agentEntry(current)
+		if !ok {
+			return false
+		}
+		next := strings.TrimSpace(entry.ParentThreadID)
+		if next == "" {
+			return false
+		}
+		if next == parent {
+			return true
+		}
+		current = next
+	}
+	return false
+}
+
+// openAgentTranscript opens a thread picked from a transcript link or the
+// Subagents list: a parent-owned agent lands in the sidebar reader, everything
+// else keeps the ordinary conversation switch.
+func (m *Model) openAgentTranscript(threadID string) bubbletea.Cmd {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil
+	}
+	if cmd, ok := m.openSidebarSubagentTranscript(threadID); ok {
+		return cmd
+	}
+	return m.applyAgentModalOptionAllowed(threadID, true)
 }

@@ -179,7 +179,7 @@ func (m *Model) resumeDeferredAgentLink() bubbletea.Cmd {
 		m.notice = "This agent is no longer available."
 		return nil
 	}
-	return m.applyAgentModalOptionAllowed(threadID, true)
+	return m.openAgentTranscript(threadID)
 }
 
 func (m *Model) showAgentPicker(entries []codextui.AgentThreadEntry, currentThreadID string, selectedThreadID string) {

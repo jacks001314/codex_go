@@ -84,5 +84,5 @@ func (m *Model) openThreadLink(threadID string) bubbletea.Cmd {
 		m.refreshTranscript()
 		return nil
 	}
-	return m.applyAgentModalOptionAllowed(threadID, true)
+	return m.openAgentTranscript(threadID)
 }
