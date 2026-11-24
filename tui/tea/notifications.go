@@ -69,8 +69,13 @@ func (m *Model) lastAssistantNotificationResponse() string {
 	}
 	for i := len(m.State.Messages) - 1; i >= 0; i-- {
 		message := m.State.Messages[i]
-		if message.Role == codextui.RoleAssistant {
-			return strings.TrimSpace(message.Text)
+		if message.Role != codextui.RoleAssistant {
+			continue
+		}
+		// Rust #62403: a reserved Cloud reply slot carries no text yet; the
+		// completion notification falls back to the latest reply that does.
+		if text := strings.TrimSpace(message.Text); text != "" {
+			return text
 		}
 	}
 	return ""

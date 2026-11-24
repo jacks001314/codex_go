@@ -296,9 +296,33 @@ func (t *TranscriptComponent) replaceAssistantMessageForItem(state *codextui.Sta
 		return false
 	}
 	itemID = strings.TrimSpace(itemID)
-	text = codextui.NormalizeCompletedAssistantMarkdown(text)
-	if itemID == "" || text == "" {
+	if itemID == "" {
 		return false
+	}
+	text = codextui.NormalizeCompletedAssistantMarkdown(text)
+	if text == "" {
+		// Rust #62403: a completion that contains only hidden directives owns
+		// the reply; drop the restored or streamed prefix instead of leaving it
+		// in the transcript.
+		kept := state.Messages[:0]
+		removed := false
+		for _, message := range state.Messages {
+			if message.Role == codextui.RoleAssistant && strings.TrimSpace(message.ItemID) == itemID {
+				removed = true
+				continue
+			}
+			kept = append(kept, message)
+		}
+		if !removed {
+			return false
+		}
+		state.Messages = kept
+		if t.lastFlushedAssistantItemID == itemID {
+			t.lastFlushedAssistantItemID = ""
+			t.lastFlushedAssistantTurnID = ""
+		}
+		state.BumpMessagesRevision()
+		return true
 	}
 	first := -1
 	for index, message := range state.Messages {

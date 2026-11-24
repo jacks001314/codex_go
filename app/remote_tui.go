@@ -3295,7 +3295,7 @@ func remoteTUIThreadMessagesFromThread(thread *appserver.Thread, projection reas
 				}
 			}
 			messages = append(messages, resume.Flush()...)
-			message, ok := remoteTUIMessageFromThreadItem(item, projection, showRawReasoning)
+			message, ok := remoteTUIMessageFromThreadItemInTurn(item, projection, showRawReasoning, turn.Status)
 			if ok {
 				messages = append(messages, message)
 			}
@@ -3430,7 +3430,28 @@ func remoteTUIImageLinksOverSSH() bool {
 	return environment.SSHSession
 }
 
+// remoteTUIMessageFromThreadItem renders one restored item without knowing its
+// turn. A reply with no visible text is treated as finished so callers that do
+// not carry a turn status keep the historical behavior.
 func remoteTUIMessageFromThreadItem(item appserver.ThreadItem, projection reasoningProjection, showRawReasoning bool) (codextui.Message, bool) {
+	return remoteTUIMessageFromThreadItemInTurn(item, projection, showRawReasoning, "")
+}
+
+// remoteTUIThreadItemFinished mirrors Rust #62403's finished check for a
+// restored Cloud item: a recorded completion wins, and an item without a start
+// time belongs to its turn, so a completed turn has finished it.
+func remoteTUIThreadItemFinished(item appserver.ThreadItem, turnStatus appserver.TurnStatus) bool {
+	if item.CompletedAtMS != nil {
+		return true
+	}
+	return item.StartedAtMS == nil && turnStatus != appserver.TurnStatusInProgress
+}
+
+// remoteTUIMessageFromThreadItemInTurn renders one restored item in the context
+// of its turn. Rust #62403 reserves a transcript position for an unfinished
+// Cloud reply that has no visible text yet, so the later completion replaces it
+// in place instead of appearing after intervening tool output.
+func remoteTUIMessageFromThreadItemInTurn(item appserver.ThreadItem, projection reasoningProjection, showRawReasoning bool, turnStatus appserver.TurnStatus) (codextui.Message, bool) {
 	itemType := remoteTUINormalizedThreadItemType(item.Type)
 	role := remoteTUINormalizedThreadItemRole(item.Role)
 	switch {
@@ -3442,6 +3463,16 @@ func remoteTUIMessageFromThreadItem(item appserver.ThreadItem, projection reason
 		return message, hasVisibleTUIUserMessageText(text)
 	case itemType == "agentmessage" || itemType == "assistantmessage" || role == "assistant":
 		text := strings.TrimSpace(item.Text)
+		itemID := strings.TrimSpace(item.ID)
+		if text == "" {
+			// Rust #62403: an unfinished reply may still be empty. Keep an
+			// invisible placeholder at this position so its completion replaces
+			// it here rather than at the end of the transcript.
+			if itemID != "" && !remoteTUIThreadItemFinished(item, turnStatus) {
+				return codextui.Message{Role: codextui.RoleAssistant, ItemID: itemID}, true
+			}
+			return codextui.Message{}, false
+		}
 		return codextui.Message{
 			Role:           codextui.RoleAssistant,
 			Text:           text,
@@ -3449,8 +3480,8 @@ func remoteTUIMessageFromThreadItem(item appserver.ThreadItem, projection reason
 			AsyncQuestions: tuiMessageAsyncQuestions(item.Data["questions"]),
 			// Rust #60335: keep the restored item identity so the live
 			// completion replaces this message instead of appending a copy.
-			ItemID: strings.TrimSpace(item.ID),
-		}, text != ""
+			ItemID: itemID,
+		}, true
 	case itemType == "plan":
 		text := strings.TrimSpace(item.Text)
 		if text == "" {
