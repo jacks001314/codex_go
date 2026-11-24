@@ -317,6 +317,11 @@ type responsesWebsocketSession struct {
 	// the connection (Rust #55969).
 	messages   chan responsesWebsocketReadResult
 	readerDone chan struct{}
+	// handshakeModelsETag is the x-models-etag the handshake advertised. It is
+	// taken by the first generation on this connection, so a reused socket
+	// cannot replay an older catalog after response metadata advertised a newer
+	// one (Rust #63533). Warmup leaves it alone.
+	handshakeModelsETag string
 	// maxMessageBytes is the peer's advertised request size limit from the
 	// handshake (Rust #60841); zero means the server advertised none.
 	maxMessageBytes int
@@ -1194,6 +1199,11 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 		r.recordWebsocketConnectRecord(ctx, request, apiRequest, httpRequest, response, err, time.Since(dialStartedAt), recoveryMode, recoveryPhase, reauth)
 		if err == nil {
 			session.markConnectedAuth(r.AuthSnapshot)
+			// Rust #63533: the warmup drains handshake events without refreshing
+			// the catalog, so the handshake ETag waits for the first generation.
+			if response != nil {
+				session.handshakeModelsETag = responseHeaderValue(response.Header, responsesModelsETagHeader)
+			}
 			break
 		}
 		if response != nil && response.StatusCode == http.StatusUpgradeRequired {
@@ -1675,6 +1685,17 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		if response != nil {
 			r.rememberTurnStateFromHeaders(request, response.Header)
 			session.maxMessageBytes = responsesWebsocketMaxMessageBytes(response.Header)
+			session.handshakeModelsETag = responseHeaderValue(response.Header, responsesModelsETagHeader)
+		}
+	}
+	// Rust #63533: the first generation on this connection refreshes the model
+	// catalog from the handshake ETag, once. Warmup leaves the ETag pending, and
+	// a reused socket cannot replay an older one after response metadata
+	// advertised a newer catalog.
+	if etag := strings.TrimSpace(session.handshakeModelsETag); etag != "" {
+		session.handshakeModelsETag = ""
+		if manager := r.ModelsManager; manager != nil {
+			go manager.RefreshIfNewETag(etag)
 		}
 	}
 	payload := websocketResponseCreatePayload(apiRequest, request.PreviousResponseID, nil, request.Trace)

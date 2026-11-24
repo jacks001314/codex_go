@@ -177,7 +177,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// core/tests/suite across the Guardian and subagent windows.
 			// Re-anchored to upstream 188940258d: the encrypted-hook and
 			// remote-exec suites joined core/tests/suite.
-			Files: 507,
+			// Re-anchored to upstream 1985925638: #63533 added the
+			// client_websockets_catalog_etag and models_etag_responses suites.
+			Files: 508,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{

@@ -55723,9 +55723,33 @@
    "sha": "dc9e1478fbde08617c1484d2b15e6a95b60bd943",
    "status": "blocked_precondition",
    "subject": "Verify eval plugin archives with scoped signing keys (#63528)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 180: partial - Rust lets an extension contribute a host-local Streamable HTTP MCP server with SetWithAuthProvider: the host asks the provider for fresh headers on every request, keeps the connection across credential refreshes for the same owner, rejects requests whose owner differs from the session owner, rebuilds when the active owner changes, rejects conflicting credential configuration, disables redirects, bypasses the shared startup tool catalog, and drops a provider-backed registration whose transport changed. Go's MCP client resolves static headers, bearer_token_env_var and a configured http_headers_helper command per request (mcp/http_headers_helper.go caches by epoch in a RoundTripper), but it has no extension auth-provider contribution, no owner key checked against the session owner, no connection rebuild on owner change, and no reasoning about a provider-backed transport in the shared startup catalog. Residual: an in-process McpRequestAuth provider with owner-keyed sessions."
+   ],
+   "kind": "runtime",
+   "sha": "7c5b5098fa4118fee29aa516031665487ad6ec43",
+   "status": "partial",
+   "subject": "Let extensions supply per-request authentication for MCP servers (#63532)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 180: complete - Rust saves the handshake x-models-etag through warmup and emits it as ResponseEvent::ModelsEtag at the start of the first generation on each connection, exactly once, so a reused connection cannot replay an older ETag after response metadata advertised a newer one. Go's responsesWebsocketSession now keeps handshakeModelsETag, captured from the handshake response on the prewarm dial and on a turn dial, and the first generation that sends on the connection takes it and calls ModelsManager.RefreshIfNewETag once (warmup leaves it pending). appserver's catalog refresh path already consumes RefreshIfNewETag, and responses_websocket_models_etag_like_rust_test.go pins no refresh during warmup, exactly one refresh with the handshake ETag on the first generation, and no replay on a reused socket (one connection)."
+   ],
+   "kind": "runtime",
+   "sha": "1985925638538b75d5c6058ed3c18afcf1fe21cc",
+   "status": "complete",
+   "subject": "Refresh the model catalog from Responses WebSocket handshakes (#63533)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "dc9e1478fbde08617c1484d2b15e6a95b60bd943",
+ "rustToInclusive": "1985925638538b75d5c6058ed3c18afcf1fe21cc",
  "schemaVersion": 1
 }
