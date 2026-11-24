@@ -88,7 +88,28 @@ func (r *RuntimeRouter) Execute(ctx context.Context, call HookMcpCall) (HookMcpO
 		// its structured content is never billed.
 		return HookMcpOutput{}, fmt.Errorf("MCP tool returned an error: %s", text)
 	}
-	return HookMcpOutput{Text: text, StructuredContent: response.StructuredContent, EncryptedContent: encrypted}, nil
+	// Rust #63474 attributes ciphertext to the tool the hook called, so the
+	// model item and the replayed session item keep the callable namespace.
+	namespace := ""
+	if len(encrypted) > 0 {
+		namespace = hookEncryptedToolNamespace(r.executorHookToolLookup(""), server, toolName)
+	}
+	return HookMcpOutput{Text: text, StructuredContent: response.StructuredContent, EncryptedContent: encrypted, SourceToolNamespace: namespace}, nil
+}
+
+// hookEncryptedToolNamespace resolves the callable namespace of the MCP tool
+// a hook call used. An unknown tool or a runtime without the tool catalog
+// leaves the namespace empty rather than inventing one (Rust #63474
+// source_tool_namespace).
+func hookEncryptedToolNamespace(lookup func(server string, tool string) *mcp.RuntimeToolInfo, server string, tool string) string {
+	if lookup == nil {
+		return ""
+	}
+	info := lookup(server, tool)
+	if info == nil {
+		return ""
+	}
+	return strings.TrimSpace(info.CallableNamespace)
 }
 
 // validateBundledAppHookTarget enforces the identity a built-in bundled App

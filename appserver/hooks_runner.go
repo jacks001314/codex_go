@@ -70,6 +70,10 @@ type HookMcpOutput struct {
 	// EncryptedContent carries text blocks the MCP result marked
 	// `codex/encryptedContent`; they never join Text (Rust #63474).
 	EncryptedContent []string
+	// SourceToolNamespace is the callable namespace of the MCP tool that
+	// produced EncryptedContent, when the runtime still exposes it (Rust
+	// #63474 `source_tool_namespace`).
+	SourceToolNamespace string
 }
 
 // McpToolHookExecutor mirrors Rust HookMcpExecutor.
@@ -546,6 +550,7 @@ func hookEncryptedSessionStartContexts(event HookEventName, metadata HookMetadat
 		return nil, fmt.Errorf("encrypted SessionStart context requires a synchronous MCP hook")
 	}
 	tool := strings.TrimSpace(ptrStringValue(metadata.Tool))
+	namespace := strings.TrimSpace(output.SourceToolNamespace)
 	contexts := make([]turn.HookEncryptedContext, 0, len(output.EncryptedContent))
 	total := 0
 	for _, content := range output.EncryptedContent {
@@ -556,7 +561,7 @@ func hookEncryptedSessionStartContexts(event HookEventName, metadata HookMetadat
 		if total > maxHookEncryptedContextBytes {
 			return nil, fmt.Errorf("encrypted SessionStart context exceeds 40,000 bytes")
 		}
-		contexts = append(contexts, turn.HookEncryptedContext{Name: tool, Content: content})
+		contexts = append(contexts, turn.HookEncryptedContext{Name: tool, Namespace: namespace, Content: content})
 	}
 	return contexts, nil
 }
