@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 
 	"codex_go/utils"
@@ -27,6 +28,7 @@ type GuardianLiveDelivery struct {
 
 	mu     sync.Mutex
 	actors map[string]*GuardianActorInbox
+	closed bool
 }
 
 // NewGuardianLiveDelivery creates the inbox set for one root thread.
@@ -75,6 +77,108 @@ func (d *GuardianLiveDelivery) CloseInbox(actor string) {
 	inbox.Close()
 }
 
+// GuardianLiveDeliveries keeps one live delivery per root thread so a root
+// reload reuses the inboxes of its surviving child reviewers instead of
+// dropping their subscriptions and queued evidence (Rust #63361). Retiring a
+// root closes its inboxes, so a root reloaded after shutdown starts empty.
+type GuardianLiveDeliveries struct {
+	mu     sync.Mutex
+	byRoot map[string]*GuardianLiveDelivery
+}
+
+// NewGuardianLiveDeliveries creates an empty registry.
+func NewGuardianLiveDeliveries() *GuardianLiveDeliveries {
+	return &GuardianLiveDeliveries{byRoot: map[string]*GuardianLiveDelivery{}}
+}
+
+// ForRoot returns the root's live delivery, creating it on first use and
+// reusing the same stream across reloads.
+func (r *GuardianLiveDeliveries) ForRoot(root string) *GuardianLiveDelivery {
+	if r == nil {
+		return nil
+	}
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.byRoot == nil {
+		r.byRoot = map[string]*GuardianLiveDelivery{}
+	}
+	delivery, ok := r.byRoot[root]
+	if !ok {
+		delivery = NewGuardianLiveDelivery(root)
+		r.byRoot[root] = delivery
+	}
+	return delivery
+}
+
+// Existing returns the root's live delivery without creating one.
+func (r *GuardianLiveDeliveries) Existing(root string) (*GuardianLiveDelivery, bool) {
+	if r == nil {
+		return nil, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delivery, ok := r.byRoot[strings.TrimSpace(root)]
+	return delivery, ok
+}
+
+// Retire closes every inbox of the root and forgets the delivery stream.
+func (r *GuardianLiveDeliveries) Retire(root string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	delivery := r.byRoot[strings.TrimSpace(root)]
+	delete(r.byRoot, strings.TrimSpace(root))
+	r.mu.Unlock()
+	if delivery != nil {
+		delivery.CloseAll()
+	}
+}
+
+// RetireAll closes every root's inboxes, e.g. when the host shuts down.
+func (r *GuardianLiveDeliveries) RetireAll() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	deliveries := r.byRoot
+	r.byRoot = map[string]*GuardianLiveDelivery{}
+	r.mu.Unlock()
+	for _, delivery := range deliveries {
+		delivery.CloseAll()
+	}
+}
+
+// Closed reports whether this delivery stream was retired.
+func (d *GuardianLiveDelivery) Closed() bool {
+	if d == nil {
+		return true
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.closed
+}
+
+// CloseAll closes every actor inbox owned by this delivery and prevents
+// further publishes, so a reloaded root uses a fresh stream (Rust #63361).
+func (d *GuardianLiveDelivery) CloseAll() {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	inboxes := d.actors
+	d.actors = map[string]*GuardianActorInbox{}
+	d.closed = true
+	d.mu.Unlock()
+	for _, inbox := range inboxes {
+		inbox.Close()
+	}
+}
+
 // Publish queues one committed original for every recipient, one post per
 // actor even when several subscribed channels carried the same original. The
 // housekeeper is the single root writer, so an ordinal that is not newer than
@@ -82,6 +186,9 @@ func (d *GuardianLiveDelivery) CloseInbox(actor string) {
 func (d *GuardianLiveDelivery) Publish(id GuardianEvidenceID, recipients map[string]string) error {
 	if d == nil {
 		return errors.New("Guardian delivery is unavailable")
+	}
+	if d.Closed() {
+		return errors.New("Guardian delivery is closed")
 	}
 	actors := make([]string, 0, len(recipients))
 	for actor := range recipients {
