@@ -23,6 +23,11 @@ type ConfigServerOAuth struct {
 	Resource               *string
 	Scopes                 []string
 	RedirectPort           *uint16
+	// CredentialsStore selects where the shared OAuth grant is stored:
+	// "keyring" (the default) or "file". A gateway enrollment supplies one auth
+	// table for both destinations, so the config server keeps the same choice
+	// (Rust OAuthCredentialsStore).
+	CredentialsStore *string
 }
 
 // ConfigServer is the trusted local managed requirement that selects a
@@ -150,7 +155,26 @@ func configServerOAuthFromMap(values map[string]any) (*ConfigServerOAuth, error)
 		}
 		oauth.RedirectPort = &port
 	}
+	if value, ok := stringAnyKey(values, "credentials_store", "credentialsStore"); ok {
+		store, err := configServerCredentialsStore(value)
+		if err != nil {
+			return nil, err
+		}
+		oauth.CredentialsStore = &store
+	}
 	return oauth, nil
+}
+
+// configServerCredentialsStore mirrors Rust's lowercase OAuthCredentialsStore
+// enum: `keyring` keeps the encrypted OS-keyring namespace and `file` writes
+// <codex_home>/secrets/gateway_oauth.json.
+func configServerCredentialsStore(value string) (string, error) {
+	switch normalized := strings.ToLower(strings.TrimSpace(value)); normalized {
+	case "keyring", "file":
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("invalid value for credentials_store: expected `keyring` or `file`, found `%s`", strings.TrimSpace(value))
+	}
 }
 
 func configServerRedirectPort(value any) (uint16, error) {
@@ -187,6 +211,10 @@ func cloneConfigServer(server *ConfigServer) *ConfigServer {
 		if server.OAuth.RedirectPort != nil {
 			port := *server.OAuth.RedirectPort
 			oauth.RedirectPort = &port
+		}
+		if server.OAuth.CredentialsStore != nil {
+			store := *server.OAuth.CredentialsStore
+			oauth.CredentialsStore = &store
 		}
 		cloned.OAuth = &oauth
 	}

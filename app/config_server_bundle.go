@@ -173,6 +173,9 @@ func configServerOAuthSessionConfig(oauth *config.ConfigServerOAuth) auth.Gatewa
 	if oauth.Resource != nil {
 		session.Resource = *oauth.Resource
 	}
+	if oauth.CredentialsStore != nil {
+		session.CredentialsStore = *oauth.CredentialsStore
+	}
 	return session
 }
 
