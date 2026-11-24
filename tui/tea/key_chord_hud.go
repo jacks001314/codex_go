@@ -221,6 +221,12 @@ func (m *Model) pendingChordGuide() (string, bool, bool) {
 // renderKeyChordHUD returns the floating guide, or nothing while the prefix is
 // absent or still inside the reveal delay.
 func (m *Model) renderKeyChordHUD() string {
+	return m.renderKeyChordHUDWidth(firstPositive(m.width, 80), m.height)
+}
+
+// renderKeyChordHUDWidth lays the guide out inside a panel of the given width,
+// so the overlay can paint it without clipping its entries.
+func (m *Model) renderKeyChordHUDWidth(width int, height int) string {
 	prefix, custom, ok := m.pendingChordGuide()
 	if !ok {
 		return ""
@@ -232,7 +238,6 @@ func (m *Model) renderKeyChordHUD() string {
 	if m.currentTime().Sub(started) < keyChordRevealDelay {
 		return ""
 	}
-	width := m.width
 	if width <= 0 {
 		width = 80
 	}
@@ -279,7 +284,7 @@ func (m *Model) renderKeyChordHUD() string {
 		}
 		lines = append(lines, "", keyChordHUDCancel)
 	}
-	lines = clipKeyChordHUD(lines, m.height, inner)
+	lines = clipKeyChordHUD(lines, height, inner)
 	for index, line := range lines {
 		lines[index] = "  " + fitTerminalLine(line, inner)
 	}
@@ -309,26 +314,74 @@ func clipKeyChordHUD(lines []string, height int, inner int) []string {
 		return append([]string{title}, body...)
 	}
 	out := append([]string(nil), lines[:height]...)
-	out[height-1] = keyChordHUDMore
+	// Rust reserves the bottom row for the caller commands, so the Esc hint
+	// stays visible while the body is clipped above it.
+	if height >= 2 {
+		out[height-1] = lines[len(lines)-1]
+		out[height-2] = keyChordHUDMore
+	} else {
+		out[height-1] = keyChordHUDMore
+	}
 	return out
 }
 
-// composeWithKeyChordHUD keeps a full-screen surface inside the terminal while
-// showing the pending guide at its bottom edge. Rust paints the guide as a
-// floating overlay; Go's renderer is line-oriented, so it trims the base view
-// when the guide would otherwise push past the terminal height.
+// composeWithKeyChordHUD paints the pending guide over a full-screen surface.
+// Rust renders it as a floating panel, so the base frame keeps every row.
 func (m *Model) composeWithKeyChordHUD(view string) string {
-	hud := m.renderKeyChordHUD()
-	if hud == "" {
+	return m.overlayKeyChordHUD(view)
+}
+
+// overlayKeyChordHUD mirrors Rust ShortcutHud::render_overlay: the panel is
+// anchored to the bottom-right, one row above the frame's last row and two
+// columns from its right edge, and is half the frame wide (at least 32
+// columns). Painting the guide over the frame keeps the composer in place
+// instead of moving it down.
+func (m *Model) overlayKeyChordHUD(view string) string {
+	if m == nil || view == "" {
 		return view
 	}
 	lines := strings.Split(view, "\n")
-	hudLines := strings.Split(hud, "\n")
-	if m != nil && m.height > 0 && len(lines)+len(hudLines) > m.height {
-		keep := max(m.height-len(hudLines), 0)
-		if keep < len(lines) {
-			lines = lines[:keep]
-		}
+	// Rust reserves one bottom row and two right columns for the panel.
+	avail := len(lines) - 1
+	if avail < 1 {
+		return view
 	}
-	return strings.Join(append(lines, hudLines...), "\n")
+	viewWidth := 0
+	for _, line := range lines {
+		viewWidth = max(viewWidth, codextui.DisplayWidth(line))
+	}
+	if viewWidth < 8 {
+		return view
+	}
+	panelWidth := (viewWidth + 1) / 2
+	panelWidth = min(max(panelWidth, 32), viewWidth-2)
+	if panelWidth < 8 {
+		return view
+	}
+	hud := m.renderKeyChordHUDWidth(panelWidth, avail)
+	if hud == "" {
+		return view
+	}
+	hudLines := strings.Split(hud, "\n")
+	if len(hudLines) > avail {
+		hudLines = clipKeyChordHUD(hudLines, avail, max(panelWidth-2, 1))
+	}
+	start := len(lines) - 1 - len(hudLines)
+	keep := viewWidth - 2 - panelWidth
+	for index, hudLine := range hudLines {
+		row := start + index
+		if row < 0 || row >= len(lines) {
+			continue
+		}
+		left := codextui.TruncateToWidth(lines[row], keep)
+		if padding := keep - codextui.DisplayWidth(left); padding > 0 {
+			left += strings.Repeat(" ", padding)
+		}
+		right := codextui.TruncateToWidth(hudLine, panelWidth)
+		if padding := panelWidth - codextui.DisplayWidth(right); padding > 0 {
+			right += strings.Repeat(" ", padding)
+		}
+		lines[row] = left + right + "  "
+	}
+	return strings.Join(lines, "\n")
 }

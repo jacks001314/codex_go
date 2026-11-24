@@ -6307,10 +6307,6 @@ func (m *Model) viewString() string {
 			hudIndex = len(sections)
 			sections = append(sections, m.bottomStyle.Render(hud))
 		}
-		if chordHUD := m.renderKeyChordHUD(); chordHUD != "" {
-			hudIndex = len(sections)
-			sections = append(sections, m.bottomStyle.Render(chordHUD))
-		}
 		// Rust anchors command/skill suggestions directly above the composer.
 		if popup := m.renderSkillPopup(); popup != "" {
 			sections = append(sections, popup)
@@ -6444,7 +6440,9 @@ func (m *Model) viewString() string {
 	rendered := lipgloss.JoinVertical(lipgloss.Left, sections...)
 	m.transcriptImageFrameRows = strings.Count(rendered, "\n") + 1
 	m.publishTranscriptImages()
-	return rendered
+	// Rust paints the pending chord guide as a floating panel over the frame
+	// instead of reserving rows, so the composer never moves when it appears.
+	return m.overlayKeyChordHUD(rendered)
 }
 
 func (m *Model) footerHelpLine() (string, bool) {
@@ -13452,9 +13450,6 @@ func (m *Model) bottomReservedRowsExceptVoiceFor(shortcutOverlayVisible bool, sh
 		return rows + m.replacedComposerRows()
 	}
 	if hud := m.renderQuickDialHUD(); hud != "" {
-		rows += sectionHeight(hud)
-	}
-	if hud := m.renderKeyChordHUD(); hud != "" {
 		rows += sectionHeight(hud)
 	}
 	if working := m.renderWorkingIndicator(); working != "" {

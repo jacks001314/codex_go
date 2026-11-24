@@ -43263,7 +43263,8 @@
     "codex_go"
    ],
    "evidence": [
-    "update/plan_2026_11_06.md: partial: the sidebar shortcut opens a chooser when no side chat exists, the chooser owns input while focused, and Enter/Esc/↑/↓ drive it; the animated slide and the floating workspace shortcut/preset overlays are not ported."
+    "update/plan_2026_11_06.md: partial: the sidebar shortcut opens a chooser when no side chat exists, the chooser owns input while focused, and Enter/Esc/↑/↓ drive it; the animated slide and the floating workspace shortcut/preset overlays are not ported.",
+    "Batch 308: the workspace shortcut guide now floats over the frame instead of reserving rows. tui/tea/key_chord_hud.go overlayKeyChordHUD mirrors ShortcutHud::render_overlay: the panel is anchored bottom-right one row above the frame's last row and two columns from its right edge, half the frame wide with a 32-column floor, and renderKeyChordHUDWidth lays the guide out for that panel width so entries fit. model.go no longer appends the guide as a bottom section or counts its rows in the composer layout, and overlays the joined frame instead, so the composer and status row stop moving when the guide appears and a full-screen surface keeps its rows. clipKeyChordHUD now keeps the Esc hint on the panel's bottom row while the body is clipped above it, matching Rust's reserved command row. Tests: tui/tea/key_chord_hud_overlay_like_rust_test.go (the guide leaves the frame height and last row untouched, starts past the frame midpoint and stays inside the width; a full-screen surface keeps its rows and both the guide and its cancel hint). go test ./tui/tea, go vet ./tui/tea and go build pass. Residual: the sidebar open/close animation and the quick-dial presets inside the same overlay are still missing."
    ],
    "kind": "runtime",
    "sha": "194f2662b8b63390416c44ebb7e6a3a35a845e3a",
