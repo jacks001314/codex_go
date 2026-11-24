@@ -49,7 +49,7 @@ var startupConfigServerLogin = func(ctx context.Context, codexHome string, loade
 	}
 	policy := publishApplicationNetworkPolicy(loaded)
 	client := configServerHTTPClient(loaded, nil)
-	resolved, err := resolveConfigServerOAuth(ctx, loaded.Requirements.ConfigServer, client, &policy)
+	resolved, err := resolveConfigServerOAuthForConfig(ctx, loaded.Requirements.ConfigServer, client, &policy, loaded)
 	if err != nil {
 		return fmt.Errorf("%w: %v", errStartupOAuthInitFailed, err)
 	}
@@ -68,7 +68,13 @@ var startupConfigServerLogin = func(ctx context.Context, codexHome string, loade
 		return nil
 	}
 	defer func() { _ = attempt.Close() }()
-	return attempt.LoginWithBrowser(ctx, onURL, ConfigServerLoginFailureMessage)
+	if err := attempt.LoginWithBrowser(ctx, onURL, ConfigServerLoginFailureMessage); err != nil {
+		return err
+	}
+	// Rust #63473: rediscover the server after onboarding so a newly enabled
+	// OAuth requirement is picked up.
+	forgetConfigServerOAuthResolution(loaded.Requirements.ConfigServer.BaseURL)
+	return nil
 }
 
 type startupOAuthMessage struct {

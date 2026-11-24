@@ -45,7 +45,7 @@ func configServerCloudConfigBundleLoaderForRunWithDeps(ctx context.Context, code
 	// Rust #62824: discovery decides whether the bundle fetch signs in when the
 	// config server omits explicit OAuth settings.
 	policy := publishApplicationNetworkPolicy(bootstrap)
-	resolved, err := resolveConfigServerOAuth(ctx, server, configServerHTTPClient(bootstrap, client), &policy)
+	resolved, err := resolveConfigServerOAuthForConfig(ctx, server, configServerHTTPClient(bootstrap, client), &policy, bootstrap)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +67,7 @@ func anonymousConfigServerBundleLoaderWithClient(ctx context.Context, codexHome 
 		return nil, nil
 	}
 	policy := publishApplicationNetworkPolicy(bootstrap)
-	resolved, err := resolveConfigServerOAuth(ctx, server, configServerHTTPClient(bootstrap, client), &policy)
+	resolved, err := resolveConfigServerOAuthForConfig(ctx, server, configServerHTTPClient(bootstrap, client), &policy, bootstrap)
 	if err != nil {
 		return nil, err
 	}

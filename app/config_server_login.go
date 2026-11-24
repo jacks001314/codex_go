@@ -78,12 +78,21 @@ func ensureConfigServerLoginWith(ctx context.Context, codexHome string, requirem
 	}
 	defer func() { _ = attempt.Close() }()
 	if !method.DeviceCode {
-		return attempt.LoginWithBrowser(ctx, method.OnURL, ConfigServerLoginFailureMessage)
+		if err := attempt.LoginWithBrowser(ctx, method.OnURL, ConfigServerLoginFailureMessage); err != nil {
+			return err
+		}
+	} else {
+		if !manager.SupportsDeviceAuthorization() {
+			return errors.New("Device sign-in requires config_server.oauth.device_authorization_url")
+		}
+		if err := attempt.LoginWithDeviceCode(ctx, method.Present, ConfigServerLoginFailureMessage); err != nil {
+			return err
+		}
 	}
-	if !manager.SupportsDeviceAuthorization() {
-		return errors.New("Device sign-in requires config_server.oauth.device_authorization_url")
-	}
-	return attempt.LoginWithDeviceCode(ctx, method.Present, ConfigServerLoginFailureMessage)
+	// Rust #63473: onboarding can enable an OAuth requirement, so the server is
+	// rediscovered instead of reusing the anonymous resolution.
+	forgetConfigServerOAuthResolution(requirements.ConfigServer.BaseURL)
+	return nil
 }
 
 // logoutConfigServer removes the config server's stored grant and reports

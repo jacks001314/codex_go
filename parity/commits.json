@@ -55492,11 +55492,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Batch 164: partial - Rust reuses a single config-server discovery result across managed-policy loading (`cloud-config/src/discovery.rs`, `config_server.rs`, CLI entry points). Go's `config/config_server.go` resolves trusted enrollment and managed policy per load without sharing a discovery cache. Residual: share the discovery result between startup config, login and managed-policy loading."
+    "Batch 167: complete - Rust #63473 carries the resolved config-server settings in memory so CLI sign-in, TUI startup and managed-policy loading do not rediscover the same OAuth metadata, reusing a resolution only when the configured server, the outbound proxy policy and the system-proxy fallback setting match, rediscovering anonymous servers after onboarding, and classifying app-server startup errors with the discovered settings. Go now keeps `configServerOAuthResolutions` keyed by base URL, the published network policy revision/managed flag, `RespectSystemProxyEnabled` and `SystemProxyFallbackEnabled`; `resolveConfigServerOAuthForConfig` serves the sign-in, startup and both bundle-loader paths from that cache (bounded to 8 entries, cloning the cached server so callers cannot mutate it), while explicit OAuth settings still bypass discovery. Successful browser and device-code sign-ins call `forgetConfigServerOAuthResolution`, so onboarding rediscovers the server. Startup classification already rides on the loader's discovered resolution: `appServerStartupConfigServerErrorData` turns the loader's `CloudConfigLoadAuth`/`RequiresLogin` failure into the `configServerLogin` action. Tests: TestConfigServerResolutionReuseLikeRust (reuse, then cache misses for a changed system-proxy setting, a changed fallback setting and after onboarding; fails when the cache lookup is removed). Verified: go test ./app -run 'ConfigServer' -count=1, go test ./app -run 'CloudConfig|ManagedConfig|Bundle|Startup' -count=1, go build ./..., go vet ./app."
    ],
    "kind": "runtime",
    "sha": "83077214a422dc0f3f6b23bf8ed4a402a6ac7b09",
-   "status": "partial",
+   "status": "complete",
    "subject": "Reuse config server discovery when loading managed policy (#63473)"
   },
   {
