@@ -43372,11 +43372,12 @@
    ],
    "evidence": [
     "update/plan_2026_11_06.md: partial: the sidebar paints a ` Side chat ` / ` + ` tab strip, `focus_sidebar_tabs` (leader `t`) opens the chooser, and side creation stays asynchronous with a loading state; deferred MCP startup notifications and inherited permission profiles are not part of the Go side start path.",
-    "Batch 289: the permission-profile half of the side start path now exists. SideStartParams carries the parent conversation's ActivePermissionProfile (tui/tea/side.go), the local side coordinator sends it as thread/fork permissions and drops the sandbox override that cannot be combined with a named profile, then records it on the child's metadata (app/side_tui.go), and the remote side fork inherits state.ActivePermissionProfile the same way (app/remote_tui.go). Tests: tui/tea/side_permission_profile_like_rust_test.go and app/side_permission_profile_like_rust_test.go (the side keeps side-reader after the parent selects full-access). Residual: deferred MCP startup notifications are still not part of the Go side start path."
+    "Batch 289: the permission-profile half of the side start path now exists. SideStartParams carries the parent conversation's ActivePermissionProfile (tui/tea/side.go), the local side coordinator sends it as thread/fork permissions and drops the sandbox override that cannot be combined with a named profile, then records it on the child's metadata (app/side_tui.go), and the remote side fork inherits state.ActivePermissionProfile the same way (app/remote_tui.go). Tests: tui/tea/side_permission_profile_like_rust_test.go and app/side_permission_profile_like_rust_test.go (the side keeps side-reader after the parent selects full-access). Residual: deferred MCP startup notifications are still not part of the Go side start path.",
+    "Batch 290: closed. Deferred MCP startup statuses now follow Rust #59767's slot. When a status names a thread this connection does not display yet (the side thread during a sidebar fork), remoteAppServerTUIClient parks it in a bounded per-thread queue and replays it from handleNotification as soon as the thread becomes active, so the child keeps its MCP startup outcome instead of losing it. Tests: app/deferred_mcp_startup_status_like_rust_test.go (a parked failed status reaches no thread, the TUI switches to the side, and the replay precedes the next live status). Together with Batch 289 this closes the entry: the tab strip and chooser, leader-t focus, asynchronous creation with a loading state, the inherited permission profile, and the deferred MCP startup statuses are all present. Verification: go test ./app ./tui/tea -count=1."
    ],
    "kind": "runtime",
    "sha": "9df200a0680f5653ffb69725ecac6a201e2790fb",
-   "status": "partial",
+   "status": "complete",
    "subject": "Add sidebar tabs and nonblocking side-chat creation (#59767)"
   },
   {

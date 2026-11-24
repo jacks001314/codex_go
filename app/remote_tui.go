@@ -95,6 +95,12 @@ type remoteAppServerTUIClient struct {
 	// turnDurationMS carries the completed turn's protocol duration so the TUI
 	// can show "Worked for" completion metadata (Rust #43558).
 	turnDurationMS *int64
+	// deferredMCPStatus parks MCP startup statuses for a thread this connection
+	// does not display yet, for example the side thread requested by a sidebar
+	// fork (Rust #59767 defer_side_startup_notification). Entries replay once
+	// the thread becomes active instead of being dropped.
+	deferredMCPStatusMu sync.Mutex
+	deferredMCPStatus   map[string][]appserver.MCPServerStatusUpdatedNotification
 	// hostProject retains the last attached local GitHub project so a backend
 	// switch that reports a managed cloud cwd can still provision it
 	// (Rust #60007 remember_attached_host_project).
@@ -5976,6 +5982,80 @@ func (c *remoteAppServerTUIClient) rememberedHostProject() *cloudclient.ProjectE
 	return &cloned
 }
 
+// Side starts emit a handful of MCP startup statuses per thread; a thread this
+// connection never opens must not grow the parked queue without bound.
+const (
+	deferredMCPStatusThreads   = 16
+	deferredMCPStatusPerThread = 16
+)
+
+// deferMCPStartupStatus parks one MCP startup status for a thread this
+// connection does not display yet. The buffer is deliberately small: a side
+// start emits a handful of statuses, and a thread this connection never opens
+// must not grow the queue without bound.
+func (c *remoteAppServerTUIClient) deferMCPStartupStatus(threadID string, payload appserver.MCPServerStatusUpdatedNotification) {
+	threadID = strings.TrimSpace(threadID)
+	if c == nil || threadID == "" {
+		return
+	}
+	c.deferredMCPStatusMu.Lock()
+	defer c.deferredMCPStatusMu.Unlock()
+	if c.deferredMCPStatus == nil {
+		c.deferredMCPStatus = map[string][]appserver.MCPServerStatusUpdatedNotification{}
+	}
+	if len(c.deferredMCPStatus) >= deferredMCPStatusThreads && c.deferredMCPStatus[threadID] == nil {
+		return
+	}
+	entries := append(c.deferredMCPStatus[threadID], payload)
+	if len(entries) > deferredMCPStatusPerThread {
+		entries = entries[len(entries)-deferredMCPStatusPerThread:]
+	}
+	c.deferredMCPStatus[threadID] = entries
+}
+
+// flushDeferredMCPStartupStatuses replays parked statuses for every thread
+// this connection now displays.
+func (c *remoteAppServerTUIClient) flushDeferredMCPStartupStatuses() {
+	if c == nil {
+		return
+	}
+	c.deferredMCPStatusMu.Lock()
+	var replay []appserver.MCPServerStatusUpdatedNotification
+	for threadID, entries := range c.deferredMCPStatus {
+		if !c.notificationThreadIsActive(threadID) {
+			continue
+		}
+		replay = append(replay, entries...)
+		delete(c.deferredMCPStatus, threadID)
+	}
+	c.deferredMCPStatusMu.Unlock()
+	for _, payload := range replay {
+		c.emitMCPStartupStatus(payload)
+	}
+}
+
+// emitMCPStartupStatus forwards one MCP startup status to the TUI.
+func (c *remoteAppServerTUIClient) emitMCPStartupStatus(payload appserver.MCPServerStatusUpdatedNotification) {
+	name := strings.TrimSpace(payload.Name)
+	if c == nil || name == "" {
+		return
+	}
+	kind := chatwidget.McpStartupStatusKind(strings.TrimSpace(payload.Status))
+	switch kind {
+	case chatwidget.McpStartupStarting, chatwidget.McpStartupReady, chatwidget.McpStartupFailed, chatwidget.McpStartupCancelled:
+	default:
+		kind = chatwidget.McpStartupFailed
+	}
+	status := chatwidget.McpStartupStatus{Kind: kind}
+	if payload.Error != nil {
+		status.Error = strings.TrimSpace(*payload.Error)
+	}
+	if payload.FailureReason != nil {
+		status.FailureReason = strings.TrimSpace(string(*payload.FailureReason))
+	}
+	c.send(codextea.MCPStartupUpdateMsg{Name: name, Status: status})
+}
+
 func (c *remoteAppServerTUIClient) notificationThreadIsActive(threadID string) bool {
 	threadID = strings.TrimSpace(threadID)
 	if threadID == "" || c == nil || c.state == nil {
@@ -6072,6 +6152,9 @@ func sideParentStatusForTurnStatus(status appserver.TurnStatus) (codextea.SidePa
 
 func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMessage) error {
 	method := appserver.NotificationMethod(strings.TrimSpace(message.Method))
+	// Rust #59767: replay parked MCP startup statuses as soon as their thread
+	// becomes the connection's active one.
+	c.flushDeferredMCPStartupStatuses()
 	// Rust #60969: the Cloud transport reports a lost reply stream and its
 	// quiet reopen as internal events, so the TUI can hold submitted input
 	// instead of surfacing an error for a conversation that reconnects itself.
@@ -6165,27 +6248,11 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 		if err := json.Unmarshal(message.Params, &payload); err != nil {
 			return err
 		}
-		if !c.notificationThreadIsActive(stringPtrValue(payload.ThreadID)) {
+		if threadID := strings.TrimSpace(stringPtrValue(payload.ThreadID)); !c.notificationThreadIsActive(threadID) {
+			c.deferMCPStartupStatus(threadID, payload)
 			return nil
 		}
-		name := strings.TrimSpace(payload.Name)
-		if name == "" {
-			return nil
-		}
-		kind := chatwidget.McpStartupStatusKind(strings.TrimSpace(payload.Status))
-		switch kind {
-		case chatwidget.McpStartupStarting, chatwidget.McpStartupReady, chatwidget.McpStartupFailed, chatwidget.McpStartupCancelled:
-		default:
-			kind = chatwidget.McpStartupFailed
-		}
-		status := chatwidget.McpStartupStatus{Kind: kind}
-		if payload.Error != nil {
-			status.Error = strings.TrimSpace(*payload.Error)
-		}
-		if payload.FailureReason != nil {
-			status.FailureReason = strings.TrimSpace(string(*payload.FailureReason))
-		}
-		c.send(codextea.MCPStartupUpdateMsg{Name: name, Status: status})
+		c.emitMCPStartupStatus(payload)
 	case appserver.NotificationThreadStarted:
 		var payload appserver.ThreadStartedNotification
 		if err := json.Unmarshal(message.Params, &payload); err != nil {
