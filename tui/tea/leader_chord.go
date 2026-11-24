@@ -235,6 +235,15 @@ func (m *Model) dispatchLeaderAction(action string) bubbletea.Cmd {
 	case "chat.open_presets":
 		return m.openQuickDialMenu()
 	case "global.focus_main_composer":
+		if m.agentsOverviewWorkspaceOpen() {
+			// Rust #62990: the docked Command Center hands input to the
+			// conversation composer, unless a dashboard editor owns the keys.
+			if m.agentsOverviewDockConversationFocused() || m.agentsOverviewOwnsNestedInput() {
+				return nil
+			}
+			m.focusAgentsOverviewDockConversation()
+			return nil
+		}
 		return m.focusMainComposerExplicit()
 	case "global.focus_pane_left":
 		return m.focusMainComposer()

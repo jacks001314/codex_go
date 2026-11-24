@@ -53,6 +53,36 @@ func (m *Model) agentsOverviewCenterOwnsInput() bool {
 	return m != nil && m.agentsOverview != nil && !m.agentsOverviewDockConversationFocused()
 }
 
+// agentsOverviewOwnsNestedInput reports whether a dashboard search, rename,
+// help, removal or worktree flow owns keys (Rust view.owns_nested_input). A
+// composer draft alone does not: the dashboard composer is the shared chat
+// composer and the workspace focus keys still reach it.
+func (m *Model) agentsOverviewOwnsNestedInput() bool {
+	if m == nil || m.agentsOverview == nil {
+		return false
+	}
+	state := m.agentsOverview.State
+	return state.Searching || state.Renaming || state.Help ||
+		state.CreatingWorktree || m.agentsOverviewLifecycleProgress != ""
+}
+
+// agentsOverviewBindingMatches reports whether an Agents action binds this key;
+// those bindings take precedence over the workspace focus shortcuts (#62990).
+func (m *Model) agentsOverviewBindingMatches(spec string) bool {
+	if m == nil || spec == "" {
+		return false
+	}
+	for _, action := range codextui.KeymapActions(codextui.KeymapActionFilter{}) {
+		if action.Context != "agents" {
+			continue
+		}
+		if m.keyMatches(action.Context, action.Action, spec) {
+			return true
+		}
+	}
+	return false
+}
+
 // handleAgentsOverviewWorkspaceChord routes leader chords while the dashboard
 // owns input. Rust handle_workspace_key sees the routed chord completion first
 // and turns focus_pane_right into a workspace focus move; every other chord
@@ -62,7 +92,7 @@ func (m *Model) handleAgentsOverviewWorkspaceChord(spec string) (bool, bubbletea
 		return false, nil
 	}
 	if m.leaderChordPending && m.leaderChordActions[spec] == "global.focus_pane_right" &&
-		m.agentsOverviewWorkspaceOpen() {
+		m.agentsOverviewWorkspaceOpen() && !m.agentsOverviewOwnsNestedInput() {
 		m.clearLeaderChord()
 		m.focusAgentsOverviewDockConversation()
 		return true, nil
@@ -137,9 +167,12 @@ func (m *Model) handleDockedAgentsOverviewKey(msg keymsg.KeyMsg) (bool, bubblete
 		}
 		return false, nil
 	}
-	// Rust focus_main_composer and focus_pane_right both hand the workspace
-	// to the conversation, and every other key stays with the dashboard.
-	if m.agentsOverviewWorkspaceOpen() &&
+	// Rust focus_main_composer and focus_pane_right hand the workspace to the
+	// conversation, but only while the dashboard owns no nested editor and no
+	// Agents binding claims the key (#62990). Every other key stays with the
+	// dashboard.
+	if m.agentsOverviewWorkspaceOpen() && !m.agentsOverviewOwnsNestedInput() &&
+		!m.agentsOverviewBindingMatches(spec) &&
 		(m.keyMatches("global", "focus_main_composer", spec) ||
 			m.keyMatches("global", "focus_pane_right", spec)) {
 		m.focusAgentsOverviewDockConversation()

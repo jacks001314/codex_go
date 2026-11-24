@@ -75,6 +75,18 @@ func (m *Model) keymapActionDescriptors() []codextui.KeymapAction {
 
 // leaderChordHUDGroups mirrors workspace_hud.rs: leader completions are grouped
 // into Panes, Move, and This pane, and unavailable pane actions are omitted.
+// workspaceHUDOrigin names the pane the leader guide is anchored to, matching
+// Rust workspace_hud.rs: Command Center, Sidebar, or Conversation.
+func (m *Model) workspaceHUDOrigin() string {
+	if m != nil && m.agentsOverviewCenterOwnsInput() {
+		return "Command Center"
+	}
+	if m.workspaceSidebarFocused() {
+		return "Sidebar"
+	}
+	return "Conversation"
+}
+
 func (m *Model) workspaceSidebarFocused() bool {
 	if m == nil {
 		return false
@@ -89,13 +101,15 @@ func (m *Model) leaderChordHUDGroups() []keyChordHUDGroup {
 	if m == nil || len(m.leaderChordActions) == 0 {
 		return nil
 	}
-	side := m.workspaceSidebarFocused()
+	center := m.agentsOverviewCenterOwnsInput()
+	centerOpen := m.agentsOverviewWorkspaceOpen()
+	side := m.workspaceSidebarFocused() && !center
 	canSize := m.sidePaneSplitAvailable()
 	canResize := m.sideBarResizableSplitAvailable()
 	hasSideTab := m.activeSide != nil && strings.TrimSpace(m.activeSide.ParentThreadID) != ""
 	items := make([][]keyChordHUDCompletion, 3)
 	for completion, action := range m.leaderChordActions {
-		group, label, ok := leaderHUDEntry(action, side, canSize, canResize, hasSideTab, m.sideZoomed)
+		group, label, ok := leaderHUDEntry(action, side, center, centerOpen, canSize, canResize, hasSideTab, m.sideZoomed)
 		if !ok {
 			continue
 		}
@@ -123,11 +137,11 @@ func (m *Model) leaderChordHUDGroups() []keyChordHUDGroup {
 
 // leaderHUDEntry maps a workspace leader action to its guide group and label.
 // The action strings keep their keymap context prefix ("global.", "chat.").
-func leaderHUDEntry(action string, side bool, canSize bool, canResize bool, hasSideTab bool, zoomed bool) (int, string, bool) {
+func leaderHUDEntry(action string, side bool, center bool, centerOpen bool, canSize bool, canResize bool, hasSideTab bool, zoomed bool) (int, string, bool) {
 	action = strings.TrimPrefix(action, "global.")
 	action = strings.TrimPrefix(action, "chat.")
 	switch action {
-	case "focus_command_center":
+	case "open_agents", "focus_command_center":
 		return 0, "Command Center", true
 	case "focus_main_composer":
 		return 0, "Main composer", true
@@ -182,11 +196,13 @@ func leaderHUDEntry(action string, side bool, canSize bool, canResize bool, hasS
 	case "mark_markdown":
 		return 2, "Mark Markdown block", true
 	case "focus_pane_left":
-		if side {
+		// Rust workspace_hud.rs keeps Pane left available from the conversation
+		// while the Command Center is docked beside it.
+		if side || (!center && !side && centerOpen) {
 			return 1, "Pane left", true
 		}
 	case "focus_pane_right":
-		if !side {
+		if center || !side {
 			return 1, "Pane right", true
 		}
 	case "open_presets":
@@ -262,11 +278,7 @@ func (m *Model) renderKeyChordHUDWidth(width int, height int) string {
 		}
 		lines = append(lines, "", keyChordHUDCancel)
 	} else {
-		origin := "Conversation"
-		if m.workspaceSidebarFocused() {
-			origin = "Sidebar"
-		}
-		lines = append(lines, title+" · "+origin)
+		lines = append(lines, title+" · "+m.workspaceHUDOrigin())
 		groups := m.leaderChordHUDGroups()
 		if len(groups) == 0 {
 			lines = append(lines, "", "No matching shortcuts.")

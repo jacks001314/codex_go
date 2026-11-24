@@ -192,6 +192,57 @@ func TestAgentsOverviewDockFocusClearsTranscriptInteractionLikeRust(t *testing.T
 	}
 }
 
+// Rust #62990: leader c focuses the conversation composer while the dock owns
+// input.
+func TestAgentsOverviewDockLeaderCFocusesConversationLikeRust(t *testing.T) {
+	model := newAgentsOverviewDockModel(t, 120)
+	_ = model.viewString()
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlX})
+	model.Update(runes("c"))
+	if !model.agentsOverviewDockConversationFocused() {
+		t.Fatalf("leader c left focus at %q, want the conversation", model.agentsOverviewDockFocus)
+	}
+	model.Update(runes("Hi"))
+	if got := model.composerText(); got != "Hi" {
+		t.Fatalf("conversation composer = %q, want the typed draft", got)
+	}
+}
+
+// Rust view.owns_nested_input: a dashboard help surface keeps the focus key
+// instead of handing the workspace to the conversation.
+func TestAgentsOverviewDockHelpKeepsFocusKeyLikeRust(t *testing.T) {
+	model := newAgentsOverviewDockModel(t, 120)
+	_ = model.viewString()
+	model.Update(runes("?"))
+	if !model.agentsOverview.State.Help {
+		t.Fatal("dashboard help did not open")
+	}
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlX})
+	model.Update(runes("c"))
+	if model.agentsOverviewDockConversationFocused() {
+		t.Fatal("focus key left the dashboard help")
+	}
+}
+
+// A dashboard draft is not nested input: leader c still hands the workspace to
+// the conversation and keeps the draft for the next visit.
+func TestAgentsOverviewDockDraftSurvivesFocusKeyLikeRust(t *testing.T) {
+	model := newAgentsOverviewDockModel(t, 120)
+	_ = model.viewString()
+	model.Update(runes("Z"))
+	if !model.agentsOverview.Composing() {
+		t.Fatal("dashboard composer did not take the rune")
+	}
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlX})
+	model.Update(runes("c"))
+	if !model.agentsOverviewDockConversationFocused() {
+		t.Fatalf("leader c left focus at %q, want the conversation", model.agentsOverviewDockFocus)
+	}
+	if model.agentsOverview == nil || !model.agentsOverview.Composing() {
+		t.Fatal("the dashboard draft was dropped")
+	}
+}
+
 // Rust #62986: opening a task returns focus to the conversation and keeps the
 // dock open instead of replacing the workspace with the dashboard.
 func TestAgentsOverviewDockStaysAfterOpeningTaskLikeRust(t *testing.T) {
