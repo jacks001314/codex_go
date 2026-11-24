@@ -113,6 +113,15 @@ func sideWorkspaceWidths(width int) (leftWidth int, rightWidth int, ok bool) {
 
 // sidePaneLayout reports whether both transcripts are drawn and which of them
 // currently owns the composer.
+// sidePaneLayoutInWorkspace reports the side split as painted inside the
+// workspace's conversation area, plus the column where that area starts. Rust
+// side_pane::split_layout measures workspace_chat_area for the same reason.
+func (m *Model) sidePaneLayoutInWorkspace() (originX int, leftWidth int, rightWidth int, sideFocused bool, ok bool) {
+	originX, areaWidth := m.workspaceChatArea()
+	leftWidth, rightWidth, sideFocused, ok = m.sidePaneLayout(areaWidth)
+	return originX, leftWidth, rightWidth, sideFocused, ok
+}
+
 func (m *Model) sidePaneLayout(width int) (leftWidth int, rightWidth int, sideFocused bool, ok bool) {
 	if m == nil {
 		return 0, 0, false, false

@@ -18,11 +18,11 @@ type sidePaneDrag struct {
 // space. The strip only owns columns inside the sidebar pane; the divider and
 // the parent pane report false.
 func (m *Model) sidebarStripColumn(x int) (int, bool) {
-	left, _, _, ok := m.sidePaneLayout(firstPositive(m.width, defaultWidth))
+	originX, left, _, _, ok := m.sidePaneLayoutInWorkspace()
 	if !ok {
 		return 0, false
 	}
-	dividerEnd := left + ansi.StringWidth(sideWorkspaceDivider) - 1
+	dividerEnd := originX + left + ansi.StringWidth(sideWorkspaceDivider) - 1
 	if x <= dividerEnd {
 		return 0, false
 	}
@@ -111,12 +111,12 @@ func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd)
 		// Rust side_focus.rs: the wheel over the reader scrolls it in fixed
 		// three-row steps, a press focuses the pane without leaving it, and a
 		// press on a painted destination opens that link (#61890).
-		if left, _, _, ok := m.sidePaneLayout(firstPositive(m.width, defaultWidth)); ok {
+		if originX, left, _, _, ok := m.sidePaneLayoutInWorkspace(); ok {
 			dividerWidth := ansi.StringWidth(sideWorkspaceDivider)
-			inside := msg.X >= left+dividerWidth
+			inside := msg.X >= originX+left+dividerWidth
 			height := max(m.transcript.Height, 1)
 			tab := m.sidebarDocumentActiveTab()
-			column := msg.X - (left + dividerWidth) - 1
+			column := msg.X - (originX + left + dividerWidth) - 1
 			if msg.Action == mousemsg.MouseActionMotion && tab != nil {
 				if tab.Selection.active && inside {
 					m.extendSidebarDocumentSelection(tab, msg.Y, height, column)
@@ -163,8 +163,8 @@ func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd)
 	if m != nil && msg.Action == mousemsg.MouseActionMotion {
 		hover := false
 		if m.sideWorkspaceEnabled() && !m.sideZoomed {
-			if left, _, _, ok := m.sidePaneLayout(firstPositive(m.width, defaultWidth)); ok {
-				hover = msg.X == left && msg.Y >= 0 && msg.Y < max(m.transcript.Height, 1)
+			if originX, left, _, _, ok := m.sidePaneLayoutInWorkspace(); ok {
+				hover = msg.X == originX+left && msg.Y >= 0 && msg.Y < max(m.transcript.Height, 1)
 			}
 		}
 		if hover != m.sideDividerHover {
@@ -179,9 +179,9 @@ func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd)
 	// configurable transcript scroll speed.
 	if m != nil && m.sidebarChooserVisible() && m.sidebarChooserFocused {
 		if rows, wheel := m.transcriptWheelRows(msg); wheel {
-			if left, _, _, ok := m.sidePaneLayout(firstPositive(m.width, defaultWidth)); ok {
+			if originX, left, _, _, ok := m.sidePaneLayoutInWorkspace(); ok {
 				dividerWidth := ansi.StringWidth(sideWorkspaceDivider)
-				if msg.X >= left+dividerWidth {
+				if msg.X >= originX+left+dividerWidth {
 					delta := 3
 					if rows < 0 {
 						delta = -3
@@ -211,7 +211,8 @@ func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd)
 	if m == nil || m.State == nil || m.activeSide == nil || !m.sideWorkspaceEnabled() || m.sideZoomed {
 		return false, nil
 	}
-	left, right, _, ok := m.sidePaneLayout(m.width)
+	originX, areaWidth := m.workspaceChatArea()
+	left, right, _, ok := m.sidePaneLayout(areaWidth)
 	if !ok {
 		return false, nil
 	}
@@ -221,11 +222,11 @@ func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd)
 	dividerWidth := ansi.StringWidth(sideWorkspaceDivider)
 	// Rust #62157 reuses the transcript view in the docked agent reader, so a
 	// drag there selects text before the pane treats the press as a focus.
-	if handled, cmd := m.handleSidebarReaderMouse(msg, left, dividerWidth); handled {
+	if handled, cmd := m.handleSidebarReaderMouse(msg, originX+left, dividerWidth); handled {
 		return true, cmd
 	}
-	dividerStart := left
-	dividerEnd := left + dividerWidth - 1
+	dividerStart := originX + left
+	dividerEnd := originX + left + dividerWidth - 1
 	// Rust #59527 scrolls whichever pane the wheel is over: the focused pane
 	// through its transcript viewport and the inactive pane through its own
 	// parked offset.
@@ -279,7 +280,7 @@ func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd)
 		if m.sideDrag == nil || !m.sideDrag.active {
 			return false, nil
 		}
-		width := sidebarColumns(m.width-msg.X-dividerWidth, m.width)
+		width := sidebarColumns(areaWidth-(msg.X-originX)-dividerWidth, areaWidth)
 		if m.sideResize == nil || m.sideResize.previewWidth != width {
 			m.sideResize = &sidePaneResize{previewWidth: width}
 		}
@@ -292,10 +293,10 @@ func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd)
 		if m.sideResize == nil {
 			return true, nil
 		}
-		width := sidebarColumns(m.sideResize.previewWidth, m.width)
+		width := sidebarColumns(m.sideResize.previewWidth, areaWidth)
 		m.sideResize = nil
-		m.sideExactWidth = sideExactWidth{total: m.width, width: width, valid: true}
-		m.sideWidthPercent = widthPercent(width, m.width)
+		m.sideExactWidth = sideExactWidth{total: areaWidth, width: width, valid: true}
+		m.sideWidthPercent = widthPercent(width, areaWidth)
 		return true, m.saveConfigPanelPreference("tui.sidebar_width_percent", m.sideWidthPercent)
 	}
 	return false, nil

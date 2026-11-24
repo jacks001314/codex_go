@@ -90,6 +90,11 @@ func (m *Model) focusAgentsOverviewDockConversation() bool {
 	}
 	if m.agentsOverviewDockFocus != agentsOverviewDockConversation {
 		m.agentsOverviewDockFocus = agentsOverviewDockConversation
+		// Rust focus_workspace_composer leaves transcript interaction behind:
+		// find, activity focus and a pending chord all return to the chat.
+		m.clearMainTranscriptFind(false)
+		m.activityFocus.active = false
+		m.clearLeaderChord()
 		m.rearmActivationKeyGuard()
 		m.refreshTranscript()
 	}
@@ -233,12 +238,11 @@ func (m *Model) renderClosingAgentsOverviewDock() string {
 // zipAgentsOverviewDock pads the dock column, paints the live conversation at
 // the remaining width and joins them around the dim divider.
 func (m *Model) zipAgentsOverviewDock(center []string, centerWidth int, conversationWidth int, height int) string {
-	m.agentsOverviewDockRendering = true
-	conversation := m.renderFocusedPane(conversationWidth, height)
-	m.agentsOverviewDockRendering = false
+	conversation := m.agentsOverviewDockConversationLines(conversationWidth, height)
 	// The conversation column sits right of the dock, so its pointer regions
 	// move into frame coordinates like the side workspace does.
 	m.offsetFocusedPanePointer(centerWidth+agentsOverviewDockGutter, 0)
+	m.offsetSidePaneThreadLinks(centerWidth + agentsOverviewDockGutter)
 	divider := codextui.TruncateToWidth("\x1b[2m│\x1b[0m ", agentsOverviewDockGutter)
 	rows := make([]string, 0, height)
 	for index := 0; index < height; index++ {
@@ -254,6 +258,60 @@ func (m *Model) zipAgentsOverviewDock(center []string, centerWidth int, conversa
 		rows = append(rows, left+divider+right)
 	}
 	return strings.Join(rows, "\n")
+}
+
+// workspaceChatArea maps the terminal onto the conversation area: with the
+// Command Center docked it starts right of the divider and keeps the column the
+// dock left, exactly like Rust workspace_chat_area.
+func (m *Model) workspaceChatArea() (x int, width int) {
+	if m == nil {
+		return 0, defaultWidth
+	}
+	width = firstPositive(m.width, defaultWidth)
+	if !m.agentsOverviewDockOpen() {
+		return 0, width
+	}
+	centerWidth, conversationWidth, ok := m.agentsOverviewDockWidths()
+	if !ok {
+		return 0, width
+	}
+	if fraction := m.agentsOverviewDockFraction; fraction > 0 && fraction < 1 {
+		centerWidth = max(int(math.Round(float64(centerWidth)*fraction)), 1)
+		conversationWidth = width - centerWidth - agentsOverviewDockGutter
+		if conversationWidth < 1 {
+			return 0, width
+		}
+	}
+	return centerWidth + agentsOverviewDockGutter, conversationWidth
+}
+
+// agentsOverviewDockConversationLines paints the conversation column. Rust
+// split_layout measures the side conversation against workspace_chat_area, so a
+// side pane splits this column beside the dock instead of the whole terminal.
+func (m *Model) agentsOverviewDockConversationLines(width int, height int) []string {
+	m.agentsOverviewDockRendering = true
+	defer func() { m.agentsOverviewDockRendering = false }()
+	if width >= sideWorkspaceMinWidth && m.sideWorkspaceOpen() {
+		if panes, ok := m.renderSideWorkspace(width, m.sideWorkspaceHeight()); ok {
+			return strings.Split(panes, "\n")
+		}
+	}
+	return m.renderFocusedPane(width, height)
+}
+
+// offsetSidePaneThreadLinks moves the watch-only reader's link columns into
+// frame coordinates when the side conversation paints right of the dock.
+func (m *Model) offsetSidePaneThreadLinks(x int) {
+	if m == nil || x == 0 || len(m.sidePaneThreadLinks) == 0 {
+		return
+	}
+	for row, links := range m.sidePaneThreadLinks {
+		for index := range links {
+			links[index].Start += x
+			links[index].End += x
+		}
+		m.sidePaneThreadLinks[row] = links
+	}
 }
 
 // snapshotClosingAgentsOverviewDock retains the settled dock column before the

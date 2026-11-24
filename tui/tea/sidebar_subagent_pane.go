@@ -219,7 +219,7 @@ func (m *Model) sidebarReaderLines(side *activeSideConversation) ([]string, int,
 	if m == nil || side == nil || !watchOnlySidePane(side) {
 		return nil, 0, 0
 	}
-	_, rightWidth, _, ok := m.sidePaneLayout(firstPositive(m.width, defaultWidth))
+	_, _, rightWidth, _, ok := m.sidePaneLayoutInWorkspace()
 	if !ok || rightWidth <= 0 {
 		return nil, 0, 0
 	}
@@ -244,7 +244,7 @@ func (m *Model) sidebarReaderTranscriptLines(side *activeSideConversation) ([]st
 	if m == nil || side == nil || !watchOnlySidePane(side) {
 		return nil, 0, 0
 	}
-	_, rightWidth, _, ok := m.sidePaneLayout(firstPositive(m.width, defaultWidth))
+	_, _, rightWidth, _, ok := m.sidePaneLayoutInWorkspace()
 	if !ok || rightWidth <= 0 {
 		return nil, 0, 0
 	}

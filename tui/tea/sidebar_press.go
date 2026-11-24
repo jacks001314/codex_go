@@ -76,11 +76,11 @@ func (m *Model) sidebarInputStateFor() sidebarInputState {
 // sidebarPointInPane reports whether a pointer sits inside the sidebar pane
 // (the column right of the divider) at a painted transcript row.
 func (m *Model) sidebarPointInPane(x int, y int) bool {
-	left, right, _, ok := m.sidePaneLayout(firstPositive(m.width, defaultWidth))
+	originX, left, right, _, ok := m.sidePaneLayoutInWorkspace()
 	if !ok || right <= 0 {
 		return false
 	}
-	start := left + ansi.StringWidth(sideWorkspaceDivider)
+	start := originX + left + ansi.StringWidth(sideWorkspaceDivider)
 	return x >= start && x < start+right && y >= 0 && y < max(m.transcript.Height, 1)
 }
 

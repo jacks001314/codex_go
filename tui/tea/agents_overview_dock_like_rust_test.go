@@ -175,6 +175,23 @@ func TestAgentsOverviewDockSelectTranscriptLikeRust(t *testing.T) {
 	}
 }
 
+// Rust focus_workspace_composer clears transcript interaction when the
+// workspace hands input to the conversation.
+func TestAgentsOverviewDockFocusClearsTranscriptInteractionLikeRust(t *testing.T) {
+	model := newAgentsOverviewDockModel(t, 120)
+	_ = model.viewString()
+	if !model.focusAgentsOverviewDockCenter() {
+		t.Fatal("dock did not take input back")
+	}
+	model.activityFocus.active = true
+	if !model.focusAgentsOverviewDockConversation() {
+		t.Fatal("dock did not hand input to the conversation")
+	}
+	if model.activityFocus.active {
+		t.Fatal("handing input to the conversation left activity focus on")
+	}
+}
+
 // Rust #62986: opening a task returns focus to the conversation and keeps the
 // dock open instead of replacing the workspace with the dashboard.
 func TestAgentsOverviewDockStaysAfterOpeningTaskLikeRust(t *testing.T) {
