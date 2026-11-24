@@ -1290,14 +1290,48 @@ func appendResumeApproveForMeRolloutSettings(store *session.Store, target sessio
 	}
 	roots := []string{cwd}
 	requested := reviewer
-	return recorder.AppendThreadSettingsAppliedSnapshot(string(target), rollout.ThreadSettingsApplied{
+	settings := rollout.ThreadSettingsApplied{
 		ApprovalPolicy:             policy,
 		ApprovalsReviewer:          reviewer,
 		RequestedApprovalsReviewer: &requested,
 		PermissionProfile:          json.RawMessage(profileJSON),
 		CWD:                        cwd,
 		RuntimeWorkspaceRoots:      &roots,
-	}, time.Now().UTC())
+	}
+	if err := recorder.AppendThreadSettingsAppliedSnapshot(string(target), settings, time.Now().UTC()); err != nil {
+		return err
+	}
+	return confirmResumeApproveForMeSettings(store, target, path, policy, string(mode), settings)
+}
+
+// confirmResumeApproveForMeSettings reads back what an embedded resume just
+// checkpointed before the initial prompt is submitted: the thread metadata must
+// carry the preset's approval policy and sandbox mode, and the newest owned
+// thread-settings snapshot must equal the one written (Rust #63589 reads the
+// loaded conversation's approval and sandbox settings back and stops the resume
+// when the server cannot confirm them).
+func confirmResumeApproveForMeSettings(store *session.Store, target session.ThreadID, path string, policy string, sandboxMode string, want rollout.ThreadSettingsApplied) error {
+	record, err := store.Read(target, true, false)
+	switch {
+	case err == nil:
+		if record.Metadata.ApprovalPolicy != policy || record.Metadata.SandboxPolicy != sandboxMode {
+			return fmt.Errorf("cannot confirm --approve-for-me settings: metadata reports approval %q and sandbox %q", record.Metadata.ApprovalPolicy, record.Metadata.SandboxPolicy)
+		}
+	case errors.Is(err, session.ErrThreadNotFound):
+		// A Rust-only conversation has no Go snapshot; the checkpointed
+		// settings snapshot below is the surface an embedded resume restores.
+	default:
+		return fmt.Errorf("cannot confirm --approve-for-me settings: %w", err)
+	}
+	lines, _, err := rollout.Load(path)
+	if err != nil {
+		return fmt.Errorf("cannot confirm --approve-for-me settings: %w", err)
+	}
+	persisted, ok := rollout.LatestPersistedOwnedThreadSettingsApplied(string(target), lines)
+	if !ok || !rollout.ThreadSettingsAppliedEqual(persisted, want) {
+		return errors.New("cannot confirm --approve-for-me settings: the resumed conversation did not accept them")
+	}
+	return nil
 }
 
 func sessionIDByName(store *session.Store, opts *cli.SessionOptions, name string) (session.ThreadID, error) {
