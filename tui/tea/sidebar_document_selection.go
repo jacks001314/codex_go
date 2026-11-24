@@ -129,7 +129,7 @@ func (m *Model) finishSidebarDocumentSelection(tab *sidebarDocumentTab) bubblete
 	if !m.copyOnSelectEnabled() {
 		return nil
 	}
-	cmd := m.copySidebarDocumentSelection(tab)
+	cmd := m.copySidebarDocumentSelection(tab, true)
 	if m.copyOnSelectClear {
 		tab.Selection.clear()
 		m.refreshTranscript()
@@ -137,13 +137,19 @@ func (m *Model) finishSidebarDocumentSelection(tab *sidebarDocumentTab) bubblete
 	return cmd
 }
 
-// copySidebarDocumentSelection puts the selected cells on the clipboard.
-func (m *Model) copySidebarDocumentSelection(tab *sidebarDocumentTab) bubbletea.Cmd {
+// copySidebarDocumentSelection puts the selected cells on the clipboard and,
+// for copy-on-select, publishes them to PRIMARY under this preview's claim
+// (Rust TranscriptView::copy_selection plus Sidebar::cancel_hidden_document_primary).
+func (m *Model) copySidebarDocumentSelection(tab *sidebarDocumentTab, primary bool) bubbletea.Cmd {
 	text := m.sidebarDocumentSelectionText(tab)
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
-	return m.clipboardWriteCmd("document selection", text, false, false)
+	clipboardCmd := m.clipboardWriteCmd("document selection", text, false, false)
+	if !primary {
+		return clipboardCmd
+	}
+	return bubbletea.Batch(clipboardCmd, m.publishSidebarDocumentPrimaryCmd(tab, text))
 }
 
 // sidebarDocumentSelectionText extracts the selected text from the rendered

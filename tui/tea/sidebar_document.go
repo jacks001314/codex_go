@@ -5,9 +5,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	bubbletea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/mattn/go-runewidth"
 
 	codextui "codex_go/tui"
 	"codex_go/tui/keymsg"
@@ -93,6 +95,10 @@ type sidebarDocumentTab struct {
 	// PathFeedback is the clipboard status the path footer shows (Rust
 	// CopyFeedback).
 	PathFeedback *sidebarDocumentPathFeedback
+	// primaryPublished marks copy-on-select PRIMARY ownership this preview
+	// holds, cleared when the pane stops showing the tab (Rust
+	// Selection::cancel_primary).
+	primaryPublished bool
 	// Location is the coordinate the preview was opened at, so a refresh
 	// re-reads the same target (Rust Document::location).
 	Location *markdown.SidebarSourceLocation
@@ -337,6 +343,14 @@ func (m *Model) closeSidebarDocumentTab(id string) bubbletea.Cmd {
 	kept := tabs[:0]
 	for _, tab := range tabs {
 		if tab != nil && tab.ID == id {
+			// Closing the preview drops its copy-on-select PRIMARY claim
+			// (Rust drops Selection::primary_owner with the document).
+			if tab.primaryPublished {
+				tab.primaryPublished = false
+				if m.primarySelectionDocument == tab.ID {
+					m.releasePrimarySelectionOwnership()
+				}
+			}
 			continue
 		}
 		kept = append(kept, tab)
@@ -1329,8 +1343,10 @@ func (m *Model) renderSidebarDocument(width int, height int) string {
 	lines := m.sidebarDocumentLines(tab, bodyWidth)
 	tab.Scroll = clampModalInt(tab.Scroll, 0, max(len(lines)-contentHeight, 0))
 	targetRow := -1
+	targetColumn := -1
 	if tab.View.Target != nil && !tab.TargetCleared {
 		targetRow = tab.View.Target.Line - 1
+		targetColumn = sidebarDocumentTargetColumn(tab.View, bodyWidth)
 	}
 	linkRows := m.sidebarDocumentLinkRows(tab)
 	linkPath := ""
@@ -1358,7 +1374,7 @@ func (m *Model) renderSidebarDocument(width int, height int) string {
 			line = highlightSidebarDocumentLink(line, linkPath)
 		}
 		if row == targetRow {
-			line = paintSidebarDocumentTarget(line, bodyWidth)
+			line = paintSidebarDocumentTarget(line, bodyWidth, targetColumn)
 		}
 		if tab.Selection.active {
 			if from, to, ok := tab.Selection.spanFor(row, bodyWidth); ok {
@@ -1486,8 +1502,11 @@ func (m *Model) sidebarDocumentFooter(width int, tab *sidebarDocumentTab) string
 }
 
 // paintSidebarDocumentTarget shades the coordinate link's row (Rust
-// render_document paints user_message_style over the target line).
-func paintSidebarDocumentTarget(line string, width int) string {
+// render_document paints user_message_style over the target line) and toggles
+// reverse video on the target character cell. A cell that is already reversed,
+// such as a selected link, loses the reverse instead of gaining it a second
+// time, exactly like Rust setting REVERSED only when the cell lacks it.
+func paintSidebarDocumentTarget(line string, width int, column int) string {
 	level := codextui.DetectStdoutColorLevel()
 	spec := selectionNotUnderlined(level)
 	prefix := codextui.SGRForStyleQuiet(spec, level)
@@ -1495,7 +1514,164 @@ func paintSidebarDocumentTarget(line string, width int) string {
 		return line
 	}
 	padding := max(width-codextui.DisplayWidth(line), 0)
-	return prefix + line + strings.Repeat(" ", padding) + "\x1b[0m"
+	shaded := shadeSidebarDocumentLine(line, prefix, padding)
+	if column < 0 || column >= width {
+		return shaded
+	}
+	return toggleSidebarDocumentReverseCell(shaded, column)
+}
+
+// shadeSidebarDocumentLine fills the whole row with the target style and
+// restores that fill after every SGR reset. ratatui composites the row style
+// with each cell, so syntax colours keep the row fill; an escape sequence can
+// only be simulated by putting the fill back after a reset.
+func shadeSidebarDocumentLine(line string, fill string, padding int) string {
+	var out strings.Builder
+	out.WriteString(fill)
+	for i := 0; i < len(line); {
+		if line[i] == 0x1b {
+			end := sparkleSequenceEnd(line, i)
+			out.WriteString(line[i:end])
+			if sgrSequenceResets(line[i:end]) {
+				out.WriteString(fill)
+			}
+			i = end
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(line[i:])
+		out.WriteString(line[i : i+size])
+		i += size
+	}
+	out.WriteString(strings.Repeat(" ", padding))
+	out.WriteString("\x1b[0m")
+	return out.String()
+}
+
+// sgrSequenceResets reports whether an SGR sequence starts a fresh style run.
+func sgrSequenceResets(sequence string) bool {
+	if !strings.HasPrefix(sequence, "\x1b[") || !strings.HasSuffix(sequence, "m") {
+		return false
+	}
+	params := sequence[2 : len(sequence)-1]
+	if params == "" {
+		return true
+	}
+	first, _, _ := strings.Cut(params, ";")
+	return first == "0" || first == "00"
+}
+
+// toggleSidebarDocumentReverseCell flips reverse video on the display cell at
+// column, skipping ANSI sequences so syntax colours stay intact. Inside an
+// already reversed run the cell is un-reversed and the run resumes after it.
+func toggleSidebarDocumentReverseCell(line string, column int) string {
+	position := 0
+	start, end := -1, -1
+	reversed := false
+	cellReversed := false
+	for i := 0; i < len(line); {
+		if line[i] == 0x1b {
+			next := sparkleSequenceEnd(line, i)
+			reversed = reverseStateAfterSequence(line[i:next], reversed)
+			i = next
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(line[i:])
+		cellWidth := max(runewidth.RuneWidth(r), 1)
+		if start < 0 && position <= column && column < position+cellWidth {
+			start, end = i, i+size
+			cellReversed = reversed
+		}
+		position += cellWidth
+		i += size
+	}
+	if start < 0 {
+		return line
+	}
+	if cellReversed {
+		return line[:start] + "\x1b[27m" + line[start:end] + "\x1b[7m" + line[end:]
+	}
+	return line[:start] + "\x1b[7m" + line[start:end] + "\x1b[27m" + line[end:]
+}
+
+// reverseStateAfterSequence reports the reverse-video state after one SGR
+// sequence: 7 turns it on and 27 or a reset turns it off.
+func reverseStateAfterSequence(sequence string, reversed bool) bool {
+	if !strings.HasPrefix(sequence, "\x1b[") || !strings.HasSuffix(sequence, "m") {
+		return reversed
+	}
+	params := sequence[2 : len(sequence)-1]
+	if params == "" {
+		return false
+	}
+	parts := strings.Split(params, ";")
+	for i := 0; i < len(parts); i++ {
+		// Extended colours carry their own parameters; a 0 inside a truecolor
+		// triplet is a colour channel, not a reset.
+		switch parts[i] {
+		case "38", "48", "58":
+			if i+1 < len(parts) {
+				if parts[i+1] == "2" {
+					i += 4
+				} else if parts[i+1] == "5" {
+					i += 2
+				}
+			}
+			continue
+		case "0":
+			reversed = false
+		case "7":
+			reversed = true
+		case "27":
+			reversed = false
+		}
+	}
+	return reversed
+}
+
+// sidebarDocumentTargetColumn is the display column of the coordinate target
+// inside the painted source line, gutter included (Rust render_document adds
+// the gutter to TranscriptView::column_for_offset). The preview truncates long
+// source lines instead of wrapping, so the target lives on its own row.
+func sidebarDocumentTargetColumn(view SidebarDocumentView, width int) int {
+	target := view.Target
+	if target == nil || width <= 0 || target.Line <= 0 || target.Line > len(view.LineStarts) {
+		return -1
+	}
+	lines := strings.Split(strings.ReplaceAll(view.Text, "\r\n", "\n"), "\n")
+	if last := len(lines) - 1; last >= 0 && lines[last] == "" {
+		lines = lines[:last]
+	}
+	if target.Line > len(lines) {
+		return -1
+	}
+	line := lines[target.Line-1]
+	start := view.LineStarts[target.Line-1]
+	offset := target.Offset - start
+	if target.Offset < start {
+		// A hand-built view may carry only the column; count runes like
+		// Rust source_target does before it snaps to the grapheme start.
+		offset = sidebarDocumentRuneOffset(line, target.Column-1)
+	}
+	offset = clampModalInt(offset, 0, len(line))
+	for offset > 0 && offset < len(line) && !utf8.RuneStart(line[offset]) {
+		offset--
+	}
+	digits := sidebarDocumentDigits(len(view.LineStarts))
+	gutter := 0
+	if digits > 0 && width > 40+digits {
+		gutter = digits + 1
+	}
+	return gutter + codextui.DisplayWidth(line[:offset])
+}
+
+// sidebarDocumentRuneOffset is the byte offset of the count-th rune of line.
+func sidebarDocumentRuneOffset(line string, count int) int {
+	offset := 0
+	for i := 0; i < count && offset < len(line); i++ {
+		_, size := utf8.DecodeRuneInString(line[offset:])
+		offset += size
+	}
+	return offset
 }
 
 // sidebarDocumentLinkSpan finds the destination span of a rendered link and

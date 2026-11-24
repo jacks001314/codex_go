@@ -3250,6 +3250,7 @@ type Model struct {
 	onPrimarySelectionRead            func() (string, error)
 	onPrimarySelectionRelease         func() error
 	primarySelectionPublished         bool
+	primarySelectionDocument          string
 	nextPrimarySelectionReadID        uint64
 	pendingPrimarySelectionRead       uint64
 	onFetchStartupAnnouncement        func() (string, bool)
@@ -13647,6 +13648,9 @@ func (m *Model) refreshTranscript() {
 	if m == nil {
 		return
 	}
+	// Rust cancels a hidden preview's PRIMARY claim on idle draws, before the
+	// frame that stops painting it.
+	m.cancelHiddenSidebarDocumentPrimary()
 	if m.activityFollow {
 		m.transcriptUnseenActivity = false
 	}
