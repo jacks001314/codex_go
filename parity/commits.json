@@ -50397,7 +50397,7 @@
     "codex_go"
    ],
    "evidence": [
-    "tui/tea/statusline_authoring.go provides the authoring draft and skill draft, and the /statusline modal opens a fresh conversation with the authoring prompt (tui/tea/modal.go, Rust #62037).",
+    "tui/tea/statusline_authoring.go provides the authoring draft and skill draft, and the /statusline modal opens a fresh conversation with the authoring prompt (tui/tea/modal.go, Rust #62037). Batch 188: the bundled create-statusline sample now matches the upstream text at the anchor (the picker reads Choose a status line provider), and every bundled sample asset under systemskills/assets/samples matches codex-rs/skills/src/assets/samples byte for byte (the imagegen, skill-creator and skill-installer python scripts carry the upstream formatting).",
     "tests: tui/tea statusline_authoring_like_rust_test.go asserts the modal row label \"Create a custom status line\" and the drafts the row sends."
    ],
    "kind": "runtime",
