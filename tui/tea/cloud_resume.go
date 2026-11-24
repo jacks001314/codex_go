@@ -10,6 +10,7 @@ import (
 
 	bubbletea "charm.land/bubbletea/v2"
 
+	"codex_go/protocol"
 	codextui "codex_go/tui"
 )
 
@@ -39,6 +40,9 @@ func (m *Model) beginCloudConversationResync(threadID string) bubbletea.Cmd {
 	resume := m.onResumeSession
 	backendID := m.backendID
 	cwd := strings.TrimSpace(m.State.CWD)
+	// Live events for the conversation wait until this fetch installs, so the
+	// replacement history cannot swallow a reply that arrived during the read.
+	m.cloudResyncThreadID = threadID
 	return func() bubbletea.Msg {
 		response, err := resume(codextui.SessionSelection{
 			Kind:      codextui.SessionSelectionResume,
@@ -98,10 +102,10 @@ func (m *Model) applyCloudConversationResync(msg CloudConversationResyncMsg) bub
 	if msg.Err != nil || msg.Response.ReadOnly || msg.Response.HasOlderHistory ||
 		!cloudHistoryIncludesTranscript(m.State.Messages, msg.Response.Messages) {
 		// The conversation stays held: queued prompts and the draft are kept
-		// for a later successful reattach.
+		// for a later successful reattach. Events held during the fetch still
+		// belong to the live stream, so they are applied to the kept transcript.
 		m.notice = cloudHistoryUnavailableNotice
-		m.refreshTranscript()
-		return nil
+		return m.releaseCloudResyncEvents()
 	}
 	cwd := strings.TrimSpace(m.State.CWD)
 	m.applyResumeResponseWithResolvedCWD(threadID, msg.Response, cwd)
@@ -109,6 +113,54 @@ func (m *Model) applyCloudConversationResync(msg CloudConversationResyncMsg) bub
 	if m.notice == cloudHistoryUnavailableNotice || m.notice == "Reconnecting to the Cloud conversation\u2026" {
 		m.notice = ""
 	}
+	released := m.releaseCloudResyncEvents()
+	submit := m.submitNextQueued()
+	switch {
+	case released == nil:
+		return submit
+	case submit == nil:
+		return released
+	default:
+		return bubbletea.Batch(released, submit)
+	}
+}
+
+// holdCloudResyncEvent queues a live event that arrives while the conversation's
+// history is being refetched (Rust #63211: buffer live Cloud events until the
+// reattach installs). Events for another thread, or after the fetch completed,
+// are applied normally.
+func (m *Model) holdCloudResyncEvent(event protocol.ThreadEvent) bool {
+	if m == nil || m.cloudResyncThreadID == "" {
+		return false
+	}
+	if m.State == nil || strings.TrimSpace(m.State.ThreadID) != m.cloudResyncThreadID {
+		return false
+	}
+	if threadID := strings.TrimSpace(event.ThreadID); threadID != "" && threadID != m.cloudResyncThreadID {
+		return false
+	}
+	m.cloudResyncHeldEvents = append(m.cloudResyncHeldEvents, event)
+	return true
+}
+
+// releaseCloudResyncEvents applies the events held during a fetch, once the
+// history install (or the keep-paused decision) settled, in arrival order.
+func (m *Model) releaseCloudResyncEvents() bubbletea.Cmd {
+	held := m.cloudResyncHeldEvents
+	m.cloudResyncHeldEvents = nil
+	m.cloudResyncThreadID = ""
+	if m == nil {
+		return nil
+	}
+	cmds := make([]bubbletea.Cmd, 0, len(held))
+	for _, event := range held {
+		if cmd := m.applyThreadEvent(event); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
 	m.refreshTranscript()
-	return m.submitNextQueued()
+	if len(cmds) == 0 {
+		return nil
+	}
+	return bubbletea.Batch(cmds...)
 }

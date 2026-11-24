@@ -3568,6 +3568,11 @@ type Model struct {
 	threadQueuedInput            map[string]queuedThreadInput
 	resumedQueueThreadID         string
 	pendingSteers                []pendingSteerSubmission
+	// cloudResyncThreadID is the Cloud conversation whose history is being
+	// refetched; live events for it wait in cloudResyncHeldEvents instead of
+	// repainting a transcript the fetch is about to replace (Rust #63211).
+	cloudResyncThreadID string
+	cloudResyncHeldEvents []protocol.ThreadEvent
 	// cloudStreamDisconnectedThreadID holds submitted input while the Cloud
 	// reply stream of that conversation is being reopened (Rust #60969).
 	cloudStreamDisconnectedThreadID string
@@ -5000,6 +5005,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		m.applyExternalEditorFinished(msg)
 		return m, m.refreshSkillPopup()
 	case ThreadEventMsg:
+		if m.holdCloudResyncEvent(msg.Event) {
+			return m, nil
+		}
 		cmd := m.applyThreadEvent(msg.Event)
 		if m.agentsOverview != nil {
 			cmd = bubbletea.Batch(cmd, m.refreshAgentsOverviewCmd())
