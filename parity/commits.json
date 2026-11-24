@@ -52220,13 +52220,14 @@
     "codex_go"
    ],
    "evidence": [
-    "V2 sandbox policies already keep writableRoots as path strings; turn/start and command/exec now validate every root with the host's path rules before enforcement and reject a non-absolute root with `writable root is not absolute: <path>`.",
-    "Go has no client-side thread-permission display that projects server paths through path URIs (the TUI parity area), and spawned child threads inherit the live config permission profile instead of separately forwarding a legacy sandbox policy, so those two parts have no distinct Go carrier.",
-    "go test ./appserver -run 'Sandbox|Command|Permission|Writable' -count=1; go build ./...; go vet ./appserver"
+    "V2 sandbox policies keep writableRoots as path strings; turn/start and command/exec validate every root with the server host's path rules before enforcement and reject a relative root with writable root is not absolute: <path>.",
+    "Dynamic child-thread creation resumes the source and forwards its original sandbox policy map. app/dynamic_tools_helpers.go preserves a workspaceWrite policy containing server-side writable roots without reinterpreting them under the client host's path rules, and new regression coverage in app/dynamic_sandbox_paths_like_rust_test.go keeps C:\\shared and /srv/shared verbatim.",
+    "Go's active TUI has no thread-permission surface that decodes writable roots through path URIs; the tui/status WorkspaceRootSuffix helper has no production caller. The server validation and dynamic-tool forwarding cover the behavior Go exposes.",
+    "go test ./appserver -run 'RuntimeWorkspace|WritableRoots|TurnSandboxPolicy|CommandExecRejectsRelative' -count=1; go test ./app -run 'DynamicSandboxFromResume' -count=1; go build ./...; go vet ./app ./appserver"
    ],
    "kind": "runtime",
    "sha": "7d458c8fc5cfc99ec447e3af6c173949660c268b",
-   "status": "partial",
+   "status": "complete",
    "subject": "Preserve sandbox writable roots across client and server platforms (#62376)"
   },
   {
@@ -52234,14 +52235,14 @@
     "codex_go"
    ],
    "evidence": [
-    "Thread start, resume and fork keep runtimeWorkspaceRoots as path strings and now reject any root that is not absolute under the server host's path rules; turn start applies the same host rule to its runtime workspace roots.",
-    "Resume and fork continue to use the effective thread roots; existing tests for restored and effective roots pass.",
-    "Go's TUI has no PathUri-based thread-permission display, so the client-side path-URI display half of the change has no Go carrier.",
-    "go test ./turn -count=1; go test ./appserver -run 'Thread(Start|Resume|Fork)|RuntimeWorkspace' -count=1; go build ./...; go vet ./turn ./appserver"
+    "Thread start, resume and fork keep runtimeWorkspaceRoots as path strings on the wire and reject any root that is not absolute under the server host's path rules; turn start applies the same rule. The effective roots remain attached to the resumed and forked thread.",
+    "The TUI keeps server-returned workspace roots as strings, which preserves Windows, Unix and UNC forms without parsing them as local paths. Side conversations forward the active session's exact roots: tui/tea/side_toggle_test.go and app/app_test.go verify the fork request retains both roots.",
+    "Go's active TUI has no PathUri-based thread-permission display, so the client display half has no distinct carrier; string roots already remain portable through start, turn, resume and fork.",
+    "go test ./appserver -run 'RuntimeWorkspace|WritableRoots|TurnSandboxPolicy|CommandExecRejectsRelative' -count=1; go test ./turn -run 'RuntimeWorkspace|WorkspaceRoot|Restore|Effective' -count=1; go test ./tui/app -run 'RuntimeWorkspace|ThreadSessionState|SessionStateForThreadRead' -count=1; go test ./tui/tea -run 'SideCommandForwardsSessionWorkspaceRoots' -count=1; go test ./app -run 'InteractiveRemoteStartSideForksAndInjectsBoundary' -count=1; go build ./...; go vet ./app ./appserver ./turn ./tui/app ./tui/tea"
    ],
    "kind": "runtime",
    "sha": "b967993f35239b86ee3c6a9c8f54b8146e31ddfa",
-   "status": "partial",
+   "status": "complete",
    "subject": "Preserve workspace roots across client and server platforms (#62377)"
   },
   {
