@@ -3448,6 +3448,9 @@ type Model struct {
 	// reconnectAutoGeneration invalidates a scheduled attempt after a manual
 	// retry, a success or a newer disconnect.
 	reconnectAutoGeneration int
+	// reconnectAttemptStarted drives the elapsed timer shown only while a
+	// reconnect attempt runs (Rust #63599).
+	reconnectAttemptStarted time.Time
 	// statuslineDisconnected hides provider content while the app-server
 	// transport is down (Rust #61985 statusline_disconnected): reads would only
 	// fail, so the built-in status line takes the footer until a new session
@@ -12114,6 +12117,19 @@ func (m *Model) applyWarningMessage(message string) {
 	m.refreshTranscript()
 }
 
+// reconnectActivityText appends the elapsed timer to a running reconnect
+// attempt row (Rust #63599). Other retry rows keep their text.
+func (m *Model) reconnectActivityText(message string) string {
+	if m == nil || !m.retryActivityActive || m.reconnectAttemptStarted.IsZero() {
+		return message
+	}
+	seconds := int(m.currentTime().Sub(m.reconnectAttemptStarted) / time.Second)
+	if seconds <= 0 {
+		return message
+	}
+	return fmt.Sprintf("%s (%ds)", message, seconds)
+}
+
 func (m *Model) renderRetryActivity() {
 	if m == nil {
 		return
@@ -12137,6 +12153,7 @@ func (m *Model) renderRetryActivity() {
 	if m.animEngine != nil {
 		frame = frames[m.animEngine.CurrentTick()%len(frames)]
 	}
+	message = m.reconnectActivityText(message)
 	message = frame + " " + message
 	width := m.width
 	if width < 20 {

@@ -117,3 +117,29 @@ func TestAutoReconnectTimeoutHandsBackCtrlRLikeRust(t *testing.T) {
 		t.Fatalf("timeout lost the draft: %q", model.composer.Value())
 	}
 }
+
+// TestReconnectAttemptShowsElapsedTimerLikeRust mirrors Rust #63599: the
+// reconnect row carries an elapsed timer only while the attempt is running.
+func TestReconnectAttemptShowsElapsedTimerLikeRust(t *testing.T) {
+	model := disconnectedRetryModel(t, func(codextui.SessionSelection) (SessionResumeResponse, error) {
+		return SessionResumeResponse{}, nil
+	})
+	model.retryActivityActive = true
+	model.retryActivityMessage = "Reconnecting to server\u2026"
+	now := time.Now()
+	model.reconnectAttemptStarted = now.Add(-5 * time.Second)
+	model.now = func() time.Time { return now }
+	if got := model.reconnectActivityText(model.retryActivityMessage); got != "Reconnecting to server\u2026 (5s)" {
+		t.Fatalf("attempt row = %q, want the elapsed timer", got)
+	}
+
+	model.reconnectAttemptStarted = time.Time{}
+	if got := model.reconnectActivityText(model.retryActivityMessage); got != "Reconnecting to server\u2026" {
+		t.Fatalf("idle retry row = %q, want no timer", got)
+	}
+	model.reconnectAttemptStarted = now.Add(-5 * time.Second)
+	model.retryActivityActive = false
+	if got := model.reconnectActivityText("Compacting context"); got != "Compacting context" {
+		t.Fatalf("non-reconnect row = %q, want no timer", got)
+	}
+}

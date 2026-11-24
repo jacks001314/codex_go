@@ -9,6 +9,7 @@ package tea
 
 import (
 	"strings"
+	"time"
 
 	bubbletea "charm.land/bubbletea/v2"
 
@@ -143,12 +144,13 @@ func (m *Model) startReconnectAttempt() bubbletea.Cmd {
 	threadID := strings.TrimSpace(m.State.ThreadID)
 	cwd := strings.TrimSpace(m.State.CWD)
 	m.reconnectAttemptThreadID = threadID
+	m.reconnectAttemptStarted = time.Now()
 	m.showReconnecting()
 	m.notice = "Reconnecting to server\u2026"
 	m.refreshTranscript()
 	resume := m.onResumeSession
 	backendID := m.backendID
-	return func() bubbletea.Msg {
+	attempt := func() bubbletea.Msg {
 		response, err := resume(codextui.SessionSelection{
 			Kind:      codextui.SessionSelectionResume,
 			Target:    codextui.SessionTarget{BackendID: backendID, ThreadID: threadID, CWD: cwd},
@@ -156,6 +158,7 @@ func (m *Model) startReconnectAttempt() bubbletea.Cmd {
 		})
 		return ReconnectAttemptFinishedMsg{ThreadID: threadID, Response: response, Err: err}
 	}
+	return attempt
 }
 
 // applyReconnectAttemptFinished clears the offline state after a successful
@@ -169,6 +172,7 @@ func (m *Model) applyReconnectAttemptFinished(msg ReconnectAttemptFinishedMsg) b
 		return nil
 	}
 	m.reconnectAttemptThreadID = ""
+	m.reconnectAttemptStarted = time.Time{}
 	if msg.Err != nil {
 		m.reconnectFailed = true
 		m.clearRetryActivity()
