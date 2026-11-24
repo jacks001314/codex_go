@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"codex_go/utils"
 )
 
 // guardianRouteSourcesInstruction is Rust's default routing strategy: related
@@ -120,6 +122,20 @@ type GuardianHousekeeperOptions struct {
 	// plus the originals). Zero keeps the whole batch. Rust scales this from
 	// the model's tool-output budget (#62372).
 	MaxInputBytes int
+	// InputBudget is the model's truncation policy for the routing request
+	// (Rust TruncationPolicy::byte_budget). It supplies MaxInputBytes when
+	// that field is zero, so a host that only knows the model window can pass
+	// its policy directly.
+	InputBudget utils.TruncationPolicy
+}
+
+// guardianRoutingInputBytes resolves the routing input cap from a model
+// truncation policy, mirroring Rust's TruncationPolicy::byte_budget.
+func guardianRoutingInputBytes(policy utils.TruncationPolicy) int {
+	if policy.Limit <= 0 {
+		return 0
+	}
+	return policy.ByteBudget()
 }
 
 // NewGuardianHousekeeperWithOptions binds a routing pass with a batch budget.
@@ -136,14 +152,27 @@ func NewGuardianHousekeeperWithOptions(board AgentMessageBoard, owner string, de
 	if board.Identity() != owner || delivery == nil || delivery.Root() != owner {
 		return nil, errors.New("housekeeper root mismatch")
 	}
+	maxInputBytes := options.MaxInputBytes
+	if maxInputBytes <= 0 {
+		maxInputBytes = guardianRoutingInputBytes(options.InputBudget)
+	}
 	return &GuardianHousekeeper{
 		board:         board,
 		owner:         owner,
 		delivery:      delivery,
 		decide:        decide,
 		batchTimeout:  options.BatchTimeout,
-		maxInputBytes: options.MaxInputBytes,
+		maxInputBytes: maxInputBytes,
 	}, nil
+}
+
+// MaxInputBytes is the resolved serialized-input cap for one routing request
+// (zero means uncapped).
+func (h *GuardianHousekeeper) MaxInputBytes() int {
+	if h == nil {
+		return 0
+	}
+	return h.maxInputBytes
 }
 
 // Owner is the root thread whose evidence this pass routes.
