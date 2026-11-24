@@ -16,6 +16,7 @@ import (
 	"codex_go/auth"
 	"codex_go/cli"
 	"codex_go/session"
+	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
 	codextea "codex_go/tui/tea"
 	"codex_go/worktree"
@@ -124,19 +125,42 @@ func sortAgentsOverviewSearchRows(rows []agentsoverview.Row, order agentsovervie
 // selected checkout without sending a turn, and returns the snapshot the
 // dashboard attaches to (Rust #45255 new_agents_overview_session). The started
 // session has no rollout, so the TUI reuses this snapshot until its first turn.
-func interactiveRemoteAgentsOverviewNewSession(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.AgentsOverviewNewSessionFunc {
+func interactiveRemoteAgentsOverviewNewSession(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, root *cli.RootOptions, state *codextui.State) codextea.AgentsOverviewNewSessionFunc {
 	return func(cwd string) (codextea.AgentThreadSwitchResponse, error) {
 		client, err := openRemoteSessionClient(ctx, endpoint)
 		if err != nil {
 			return codextea.AgentThreadSwitchResponse{}, err
 		}
 		defer client.close()
-		started, err := newRemoteAgentsDashboardSource(client, "").StartSession(ctx, cwd)
+		defaultsCWD := agentsOverviewDefaultsCWD(threadParamsModeForEndpoint(endpoint), root, state)
+		started, err := newRemoteAgentsDashboardSource(client, defaultsCWD).StartSession(ctx, cwd)
 		if err != nil {
 			return codextea.AgentThreadSwitchResponse{}, err
 		}
 		return remoteTUIAgentSwitchResponseForStartedSession(started), nil
 	}
+}
+
+// agentsOverviewDefaultsCWD mirrors Rust agents_overview.rs defaults_cwd
+// (#57267): a dashboard-created task without a selected checkout starts in the
+// --cd override for a remote or server-owned workspace, then the displayed
+// thread's directory. An embedded session leaves the directory to its own app
+// server, which already runs with the launch configuration.
+func agentsOverviewDefaultsCWD(mode ThreadParamsMode, root *cli.RootOptions, state *codextui.State) string {
+	if mode == ThreadParamsModeEmbedded {
+		return ""
+	}
+	if root != nil {
+		if cwd := strings.TrimSpace(root.Shared.CWD); cwd != "" {
+			return cwd
+		}
+	}
+	if state != nil {
+		if cwd := strings.TrimSpace(state.CWD); cwd != "" {
+			return cwd
+		}
+	}
+	return "."
 }
 
 // interactiveRemoteAgentsOverviewNewWorktree creates a managed worktree from

@@ -790,7 +790,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnAgentsOverviewPinnedThreads: interactiveRemoteAgentsOverviewPinnedThreads(agentsOverviewPinRequest),
 		OnAgentsOverviewTogglePin:     interactiveRemoteAgentsOverviewTogglePin(agentsOverviewPinRequest),
 		OnAgentsOverviewUsage:         interactiveRemoteAgentsOverviewUsage(ctx, endpoint),
-		OnAgentsOverviewNewSession:    interactiveRemoteAgentsOverviewNewSession(ctx, endpoint),
+		OnAgentsOverviewNewSession:    interactiveRemoteAgentsOverviewNewSession(ctx, endpoint, root, state),
 		OnAgentsOverviewNewWorktree:   interactiveRemoteAgentsOverviewNewWorktree(ctx, endpoint, root),
 		OnAgentsOverviewStop:          interactiveRemoteAgentsOverviewStop(ctx, endpoint),
 		OnAgentsOverviewArchive:       interactiveRemoteAgentsOverviewArchive(ctx, endpoint),

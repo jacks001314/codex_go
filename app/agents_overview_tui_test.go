@@ -19,7 +19,7 @@ func TestInteractiveRemoteAgentsOverviewHandlersWireRemoteSource(t *testing.T) {
 	endpoint := appserverdaemon.NewWebSocketEndpoint("ws://127.0.0.1:1", nil)
 	ctx := context.Background()
 	refresh := interactiveRemoteAgentsOverviewRefresh(ctx, endpoint)
-	newSession := interactiveRemoteAgentsOverviewNewSession(ctx, endpoint)
+	newSession := interactiveRemoteAgentsOverviewNewSession(ctx, endpoint, nil, nil)
 	stop := interactiveRemoteAgentsOverviewStop(ctx, endpoint)
 	rename := interactiveRemoteAgentsOverviewRename(ctx, endpoint)
 	if refresh == nil || newSession == nil || stop == nil || rename == nil {
