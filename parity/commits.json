@@ -54985,7 +54985,7 @@
     "codex_go"
    ],
    "evidence": [
-    "Batch 122: partial - Rust collects completed user and tool audio transcripts into Guardian review evidence with their own elastic budget and delta participation. Go's guardiancontext package has no audio-transcript entry kind or transcript_audio budget, so recorded speech never reaches Guardian context."
+    "Batch 184: partial - Rust includes completed audio transcripts in Guardian review context: speech from a user recording or a tool result becomes its own transcript entry whose role label names the originating turn or call, participates in delta selection and budgets, keeps its label when truncated, and may use an optional transcript_audio elastic budget. Go's guardiancontext now carries the entry kinds and the collector: ConversationTranscriptUserAudio/ConversationTranscriptToolAudio, UserAudioTranscriptKind/ToolAudioTranscriptKind with Rust's role labels (quoted turn id, quoted call id), and CollectAudioTranscript, which drops blank transcriptions and drops tool audio unless ConversationTranscriptOptions.IncludeToolOutputs admits tool results. Residual: Go's simplified guardiancontext has no elastic budget groups, so transcript_audio is absent and audio falls back to whatever budget the caller applies, and no contributor collects audio transcripts from history yet."
    ],
    "kind": "runtime",
    "sha": "177c406276b6757ffaf49da9de52cd7a64c97dd5",

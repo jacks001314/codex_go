@@ -7,6 +7,9 @@ type ConversationTranscriptKind int
 const (
 	// ConversationTranscriptUser is an actual parent-thread user message.
 	ConversationTranscriptUser ConversationTranscriptKind = iota
+	// ConversationTranscriptUserAudio is speech transcribed from a recording
+	// submitted on a user turn.
+	ConversationTranscriptUserAudio
 	// ConversationTranscriptDeveloper is an explicit developer message
 	// preserving a user-approved action.
 	ConversationTranscriptDeveloper
@@ -21,6 +24,9 @@ const (
 	ConversationTranscriptToolCall
 	// ConversationTranscriptToolOutput is a named or unnamed tool result.
 	ConversationTranscriptToolOutput
+	// ConversationTranscriptToolAudio is speech transcribed from audio a tool
+	// call returned.
+	ConversationTranscriptToolAudio
 	// ConversationTranscriptNodeReplToolOutput is a result from a Node
 	// REPL-backed tool that may receive a larger synchronous cap.
 	ConversationTranscriptNodeReplToolOutput
@@ -63,6 +69,21 @@ func ProtectedAssistantKind() ConversationTranscriptEntryKind {
 	return ConversationTranscriptEntryKind{Kind: ConversationTranscriptProtectedAssistant}
 }
 
+// UserAudioTranscriptKind returns the entry kind for speech transcribed from a
+// recording submitted on a user turn; the label names that turn so the
+// transcription stays distinct from the typed user message (Rust
+// ConversationTranscriptEntryKind::UserAudioTranscript).
+func UserAudioTranscriptKind(turnID string) ConversationTranscriptEntryKind {
+	return ConversationTranscriptEntryKind{Kind: ConversationTranscriptUserAudio, Tool: userAudioTranscriptRole(turnID)}
+}
+
+// ToolAudioTranscriptKind returns the entry kind for speech transcribed from
+// audio a tool call returned; the label names the originating call (Rust
+// ConversationTranscriptEntryKind::ToolAudioTranscript).
+func ToolAudioTranscriptKind(callID string) ConversationTranscriptEntryKind {
+	return ConversationTranscriptEntryKind{Kind: ConversationTranscriptToolAudio, Tool: toolAudioTranscriptRole(callID)}
+}
+
 // ToolCallKind returns the entry kind for a named tool invocation.
 func ToolCallKind(tool string) ConversationTranscriptEntryKind {
 	return ConversationTranscriptEntryKind{Kind: ConversationTranscriptToolCall, Tool: tool}
@@ -93,7 +114,8 @@ func (k ConversationTranscriptEntryKind) Role() string {
 		return "developer"
 	case ConversationTranscriptAssistant, ConversationTranscriptProtectedAssistant:
 		return "assistant"
-	case ConversationTranscriptToolCall, ConversationTranscriptToolOutput, ConversationTranscriptNodeReplToolOutput:
+	case ConversationTranscriptToolCall, ConversationTranscriptToolOutput, ConversationTranscriptNodeReplToolOutput,
+		ConversationTranscriptUserAudio, ConversationTranscriptToolAudio:
 		return k.Tool
 	case ConversationTranscriptReasoning:
 		return "reasoning"
