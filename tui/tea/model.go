@@ -3402,6 +3402,12 @@ type Model struct {
 	// transport failed, so only local commands run and the slash popup explains
 	// which commands need the server.
 	appServerDisconnected bool
+	// reconnectFailed records that the transport is offline and no attempt is
+	// running, so Ctrl+R may start one (Rust #63599 can_retry_reconnect).
+	reconnectFailed bool
+	// reconnectAttemptThreadID names the conversation a running Ctrl+R
+	// attempt is rejoining.
+	reconnectAttemptThreadID string
 	// statuslineDisconnected hides provider content while the app-server
 	// transport is down (Rust #61985 statusline_disconnected): reads would only
 	// fail, so the built-in status line takes the footer until a new session
@@ -4860,6 +4866,11 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		// Rust #63258: the composer keeps working offline, but the slash popup
 		// marks server-dependent commands and local ones stay runnable.
 		m.setAppServerDisconnected(true)
+		// Rust #63599: with no attempt in flight the connection has failed; an
+		// eligible conversation offers a fresh Ctrl+R attempt and keeps its
+		// draft editable.
+		m.reconnectFailed = true
+		m.showReconnectFailed(m.canRetryReconnect())
 		// Rust #61985: a disconnected transport cancels provider reads and shows
 		// the built-in status line instead of a stale provider footer.
 		m.statuslineDisconnected = true
@@ -4877,6 +4888,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		m.cancelAgentsOverviewRefresh(m.backendID)
 		return m, bubbletea.Batch(m.refreshStatusControlsCmd(), m.reconnectThreadApprovalsCmd(reconnectThreads))
+	case ReconnectAttemptFinishedMsg:
+		return m, m.applyReconnectAttemptFinished(msg)
 	case TurnInterruptedMsg:
 		if m.applyInactiveThreadTurnInterrupted(msg) {
 			return m, m.refreshStatusControlsCmd()
@@ -5801,6 +5814,15 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		if m.applyVimModeKey(msg, keySpec) {
 			return m, nil
+		}
+		// Rust #63599: Ctrl+R starts a fresh reconnect attempt in an eligible
+		// disconnected conversation. Vim Normal mode keeps Ctrl+R redo because
+		// the composer only accepts the shortcut in Insert mode.
+		if m.appServerDisconnected && keySpec == "ctrl-r" && m.acceptsReconnectShortcut() {
+			if cmd := m.retryReconnect(); cmd != nil {
+				m.clearComposerPasteWindow()
+				return m, cmd
+			}
 		}
 		if m.applyComposerEditHistoryKey(keySpec) {
 			return m, nil

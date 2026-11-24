@@ -173,6 +173,11 @@ func (m *Model) applyAgentsCommand() bubbletea.Cmd {
 	// Rust #44424: hidden tasks stay hidden across dashboard close/reopen.
 	m.agentsOverview.SetHiddenThreads(m.agentsOverviewHidden)
 	m.agentsOverviewNotice = ""
+	if m.appServerDisconnected && m.canRetryReconnect() {
+		// Rust #63599 directs an offline overview back to the conversation,
+		// where Ctrl+R restarts the connection.
+		m.agentsOverviewNotice = "Reconnect failed \u2014 return to the conversation and press Ctrl+R to retry"
+	}
 	m.agentsOverviewBusy = false
 	m.agentsOverviewArchiveError = ""
 	// Invalidate pages requested by a previous dashboard session instead of
@@ -426,7 +431,13 @@ func (m *Model) applyAgentsOverviewList(message agentsOverviewListMsg) bubbletea
 			backendState.pending = true
 		}
 		// Rust #49106: a failed page request keeps the row as a retry target.
-		m.agentsOverviewNotice = "Failed to load shared agents: " + strings.TrimSpace(message.err.Error())
+		// Rust #63599: while offline, the notice points back to Ctrl+R instead
+		// of repeating transport text already shown in the conversation.
+		if m.appServerDisconnected && m.canRetryReconnect() {
+			m.agentsOverviewNotice = "Reconnect failed \u2014 return to the conversation and press Ctrl+R to retry"
+		} else {
+			m.agentsOverviewNotice = "Failed to load shared agents: " + strings.TrimSpace(message.err.Error())
+		}
 		m.agentsOverviewPending = false
 		m.syncAgentsOverviewBackendView()
 		cmds := make([]bubbletea.Cmd, 0, 2)
