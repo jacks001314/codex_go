@@ -49931,11 +49931,12 @@
    ],
    "evidence": [
     "Chooser Files rows/tabs: inventory, scan and document loading landed; row rendering and selection are pending.",
-    "plan: update/plan_2026_11_16.md batch 74"
+    "plan: update/plan_2026_11_16.md batch 74",
+    "Batch 315: #61922 is fully carried in Go, so the stale precondition is cleared. Conversation files list beside the saved chats under a Files and a Markdown files group and open in the sidebar pane without a transcript coordinate (sidebar_chooser.go paintSidebarFileRow, and acceptSidebarChooser clears file.Location before openSidebarFileDocument); rows carry the directory context and shrink to a both-ends summary on narrow panes, the p full-path view and its scrolling live in sidebar_document_path.go, and the unsupported-host reason comes from app/sidebar_files_refresh.go sidebarPreviewUnavailableForEmbedded and sidebarPreviewUnavailableForRemote with the Rust strings Requires workspace on server host and Preview unavailable on Windows, painted in place of the directory text and leaving the row inert. Wheel scrolling moves the list independently of the selection, keyboard paging uses the visible row count, hover paints the pointer row, and restoreSidebarFileSelection keeps the chosen path selected as the inventory grows. Rows, tabs and footer hints all activate through sidebar_press.go handleSidebarPressMouse, which requires the release to hit the target the press captured in the same pane state. Tests: tui/tea/sidebar_chooser_files_like_rust_test.go (group headers, narrow rows, preview constraint and inert rows, wheel scroll, path view, selection preserved across inventory changes, transcript links, host merge, patch promotion, paging chain), the new sidebar_chooser_row_press_like_rust_test.go (a press on one row released on another starts nothing while the matching pair runs the row action; reverting the press match in handleSidebarPressMouse fails it), sidebar_press_like_rust_test.go (tab and footer press/release, background press returns focus), sidebar_chooser_hover_like_rust_test.go, sidebar_chooser_paging_mouse_like_rust_test.go, sidebar_document_path_like_rust_test.go and app/sidebar_files_refresh_like_rust_test.go. go test ./tui/tea with those selectors, go test ./app -run SidebarFiles|SidebarPreview and go build ./... pass."
    ],
    "kind": "runtime",
    "sha": "42248f5ef988883cebce298c2279ce22cb536726",
-   "status": "blocked_precondition",
+   "status": "complete",
    "subject": "Add conversation files to the TUI sidebar chooser (#61922)"
   },
   {
