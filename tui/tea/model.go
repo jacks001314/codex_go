@@ -3376,6 +3376,10 @@ type Model struct {
 	// chooser can list subagents and their statuses (Rust #62149
 	// sidebar_subagents::Overview).
 	sidebarAgentTrees   map[string]*sidebarAgentTree
+	// pendingSidebarSubagent records a transcript load started from the
+	// Subagents list; its AgentSwitchResultMsg opens the watch-only pane
+	// instead of switching the main conversation (Rust #62157).
+	pendingSidebarSubagent *sidebarSubagentOpen
 	sidebarAgentRequest uint64
 	// pendingSideTabCloseThreadID holds the tab waiting on the close
 	// confirmation, so a replaced dialog cannot close a different chat.

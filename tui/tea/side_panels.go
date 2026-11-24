@@ -341,7 +341,13 @@ func (m *Model) renderPassiveSidePane(side *activeSideConversation, sidePassive 
 	}
 	cache := &transcriptMessageCache{}
 	content := m.renderSidePaneContent(cache, threadID, messages, width)
-	rows, clamped, maxFirst := m.composeSidePane(threadID, content, m.paneStatusForThread(threadID), draft, width, height, first)
+	var rows []string
+	var clamped, maxFirst int
+	if sidePassive && watchOnlySidePane(side) {
+		rows, clamped, maxFirst = m.composeWatchOnlySidePane(content, height, first)
+	} else {
+		rows, clamped, maxFirst = m.composeSidePane(threadID, content, m.paneStatusForThread(threadID), draft, width, height, first)
+	}
 	for index := range rows {
 		// A pane must never paint past the divider, even when a transcript row
 		// (a table or an unbreakable token) is wider than its column.
@@ -539,6 +545,31 @@ func sidePaneFrameFor(height int) sidePaneFrame {
 		transcript = 1
 	}
 	return sidePaneFrame{transcript: transcript, status: status, composer: composer, hint: hint}
+}
+
+// watchOnlySidePaneFrame is Rust #62157's watch-only reader: the pane has no
+// composer and no status line, so the transcript owns the whole column.
+func watchOnlySidePaneFrame(height int) sidePaneFrame {
+	if height <= 0 {
+		return sidePaneFrame{transcript: 1}
+	}
+	return sidePaneFrame{transcript: height}
+}
+
+// composeWatchOnlySidePane paints a read-only subagent transcript without the
+// composer, draft preview, or status rows a side chat reserves.
+func (m *Model) composeWatchOnlySidePane(content string, height int, first int) ([]string, int, int) {
+	frame := watchOnlySidePaneFrame(height)
+	lines, clamped, maxFirst := sidePaneWindow(content, frame.transcript, first)
+	rows := make([]string, 0, height)
+	rows = append(rows, lines...)
+	for len(rows) < height {
+		rows = append(rows, "")
+	}
+	if len(rows) > height {
+		rows = rows[:height]
+	}
+	return rows, clamped, maxFirst
 }
 
 // composeSidePane builds exactly `height` rows: the windowed transcript, the

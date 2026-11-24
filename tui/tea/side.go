@@ -229,6 +229,11 @@ func (m *Model) toggleSideConversation() bubbletea.Cmd {
 		return nil
 	}
 	side := m.activeSide
+	if side.WatchOnly {
+		// Rust #62157: the watch-only reader cannot own the composer, so the
+		// agent transcript never replaces the parent conversation.
+		return nil
+	}
 	// Capture the pane that is about to lose focus before the transcript and
 	// composer switch to its counterpart.
 	m.parkSidePaneInteraction(side)
@@ -398,6 +403,11 @@ type activeSideConversation struct {
 	SideStatus        string
 	SidePlaceholder   string
 	ShowingSide       bool
+	// WatchOnly marks a parent-owned subagent transcript opened in the side
+	// pane (Rust #62157 docked_agent). The pane is a read-only reader: it never
+	// owns the composer, never becomes the main conversation, and closing it
+	// only drops the tab so the agent's own thread is never archived.
+	WatchOnly bool
 	// Voice-handoff markers are per thread. The parent snapshot and the side
 	// snapshot stand in for the two ThreadEventStores Rust keeps
 	// (thread_events.rs:69-86), so each carries its own set and a retained
@@ -512,6 +522,14 @@ func (m *Model) forgetRetainedSideConversation(side *activeSideConversation) {
 // channel, and thread state when /side reopens a retained conversation.
 func (m *Model) activateRetainedSideConversation(side *activeSideConversation, userMessage string) bubbletea.Cmd {
 	if m == nil || m.State == nil || side == nil {
+		return nil
+	}
+	if side.WatchOnly {
+		m.retainSideConversation(side)
+		m.activeSide = side
+		side.ShowingSide = false
+		m.resetSidePaneViewState()
+		m.refreshTranscript()
 		return nil
 	}
 	currentThreadID := strings.TrimSpace(m.State.ThreadID)
@@ -866,6 +884,11 @@ func (m *Model) returnFromSideConversation() bubbletea.Cmd {
 		return nil
 	}
 	side := m.activeSide
+	if side.WatchOnly {
+		// A parent-owned subagent transcript owns no side chat, so returning
+		// from it only drops the reader (Rust #62157).
+		return m.closeSidebarSubagentTranscript(side)
+	}
 	if m.onCloseSide != nil {
 		params := SideCloseParams{
 			ParentThreadID: side.ParentThreadID,

@@ -519,11 +519,16 @@ func (m *Model) applySidebarAgentsLoaded(message SidebarAgentsLoadedMsg) bubblet
 	return nil
 }
 
-// switchToSidebarAgent opens a Subagents row's conversation, reusing the agent
-// switch path the picker uses (Rust App::select_agent_thread).
+// switchToSidebarAgent opens a Subagents row. A parent-owned subagent opens in
+// the sidebar pane so the parent conversation stays visible (Rust #62157
+// App::open_sidebar_agent); any other thread keeps the picker's switch path
+// (Rust App::select_agent_thread).
 func (m *Model) switchToSidebarAgent(threadID string) bubbletea.Cmd {
 	if m == nil || strings.TrimSpace(threadID) == "" {
 		return nil
+	}
+	if cmd, ok := m.openSidebarSubagentTranscript(threadID); ok {
+		return cmd
 	}
 	return m.applyAgentModalOption(threadID)
 }

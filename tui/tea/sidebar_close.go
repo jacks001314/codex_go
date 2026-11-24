@@ -129,6 +129,11 @@ func (m *Model) sidebarTabCloseLosses(side *activeSideConversation) []string {
 	if m == nil || side == nil {
 		return nil
 	}
+	if side.WatchOnly {
+		// The reader holds no draft and no chat history of its own, so closing it
+		// discards nothing the user typed.
+		return nil
+	}
 	displayed := m.activeSide == side && side.ShowingSide
 	var losses []string
 	if displayed && m.isTaskRunning() {
@@ -184,6 +189,11 @@ func (m *Model) respondSideTabCloseModal(optionID string, cancelled bool) bubble
 func (m *Model) executeSidebarTabClose(side *activeSideConversation) bubbletea.Cmd {
 	if m == nil || side == nil {
 		return nil
+	}
+	if side.WatchOnly {
+		// A parent-owned subagent transcript owns no side chat: closing the tab
+		// must not archive the agent's thread (Rust #62157 close_agents).
+		return m.closeSidebarSubagentTranscript(side)
 	}
 	if m.activeSide == side && side.ShowingSide {
 		return m.returnFromSideConversation()

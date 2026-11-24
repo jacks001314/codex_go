@@ -341,6 +341,11 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 	if m == nil {
 		return
 	}
+	if open := m.pendingSidebarSubagent; open != nil && strings.TrimSpace(message.ThreadID) == open.ThreadID {
+		m.pendingSidebarSubagent = nil
+		m.applySidebarSubagentTranscript(open, message)
+		return
+	}
 	if message.Err != nil {
 		m.discardPendingAgentsOverviewDraft()
 		text := strings.TrimSpace(message.Err.Error())
