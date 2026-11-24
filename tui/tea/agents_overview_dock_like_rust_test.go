@@ -181,3 +181,35 @@ func TestAgentsOverviewDockMouseFocusAndResizeLikeRust(t *testing.T) {
 		t.Fatalf("resized dock lost the conversation:\n%s", painted)
 	}
 }
+
+// Rust #62990: leader a opens the Command Center by default, and focuses the
+// dock that is already beside the conversation.
+func TestLeaderAOpensOrFocusesCommandCenterLikeRust(t *testing.T) {
+	model := newAgentsOverviewDockModel(t, 120)
+	model.closeAgentsOverview()
+	if model.agentsOverview != nil {
+		t.Fatal("close left the Command Center open")
+	}
+	actions, _, ok := model.leaderBindingsFor("ctrl-x", nil)
+	if !ok || actions["a"] != "global.open_agents" {
+		t.Fatalf("leader a = %q, want global.open_agents", actions["a"])
+	}
+
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlX})
+	model.Update(runes("a"))
+	if model.agentsOverview == nil {
+		t.Fatal("leader a did not open the Command Center")
+	}
+	if !model.agentsOverviewDockOpen() || model.agentsOverviewDockFocus != agentsOverviewDockCenter {
+		t.Fatalf("opened dock = open %t focus %q", model.agentsOverviewDockOpen(), model.agentsOverviewDockFocus)
+	}
+
+	if !model.focusAgentsOverviewDockConversation() {
+		t.Fatal("conversation did not take focus")
+	}
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlX})
+	model.Update(runes("a"))
+	if model.agentsOverviewDockFocus != agentsOverviewDockCenter {
+		t.Fatalf("leader a left focus at %q, want the dock", model.agentsOverviewDockFocus)
+	}
+}

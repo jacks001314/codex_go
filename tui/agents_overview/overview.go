@@ -519,6 +519,11 @@ type View struct {
 	// FilterHint is the resolved tab/shift+tab hint shown at the right edge of
 	// the status tab row when the terminal is wide enough (Rust #46839).
 	FilterHint string
+	// DockOpen makes the task list paint a second status and branch line per
+	// row and count it when paging (Rust #62990 docked task rows).
+	DockOpen bool
+	// DockFocused marks the docked center as the input owner.
+	DockFocused bool
 	// pageHeight is the visible list height from the last render. PageUp and
 	// PageDown move by this many displayed rows (Rust #46837).
 	pageHeight int

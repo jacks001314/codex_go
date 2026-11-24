@@ -48,11 +48,11 @@ func TestPresetsLeaderChordOpensQuickDialLikeRust(t *testing.T) {
 func TestPresetsLeaderChordCancelsOnOtherKeyAndTimeoutLikeRust(t *testing.T) {
 	model := leaderChordModel(t, nil)
 	model.Update(key(keymsg.KeyCtrlX))
-	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'a'}})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'q'}})
 	if model.leaderChordPending || model.quickDialMenu {
 		t.Fatalf("other key state pending=%v menu=%v", model.leaderChordPending, model.quickDialMenu)
 	}
-	if got := model.composerText(); got != "a" {
+	if got := model.composerText(); got != "q" {
 		t.Fatalf("cancelled completion did not reach the composer: %q", got)
 	}
 

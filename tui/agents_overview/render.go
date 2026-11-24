@@ -599,6 +599,10 @@ func (v *View) renderRows(height, listWidth int, styled bool, progressInFooter b
 		return []string{renderLine("", []span{{text: message, style: spanDim}}, listWidth, styled)}
 	}
 	grouping := v.State.Grouping
+	taskLines := 1
+	if v.DockOpen {
+		taskLines = 2
+	}
 	selPos := 0
 	if v.hasMore && v.Selected == ShowMoreIndex {
 		// Rust #49106: the "Show more" row sits after the published list.
@@ -614,16 +618,16 @@ func (v *View) renderRows(height, listWidth int, styled bool, progressInFooter b
 
 	// Walk back from the selection while the accumulated height fits.
 	first := selPos
-	accumulated := 1
+	accumulated := taskLines
 	if selPos >= len(visible) {
 		first = len(visible) - 1
 		accumulated = 2 // gap + "Show more" row
 	}
 	for first > 0 {
 		groupChanged := !v.sameGroup(grouping, visible[first-1], visible[first])
-		added := 1
+		added := taskLines
 		if groupChanged {
-			added = 1 + 1 // group header + separator
+			added += 1 + 1 // group header + separator
 		}
 		if accumulated+added > height {
 			break
@@ -667,6 +671,12 @@ func (v *View) renderRows(height, listWidth int, styled bool, progressInFooter b
 		}
 		v.pendingHits = append(v.pendingHits, rowHit{lineOffset: len(lines), threadID: v.Rows[index].ThreadID})
 		lines = append(lines, renderLine("", v.renderRowSpans(index, grouping != GroupingStatus, listWidth), listWidth, styled))
+		if v.DockOpen && len(lines) < height {
+			// Rust #62990: the docked center adds a status and branch line
+			// that opens the same task.
+			v.pendingHits = append(v.pendingHits, rowHit{lineOffset: len(lines), threadID: v.Rows[index].ThreadID})
+			lines = append(lines, renderLine("", v.dockContextSpans(index), listWidth, styled))
+		}
 	}
 	// Rust #49106: a selectable "Show more" row closes the list while another
 	// page exists, including during search and after a failed request.
@@ -682,6 +692,21 @@ func (v *View) renderRows(height, listWidth int, styled bool, progressInFooter b
 
 // recordRowHits stores the painted task rows in absolute screen coordinates so
 // a pointer click can find the row it landed on (Rust #62990 click_row).
+// dockContextSpans is the second line of a docked task: its status and Git
+// branch, indented under the title (Rust #62990 rows.rs Context).
+func (v *View) dockContextSpans(index int) []span {
+	row := &v.Rows[index]
+	detail := "    " + v.statusLabelForRow(row)
+	if branch := strings.TrimSpace(row.GitBranch); branch != "" {
+		detail += " \u00b7 " + branch
+	}
+	style := spanDim
+	if v.Selected == index {
+		style = spanPlain
+	}
+	return []span{{text: detail, style: style}}
+}
+
 func (v *View) recordRowHits(listTop int) {
 	if v == nil || len(v.pendingHits) == 0 {
 		return

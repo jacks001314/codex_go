@@ -70,6 +70,7 @@ var leaderShortcuts = []struct {
 	implicit bool
 }{
 	{"global", "select_transcript", true},
+	{"global", "open_agents", true},
 	{"chat", "open_presets", true},
 	{"global", "focus_main_composer", true},
 	{"global", "focus_sidebar_content", true},
@@ -98,6 +99,7 @@ var leaderShortcuts = []struct {
 // #59130/#59208/#59287). Keeping them out of the catalog defaults lets a user
 // assign the same chord to another action without a false conflict.
 var implicitWorkspaceLeaderCompletions = map[string][]string{
+	"global.open_agents":           {"a"},
 	"global.focus_main_composer":   {"c"},
 	"global.focus_sidebar_content": {"s"},
 	"global.focus_sidebar_tabs":    {"t"},
@@ -222,6 +224,14 @@ func (m *Model) dispatchLeaderAction(action string) bubbletea.Cmd {
 	switch action {
 	case "global.select_transcript":
 		return m.beginTranscriptSelection()
+	case "global.open_agents":
+		// Rust #62990: leader a opens the Command Center, or focuses the dock
+		// that is already beside the conversation.
+		if m.agentsOverview != nil && m.agentsOverviewDockOpen() {
+			m.focusAgentsOverviewDockCenter()
+			return nil
+		}
+		return m.applyAgentsCommand()
 	case "chat.open_presets":
 		return m.openQuickDialMenu()
 	case "global.focus_main_composer":

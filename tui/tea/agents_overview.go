@@ -1769,6 +1769,10 @@ func (m *Model) syncAgentsOverviewRenderState() {
 	m.agentsOverview.KeyChordHints = m.agentsOverviewKeyChordHints()
 	m.agentsOverview.FilterHint = m.agentsOverviewFilterHint()
 	m.agentsOverview.Loading = (m.agentsOverviewInflight || m.agentsOverviewPending) && len(m.agentsOverview.Rows) == 0
+	// Rust #62990: the docked center paints a second status and branch line
+	// per task.
+	m.agentsOverview.DockOpen = m.agentsOverviewDockOpen()
+	m.agentsOverview.DockFocused = m.agentsOverviewDockOpen() && m.agentsOverviewDockFocus == agentsOverviewDockCenter
 }
 
 // agentsOverviewFilterKeyAvailable reports whether key is free to drive the
