@@ -16,6 +16,7 @@ import (
 	codexexec "codex_go/exec"
 	"codex_go/prompt"
 	"codex_go/protocol"
+	"codex_go/sandbox"
 	"codex_go/turn"
 
 	"github.com/google/uuid"
@@ -83,6 +84,8 @@ func runRemoteExec(ctx context.Context, parsed *cli.Parsed, stdin io.Reader, std
 	defer client.close()
 
 	var thread *appserver.Thread
+	approvalPolicy := sandbox.ApprovalOnRequest
+	approvalsReviewer := string(config.ApprovalsReviewerUser)
 	if sessionID != "" {
 		var resumed appserver.ThreadResumeResponse
 		if err := remoteSessionRequest(ctx, client, appserver.MethodThreadResume, appserver.ThreadResumeParams{
@@ -92,15 +95,18 @@ func runRemoteExec(ctx context.Context, parsed *cli.Parsed, stdin io.Reader, std
 			return err
 		}
 		thread = resumed.Thread
+		approvalPolicy, approvalsReviewer = remoteExecApprovalSettings(resumed.ApprovalPolicy, resumed.ApprovalsReviewer)
 	} else {
 		var started appserver.ThreadStartResponse
+		// A fresh remote thread keeps the server's configured approvals. Sending
+		// never here was the bug fixed by Rust #63515.
 		if err := remoteSessionRequest(ctx, client, appserver.MethodThreadStart, appserver.ThreadStartParams{
-			ApprovalPolicy: "never",
-			Model:          model,
+			Model: model,
 		}, &started); err != nil {
 			return err
 		}
 		thread = started.Thread
+		approvalPolicy, approvalsReviewer = remoteExecApprovalSettings(started.ApprovalPolicy, started.ApprovalsReviewer)
 	}
 	if thread == nil || strings.TrimSpace(thread.ID) == "" {
 		return errors.New("app-server did not return a thread")
@@ -111,14 +117,14 @@ func runRemoteExec(ctx context.Context, parsed *cli.Parsed, stdin io.Reader, std
 	if err := renderer.PrintThreadStarted(thread.ID); err != nil {
 		return err
 	}
+	codexexec.WarnIfHumanApproval(stderr, approvalPolicy, approvalsReviewer, false)
 
 	var response turn.TurnStartResponse
 	if err := remoteSessionRequest(ctx, client, appserver.MethodTurnStart, turn.TurnStartParams{
-		ThreadID:       thread.ID,
-		TurnTrigger:    "exec",
-		ApprovalPolicy: "never",
-		Model:          model,
-		Effort:         effort,
+		ThreadID:    thread.ID,
+		TurnTrigger: "exec",
+		Model:       model,
+		Effort:      effort,
 		Input: []turn.TurnUserInput{{
 			Type: "text",
 			Text: promptText,
@@ -161,6 +167,27 @@ func runRemoteExec(ctx context.Context, parsed *cli.Parsed, stdin io.Reader, std
 		return &ExitError{Code: 1, Silent: true}
 	}
 	return nil
+}
+
+// remoteExecApprovalSettings normalizes the server-owned approvals returned by
+// thread start or resume. An omitted policy defaults to on-request; a granular
+// object remains a non-never policy for the warning decision.
+func remoteExecApprovalSettings(policyValue any, reviewerValue *string) (sandbox.AskForApproval, string) {
+	policy := sandbox.ApprovalOnRequest
+	switch value := policyValue.(type) {
+	case string:
+		switch sandbox.AskForApproval(strings.TrimSpace(value)) {
+		case sandbox.ApprovalNever, sandbox.ApprovalOnRequest, sandbox.ApprovalUnlessTrusted, sandbox.ApprovalGranular:
+			policy = sandbox.AskForApproval(strings.TrimSpace(value))
+		}
+	case map[string]any:
+		policy = sandbox.ApprovalGranular
+	}
+	reviewer := string(config.ApprovalsReviewerUser)
+	if reviewerValue != nil && strings.TrimSpace(*reviewerValue) != "" {
+		reviewer = strings.TrimSpace(*reviewerValue)
+	}
+	return policy, reviewer
 }
 
 // validateRemoteExecOptions mirrors Rust remote::run's ensure!: model, reasoning

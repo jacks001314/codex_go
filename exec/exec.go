@@ -433,6 +433,9 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	// Rust #63515: a resumed thread keeps the approvals it saved unless this
 	// run explicitly selected its own.
 	approvalPolicy, approvalsReviewer = resumeInheritedApprovals(cfg, req, resumePermissions, approvalPolicy, approvalsReviewer)
+	if err := validateExecRequirementConstrainedSandbox(cfg, req, permissionProfile, approvalPolicy); err != nil {
+		return nil, err
+	}
 	// Rust #63515: warn before an interactive approval could be requested;
 	// exec rejects it because it runs non-interactively.
 	warnIfHumanApproval(stderr, approvalPolicy, approvalsReviewer, true)

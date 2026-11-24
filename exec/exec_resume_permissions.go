@@ -2,6 +2,7 @@ package exec
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -130,6 +131,46 @@ func (r *Runner) resolveExecPermissionProfileForRun(cfg *config.Config, req *Req
 	}
 	// Older histories recorded no permission selection; they ran read-only.
 	return resolveExecPermissionProfileWithAddDirs(cfg, sandbox.BuiltInPermissionProfileReadOnly, cwd, roots, addDirs)
+}
+
+// validateExecRequirementConstrainedSandbox mirrors Rust #63515's final guard:
+// an explicit full-access selector may be downgraded to read-only by managed
+// requirements, but it must not then run with approvals disabled. The server
+// or local exec would otherwise hide the rejected full-access request behind a
+// read-only fallback whose approval policy can never ask for access.
+func validateExecRequirementConstrainedSandbox(cfg *config.Config, req *Request, effective *config.SandboxPermissionProfileResolution, approvalPolicy sandbox.AskForApproval) error {
+	if cfg == nil || cfg.Requirements == nil || approvalPolicy != sandbox.ApprovalNever {
+		return nil
+	}
+	requestedID := execSandboxProfileID(req)
+	if requestedID == "" || cfg.PermissionProfileRequirementWarningFor(requestedID) == "" {
+		return nil
+	}
+	if effective == nil || effective.Profile == nil || effective.Profile.Disabled ||
+		effective.Profile.SandboxPolicy == nil || effective.Profile.SandboxPolicy.Kind != sandbox.SandboxReadOnly {
+		return nil
+	}
+	cwd := requestCWD(req)
+	addDirs := execAdditionalWorkspaceRoots(req, cwd)
+	roots := append([]string{cwd}, addDirs...)
+	// Resolve the explicit selection without requirements to distinguish a
+	// deliberately read-only request from a downgraded full-access one.
+	unconstrained := *cfg
+	unconstrained.Requirements = nil
+	original, err := resolveExecPermissionProfileWithAddDirs(
+		&unconstrained,
+		requestedID,
+		cwd,
+		roots,
+		addDirs,
+	)
+	if err != nil {
+		return err
+	}
+	if original == nil || original.Profile == nil || !original.Profile.Disabled {
+		return nil
+	}
+	return errors.New("`approval_policy = \"never\"` cannot be used because requirements do not allow `sandbox_mode = \"danger-full-access\"`; Codex would fall back to read-only permissions with approvals disabled. Choose an `approval_policy` based on what you need, such as `on-request`, or choose an allowed sandbox mode.")
 }
 
 func resolveExecPermissionProfileWithAddDirs(cfg *config.Config, profileID string, cwd string, roots []string, addDirs []string) (*config.SandboxPermissionProfileResolution, error) {

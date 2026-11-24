@@ -13,6 +13,13 @@ import (
 // effective settings call for a human reviewer (Rust exec/src/approval_warning.rs,
 // #63515). Exec runs non-interactively, so it rejects approval requests it
 // receives; the warning tells the user before a turn hits one.
+// WarnIfHumanApproval exposes the non-interactive approval warning to the
+// remote exec client, which discovers the server-owned approvals after thread
+// start or resume (Rust #63515).
+func WarnIfHumanApproval(stderr io.Writer, policy sandbox.AskForApproval, reviewer string, flagsSupported bool) {
+	warnIfHumanApproval(stderr, policy, reviewer, flagsSupported)
+}
+
 func warnIfHumanApproval(stderr io.Writer, policy sandbox.AskForApproval, reviewer string, flagsSupported bool) {
 	if stderr == nil {
 		return

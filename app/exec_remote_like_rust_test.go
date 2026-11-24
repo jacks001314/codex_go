@@ -18,6 +18,7 @@ import (
 
 	"codex_go/appserver"
 	"codex_go/cli"
+	"codex_go/sandbox"
 	"codex_go/turn"
 )
 
@@ -65,12 +66,14 @@ func TestRemoteExecRunsNewThreadLikeRust(t *testing.T) {
 					remoteTUITestSendErr(serverErrs, err)
 					return
 				}
-				if params.ApprovalPolicy != "never" {
-					remoteTUITestSendErr(serverErrs, fmt.Errorf("thread/start approvalPolicy = %#v", params.ApprovalPolicy))
+				if params.ApprovalPolicy != nil {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("thread/start approvalPolicy = %#v, want server default", params.ApprovalPolicy))
 					return
 				}
 				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{
-					"thread": map[string]any{"id": "thread-remote", "status": map[string]any{"type": "idle"}},
+					"thread":            map[string]any{"id": "thread-remote", "status": map[string]any{"type": "idle"}},
+					"approvalPolicy":    "on-request",
+					"approvalsReviewer": "user",
 				}})
 			case string(appserver.MethodTurnStart):
 				var params turn.TurnStartParams
@@ -78,7 +81,7 @@ func TestRemoteExecRunsNewThreadLikeRust(t *testing.T) {
 					remoteTUITestSendErr(serverErrs, err)
 					return
 				}
-				if params.ThreadID != "thread-remote" || params.TurnTrigger != "exec" || params.ApprovalPolicy != "never" ||
+				if params.ThreadID != "thread-remote" || params.TurnTrigger != "exec" || params.ApprovalPolicy != nil ||
 					len(params.Input) != 1 || params.Input[0].Text != "hello" {
 					remoteTUITestSendErr(serverErrs, fmt.Errorf("turn/start params = %#v", params))
 					return
@@ -132,6 +135,9 @@ func TestRemoteExecRunsNewThreadLikeRust(t *testing.T) {
 	handled, err := runRemoteExecRequest(ctx, parsed, strings.NewReader(""), &stdout, &stderr)
 	if err != nil || !handled {
 		t.Fatalf("runRemoteExecRequest() = handled %v, error %v; stderr %s", handled, err, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "WARNING: This thread is configured to ask a human for approval.") {
+		t.Fatalf("stderr missing human-approval warning: %s", stderr.String())
 	}
 
 	events := decodeRemoteExecJSONLines(t, stdout.String())
@@ -198,14 +204,25 @@ func TestRemoteExecResumesThreadLikeRust(t *testing.T) {
 					remoteTUITestSendErr(serverErrs, err)
 					return
 				}
-				if params.ThreadID != threadID || !params.ExcludeTurns {
+				if params.ThreadID != threadID || !params.ExcludeTurns || params.ApprovalPolicy != nil || params.ApprovalsReviewer != nil {
 					remoteTUITestSendErr(serverErrs, fmt.Errorf("thread/resume params = %#v", params))
 					return
 				}
 				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{
-					"thread": map[string]any{"id": threadID, "status": map[string]any{"type": "idle"}},
+					"thread":            map[string]any{"id": threadID, "status": map[string]any{"type": "idle"}},
+					"approvalPolicy":    "on-request",
+					"approvalsReviewer": "user",
 				}})
 			case string(appserver.MethodTurnStart):
+				var params turn.TurnStartParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				if params.ApprovalPolicy != nil || params.ApprovalsReviewer != nil {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("turn/start approvals = %#v/%#v, want inherited settings", params.ApprovalPolicy, params.ApprovalsReviewer))
+					return
+				}
 				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{
 					"turn": map[string]any{"id": "turn-resume", "items": []any{}, "status": "inProgress"},
 				}})
@@ -244,7 +261,7 @@ func TestRemoteExecResumesThreadLikeRust(t *testing.T) {
 	if stdout.String() != "resumed answer\n" {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
-	for _, want := range []string{"thread id: " + threadID, "codex\nresumed answer", "tokens used\n25\n"} {
+	for _, want := range []string{"thread id: " + threadID, "codex\nresumed answer", "tokens used\n25\n", "WARNING: This thread is configured to ask a human for approval."} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("stderr missing %q: %s", want, stderr.String())
 		}
@@ -691,4 +708,21 @@ func decodeRemoteExecJSONLines(t *testing.T, text string) []map[string]any {
 		events = append(events, event)
 	}
 	return events
+}
+
+func TestRemoteExecApprovalSettingsLikeRust(t *testing.T) {
+	reviewer := "user"
+	policy, gotReviewer := remoteExecApprovalSettings("never", &reviewer)
+	if policy != sandbox.ApprovalNever || gotReviewer != "user" {
+		t.Fatalf("never settings = %q/%q", policy, gotReviewer)
+	}
+	auto := "auto_review"
+	policy, gotReviewer = remoteExecApprovalSettings("on-request", &auto)
+	if policy != sandbox.ApprovalOnRequest || gotReviewer != "auto_review" {
+		t.Fatalf("auto settings = %q/%q", policy, gotReviewer)
+	}
+	policy, gotReviewer = remoteExecApprovalSettings(map[string]any{"granular": map[string]any{"sandbox_approval": true}}, nil)
+	if policy != sandbox.ApprovalGranular || gotReviewer != "user" {
+		t.Fatalf("granular settings = %q/%q", policy, gotReviewer)
+	}
 }

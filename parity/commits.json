@@ -55652,11 +55652,14 @@
     "codex_go"
    ],
    "evidence": [
-    "Batch 176: partial - Rust stops codex exec from forcing approval_policy = never: new threads keep their configured approvals, resumed and forked threads inherit the source thread's approval policy and reviewer unless the run explicitly selected one, explicit CLI choices are saved on the resulting thread, and exec warns on stderr before a human approval could be requested, then rejects the request because it runs non-interactively. Go now resolves the policy from the configured approval_policy (protocol default on-request, the on-failure alias included) after review and bypass handling, resolves the reviewer from config (unset means user), inherits the rollout's saved approval_policy/approvals_reviewer on resume unless a CLI flag or a config layer names one (exec_resume_permissions.go + resumeInheritedApprovals), records a thread settings snapshot when --ask-for-approval or --approve-for-me was explicit so a later resume inherits it, and prints exec/approval_warning.go's warning for a human reviewer. A command that needs approval now reaches the approval-required output that exec rejects instead of the never-policy error. Residual: an explicit sandbox selector is not re-validated against the inherited approval policy, and Go has no remote exec client for Rust's remote half."
+    "Local codex exec keeps configured approvals on fresh threads, inherits saved policy and reviewer independently on resume/fork, warns before a human approval can be requested, and now validates a requirements-downgraded explicit full-access selector against the inherited never policy using Rust's exact error. The guard resolves the original selector without requirements so a deliberate read-only request remains valid.",
+    "The remote exec client no longer sends approvalPolicy never on thread start or turn start. It adopts the approval policy and reviewer returned by thread start/resume, keeps those settings on the turn, and emits the remote approval warning without the unsupported resume flags (Rust #63515 remote.rs).",
+    "Tests cover configured/saved local approvals, requirement-constrained full access through Runner.Run, named full-access profiles, remote start/resume inheritance, omission of client approval overrides, and the remote human-review warning.",
+    "go test ./exec -count=1; go test ./app -run 'RemoteExec' -count=1; go build ./...; go vet ./exec ./app; go test ./parity -count=1"
    ],
    "kind": "runtime",
    "sha": "6b776372fde0f7d7af5a2dfa0d475c28e999113f",
-   "status": "partial",
+   "status": "complete",
    "subject": "Honor configured and saved approvals in `codex exec` (#63515)"
   },
   {
