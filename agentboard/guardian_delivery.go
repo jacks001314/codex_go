@@ -1,6 +1,7 @@
 package agentboard
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -81,6 +82,74 @@ type guardianRoutedOriginal struct {
 // guardianDeliveryInput is the payload of the admitted context item.
 type guardianDeliveryInput struct {
 	Sources []guardianRoutedOriginal `json:"sources"`
+}
+
+// EncodeGuardianRoutedOriginal renders the exact stored body of one routed
+// original (Rust RoutedOriginal serialization: {"id":{"ordinal":N},"original":
+// <response item>}). The original must be one JSON object so a reviewer can
+// decode it without guessing at prose.
+func EncodeGuardianRoutedOriginal(id GuardianEvidenceID, original json.RawMessage) (string, error) {
+	trimmed := bytes.TrimSpace(original)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return "", errors.New("routed original requires a JSON object")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(trimmed))
+	var object map[string]json.RawMessage
+	if err := decoder.Decode(&object); err != nil {
+		return "", fmt.Errorf("decode routed original item: %w", err)
+	}
+	if decoder.More() {
+		return "", errors.New("decode routed original item: trailing JSON value")
+	}
+	if len(object) == 0 {
+		return "", errors.New("routed original item must not be empty")
+	}
+	encoded, err := json.Marshal(guardianRoutedOriginal{ID: id, Original: trimmed})
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+// GuardianCapturedEvidence is one original captured with the position that
+// admitted it (Rust EvidenceSnapshot sources).
+type GuardianCapturedEvidence struct {
+	ID       GuardianEvidenceID
+	Original json.RawMessage
+}
+
+// GuardianEvidenceSnapshot is an immutable capture of the originals a review
+// will admit (Rust EvidenceSnapshot). Start is the cursor position the read
+// began at and End the exclusive durable boundary later retrieval binds to;
+// appends that land after the capture cannot enter it.
+type GuardianEvidenceSnapshot struct {
+	Start   GuardianHistoryPosition
+	End     GuardianHistoryPosition
+	Sources []GuardianCapturedEvidence
+}
+
+// Cutoff returns the exclusive durable source boundary of the capture.
+func (s GuardianEvidenceSnapshot) Cutoff() GuardianHistoryPosition {
+	return s.End
+}
+
+// EncodedSources renders every captured original in source order.
+func (s GuardianEvidenceSnapshot) EncodedSources() ([]string, error) {
+	encoded := make([]string, 0, len(s.Sources))
+	for _, source := range s.Sources {
+		text, err := EncodeGuardianRoutedOriginal(source.ID, source.Original)
+		if err != nil {
+			return nil, err
+		}
+		encoded = append(encoded, text)
+	}
+	return encoded, nil
+}
+
+// SourceAdvanced reports whether the capture read past the cursor position
+// (Rust EvidenceSnapshot::source_advanced compares start with end).
+func (s GuardianEvidenceSnapshot) SourceAdvanced() bool {
+	return s.Start != s.End
 }
 
 func parseGuardianRoutedOriginal(text string) (guardianRoutedOriginal, error) {
