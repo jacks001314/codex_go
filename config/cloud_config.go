@@ -707,6 +707,11 @@ func applyCloudConfigBundleWithFilesystemSource(values map[string]any, requireme
 		if _, ok := mapAnyKey(parsed, "config_server", "configServer"); ok {
 			return nil, false, fmt.Errorf("%w: config_server cannot be supplied by fetched policy", ErrInvalidCloudConfig)
 		}
+		// Rust #63476: `[gateway]` bundles a config server and provider
+		// enrollment, so it is local-managed-only for the same reason.
+		if _, ok := mapAnyKey(parsed, "gateway"); ok {
+			return nil, false, fmt.Errorf("%w: gateway may only be configured in local managed requirements", ErrInvalidCloudConfig)
+		}
 		if permissions, ok := parsed["permissions"].(map[string]any); ok {
 			if _, ok := permissions["filesystem"]; ok {
 				cloudFilesystem = true

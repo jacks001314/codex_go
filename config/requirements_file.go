@@ -12,6 +12,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"codex_go/apps"
+	"codex_go/model"
 	"codex_go/network"
 	"codex_go/plugin"
 	"codex_go/sandbox"
@@ -114,6 +115,12 @@ func normalizeNetworkRequirementAliases(values map[string]any) error {
 }
 
 func configRequirementsFromValidatedMap(values map[string]any) (*ConfigRequirements, error) {
+	// Rust #63476: expand the local `[gateway]` enrollment shorthand before the
+	// individual requirement tables are parsed, so its config-server and
+	// provider settings go through the same validation as hand-written ones.
+	if err := expandGatewayRequirements(values); err != nil {
+		return nil, err
+	}
 	if err := normalizeNetworkRequirementAliases(values); err != nil {
 		return nil, err
 	}
@@ -140,6 +147,126 @@ func configRequirementsFromValidatedMap(values map[string]any) (*ConfigRequireme
 		return nil, err
 	}
 	return requirements, nil
+}
+
+// gatewayProviderNameReserved reports whether a `[gateway]` provider name
+// would shadow built-in authentication or turn on Azure-only behavior
+// (Rust `uses_builtin_auth` / `is_azure_provider_name`).
+func gatewayProviderNameReserved(name string) bool {
+	switch name {
+	case model.OpenAIProviderName, model.AmazonBedrockProviderName, model.AmazonBedrockRuntimeProviderName, model.GCPProviderName:
+		return true
+	}
+	return strings.EqualFold(name, "azure")
+}
+
+// gatewayAuthProviderValues copies the shared gateway OAuth configuration into
+// the `model_providers.gateway.gateway_oauth` table. Rust uses one
+// ConfigServerOAuth for both destinations; Go's ConfigServerOAuth does not
+// model `credentials_store`, so that key is forwarded untouched and validated
+// by the provider parser instead.
+func gatewayAuthProviderValues(auth map[string]any) map[string]any {
+	values := map[string]any{}
+	for _, key := range []string{
+		"authorization_url", "authorizationUrl",
+		"token_url", "tokenUrl",
+		"device_authorization_url", "deviceAuthorizationUrl",
+		"client_id", "clientId",
+		"resource",
+		"scopes",
+		"redirect_port", "redirectPort",
+		"credentials_store", "credentialsStore",
+	} {
+		if value, ok := auth[key]; ok {
+			values[key] = value
+		}
+	}
+	return values
+}
+
+// expandGatewayRequirements turns a local `[gateway]` enrollment into the
+// config-server and model-provider requirements it stands for (Rust #63476).
+// The enrollment supplies one base URL for managed configuration at the gateway
+// root and a required Responses provider at `/v1` with model discovery at
+// `/v1/models`, both authenticated with the same OAuth settings.
+func expandGatewayRequirements(values map[string]any) error {
+	if values == nil {
+		return nil
+	}
+	raw, present := values["gateway"]
+	if !present {
+		return nil
+	}
+	delete(values, "gateway")
+	table, ok := raw.(map[string]any)
+	if !ok {
+		return errors.New("invalid type for gateway: expected table")
+	}
+	for name := range table {
+		switch name {
+		case "name", "base_url", "baseUrl", "auth":
+		default:
+			return fmt.Errorf("gateway: unknown field `%s`, expected `name`, `base_url` or `auth`", name)
+		}
+	}
+	baseURL, ok := stringAnyKey(table, "base_url", "baseUrl")
+	if !ok || strings.TrimSpace(baseURL) == "" {
+		return errors.New("gateway: missing field `base_url`")
+	}
+	auth, ok := mapAnyKey(table, "auth")
+	if !ok {
+		return errors.New("gateway: missing field `auth`")
+	}
+	serverValues := map[string]any{"base_url": baseURL, "oauth": auth}
+	server, err := ConfigServerFromMap(serverValues)
+	if err != nil {
+		return fmt.Errorf("gateway: %s", strings.ReplaceAll(err.Error(), "config_server", "gateway"))
+	}
+	root, err := server.ValidatedBaseURL()
+	if err != nil {
+		return fmt.Errorf("gateway: %s", strings.ReplaceAll(err.Error(), "config_server", "gateway"))
+	}
+	root = strings.TrimSuffix(root, "/")
+
+	name := "Gateway"
+	if configured, ok := stringAnyKey(table, "name"); ok && strings.TrimSpace(configured) != "" {
+		name = strings.TrimSpace(configured)
+	}
+	if gatewayProviderNameReserved(name) {
+		return errors.New("gateway: gateway.name must be a non-empty, non-reserved provider name")
+	}
+
+	// A single layer may not configure the same destination twice: the
+	// shorthand must be the only source of the config server and provider it
+	// supplies (Rust requirements composition rejects these conflicts).
+	if _, present := values["config_server"]; present {
+		return errors.New("[gateway] supplies config_server; remove the separate requirement")
+	}
+	if provider, ok := stringAnyKey(values, "model_provider", "modelProvider"); ok && provider != "" && provider != "gateway" {
+		return errors.New("[gateway] supplies model_provider; remove the separate requirement")
+	}
+	if providers, ok := mapAnyKey(values, "model_providers", "modelProviders"); ok {
+		if _, present := providers["gateway"]; present {
+			return errors.New("[gateway] supplies model_providers.gateway; remove the separate requirement")
+		}
+	}
+
+	values["config_server"] = map[string]any{"base_url": root, "oauth": auth}
+	values["model_provider"] = "gateway"
+	providers, _ := mapAnyKey(values, "model_providers", "modelProviders")
+	if providers == nil {
+		providers = map[string]any{}
+	}
+	providers["gateway"] = map[string]any{
+		"name":                 name,
+		"base_url":             root + "/v1",
+		"model_catalog_url":    root + "/v1/models",
+		"wire_api":             "responses",
+		"requires_openai_auth": false,
+		"gateway_oauth":        gatewayAuthProviderValues(auth),
+	}
+	values["model_providers"] = providers
+	return nil
 }
 
 // permissionsNetworkReservedProfileError mirrors Rust #58182: in
