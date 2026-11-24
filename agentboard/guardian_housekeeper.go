@@ -254,7 +254,9 @@ func (h *GuardianHousekeeper) routeNext(ctx context.Context, sources []GuardianR
 	}
 	for index, source := range sources {
 		destinations := decision.Routes[index]
-		recipients := make(map[string]string, len(destinations))
+		// One committed original reaches the live reviewer inboxes subscribed
+		// to any destination channel, once per inbox (Rust #63357).
+		posts := make(map[string]string, len(destinations))
 		text := source.Text
 		for position, channel := range destinations {
 			requestID, err := GuardianEvidenceRequestID(source.ID.Ordinal, channel)
@@ -266,7 +268,7 @@ func (h *GuardianHousekeeper) routeNext(ctx context.Context, sources []GuardianR
 				// The last destination takes the body; the others need copies.
 				text = ""
 			}
-			post, subscribers, err := h.board.AppendWithSubscribers(ctx, h.owner, AppendRequest{
+			post, _, err := h.board.AppendWithSubscribers(ctx, h.owner, AppendRequest{
 				RequestID:   requestID,
 				Destination: PostDestination{Kind: "channel", Name: channel},
 				Text:        body,
@@ -277,15 +279,9 @@ func (h *GuardianHousekeeper) routeNext(ctx context.Context, sources []GuardianR
 			if post == nil {
 				return 0, errors.New("housekeeper append returned no post")
 			}
-			// One original reaches an actor once, even when several of its
-			// destinations match the same subscription.
-			for _, actor := range subscribers {
-				if _, ok := recipients[actor]; !ok {
-					recipients[actor] = post.MessageID
-				}
-			}
+			posts[channel] = post.MessageID
 		}
-		if err := h.delivery.Publish(source.ID, recipients); err != nil {
+		if _, err := h.delivery.PublishByChannel(source.ID, posts); err != nil {
 			return 0, err
 		}
 	}

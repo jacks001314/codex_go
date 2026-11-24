@@ -25,7 +25,7 @@ func guardianHousekeeperFixture(t *testing.T) (context.Context, *LocalAgentMessa
 // TestGuardianHousekeeperRoutesAndPublishesLikeRust mirrors Rust guardian-v3
 // #62135: one routing decision refreshes the descriptions it changed, appends
 // each original to every destination under its ordinal request id, and publishes
-// the committed post to the subscribers that append reported.
+// the committed post to the live reviewer inboxes subscribed to its channel.
 func TestGuardianHousekeeperRoutesAndPublishesLikeRust(t *testing.T) {
 	ctx, board, delivery, root, reviewer := guardianHousekeeperFixture(t)
 	if err := board.UpsertChannel(ctx, root, UpsertChannelRequest{ChannelName: "existing", Description: "kept"}); err != nil {
@@ -36,6 +36,11 @@ func TestGuardianHousekeeperRoutesAndPublishesLikeRust(t *testing.T) {
 		Change: Subscribe,
 	}); err != nil {
 		t.Fatalf("subscribe reviewer: %v", err)
+	}
+	// Routing follows the live reviewer inbox, so the loaded reviewer records
+	// the same selection (Rust #63357).
+	if err := delivery.Inbox(reviewer).SetSubscription("existing", true); err != nil {
+		t.Fatalf("subscribe live reviewer: %v", err)
 	}
 
 	var seenCatalog map[string]*string

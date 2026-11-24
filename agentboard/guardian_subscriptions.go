@@ -3,6 +3,7 @@ package agentboard
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"codex_go/agent"
 	"codex_go/tool"
@@ -23,12 +24,20 @@ var guardianNilMessageIDValue = "00000000-0000-0000-0000-000000000000"
 // acting reviewer's subscriptions: posting, other agents' subscriptions and
 // channel management stay outside the reviewer surface.
 func NewGuardianSubscriptionTools(board AgentMessageBoard, caller string, callerPath agent.AgentPath, namespace string, namespaceDescription string) []tool.Executor {
+	return NewGuardianSubscriptionToolsWithInbox(board, caller, callerPath, nil, namespace, namespaceDescription)
+}
+
+// NewGuardianSubscriptionToolsWithInbox returns the same tools while keeping the
+// caller's live reviewer inbox in step with the persisted subscription, so the
+// housekeeper routes new evidence only to reviewers that are loaded right now
+// (Rust #63357: subscriptions live on the live reviewer inbox).
+func NewGuardianSubscriptionToolsWithInbox(board AgentMessageBoard, caller string, callerPath agent.AgentPath, inbox *GuardianActorInbox, namespace string, namespaceDescription string) []tool.Executor {
 	if board == nil {
 		return nil
 	}
 	return []tool.Executor{
-		newGuardianSubscriptionTool(board, caller, callerPath, Subscribe, namespace, namespaceDescription),
-		newGuardianSubscriptionTool(board, caller, callerPath, Unsubscribe, namespace, namespaceDescription),
+		newGuardianSubscriptionTool(board, caller, callerPath, inbox, Subscribe, namespace, namespaceDescription),
+		newGuardianSubscriptionTool(board, caller, callerPath, inbox, Unsubscribe, namespace, namespaceDescription),
 	}
 }
 
@@ -36,11 +45,12 @@ type guardianSubscriptionTool struct {
 	board      AgentMessageBoard
 	caller     string
 	callerPath agent.AgentPath
+	inbox      *GuardianActorInbox
 	change     SubscriptionChange
 	spec       tool.Spec
 }
 
-func newGuardianSubscriptionTool(board AgentMessageBoard, caller string, callerPath agent.AgentPath, change SubscriptionChange, namespace string, namespaceDescription string) *guardianSubscriptionTool {
+func newGuardianSubscriptionTool(board AgentMessageBoard, caller string, callerPath agent.AgentPath, inbox *GuardianActorInbox, change SubscriptionChange, namespace string, namespaceDescription string) *guardianSubscriptionTool {
 	description := guardianSubscribeDescription
 	if change == Unsubscribe {
 		description = guardianUnsubscribeDescription
@@ -49,6 +59,7 @@ func newGuardianSubscriptionTool(board AgentMessageBoard, caller string, callerP
 		board:      board,
 		caller:     caller,
 		callerPath: callerPath,
+		inbox:      inbox,
 		change:     change,
 		spec: tool.Spec{
 			Name:        tool.NamespacedName(namespace, string(change)),
@@ -107,11 +118,33 @@ func (t *guardianSubscriptionTool) Execute(ctx context.Context, invocation *tool
 	if len(encodedLargest) > invocation.ResponseByteBudget(maxMessageBoardResponseBytes) {
 		return nil, modelError("subscription response exceeds the tool-output budget")
 	}
+	if t.inbox != nil {
+		// A closed inbox cannot record the selection, so refuse before the
+		// persisted subscription changes.
+		if err := t.inbox.SetSubscription(name, t.change == Subscribe); err != nil {
+			return nil, modelError(err.Error())
+		}
+	}
 	state, err := t.board.SetSubscription(ctx, t.caller, SubscriptionRequest{
 		Target: SubscriptionTarget{Kind: "channel", ChannelName: name},
 		Change: t.change,
 	})
 	if err != nil {
+		if t.inbox != nil && strings.Contains(err.Error(), "channel not found") {
+			// Rust #63357 accepts an exact channel name before the channel
+			// exists: the live inbox is the authority for routing, so keep the
+			// selection and report the membership it now holds.
+			live := SubscriptionState{ChannelName: name, TargetAgent: t.callerPath, Enabled: t.change == Subscribe}
+			encoded, marshalErr := json.Marshal(live)
+			if marshalErr != nil {
+				return nil, tool.Fatal(marshalErr.Error())
+			}
+			return messageBoardJSONOutput(invocation, encoded), nil
+		}
+		if t.inbox != nil {
+			// Keep the live selection in step with the board it mirrors.
+			_ = t.inbox.SetSubscription(name, t.change != Subscribe)
+		}
 		return nil, modelError(err.Error())
 	}
 	if state == nil {

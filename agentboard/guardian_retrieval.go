@@ -42,6 +42,7 @@ type GuardianRetrievalBinding struct {
 	board      AgentMessageBoard
 	caller     string
 	callerPath agent.AgentPath
+	inbox      *GuardianActorInbox
 }
 
 // NewGuardianRetrievalBinding rejects ordinary boards, even for the same root
@@ -58,6 +59,19 @@ func NewGuardianRetrievalBinding(board AgentMessageBoard, caller string, callerP
 		return nil, err
 	}
 	return &GuardianRetrievalBinding{board: live, caller: caller, callerPath: callerPath}, nil
+}
+
+// BindInbox attaches the caller's live reviewer inbox so the subscription
+// tools record selections where routing reads them (Rust #63357).
+func (b *GuardianRetrievalBinding) BindInbox(inbox *GuardianActorInbox) error {
+	if b == nil || inbox == nil {
+		return errors.New("reviewer retrieval requires a live inbox")
+	}
+	if inbox.Root() != b.board.Identity() || inbox.Actor() != b.caller {
+		return errors.New("Guardian inbox belongs to another reviewer")
+	}
+	b.inbox = inbox
+	return nil
 }
 
 // Board is the live, JSON-search-enabled handle shared with the subscription
@@ -99,10 +113,11 @@ func (b *GuardianRetrievalBinding) Tools() []tool.Executor {
 		GuardianLiveReviewDescription,
 		nil,
 	)
-	return append(tools, NewGuardianSubscriptionTools(
+	return append(tools, NewGuardianSubscriptionToolsWithInbox(
 		b.board,
 		b.caller,
 		b.callerPath,
+		b.inbox,
 		GuardianBoardToolNamespace,
 		GuardianLiveReviewDescription,
 	)...)
