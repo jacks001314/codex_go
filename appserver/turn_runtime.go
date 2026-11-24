@@ -4666,7 +4666,11 @@ func (r *RuntimeRouter) persistRuntimeTurnPrompt(threadID string, turnID string,
 	if _, err := r.runtimeAppendItem(session.ThreadID(threadID), item); err != nil {
 		return false
 	}
-	_ = r.appendRuntimeRollout(threadID, []session.Item{item}, createdAt)
+	// Rust #62271 commits an accepted input through a seal so a retry after an
+	// uncertain flush cannot append the same message twice.
+	if err := r.sealRealtimeInput(threadID, item); err != nil {
+		return false
+	}
 	threadItem := BuildThreadItem(item)
 	r.notify(NotificationItemStarted, &ItemStartedNotification{
 		Item:        threadItemPayload(threadItem),

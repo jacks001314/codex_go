@@ -1077,6 +1077,65 @@ func (r *RuntimeRouter) persistRealtimeHistoryItems(threadID string, items []rea
 	})
 }
 
+// sealRealtimeInput commits an accepted model input to durable history after
+// its realtime source frames, and tolerates a retry after an uncertain flush:
+// the input is appended at most once even when the first attempt actually
+// landed (Rust #62271 ThreadStore::seal_realtime_input).
+func (r *RuntimeRouter) sealRealtimeInput(threadID string, item session.Item) error {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return nil
+	}
+	return r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
+		if recorder == nil {
+			return nil
+		}
+		if realtimeInputAlreadyRecorded(recorder.Path(), item) {
+			return recorder.Flush()
+		}
+		createdAt := item.CreatedAt
+		if createdAt.IsZero() {
+			createdAt = runtimeRouterNow(r).UTC()
+		}
+		if err := rollout.AppendSessionItems(recorder, []session.Item{item}, createdAt); err != nil {
+			return err
+		}
+		return recorder.Flush()
+	})
+}
+
+// realtimeInputAlreadyRecorded reports whether a previous seal attempt already
+// wrote this input, identified by its thread item id or Responses item id.
+func realtimeInputAlreadyRecorded(path string, item session.Item) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	lines, _, err := rollout.Load(path)
+	if err != nil {
+		return false
+	}
+	wantItemID := strings.TrimSpace(item.ID)
+	wantResponseID := strings.TrimSpace(item.ResponseItemID)
+	for index := range lines {
+		line := &lines[index]
+		if line.Type != "item" && line.Type != "response_item" {
+			continue
+		}
+		if wantItemID != "" && strings.TrimSpace(line.ItemID) == wantItemID {
+			return true
+		}
+		if wantResponseID == "" || len(line.Item) == 0 {
+			continue
+		}
+		var payload struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(line.Item, &payload) == nil && strings.TrimSpace(payload.ID) == wantResponseID {
+			return true
+		}
+	}
+	return false
+}
+
 // realtimeFramesEnabled enrolls state-backed threads in canonical realtime
 // frames (Rust #61473 LocalThreadStore::realtime_frames_enabled). Rust #62271
 // restricts enrollment to paginated local threads while
