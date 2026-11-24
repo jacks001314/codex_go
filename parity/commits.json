@@ -55679,11 +55679,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Batch 183: partial - Rust keeps a session-start hook event queued until its outcome is handled and records accepted input before extension setup and diff-root discovery, so an interrupt during setup cannot lose the prompt or skip the hook; setup steps then run concurrently and diff discovery is cancelled with the turn. Go persists the accepted prompt before sampling and on every pre-sampling failure (persistRuntimeTurnPrompt in appserver/turn_runtime.go) and builds skills/plugins per step after the prompt is recorded. The queued SessionStart source is peeked and cleared only after the attempt reports an outcome (peekPendingSessionStartSource/clearPendingSessionStartSource/runQueuedSessionStartHook in appserver/session_start_hooks.go), so a runner failure keeps it queued for the next turn while a stop/block outcome clears it. Batch 183 adds Rust's cancelled-turn rule: runPendingSessionStartHook builds the request first, and deferredSessionStartOnCancel leaves the event queued when cancellation was already requested and the event selects a synchronous hook (sessionStartHasSynchronousMatch treats an unset execution mode as sync), while an event that matches only asynchronous hooks still runs and clears. Residual: the prompt-record ordering has no dedicated regression test."
+    "Complete. Go records the accepted prompt before sampling and before every pre-sampling failure (persistRuntimeTurnPrompt in appserver/turn_runtime.go), and the completion path removes the duplicate user item once the prompt was persisted early. The queued SessionStart source is peeked and cleared only after the attempt reports an outcome (peekPendingSessionStartSource/clearPendingSessionStartSource/runQueuedSessionStartHook in appserver/session_start_hooks.go), so a runner failure keeps it queued while a stop/block outcome clears it, and deferredSessionStartOnCancel leaves a synchronous hook queued when cancellation was already requested. Tests: TestRuntimeRouterPersistsAcceptedPromptBeforeSamplingLikeRust reads the thread inside the first agent Run and proves the prompt is already on disk exactly once, ahead of model output; TestRuntimeRouterPreTurnCompactFailurePreservesPromptLikeRust covers the pre-sampling failure path."
    ],
    "kind": "runtime",
    "sha": "98835f5ebafcb4c29dd13610a17627777c02b8ee",
-   "status": "partial",
+   "status": "complete",
    "subject": "Preserve accepted prompts when turn setup is interrupted (#63523)"
   },
   {
