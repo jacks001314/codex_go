@@ -244,6 +244,12 @@ func ValidateServerAuth(serverName string, config *ServerConfig) error {
 	if config == nil {
 		return nil
 	}
+	// Rust #63497: a Desktop socket endpoint is only served for a local,
+	// authenticated codex_app server, so refuse other configurations before
+	// any connection is attempted.
+	if err := ValidateDesktopMCPRoute(serverName, config); err != nil {
+		return err
+	}
 	if config.EffectiveAuth() == ServerAuthEMAAuth {
 		// Rust #55334: EMA is admitted only from a trusted enterprise profile
 		// and always uses a host-owned streamable HTTP transport.

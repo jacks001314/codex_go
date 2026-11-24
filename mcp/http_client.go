@@ -516,7 +516,12 @@ func newMCPHTTPClientWithFeatures(config *ServerConfig, openAIForm bool, userVer
 func newMCPHTTPClientWithCapabilities(config *ServerConfig, features mcpClientFeatures, shared HTTPDoer) *httpClient {
 	client := mcpHTTPClientFromShared(shared, mcpClientTimeout(config))
 	if config != nil {
-		if policy := mcpRedirectPolicy(config.URL); policy != nil {
+		if socketPath, isDesktop := prepareDesktopMCPConfig(config); isDesktop {
+			// Rust #63497: the Desktop socket supplies the peer, so the wire URL
+			// is local, proxies do not apply, and redirects stay unfollowed.
+			client.Transport = newDesktopSocketTransport(socketPath)
+			client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		} else if policy := mcpRedirectPolicy(config.URL); policy != nil {
 			client.CheckRedirect = policy
 		}
 	}

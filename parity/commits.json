@@ -55629,11 +55629,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Batch 175: partial - Rust routes codex-desktop://<uuid> MCP endpoints to the Desktop app's Unix socket with explicit HTTP authorization, lets http_headers_helper add headers without replacing the configured authorization, strips Proxy-Authorization, disables redirects and proxy use on socket requests, and discards pooled connections when the listener is replaced. Go's MCP HTTP transport (mcp/http_client.go) builds one client per server with a redirect policy and header injection, but it has no codex-desktop:// route, no Unix-socket dialing for MCP servers, no pool keyed on socket identity and no proxy-header stripping, so a replaced Desktop listener is not detected. Residual: Desktop socket routing plus the route-aware pool."
+    "Batch 175: partial - Rust routes codex-desktop://<uuid> MCP endpoints to the Desktop app's Unix socket with explicit HTTP authorization, lets http_headers_helper add headers without replacing the configured authorization, strips Proxy-Authorization, disables redirects and proxy use on socket requests, and discards pooled connections when the listener is replaced. Go's MCP HTTP transport (mcp/http_client.go) builds one client per server with a redirect policy and header injection, but it has no codex-desktop:// route, no Unix-socket dialing for MCP servers, no pool keyed on socket identity and no proxy-header stripping, so a replaced Desktop listener is not detected. Residual: Desktop socket routing plus the route-aware pool.",
+    "Batch 211: complete - Rust #63497 Codex Desktop MCP over Unix sockets. `mcp/desktop_socket.go` routes `codex-desktop://<uuid>` endpoints to the Desktop app's shared socket: only a local `codex_app` server with a literal `Authorization` header is admitted (bearer-env, env-header and helper credentials never authorize), the request URL becomes Rust's `http://127.0.0.1:0/mcp` wire URL, the transport dials the socket with proxies bypassed, strips `Proxy-Authorization`, and unfollows redirects, and every request compares the socket's file identity (`os.SameFile`) so a replaced or missing listener discards the pooled keep-alive connection before dialing. Socket resolution lives in `desktop_socket_unix.go` (shared daemon directory, `desktop-<id>.sock`); other platforms report the endpoint as unavailable, matching Rust's Unix-only route. Validation is wired into `ValidateServerAuth` and the transport into `newMCPHTTPClientWithCapabilities`. Note: Go applies the admission rule on every platform, so an unsupported platform reports the requirement instead of Rust's non-Unix URL failure."
    ],
    "kind": "runtime",
    "sha": "6aaf2a86b198bb0ee8f9d995e79155ad5c7f6357",
-   "status": "partial",
+   "status": "complete",
    "subject": "Connect Codex Desktop MCP over Unix sockets (#63497)"
   },
   {
