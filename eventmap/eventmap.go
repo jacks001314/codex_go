@@ -241,6 +241,9 @@ func IsContextualUserMessageContent(message []ContentItem) bool {
 // message wrapped in any of these is hidden runtime context, not user
 // authorization.
 var contextualUserMarkedFragments = [][2]string{
+	// Rust UserInstructions::type_markers (core/src/context/user_instructions.rs):
+	// the "# AGENTS.md instructions for ..." block is hidden runtime context.
+	{"# AGENTS.md instructions", "</INSTRUCTIONS>"},
 	{"<user_instructions>", "</user_instructions>"},
 	{"<environment_context>", "</environment_context>"},
 	{"<agent_message_board_notification>", "</agent_message_board_notification>"},

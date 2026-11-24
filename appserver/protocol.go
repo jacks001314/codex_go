@@ -7588,12 +7588,14 @@ func historyPreview(items []session.Item) string {
 		if sessionItemIsHiddenThreadItem(&items[i]) {
 			continue
 		}
-		if items[i].Role == "user" && strings.TrimSpace(items[i].Text) != "" {
-			return strings.TrimSpace(items[i].Text)
+		// Rust #63603: an AGENTS.md instruction block is hidden context, and the
+		// preview keeps only the text after the user message marker.
+		if preview, ok := session.UserMessagePreview(&items[i]); ok {
+			return preview
 		}
 	}
 	for i := range items {
-		if sessionItemIsHiddenThreadItem(&items[i]) {
+		if sessionItemIsHiddenThreadItem(&items[i]) || session.IsContextualUserMessage(&items[i]) {
 			continue
 		}
 		if strings.TrimSpace(items[i].Text) != "" {

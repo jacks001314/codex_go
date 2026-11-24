@@ -2946,8 +2946,10 @@ func textFromRolloutContent(content []ContentPart) string {
 
 func previewFromSessionItems(items []session.Item) string {
 	for i := range items {
-		if items[i].Role == "user" && strings.TrimSpace(items[i].Text) != "" {
-			return strings.TrimSpace(items[i].Text)
+		// Rust #63603 preview_from_rollout_items: only real user input counts, so
+		// an AGENTS.md instruction block never becomes the thread preview.
+		if preview, ok := session.UserMessagePreview(&items[i]); ok {
+			return preview
 		}
 	}
 	for i := range items {
@@ -2955,6 +2957,9 @@ func previewFromSessionItems(items []session.Item) string {
 		// a delegated thread stays discoverable before any user follow-up.
 		if preview, ok := session.DelegatedItemPreview(&items[i]); ok {
 			return preview
+		}
+		if session.IsContextualUserMessage(&items[i]) {
+			continue
 		}
 		if strings.TrimSpace(items[i].Text) != "" {
 			return strings.TrimSpace(items[i].Text)
