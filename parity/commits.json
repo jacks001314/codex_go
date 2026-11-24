@@ -51390,7 +51390,8 @@
    "evidence": [
     "Partial: subagent activity labels in the transcript are now links (Rust #62159). tui/tea linkSubAgentActivityCell wraps the label of a sub_agent_activity row in an underlined codex://threads/<id> OSC 8 link when AgentThreadID is a canonical thread id; the painted transcript records it in the region link table, so Go's Ctrl-click thread-link carrier resolves it and opens that agent's transcript through the same switch path as a saved-conversation link. Frame output still strips the OSC 8 target (StripThreadLinkHyperlinks), so the terminal never launches the desktop app. Tests: tui/tea/subagent_activity_links_like_rust_test.go.",
     "Residual: the link opens the agent in the main pane instead of a sidebar tab beside the parent conversation (Rust #62157, tracked separately); Rust's backend-ancestry confirmation for the linked agent, deferral of a click that arrives while agent discovery is still running, and the unfocused-pane source are not implemented."
-   ],
+   ,
+   "Batch 285: the click deferral now exists. tui/tea agent.go keeps a link click that names an agent with no entry yet while an agent list request is pending in pendingAgentLinkSwitchThreadID and notices Loading agent threads, and resumeDeferredAgentLink replays it at the end of applyAgentListResult on both success paths once discovery finished, opening the agent with its real entry or reporting that it is no longer available. Tests: tui/tea/subagent_link_discovery_defer_like_rust_test.go (the click during discovery switches nothing and is deferred, then the pending agent list result opens the linked agent). Residual: the sidebar tab and the backend-ancestry confirmation for the linked agent are still missing."],
    "kind": "runtime",
    "sha": "bedafe7156ab73ac213cf960a2c2ef90033dd259",
    "status": "partial",

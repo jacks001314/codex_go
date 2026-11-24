@@ -2751,6 +2751,10 @@ type Model struct {
 	activeAgentLabel             string
 	nextAgentRefreshRequestID    uint64
 	pendingAgentRefreshRequestID uint64
+	// pendingAgentLinkSwitchThreadID defers a transcript link click until
+	// agent discovery finishes, so the linked agent opens with its real entry
+	// (Rust #62159).
+	pendingAgentLinkSwitchThreadID string
 	pendingAgentRefreshThreadID  string
 	// agentPickerVisibilityChanged records archive/unarchive changes that raced
 	// an in-flight picker refresh. The result is patched with these values and a

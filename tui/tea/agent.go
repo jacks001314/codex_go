@@ -134,7 +134,7 @@ func (m *Model) applyAgentListResult(message AgentListResultMsg) bubbletea.Cmd {
 		if followUp {
 			return m.refreshAgentPickerThreadsCmd()
 		}
-		return nil
+		return m.resumeDeferredAgentLink()
 	}
 	m.agentItems = append([]codextui.AgentThreadEntry(nil), entries...)
 	m.refreshCollabTranscriptRows()
@@ -152,7 +152,26 @@ func (m *Model) applyAgentListResult(message AgentListResultMsg) bubbletea.Cmd {
 	if followUp {
 		return m.refreshAgentPickerThreadsCmd()
 	}
-	return nil
+	return m.resumeDeferredAgentLink()
+}
+
+// resumeDeferredAgentLink opens the agent a transcript link named while
+// discovery was still running. A link whose agent never appears is dropped with
+// a notice so the click is not silently lost.
+func (m *Model) resumeDeferredAgentLink() bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	threadID := strings.TrimSpace(m.pendingAgentLinkSwitchThreadID)
+	if threadID == "" {
+		return nil
+	}
+	m.pendingAgentLinkSwitchThreadID = ""
+	if _, ok := m.agentEntry(threadID); !ok {
+		m.notice = "This agent is no longer available."
+		return nil
+	}
+	return m.applyAgentModalOptionAllowed(threadID, true)
 }
 
 func (m *Model) showAgentPicker(entries []codextui.AgentThreadEntry, currentThreadID string, selectedThreadID string) {
@@ -271,6 +290,14 @@ func (m *Model) applyAgentModalOptionAllowed(optionID string, allowArchived bool
 	}
 	entry, ok := m.agentEntry(threadID)
 	if !ok {
+		if m.pendingAgentRefreshRequestID != 0 {
+			// Discovery is still running, so the linked agent has no entry yet.
+			// Open it once the list arrives instead of switching with a blank one
+			// (Rust #62159).
+			m.pendingAgentLinkSwitchThreadID = threadID
+			m.notice = "Loading agent threads\u2026"
+			return nil
+		}
 		entry = codextui.AgentThreadEntry{ThreadID: threadID}
 	}
 	if m.State != nil && strings.TrimSpace(m.State.ThreadID) == threadID {
