@@ -12,7 +12,10 @@ import (
 func TestGuardianBoardRetrievalGuidanceLikeRust(t *testing.T) {
 	guidance := GuardianBoardRetrievalGuidance
 	for _, want := range []string{
-		"Use the guardian_board tools when you need more evidence for the exact action.",
+		"Before your first verdict for each task, use the Guardian board even if the action appears low risk.",
+		"The pending action does not include the user's instructions.",
+		"Call guardian_board.get_channels, then call guardian_board.subscribe for the relevant channel if you do not already follow it.",
+		"On later reviews, use the subscribed updates and look up any missing or possibly stale instructions.",
 		"Search or read any live channel, including channels you do not follow.",
 		"Use subscribed_channels to see which channels you follow.",
 		"Subscribe or unsubscribe to manage which channels feed new originals to this conversation.",
@@ -28,6 +31,29 @@ func TestGuardianBoardRetrievalGuidanceLikeRust(t *testing.T) {
 	}
 	if GuardianBoardRetrieval.Extension != GuardianBoardRetrievalGuidance {
 		t.Fatal("a live board reviewer must install the board guidance")
+	}
+}
+
+// TestGuardianBoardRetrievalHonorsCustomStrategyLikeRust checks the host
+// strategy override: a non-blank strategy replaces the default first-verdict
+// guidance while the board rules still follow it (Rust #62372/#63513).
+func TestGuardianBoardRetrievalHonorsCustomStrategyLikeRust(t *testing.T) {
+	custom := guardianBoardRetrieval("  Read the plan channel first.  ")
+	if strings.Contains(custom.Extension, guardianBoardRetrievalStrategyDefault) {
+		t.Fatalf("custom strategy kept the default: %q", custom.Extension)
+	}
+	if !strings.HasPrefix(custom.Extension, "Read the plan channel first. ") {
+		t.Fatalf("custom strategy was not trimmed and kept: %q", custom.Extension)
+	}
+	if !strings.HasSuffix(custom.Extension, guardianBoardRules) {
+		t.Fatalf("custom strategy dropped the board rules: %q", custom.Extension)
+	}
+	// Blank or whitespace-only instructions fall back to the default text, as
+	// Rust's trim/filter does before unwrap_or.
+	for _, blank := range []string{"", "   ", "\n\t"} {
+		if got := guardianBoardRetrieval(blank); got.Extension != GuardianBoardRetrievalGuidance {
+			t.Fatalf("blank strategy %q produced %q", blank, got.Extension)
+		}
 	}
 }
 

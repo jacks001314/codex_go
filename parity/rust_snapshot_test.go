@@ -319,6 +319,9 @@ type rustCriticalFileHash struct {
 
 func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 	return []rustCriticalFileHash{
+		// Re-anchored to upstream head 9ba0ceac1a (2026-11-24 window):
+		// exec/src/lib.rs moved with #63515 (exec honours configured/saved
+		// approvals); every other pin is unchanged at that head.
 		// Re-anchored to upstream head 5b0b253035 (round-86 snapshot): all nine
 		// hashes below were recomputed from `git -C <rust> cat-file blob
 		// 5b0b253035:codex-rs/<path>`, so the pins are blob (LF) digests of the
@@ -382,7 +385,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// thread/list exclusion field; Go side already landed as sync551).
 		// Re-anchored to upstream 59ac39addb: exec input preparation moved
 		// behind the shared user-input helpers (#61949/#61962).
-		{Path: "exec/src/lib.rs", SHA256: "ca04d7f95134316b59e8e04c3da3884a759149d110a3386a5b3829e673e4f4c8"},
+		{Path: "exec/src/lib.rs", SHA256: "d13ad24010c38052acda46d3b75eef4009367e3d8477ac4a82d46707bda4f292"},
 		// Re-pinned to upstream 7498521d (#46319): exec JSON web-search items
 		// now carry the structured results array.
 		{Path: "exec/src/exec_events.rs", SHA256: "dafa872d7e86a099e56e28a329dcb9c03db90ed768c3b88cca8c91d46dc1d0e5"},

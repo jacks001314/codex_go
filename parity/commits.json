@@ -55603,9 +55603,81 @@
    "sha": "188940258d413b4f0b3b160136ab097dac031a22",
    "status": "blocked_precondition",
    "subject": "Coalesce concurrent plugin signing key fetches (#63491)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 175: partial - Rust routes codex-desktop://<uuid> MCP endpoints to the Desktop app's Unix socket with explicit HTTP authorization, lets http_headers_helper add headers without replacing the configured authorization, strips Proxy-Authorization, disables redirects and proxy use on socket requests, and discards pooled connections when the listener is replaced. Go's MCP HTTP transport (mcp/http_client.go) builds one client per server with a redirect policy and header injection, but it has no codex-desktop:// route, no Unix-socket dialing for MCP servers, no pool keyed on socket identity and no proxy-header stripping, so a replaced Desktop listener is not detected. Residual: Desktop socket routing plus the route-aware pool."
+   ],
+   "kind": "runtime",
+   "sha": "6aaf2a86b198bb0ee8f9d995e79155ad5c7f6357",
+   "status": "partial",
+   "subject": "Connect Codex Desktop MCP over Unix sockets (#63497)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 175: complete - Rust #63513 replaces Guardian's default board retrieval strategy: before its first verdict on each task the reviewer must consult the Guardian board because the pending action omits the user's instructions (get_channels, subscribe to the relevant channel, read the original instructions), and later reviews use subscription updates for missing or stale instructions; a non-blank custom strategy still overrides the default while the board rules always follow it. Go now mirrors that in appserver/guardian_review_retrieval.go: guardianBoardRetrievalStrategyDefault carries the new text, guardianBoardRules is shared, guardianBoardRetrieval(instructions) trims a host strategy and falls back to the default for blank input, and GuardianBoardRetrieval/GuardianBoardRetrievalGuidance install it. appserver/guardian_review_retrieval_like_rust_test.go pins the new sentences and the override/blank behavior."
+   ],
+   "kind": "runtime",
+   "sha": "6d0d839f1a729908487121ab046057f7d6db552a",
+   "status": "complete",
+   "subject": "Direct Guardian to read user instructions before its first verdict (#63513)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 175: complete - Rust prewarms Guardian's v3 root reviewer when a thread becomes ready and its approval policy routes to Guardian, then reuses the warmed conversation for the first review while it is live and its configuration matches. Go's reviewer pool already warms at turn start: requireAgentForTurn (appserver/agent_runtime.go) resolves the turn's reviewer and starts modelGuardianReviewer.PrewarmWithRequestCountry in the background unless the reviewer is the user or the turn runs full access, guardianSessionRunner.PrewarmWithRequestCountry sends the generate:false warmup with the captured request country, the first thread-owned review adopts the warmed response through takePrewarm/adoptPrewarm, and a failed warmup is logged and left to start on demand. Go warms whenever the reviewer resolves to auto_review outside full access, which covers Rust's on-request/granular routing case."
+   ],
+   "kind": "runtime",
+   "sha": "5716c2e22898b263d638099995b18f7902bdb671",
+   "status": "complete",
+   "subject": "Prewarm the Guardian v3 root reviewer for automatic approvals (#63514)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 175: partial - Rust stops codex exec from forcing approval_policy = never: new local and remote threads keep their configured approvals, resumed and forked threads inherit the source thread's approval policy and reviewer independently, explicit CLI or profile overrides are saved on the resulting thread, and exec warns on stderr and rejects requests when the effective settings call for a human reviewer. Go's exec still derives the policy with effectiveExecApprovalPolicy (exec/exec.go), which returns never unless approvals_reviewer is auto_review or the CLI asked for a policy, never sends an approvals reviewer, and restores only the persisted permission profile when resuming (exec/exec_resume_permissions.go). Residual: configured approvals for new threads, approval/reviewer inheritance on resume and fork, saving explicit overrides, and the human-reviewer warning."
+   ],
+   "kind": "runtime",
+   "sha": "6b776372fde0f7d7af5a2dfa0d475c28e999113f",
+   "status": "partial",
+   "subject": "Honor configured and saved approvals in `codex exec` (#63515)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 175: not_applicable - Rust #63516 replaced panicking eprintln! recovery diagnostics with writeln! on a locked stderr whose error is ignored, because a closed stderr could turn an error report into another failure. Go writes the same diagnostics with fmt.Fprintf/fmt.Fprintln on os.Stderr and discards the error (tui/tea/current_archive.go's applyArchiveWaitFinished prints archive warnings that way), and terminal restoration belongs to Bubble Tea, so no codex_go path panics when stderr is unwritable."
+   ],
+   "kind": "runtime",
+   "sha": "5b249d57b2321e37ac855d09b44a203cf5182939",
+   "status": "not_applicable",
+   "subject": "Avoid panics when TUI recovery diagnostics fail to write (#63516)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 175: blocked_precondition - Rust only resumes the TUI after the Codex process group owns the terminal foreground again: suspend fails when stdin has no controlling terminal, and after SIGTSTP/SIGCONT the resume polls tcgetpgrp, exits when the controlling terminal disappeared, and returns once the job owns the foreground so a bg continuation cannot restore terminal modes under the shell. Go has no Ctrl-Z suspend path to guard: SuspendKey in tui/tui/job_control.go is an unbound constant beside a pure ResumeAction/SuspendContext model, the tea model never sends SuspendMsg, and Bubble Tea's own suspendProcess resumes raw mode without checking foreground ownership. Unblock once the TUI wires Ctrl-Z suspension; the foreground wait belongs with it."
+   ],
+   "kind": "runtime",
+   "sha": "9ba0ceac1ae9a72b1198f492a252b12c061ae399",
+   "status": "blocked_precondition",
+   "subject": "Wait for foreground terminal ownership before resuming the TUI (#63520)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "188940258d413b4f0b3b160136ab097dac031a22",
+ "rustToInclusive": "9ba0ceac1ae9a72b1198f492a252b12c061ae399",
  "schemaVersion": 1
 }
