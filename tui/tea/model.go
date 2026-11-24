@@ -3440,6 +3440,14 @@ type Model struct {
 	// reconnectAttemptThreadID names the conversation a running Ctrl+R
 	// attempt is rejoining.
 	reconnectAttemptThreadID string
+	// reconnectAutoDeadline bounds the automatic reconnect loop started at
+	// disconnect (Rust #63599 reconnect(): one shared 120-second budget).
+	reconnectAutoDeadline time.Time
+	// reconnectAutoAttempts counts the delayed attempts spent in that budget.
+	reconnectAutoAttempts int
+	// reconnectAutoGeneration invalidates a scheduled attempt after a manual
+	// retry, a success or a newer disconnect.
+	reconnectAutoGeneration int
 	// statuslineDisconnected hides provider content while the app-server
 	// transport is down (Rust #61985 statusline_disconnected): reads would only
 	// fail, so the built-in status line takes the footer until a new session
@@ -4904,6 +4912,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		// draft editable.
 		m.reconnectFailed = true
 		m.showReconnectFailed(m.canRetryReconnect())
+		autoReconnect := m.beginAutoReconnect()
 		// Rust #61985: a disconnected transport cancels provider reads and shows
 		// the built-in status line instead of a stale provider footer.
 		m.statuslineDisconnected = true
@@ -4920,7 +4929,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			state.disconnected = true
 		}
 		m.cancelAgentsOverviewRefresh(m.backendID)
-		return m, bubbletea.Batch(m.refreshStatusControlsCmd(), m.reconnectThreadApprovalsCmd(reconnectThreads))
+		return m, bubbletea.Batch(m.refreshStatusControlsCmd(), m.reconnectThreadApprovalsCmd(reconnectThreads), autoReconnect)
+	case ReconnectAutoAttemptMsg:
+		return m, m.applyReconnectAutoAttempt(msg)
 	case ReconnectAttemptFinishedMsg:
 		return m, m.applyReconnectAttemptFinished(msg)
 	case TurnInterruptedMsg:

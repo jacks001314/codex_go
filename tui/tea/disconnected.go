@@ -125,13 +125,21 @@ func (m *Model) showReconnectFailed(canRetry bool) {
 	m.refreshTranscript()
 }
 
-// retryReconnect starts one fresh attempt by resuming the displayed
+// retryReconnect starts one fresh manual attempt by resuming the displayed
 // conversation through a new connection (Rust #63599 retry_reconnect plus
-// app/reconnect.rs, which reinitializes a client and rejoins the thread).
+// app/reconnect.rs, which reinitializes a client and rejoins the thread). A
+// manual retry invalidates any scheduled automatic attempt.
 func (m *Model) retryReconnect() bubbletea.Cmd {
 	if !m.canRetryReconnect() {
 		return nil
 	}
+	m.reconnectAutoGeneration++
+	return m.startReconnectAttempt()
+}
+
+// startReconnectAttempt resumes the displayed conversation without re-checking
+// the retry gates, so the automatic loop can reuse it.
+func (m *Model) startReconnectAttempt() bubbletea.Cmd {
 	threadID := strings.TrimSpace(m.State.ThreadID)
 	cwd := strings.TrimSpace(m.State.CWD)
 	m.reconnectAttemptThreadID = threadID
@@ -169,12 +177,18 @@ func (m *Model) applyReconnectAttemptFinished(msg ReconnectAttemptFinishedMsg) b
 		if text == "" {
 			text = "unknown error"
 		}
+		if next := m.scheduleAutoReconnect(); next != nil {
+			m.notice = "Reconnect failed: " + text + ". Press Ctrl+R to retry now; automatic retries continue."
+			m.refreshTranscript()
+			return next
+		}
 		m.notice = "Reconnect failed: " + text + ". Press Ctrl+R to retry."
 		m.refreshTranscript()
 		return nil
 	}
 	m.clearRetryActivity()
 	m.reconnectFailed = false
+	m.resetReconnectAuto()
 	m.setAppServerDisconnected(false)
 	m.footerHintOverride = ""
 	m.statuslineDisconnected = false
