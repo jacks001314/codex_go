@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 )
 
 const (
@@ -116,6 +117,10 @@ func EncodeGuardianRoutedOriginal(id GuardianEvidenceID, original json.RawMessag
 type GuardianCapturedEvidence struct {
 	ID       GuardianEvidenceID
 	Original json.RawMessage
+	// End is the durable position this record reached, so a cursor can
+	// acknowledge a consumed prefix without skipping later appends
+	// (Rust OriginalEvidence.end).
+	End GuardianHistoryPosition
 }
 
 // GuardianEvidenceSnapshot is an immutable capture of the originals a review
@@ -126,6 +131,117 @@ type GuardianEvidenceSnapshot struct {
 	Start   GuardianHistoryPosition
 	End     GuardianHistoryPosition
 	Sources []GuardianCapturedEvidence
+}
+
+// GuardianEvidenceCursor tracks how much of a root's original history a board
+// has consumed (Rust EvidenceCursor). It never leaves the process: hosts create
+// it at board activation and acknowledge only after the admitted records were
+// written.
+type GuardianEvidenceCursor struct {
+	mu       sync.Mutex
+	threadID string
+	position GuardianHistoryPosition
+}
+
+// NewGuardianEvidenceCursor starts a cursor at the beginning of a root's
+// original history (Rust EvidenceCursor::start).
+func NewGuardianEvidenceCursor(threadID string) *GuardianEvidenceCursor {
+	threadID = strings.TrimSpace(threadID)
+	return &GuardianEvidenceCursor{
+		threadID: threadID,
+		position: GuardianHistoryPosition{ThreadID: threadID},
+	}
+}
+
+// ThreadID is the root whose history this cursor tracks.
+func (c *GuardianEvidenceCursor) ThreadID() string {
+	if c == nil {
+		return ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.threadID
+}
+
+// Position returns the last acknowledged durable position.
+func (c *GuardianEvidenceCursor) Position() GuardianHistoryPosition {
+	if c == nil {
+		return GuardianHistoryPosition{}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.position
+}
+
+// Pending returns the records of snapshot the cursor has not acknowledged,
+// in source order. The capture must contain the cursor: same root, and both
+// its bounds must straddle the acknowledged position.
+func (c *GuardianEvidenceCursor) Pending(snapshot *GuardianEvidenceSnapshot) ([]GuardianCapturedEvidence, error) {
+	if c == nil {
+		return nil, errors.New("Guardian evidence cursor is nil")
+	}
+	if snapshot == nil {
+		return nil, errors.New("Guardian evidence snapshot is nil")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	position := c.position
+	if err := guardianSnapshotContainsPosition(snapshot, position); err != nil {
+		return nil, err
+	}
+	pending := make([]GuardianCapturedEvidence, 0, len(snapshot.Sources))
+	for _, record := range snapshot.Sources {
+		if record.End.EndByteOffset <= position.EndByteOffset {
+			continue
+		}
+		pending = append(pending, record)
+	}
+	return pending, nil
+}
+
+// Acknowledge consumes a successfully admitted prefix of the pending records.
+// Acknowledging every pending record also skips trailing records that evidence
+// selection excluded, so the cursor lands on the capture's exclusive end.
+func (c *GuardianEvidenceCursor) Acknowledge(snapshot *GuardianEvidenceSnapshot, count int) error {
+	if c == nil {
+		return errors.New("Guardian evidence cursor is nil")
+	}
+	if count < 0 {
+		return errors.New("acknowledgement count must not be negative")
+	}
+	pending, err := c.Pending(snapshot)
+	if err != nil {
+		return err
+	}
+	if count > len(pending) {
+		return errors.New("acknowledgement exceeds pending evidence")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch {
+	case count == len(pending):
+		c.position = snapshot.End
+	case count > 0:
+		c.position = pending[count-1].End
+	}
+	return nil
+}
+
+// guardianSnapshotContainsPosition reports whether the capture's bounds straddle
+// position (Rust EvidenceCursor::pending's containment check).
+func guardianSnapshotContainsPosition(snapshot *GuardianEvidenceSnapshot, position GuardianHistoryPosition) error {
+	threadID := strings.TrimSpace(position.ThreadID)
+	if strings.TrimSpace(snapshot.Start.ThreadID) != threadID ||
+		strings.TrimSpace(snapshot.End.ThreadID) != threadID {
+		return errors.New("evidence capture does not contain the current cursor")
+	}
+	if snapshot.Start.EndByteOffset > position.EndByteOffset ||
+		position.EndByteOffset > snapshot.End.EndByteOffset ||
+		snapshot.Start.EndOrdinalExclusive > position.EndOrdinalExclusive ||
+		position.EndOrdinalExclusive > snapshot.End.EndOrdinalExclusive {
+		return errors.New("evidence capture does not contain the current cursor")
+	}
+	return nil
 }
 
 // Cutoff returns the exclusive durable source boundary of the capture.

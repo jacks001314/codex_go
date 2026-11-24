@@ -52,8 +52,8 @@ func TestGuardianEvidenceSnapshotEncodesSourcesLikeRust(t *testing.T) {
 		Start: GuardianHistoryPosition{ThreadID: "root", EndOrdinalExclusive: 1, EndByteOffset: 10},
 		End:   GuardianHistoryPosition{ThreadID: "root", EndOrdinalExclusive: 3, EndByteOffset: 30},
 		Sources: []GuardianCapturedEvidence{
-			{ID: GuardianEvidenceID{Ordinal: 1}, Original: json.RawMessage(`{"type":"response_item"}`)},
-			{ID: GuardianEvidenceID{Ordinal: 2}, Original: json.RawMessage(`{"type":"response_item"}`)},
+			{ID: GuardianEvidenceID{Ordinal: 1}, Original: json.RawMessage(`{"type":"response_item"}`), End: GuardianHistoryPosition{ThreadID: "root", EndOrdinalExclusive: 2, EndByteOffset: 20}},
+			{ID: GuardianEvidenceID{Ordinal: 2}, Original: json.RawMessage(`{"type":"response_item"}`), End: GuardianHistoryPosition{ThreadID: "root", EndOrdinalExclusive: 3, EndByteOffset: 30}},
 		},
 	}
 	encoded, err := snapshot.EncodedSources()
