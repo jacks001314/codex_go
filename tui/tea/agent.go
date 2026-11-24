@@ -166,7 +166,15 @@ func (m *Model) resumeDeferredAgentLink() bubbletea.Cmd {
 	if threadID == "" {
 		return nil
 	}
+	linkBackendID := m.pendingAgentLinkSwitchBackendID
 	m.pendingAgentLinkSwitchThreadID = ""
+	m.pendingAgentLinkSwitchBackendID = codextui.BackendID{}
+	// Rust #62159 confirms the link belongs to the conversation currently shown:
+	// a resume that replaced the backend drops a click painted under the old one.
+	if !linkBackendID.IsZero() && linkBackendID != m.backendID {
+		m.notice = "This agent belongs to another conversation."
+		return nil
+	}
 	if _, ok := m.agentEntry(threadID); !ok {
 		m.notice = "This agent is no longer available."
 		return nil
@@ -295,6 +303,7 @@ func (m *Model) applyAgentModalOptionAllowed(optionID string, allowArchived bool
 			// Open it once the list arrives instead of switching with a blank one
 			// (Rust #62159).
 			m.pendingAgentLinkSwitchThreadID = threadID
+			m.pendingAgentLinkSwitchBackendID = m.backendID
 			m.notice = "Loading agent threads\u2026"
 			return nil
 		}

@@ -83,3 +83,62 @@ func TestSubAgentLinkClickDefersUntilDiscoveryLikeRust(t *testing.T) {
 		t.Fatalf("displayed thread = %q, want %s", got, teaSubAgentThreadID)
 	}
 }
+
+// TestSubAgentLinkClickDropsReplacedBackendLikeRust mirrors Rust #62159's
+// backend-ancestry confirmation: a click painted under one backend is not
+// followed after the displayed conversation moved to another backend.
+func TestSubAgentLinkClickDropsReplacedBackendLikeRust(t *testing.T) {
+	switched := []string{}
+	state := codextui.NewState(&codextui.Options{Model: "gpt-5"})
+	state.SetThreadID("root-thread")
+	model := NewModel(state, Options{
+		Width:  100,
+		Height: 24,
+		OnReadAgents: func(string) ([]codextui.AgentThreadEntry, error) {
+			return []codextui.AgentThreadEntry{{ThreadID: teaSubAgentThreadID, AgentNickname: "reviewer"}}, nil
+		},
+		OnSwitchAgent: func(threadID string) (AgentThreadSwitchResponse, error) {
+			switched = append(switched, threadID)
+			return AgentThreadSwitchResponse{Entry: codextui.AgentThreadEntry{ThreadID: threadID}}, nil
+		},
+	})
+	model.backendID = codextui.NewBackendID()
+	item := protocol.SubAgentActivityItem("item-1", "started", teaSubAgentThreadID, "reviewer")
+	model.renderSubAgentActivity(&item)
+	_ = model.viewString()
+	discovery := model.applyAgentCommand()
+
+	region := model.transcriptSelectionRegion
+	for row, line := range region.text {
+		column := findDisplayColumn(line, "reviewer")
+		if column < 0 {
+			continue
+		}
+		_, cmd := model.Update(mousemsg.MouseMsg{
+			X:      region.x + column,
+			Y:      region.y + row,
+			Action: mousemsg.MouseActionPress,
+			Button: mousemsg.MouseButtonLeft,
+			Ctrl:   true,
+		})
+		runTeaCmd(t, model, cmd)
+		break
+	}
+	if model.pendingAgentLinkSwitchThreadID != teaSubAgentThreadID {
+		t.Fatalf("deferred link = %q, want the clicked agent", model.pendingAgentLinkSwitchThreadID)
+	}
+
+	model.backendID = codextui.NewBackendID()
+	result, cmd := model.Update(discovery())
+	model = result.(*Model)
+	runTeaCmd(t, model, cmd)
+	if len(switched) != 0 {
+		t.Fatalf("switched threads = %#v, want the replaced-backend link dropped", switched)
+	}
+	if model.notice != "This agent belongs to another conversation." {
+		t.Fatalf("notice = %q, want the other-conversation message", model.notice)
+	}
+	if model.pendingAgentLinkSwitchThreadID != "" {
+		t.Fatalf("deferred link survived: %q", model.pendingAgentLinkSwitchThreadID)
+	}
+}

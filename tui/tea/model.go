@@ -2755,6 +2755,10 @@ type Model struct {
 	// agent discovery finishes, so the linked agent opens with its real entry
 	// (Rust #62159).
 	pendingAgentLinkSwitchThreadID string
+	// pendingAgentLinkSwitchBackendID records the backend the deferred link
+	// was painted under, so a resume that switched backends drops it (Rust
+	// #62159 backend ancestry).
+	pendingAgentLinkSwitchBackendID codextui.BackendID
 	pendingAgentRefreshThreadID  string
 	// agentPickerVisibilityChanged records archive/unarchive changes that raced
 	// an in-flight picker refresh. The result is patched with these values and a
