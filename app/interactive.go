@@ -2424,22 +2424,24 @@ func pickerMetricsAuthMode(resolved *auth.ResolvedAuth) string {
 	return "chatgpt"
 }
 
-func interactiveOnListModels(root *cli.RootOptions, hasChatGPTAccount bool, owner *config.EmbeddedNetworkPolicy) func(cwd string, includeHidden bool) ([]codextui.ModelPickerOption, error) {
+func interactiveOnListModels(root *cli.RootOptions, hasChatGPTAccount bool, owner *config.EmbeddedNetworkPolicy) func(cwd string, provider string, includeHidden bool) ([]codextui.ModelPickerOption, error) {
 	var (
-		mu       sync.Mutex
-		cacheCWD string
-		cached   *interactiveModelListSource
+		mu          sync.Mutex
+		cacheCWD    string
+		cacheProvider string
+		cached      *interactiveModelListSource
 	)
-	return func(cwd string, includeHidden bool) ([]codextui.ModelPickerOption, error) {
+	return func(cwd string, provider string, includeHidden bool) ([]codextui.ModelPickerOption, error) {
 		cwd = strings.TrimSpace(cwd)
+		provider = strings.TrimSpace(provider)
 		mu.Lock()
-		if cached == nil || cacheCWD != cwd {
-			source, err := newInteractiveModelListSource(root, hasChatGPTAccount, cwd, owner)
+		if cached == nil || cacheCWD != cwd || cacheProvider != provider {
+			source, err := newInteractiveModelListSource(root, hasChatGPTAccount, cwd, provider, owner)
 			if err != nil {
 				mu.Unlock()
 				return nil, err
 			}
-			cached, cacheCWD = source, cwd
+			cached, cacheCWD, cacheProvider = source, cwd, provider
 		}
 		source := cached
 		mu.Unlock()
@@ -2463,7 +2465,7 @@ type interactiveModelListSource struct {
 	apiKeyAuth bool
 }
 
-func newInteractiveModelListSource(root *cli.RootOptions, hasChatGPTAccount bool, cwd string, owner *config.EmbeddedNetworkPolicy) (*interactiveModelListSource, error) {
+func newInteractiveModelListSource(root *cli.RootOptions, hasChatGPTAccount bool, cwd string, provider string, owner *config.EmbeddedNetworkPolicy) (*interactiveModelListSource, error) {
 	codexHome := auth.DefaultCodexHome()
 	loaded, err := config.LoadEffectiveWithOptions(codexHome, interactiveModelListLoadOptions(root, cwd))
 	if err != nil {
@@ -2473,7 +2475,7 @@ func newInteractiveModelListSource(root *cli.RootOptions, hasChatGPTAccount bool
 		return nil, errors.New("load model catalog config: empty configuration")
 	}
 	publishHostApplicationNetworkPolicy(owner, loaded)
-	providerInfo, err := modelpkg.ProviderInfoFromConfig(loaded.Values)
+	providerInfo, providerID, err := interactiveModelProviderInfo(loaded.Values, provider, cwd)
 	if err != nil {
 		return nil, fmt.Errorf("resolve model provider: %w", err)
 	}
@@ -2488,12 +2490,12 @@ func newInteractiveModelListSource(root *cli.RootOptions, hasChatGPTAccount bool
 	if resolved == nil {
 		return nil, errors.New("resolve model catalog auth: no credential")
 	}
-	provider := modelpkg.CreateRuntimeProviderForID("", *providerInfo, &resolved.Auth)
-	apiProvider, err := provider.APIProvider()
+	runtimeProvider := modelpkg.CreateRuntimeProviderForID(providerID, *providerInfo, &resolved.Auth)
+	apiProvider, err := runtimeProvider.APIProvider()
 	if err != nil {
 		return nil, fmt.Errorf("resolve model provider API: %w", err)
 	}
-	authHeaders, err := provider.APIAuth()
+	authHeaders, err := runtimeProvider.APIAuth()
 	if err != nil {
 		return nil, fmt.Errorf("resolve model provider auth: %w", err)
 	}
@@ -2518,6 +2520,26 @@ func newInteractiveModelListSource(root *cli.RootOptions, hasChatGPTAccount bool
 		values:     loaded.Values,
 		apiKeyAuth: modelpkg.AuthUsesAPIKey(&resolved.Auth),
 	}, nil
+}
+
+// interactiveModelProviderInfo resolves the provider whose catalog the model
+// picker should read (Rust #63553). An empty provider keeps the configured
+// default, so a new thread still shows the app-server default catalog while a
+// resumed thread on another provider reads that provider's own catalog.
+func interactiveModelProviderInfo(values map[string]any, provider string, cwd string) (*modelpkg.ProviderInfo, string, error) {
+	providerID := strings.TrimSpace(provider)
+	if providerID == "" {
+		providerID = strings.TrimSpace(interactiveStringFromConfig(values, "model_provider"))
+	}
+	if providerID == "" {
+		providerID = modelpkg.OpenAIProviderID
+	}
+	info, err := modelpkg.ProviderForConfigIDForCWD(values, providerID,
+		interactiveStringFromConfig(values, "openai_base_url"), cwd)
+	if err != nil {
+		return nil, "", err
+	}
+	return info, providerID, nil
 }
 
 // interactiveModelListLoadOptions resolves the config layer for the model

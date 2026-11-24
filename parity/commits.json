@@ -55863,7 +55863,8 @@
     "codex_go"
    ],
    "evidence": [
-    "Partial: the TUI model picker fetches the servers single model list (tui/model_picker.go) and has no provider-scoped catalog cache or account-change invalidation, so a resumed thread on a non-default provider still shows the default catalog."
+    "Partial: the TUI model picker now reads the active thread's provider catalog (Rust #63553). tui/tea fetchModelsForPicker and fetchModelCatalog forward State.Provider, app/interactive.go interactiveOnListModels caches the catalog source per (cwd, provider), and interactiveModelProviderInfo resolves that provider through model.ProviderForConfigIDForCWD so info.BaseURL/model_catalog_url come from model_providers.<id> (the previous ProviderInfoFromConfig(loaded.Values) call always resolved a zero provider). A new thread without a provider keeps the configured default catalog. Tests: app/model_picker_provider_like_rust_test.go, tui/tea/model_picker_provider_like_rust_test.go.",
+    "Residual: the TUI keeps one modelPickerOpts catalog rather than Rust's per-provider ModelCatalog cache, so reopening the picker after switching providers refetches and overwrites the previous provider's list; there is no account-change invalidation, model choices for alternate providers are still persisted as user defaults instead of applying to the current session only, a non-Cloud server catalog that cannot be scoped to a provider has no unscoped default fallback, and remote sessions still have no OnListModels callback."
    ],
    "kind": "runtime",
    "sha": "9038698ffa548b7b7b382a248166b9191efd8a69",

@@ -1901,7 +1901,7 @@ type Options struct {
 	MCPServers                     []historycell.McpServerStatus
 	OnReadMCPInventory             func(detail bool) ([]historycell.McpServerStatus, error)
 	OnStartMCPLogin                func(name, environmentID, threadID string) (MCPLoginStart, error)
-	OnListModels                   func(cwd string, includeHidden bool) ([]codextui.ModelPickerOption, error)
+	OnListModels                   func(cwd string, provider string, includeHidden bool) ([]codextui.ModelPickerOption, error)
 	// StartupConfigWarnings carries the requirement-driven config warnings known
 	// at startup so they coalesce into the startup warnings entry (Rust
 	// config.startup_warnings -> ConfigWarning notifications).
@@ -2723,7 +2723,7 @@ type Model struct {
 	activeMCPLoginIDs                map[string]string
 	mcpLoginResultsByThread          map[string][]MCPLoginCompletedMsg
 	nextMCPLoginRequestID            uint64
-	onListModels                     func(cwd string, includeHidden bool) ([]codextui.ModelPickerOption, error)
+	onListModels                     func(cwd string, provider string, includeHidden bool) ([]codextui.ModelPickerOption, error)
 	nextModelsRequestID              uint64
 	pendingModelsRequestID           uint64
 	nextMCPInventoryRequestID        uint64

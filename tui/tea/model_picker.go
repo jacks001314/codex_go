@@ -49,8 +49,9 @@ func (m *Model) fetchModelsForPicker() bubbletea.Cmd {
 	requestID := m.nextModelsRequestID
 	m.pendingModelsRequestID = requestID
 	cwd := m.modelListCWD()
+	provider := m.modelListProvider()
 	return func() bubbletea.Msg {
-		options, err := m.onListModels(cwd, true)
+		options, err := m.onListModels(cwd, provider, true)
 		return ModelsResultMsg{RequestID: requestID, Options: options, Err: err}
 	}
 }
@@ -68,6 +69,17 @@ func (m *Model) modelListCWD() string {
 		return strings.TrimSpace(m.State.CWD)
 	}
 	return ""
+}
+
+// modelListProvider is the model provider whose catalog the picker should read
+// (Rust #63553: the active thread can use a different provider from the
+// app-server default). An empty provider keeps the configured default catalog
+// for new threads.
+func (m *Model) modelListProvider() string {
+	if m == nil || m.State == nil {
+		return ""
+	}
+	return strings.TrimSpace(m.State.Provider)
 }
 
 // applyModelsResult applies a fetched model catalog to the picker options and
@@ -410,8 +422,9 @@ func (m *Model) fetchModelCatalog() bubbletea.Cmd {
 	requestID := m.nextModelCatalogRequestID
 	m.pendingModelCatalogRequestID = requestID
 	cwd := m.modelListCWD()
+	provider := m.modelListProvider()
 	return func() bubbletea.Msg {
-		options, err := m.onListModels(cwd, true)
+		options, err := m.onListModels(cwd, provider, true)
 		return ModelCatalogResultMsg{RequestID: requestID, Options: options, Err: err}
 	}
 }

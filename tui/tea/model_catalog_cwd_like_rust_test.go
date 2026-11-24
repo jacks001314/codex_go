@@ -44,7 +44,7 @@ func TestAPIModelCatalogRefreshOnAttachedCWDLikeRust(t *testing.T) {
 		Width:            100,
 		Height:           30,
 		SessionPickerCWD: launch,
-		OnListModels: func(cwd string, includeHidden bool) ([]codextui.ModelPickerOption, error) {
+		OnListModels: func(cwd string, provider string, includeHidden bool) ([]codextui.ModelPickerOption, error) {
 			requested = append(requested, cwd)
 			return []codextui.ModelPickerOption{{ID: "project-model", Label: "Project"}}, nil
 		},
@@ -79,7 +79,7 @@ func TestChatGPTModelCatalogStaysOnCWDChangeLikeRust(t *testing.T) {
 		Height:            30,
 		SessionPickerCWD:  launch,
 		HasChatGPTAccount: true,
-		OnListModels: func(cwd string, includeHidden bool) ([]codextui.ModelPickerOption, error) {
+		OnListModels: func(cwd string, provider string, includeHidden bool) ([]codextui.ModelPickerOption, error) {
 			requests++
 			return []codextui.ModelPickerOption{{ID: "chatgpt-model", Label: "ChatGPT"}}, nil
 		},
@@ -105,7 +105,7 @@ func TestModelPickerFetchUsesSessionCWDLikeRust(t *testing.T) {
 	model := NewModel(state, Options{
 		Width:  100,
 		Height: 30,
-		OnListModels: func(cwd string, includeHidden bool) ([]codextui.ModelPickerOption, error) {
+		OnListModels: func(cwd string, provider string, includeHidden bool) ([]codextui.ModelPickerOption, error) {
 			requested = cwd
 			return []codextui.ModelPickerOption{{ID: "project-model", Label: "Project"}}, nil
 		},
