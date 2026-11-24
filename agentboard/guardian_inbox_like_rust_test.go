@@ -143,8 +143,18 @@ func TestGuardianInboxDeliversQueuedEvidenceInSourceOrderLikeRust(t *testing.T) 
 		t.Fatalf("replacement cursor = %d, want 3", replacement)
 	}
 
-	if err := delivery.Publish(GuardianEvidenceID{Ordinal: 3}, map[string]string{reviewer: third}); err == nil {
-		t.Fatal("Publish() accepted evidence that was not newer than the queue")
+	// Republishing the original that already heads the queue is idempotent
+	// (Rust #63357 routes one original once per matching inbox), while routing
+	// an older original would go backwards.
+	queuedBefore := len(inbox.QueuedPosts())
+	if err := delivery.Publish(GuardianEvidenceID{Ordinal: 3}, map[string]string{reviewer: third}); err != nil {
+		t.Fatalf("idempotent Publish() error = %v", err)
+	}
+	if len(inbox.QueuedPosts()) != queuedBefore {
+		t.Fatal("idempotent Publish() queued the original twice")
+	}
+	if err := delivery.Publish(GuardianEvidenceID{Ordinal: 2}, map[string]string{reviewer: second}); err == nil {
+		t.Fatal("Publish() accepted evidence older than the queue head")
 	}
 }
 

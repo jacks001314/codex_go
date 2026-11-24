@@ -28,7 +28,11 @@ type GuardianLiveDelivery struct {
 
 	mu     sync.Mutex
 	actors map[string]*GuardianActorInbox
-	closed bool
+	// subscribers indexes live reviewer inboxes by channel so committed
+	// evidence reaches the reviewers that are subscribed right now, not a
+	// persisted subscription (Rust #63357).
+	subscribers map[string]map[*GuardianActorInbox]struct{}
+	closed      bool
 }
 
 // NewGuardianLiveDelivery creates the inbox set for one root thread.
@@ -57,7 +61,7 @@ func (d *GuardianLiveDelivery) Inbox(actor string) *GuardianActorInbox {
 	}
 	inbox, ok := d.actors[actor]
 	if !ok {
-		inbox = &GuardianActorInbox{root: d.root, actor: actor, wake: make(chan struct{})}
+		inbox = &GuardianActorInbox{root: d.root, actor: actor, delivery: d, wake: make(chan struct{})}
 		d.actors[actor] = inbox
 	}
 	return inbox
@@ -208,13 +212,15 @@ func (d *GuardianLiveDelivery) Publish(id GuardianEvidenceID, recipients map[str
 // retains board references only: the reviewer conversation keeps the admission
 // cursor (Rust guardian-v3 ActorInbox).
 type GuardianActorInbox struct {
-	root  string
-	actor string
+	root     string
+	actor    string
+	delivery *GuardianLiveDelivery
 
-	mu     sync.Mutex
-	posts  []GuardianQueuedEvidence
-	wake   chan struct{}
-	closed bool
+	mu       sync.Mutex
+	channels []string
+	posts    []GuardianQueuedEvidence
+	wake     chan struct{}
+	closed   bool
 }
 
 // guardianClosedWake is returned by Subscribe on a closed inbox so a waiting
@@ -265,9 +271,13 @@ func (i *GuardianActorInbox) Close() {
 	}
 	i.closed = true
 	i.posts = nil
+	i.channels = nil
 	if i.wake != nil {
 		close(i.wake)
 		i.wake = nil
+	}
+	if i.delivery != nil {
+		i.delivery.unsubscribeAll(i)
 	}
 }
 
@@ -315,8 +325,15 @@ func (i *GuardianActorInbox) publish(id GuardianEvidenceID, messageID string) er
 	if i.closed {
 		return errors.New("Guardian inbox is closed")
 	}
-	if count := len(i.posts); count != 0 && i.posts[count-1].Ordinal >= id.Ordinal {
-		return errors.New("Guardian inbox received evidence out of source order")
+	if count := len(i.posts); count != 0 {
+		last := i.posts[count-1].Ordinal
+		// Another subscribed channel may already have delivered this original.
+		if last == id.Ordinal {
+			return nil
+		}
+		if last > id.Ordinal {
+			return errors.New("Guardian inbox received evidence out of source order")
+		}
 	}
 	i.posts = append(i.posts, GuardianQueuedEvidence{Ordinal: id.Ordinal, MessageID: messageID})
 	if i.wake == nil {
