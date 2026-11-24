@@ -1996,6 +1996,12 @@ func (s *Store) finalizePreparedForkLocked(source *Record, prepared *PreparedFor
 		title = source.Title
 	}
 	sessionID := options.SessionID
+	// Rust #62314: a prepared fork that references the source's stored history
+	// keeps the root session id, so ancestor context is attributed to the root
+	// review; a fork that copies its inherited items starts its own session.
+	if sessionID == "" && prepared.HistoryBase != nil && !prepared.CopiedHistory {
+		sessionID = strings.TrimSpace(source.SessionID)
+	}
 	if sessionID == "" {
 		sessionID = string(newID)
 	}
