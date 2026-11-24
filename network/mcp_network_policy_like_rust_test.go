@@ -228,3 +228,35 @@ func TestMCPNetworkPolicyOwnerRouteLikeRust(t *testing.T) {
 		t.Fatalf("offline owner metadata = %#v, want network disabled", meta)
 	}
 }
+
+// Rust LocalBindingPolicy::resolve: an omitted setting follows the executor
+// policy, so RequireTrue keeps domain grants while DefaultFalse filters them
+// down to IP literals.
+func TestMCPNetworkPolicyLocalBindingPolicyLikeRust(t *testing.T) {
+	controller, err := NewSpec(Config{
+		Enabled: true,
+		Mode:    ModeLimited,
+		Domains: map[string]DomainPermission{"api.example.com": DomainAllow},
+	}, nil, PermissionManaged)
+	if err != nil {
+		t.Fatalf("NewSpec() error = %v", err)
+	}
+	requireTrue, err := MCPNetworkPolicy(controller, PermissionManaged,
+		MCPNetworkRoute{PrimaryAllowsProxy: true, LocalBinding: LocalBindingRequireTrue},
+		PermissionManaged, false, false, nil)
+	if err != nil {
+		t.Fatalf("MCPNetworkPolicy(RequireTrue) error = %v", err)
+	}
+	if !reflect.DeepEqual(requireTrue.AllowedDomains, []string{"api.example.com"}) {
+		t.Fatalf("RequireTrue allowed = %#v, want the domain grant kept", requireTrue.AllowedDomains)
+	}
+	defaultFalse, err := MCPNetworkPolicy(controller, PermissionManaged,
+		MCPNetworkRoute{PrimaryAllowsProxy: true},
+		PermissionManaged, false, false, nil)
+	if err != nil {
+		t.Fatalf("MCPNetworkPolicy(DefaultFalse) error = %v", err)
+	}
+	if len(defaultFalse.AllowedDomains) != 0 {
+		t.Fatalf("DefaultFalse allowed = %#v, want only IP literals", defaultFalse.AllowedDomains)
+	}
+}

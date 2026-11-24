@@ -13,22 +13,14 @@ import (
 // permission profile, the approval policy and the saved exec-policy rules. The
 // result never carries proxy endpoints or credentials.
 
-// MCPLocalBindingPolicy mirrors Rust's LocalBindingPolicy: DefaultFalse leaves
-// an omitted allow_local_binding false, RequireTrue resolves an omission to the
-// proxy's enabled state.
-type MCPLocalBindingPolicy string
-
-const (
-	MCPLocalBindingDefaultFalse MCPLocalBindingPolicy = "default_false"
-	MCPLocalBindingRequireTrue  MCPLocalBindingPolicy = "require_true"
-)
-
-// resolve mirrors LocalBindingPolicy::resolve.
-func (p MCPLocalBindingPolicy) resolve(enabled bool, configured *bool) bool {
+// resolve mirrors LocalBindingPolicy::resolve: an explicit setting always wins,
+// otherwise RequireTrue follows the proxy's enabled state and DefaultFalse
+// leaves the omission false.
+func (p LocalBindingPolicy) resolve(enabled bool, configured *bool) bool {
 	if configured != nil {
 		return *configured
 	}
-	return enabled && p == MCPLocalBindingRequireTrue
+	return enabled && p == LocalBindingRequireTrue
 }
 
 // MCPNetworkRoute mirrors Rust McpNetworkRoute. The primary attachment decides
@@ -36,7 +28,7 @@ func (p MCPLocalBindingPolicy) resolve(enabled bool, configured *bool) bool {
 // local-binding semantics even when it inherits the controller policy.
 type MCPNetworkRoute struct {
 	PrimaryAllowsProxy bool
-	LocalBinding       MCPLocalBindingPolicy
+	LocalBinding       LocalBindingPolicy
 	Owner              *EnvironmentNetworkPolicy
 }
 
@@ -60,9 +52,6 @@ func MCPNetworkPolicy(
 	approvalNever bool,
 	rules []NetworkRule,
 ) (*MCPNetworkPolicyMetadata, error) {
-	if route.LocalBinding == "" {
-		route.LocalBinding = MCPLocalBindingDefaultFalse
-	}
 	// An owner can supply its own proxy when the controller is absent. A disabled
 	// controller vetoes that route, so file tools receive an offline policy.
 	proxyActive := false
@@ -117,7 +106,7 @@ func MCPNetworkPolicy(
 	requireIPLiteral := proxyActive && !route.LocalBinding.resolve(config.Enabled, config.AllowLocalBinding)
 	// An MXC executor cannot launch an active proxy with an explicit
 	// local-binding denial.
-	canRoute := !(requireIPLiteral && route.LocalBinding == MCPLocalBindingRequireTrue)
+	canRoute := !(requireIPLiteral && route.LocalBinding == LocalBindingRequireTrue)
 	allowed := domainsWithPermission(config.Domains, DomainAllow)
 	if requireIPLiteral {
 		allowed = mcpIPLiteralRules(allowed)
@@ -152,7 +141,7 @@ func composeMCPEnvironmentPolicy(
 	policy *EnvironmentNetworkPolicy,
 	profile PermissionProfileKind,
 	routed bool,
-	binding MCPLocalBindingPolicy,
+	binding LocalBindingPolicy,
 	rules []NetworkRule,
 ) (*Spec, error) {
 	if routed && profile == PermissionDisabled {
