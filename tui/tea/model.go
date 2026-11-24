@@ -9960,11 +9960,42 @@ func (m *Model) renderSubAgentActivity(item *protocol.ThreadItem) {
 	if !ok {
 		return
 	}
+	cell = linkSubAgentActivityCell(cell, item.AgentThreadID)
 	if strings.TrimSpace(m.Transcript.activeAssistantDeltaItemID) != "" {
 		m.deferredSubAgentActivity = append(m.deferredSubAgentActivity, *item)
 		return
 	}
 	m.applyHistoryCell(cell)
+}
+
+// linkSubAgentActivityCell wraps the activity label in a saved-conversation
+// link to the subagent's thread and underlines it (Rust #62159 paints activity
+// labels as links when the transcript is available). Go activates such links
+// with Ctrl-click and opens the agent through the same switch path as any other
+// saved-conversation link.
+func linkSubAgentActivityCell(cell historycell.PlainHistoryCell, threadID string) historycell.PlainHistoryCell {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return cell
+	}
+	destination := codextui.ThreadLinkDestination(threadID)
+	if _, ok := codextui.ThreadIDFromLink(destination); !ok {
+		return cell
+	}
+	for index, line := range cell.Lines {
+		open := strings.IndexByte(line, '`')
+		if open < 0 {
+			continue
+		}
+		closing := strings.IndexByte(line[open+1:], '`')
+		if closing <= 0 {
+			continue
+		}
+		label := line[open+1 : open+1+closing]
+		linked := "\x1b]8;;" + destination + "\x07\x1b[4m" + label + "\x1b[24m\x1b]8;;\x07"
+		cell.Lines[index] = line[:open+1] + linked + line[open+1+closing:]
+	}
+	return cell
 }
 
 // flushDeferredSubAgentActivity renders activity that arrived during an

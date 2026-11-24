@@ -51382,7 +51382,8 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1270: partial - Rust underlines subagent labels in transcript activity and opens that transcript when clicked. Go records subagent activity for the navigation picker (tui/app/agent_navigation.go RecordSubAgentActivity, SubAgentActivityDisplay) and supports keyboard switching, but agent_navigation.go has no link span or click handling, so activity labels are not clickable."
+    "Partial: subagent activity labels in the transcript are now links (Rust #62159). tui/tea linkSubAgentActivityCell wraps the label of a sub_agent_activity row in an underlined codex://threads/<id> OSC 8 link when AgentThreadID is a canonical thread id; the painted transcript records it in the region link table, so Go's Ctrl-click thread-link carrier resolves it and opens that agent's transcript through the same switch path as a saved-conversation link. Frame output still strips the OSC 8 target (StripThreadLinkHyperlinks), so the terminal never launches the desktop app. Tests: tui/tea/subagent_activity_links_like_rust_test.go.",
+    "Residual: the link opens the agent in the main pane instead of a sidebar tab beside the parent conversation (Rust #62157, tracked separately); Rust's backend-ancestry confirmation for the linked agent, deferral of a click that arrives while agent discovery is still running, and the unfocused-pane source are not implemented."
    ],
    "kind": "runtime",
    "sha": "bedafe7156ab73ac213cf960a2c2ef90033dd259",
