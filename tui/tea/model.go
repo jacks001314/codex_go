@@ -5649,7 +5649,10 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			if handled, cmd := m.handleDockedAgentsOverviewKey(msg); handled {
 				return m, cmd
 			}
-			if !m.agentsOverviewDockOpen() || !m.agentsOverviewDockConversationFocused() {
+			if m.agentsOverviewCenterOwnsInput() {
+				if handled, cmd := m.handleAgentsOverviewWorkspaceChord(keySpecFromKeyMsg(msg)); handled {
+					return m, cmd
+				}
 				return m, m.updateAgentsOverviewKey(msg)
 			}
 		}
@@ -6255,6 +6258,15 @@ func (m *Model) viewString() string {
 	m.deliverRightClickPasteAtRender()
 	m.ensureSize()
 	m.observeFocusedThreadRead()
+	if m.agentsOverviewNarrowConversationFillsScreen() {
+		// Rust #62986 workspace_areas: without room for both panes the
+		// pane that owns input fills the screen, so a conversation-focused
+		// workspace still paints the transcript instead of the dashboard.
+		m.agentsOverviewDockRendering = true
+		frame := m.viewString()
+		m.agentsOverviewDockRendering = false
+		return frame
+	}
 	m.syncStatusTimerPause(m.currentTime())
 	m.syncTranscriptHeight()
 	m.storePetDrawRequest()

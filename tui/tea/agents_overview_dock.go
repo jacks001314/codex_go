@@ -30,12 +30,51 @@ const (
 // conversation: it must be open and the terminal must have room for both
 // panes, exactly like Rust's workspace_areas MIN_SPLIT_WIDTH check.
 func (m *Model) agentsOverviewDockOpen() bool {
+	return m.agentsOverviewWorkspaceOpen() &&
+		firstPositive(m.width, defaultWidth) >= agentsOverviewDockMinSplit
+}
+
+// agentsOverviewWorkspaceOpen reports whether the Command Center is the
+// workspace pane Rust #62986 docks: it needs the owned transcript renderer and
+// the workspace feature, but not room for both columns. A narrow terminal
+// paints whichever pane owns input full screen.
+func (m *Model) agentsOverviewWorkspaceOpen() bool {
 	if m == nil || m.agentsOverview == nil || !m.sideWorkspaceEnabled() || !m.ownedScreen {
-		// Rust needs the owned transcript renderer as well as the workspace
-		// feature; the inline surface keeps the modal dashboard.
 		return false
 	}
-	return firstPositive(m.width, defaultWidth) >= agentsOverviewDockMinSplit
+	return true
+}
+
+// agentsOverviewCenterOwnsInput reports whether the dashboard, rather than the
+// conversation, receives keys. The dock opens on the center, and only an
+// explicit focus move hands input to the conversation.
+func (m *Model) agentsOverviewCenterOwnsInput() bool {
+	return m != nil && m.agentsOverview != nil && !m.agentsOverviewDockConversationFocused()
+}
+
+// handleAgentsOverviewWorkspaceChord routes leader chords while the dashboard
+// owns input. Rust handle_workspace_key sees the routed chord completion first
+// and turns focus_pane_right into a workspace focus move; every other chord
+// keeps its normal action.
+func (m *Model) handleAgentsOverviewWorkspaceChord(spec string) (bool, bubbletea.Cmd) {
+	if m == nil || spec == "" {
+		return false, nil
+	}
+	if m.leaderChordPending && m.leaderChordActions[spec] == "global.focus_pane_right" &&
+		m.agentsOverviewWorkspaceOpen() {
+		m.clearLeaderChord()
+		m.focusAgentsOverviewDockConversation()
+		return true, nil
+	}
+	return m.handleLeaderChordKey(spec, nil)
+}
+
+// agentsOverviewNarrowConversationFillsScreen reports whether the workspace
+// has no room for both panes while the conversation owns input; Rust then
+// paints that pane across the whole viewport.
+func (m *Model) agentsOverviewNarrowConversationFillsScreen() bool {
+	return m != nil && m.agentsOverview != nil && !m.agentsOverviewDockRendering &&
+		!m.agentsOverviewDockOpen() && m.agentsOverviewDockConversationFocused()
 }
 
 func (m *Model) agentsOverviewDockConversationFocused() bool {
@@ -45,7 +84,7 @@ func (m *Model) agentsOverviewDockConversationFocused() bool {
 // focusAgentsOverviewDockConversation hands input to the conversation while
 // keeping the dock painted (Rust focus_workspace_composer).
 func (m *Model) focusAgentsOverviewDockConversation() bool {
-	if m == nil || !m.agentsOverviewDockOpen() || !m.agentsOverviewCanReturnToChat() {
+	if m == nil || !m.agentsOverviewWorkspaceOpen() || !m.agentsOverviewCanReturnToChat() {
 		return false
 	}
 	if m.agentsOverviewDockFocus != agentsOverviewDockConversation {
@@ -59,7 +98,7 @@ func (m *Model) focusAgentsOverviewDockConversation() bool {
 // focusAgentsOverviewDockCenter gives the dock its own input back, used by the
 // focus_pane_left and open_agents shortcuts while the conversation is focused.
 func (m *Model) focusAgentsOverviewDockCenter() bool {
-	if m == nil || !m.agentsOverviewDockOpen() {
+	if m == nil || !m.agentsOverviewWorkspaceOpen() {
 		return false
 	}
 	m.agentsOverviewDockFocus = agentsOverviewDockCenter
@@ -69,7 +108,7 @@ func (m *Model) focusAgentsOverviewDockCenter() bool {
 // keepDockedAgentsOverviewAfterOpen leaves the dock open after a task opens and
 // hands the conversation its input, matching Rust #62986.
 func (m *Model) keepDockedAgentsOverviewAfterOpen() bool {
-	if m == nil || !m.agentsOverviewDockOpen() {
+	if m == nil || !m.agentsOverviewWorkspaceOpen() {
 		return false
 	}
 	m.agentsOverviewDockFocus = agentsOverviewDockConversation
@@ -77,25 +116,30 @@ func (m *Model) keepDockedAgentsOverviewAfterOpen() bool {
 }
 
 // handleDockedAgentsOverviewKey routes keys while the dock is open. The center
-// keeps the dashboard's own handling; focus_main_composer moves input to the
-// conversation, and focus_pane_left or open_agents moves it back.
+// keeps the dashboard's own handling; focus_main_composer or focus_pane_right
+// moves input to the conversation, and focus_pane_left or open_agents moves it
+// back.
 func (m *Model) handleDockedAgentsOverviewKey(msg keymsg.KeyMsg) (bool, bubbletea.Cmd) {
-	if m == nil || m.agentsOverview == nil || !m.agentsOverviewDockOpen() {
+	if m == nil || m.agentsOverview == nil {
 		return false, nil
 	}
 	spec := keySpecFromKeyMsg(msg)
-	if m.agentsOverviewDockFocus == agentsOverviewDockConversation {
+	if m.agentsOverviewDockConversationFocused() {
 		if m.keyMatches("global", "focus_pane_left", spec) || m.keyMatches("global", "open_agents", spec) {
 			m.focusAgentsOverviewDockCenter()
 			return true, nil
 		}
 		return false, nil
 	}
-	if m.keyMatches("global", "focus_main_composer", spec) {
+	// Rust focus_main_composer and focus_pane_right both hand the workspace
+	// to the conversation, and every other key stays with the dashboard.
+	if m.agentsOverviewWorkspaceOpen() &&
+		(m.keyMatches("global", "focus_main_composer", spec) ||
+			m.keyMatches("global", "focus_pane_right", spec)) {
 		m.focusAgentsOverviewDockConversation()
 		return true, nil
 	}
-	return true, m.updateAgentsOverviewKey(msg)
+	return false, nil
 }
 
 // agentsOverviewDockWidths splits the workspace into the dock and the

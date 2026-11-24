@@ -80,6 +80,39 @@ func TestAgentsOverviewNarrowStaysFullScreenLikeRust(t *testing.T) {
 	}
 }
 
+// Rust #62986 narrow workspace: without room for both panes the pane that
+// owns input fills the screen, so a focused conversation still paints the
+// transcript and keeps its keys instead of falling back to the dashboard.
+func TestAgentsOverviewNarrowFocusedConversationFillsScreenLikeRust(t *testing.T) {
+	model := newAgentsOverviewDockModel(t, 80)
+	if !model.focusAgentsOverviewDockConversation() {
+		t.Fatal("narrow workspace did not hand input to the conversation")
+	}
+	painted := ansi.Strip(model.viewString())
+	if !strings.Contains(painted, "hello from the main chat") {
+		t.Fatalf("narrow focused conversation painted no transcript:\n%s", painted)
+	}
+	if strings.Contains(painted, "Group:") {
+		t.Fatalf("narrow focused conversation still painted the dashboard:\n%s", painted)
+	}
+
+	model.Update(runes("Hi"))
+	if model.agentsOverview.Composing() {
+		t.Fatal("conversation-focused rune reached the Command Center composer")
+	}
+	if got := model.composerText(); got != "Hi" {
+		t.Fatalf("conversation composer = %q, want the typed draft", got)
+	}
+
+	if !model.focusAgentsOverviewDockCenter() {
+		t.Fatal("narrow workspace did not return input to the dashboard")
+	}
+	painted = ansi.Strip(model.viewString())
+	if !strings.Contains(painted, "Group:") || strings.Contains(painted, "hello from the main chat") {
+		t.Fatalf("returning to the center did not restore the dashboard:\n%s", painted)
+	}
+}
+
 // Rust #62986 workspace focus: focus_main_composer hands input to the
 // conversation and the dock stays painted; focus_pane_left (or open_agents)
 // gives it back to the center.
@@ -115,6 +148,14 @@ func TestAgentsOverviewDockFocusMovesLikeRust(t *testing.T) {
 	model.Update(runes("y"))
 	if got := model.composerText(); got != "Hi" {
 		t.Fatalf("center-focused rune changed the conversation draft to %q", got)
+	}
+
+	// Rust handle_workspace_key treats focus_pane_right like
+	// focus_main_composer and hands the workspace to the conversation.
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlX})
+	model.Update(runes("l"))
+	if !model.agentsOverviewDockConversationFocused() {
+		t.Fatalf("focus_pane_right left focus at %q, want the conversation", model.agentsOverviewDockFocus)
 	}
 }
 
