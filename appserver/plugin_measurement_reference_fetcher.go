@@ -24,6 +24,28 @@ type authenticatedMeasurementBundleFetcher struct {
 	productSKU string
 }
 
+// archiveSigningContext mirrors the credentials the installed-plugin listing
+// used, so the signing-key request is authorized the same way.
+func (f *authenticatedMeasurementBundleFetcher) archiveSigningContext() remotePluginArchiveSigningContext {
+	headers := http.Header{}
+	if f == nil {
+		return remotePluginArchiveSigningContext{}
+	}
+	headers.Set("Authorization", "Bearer "+f.token)
+	if account := strings.TrimSpace(f.accountID); account != "" {
+		headers.Set("ChatGPT-Account-ID", account)
+	}
+	sku := strings.TrimSpace(f.productSKU)
+	if sku == "" {
+		sku = plugin.CODEXProductSKU
+	}
+	headers.Set("OAI-Product-Sku", sku)
+	return remotePluginArchiveSigningContext{
+		ServiceBaseURL: strings.TrimRight(strings.TrimSpace(f.baseURL), "/"),
+		Headers:        headers,
+	}
+}
+
 func (f *authenticatedMeasurementBundleFetcher) FetchMeasurementBundle(ctx context.Context, target plugin.PluginMeasurementTarget) (*plugin.PluginMeasurementBundle, error) {
 	if f == nil || f.client == nil || strings.TrimSpace(target.PluginName) == "" {
 		return nil, nil
@@ -108,6 +130,12 @@ func (f *authenticatedMeasurementBundleFetcher) FetchMeasurementBundle(ctx conte
 		Materialize: func(ctx context.Context, home string) (plugin.TrustedPluginRoots, error) {
 			bundle, err := downloadRemotePluginBundle(ctx, f.client, bundleURL)
 			if err != nil {
+				return plugin.TrustedPluginRoots{}, err
+			}
+			// Rust #63489: a measurement reference stages the same signed archive
+			// the install path accepts, so a tampered bundle never becomes a trusted
+			// measurement root.
+			if err := verifyRemotePluginArchiveBundle(ctx, f.client, f.archiveSigningContext(), candidate.Release.Signing, bundle); err != nil {
 				return plugin.TrustedPluginRoots{}, err
 			}
 			if _, err := installRemotePluginBundle(home, remoteInstalledGlobalMarketplace, name, version, remoteID, appManifest, bundle); err != nil {

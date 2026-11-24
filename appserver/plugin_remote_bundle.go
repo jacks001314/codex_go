@@ -17,6 +17,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"codex_go/plugin"
 )
 
 const (
@@ -25,9 +27,17 @@ const (
 	remotePluginInstallMetadataFilename       = ".codex-remote-plugin-install.json"
 )
 
+// remotePluginArchiveSigningContext carries what the archive signing-key
+// request needs: the authenticated Plugin Service base URL and the resolved
+// request headers (Rust #63487 RemotePluginArchiveDownload::verify).
+type remotePluginArchiveSigningContext struct {
+	ServiceBaseURL string
+	Headers        http.Header
+}
+
 func ensureRemoteInstalledPluginCache(ctx context.Context, client interface {
 	Do(*http.Request) (*http.Response, error)
-}, codexHome string, marketplaceName string, candidate remoteInstalledPlugin) (string, error) {
+}, codexHome string, marketplaceName string, candidate remoteInstalledPlugin, signing remotePluginArchiveSigningContext) (string, error) {
 	name := strings.TrimSpace(candidate.Name)
 	pluginBase := filepath.Join(codexHome, "plugins", "cache", marketplaceName, name)
 	activeRoot := activeRemotePluginRoot(pluginBase)
@@ -79,11 +89,48 @@ func ensureRemoteInstalledPluginCache(ctx context.Context, client interface {
 	if err != nil {
 		return activeRoot, err
 	}
+	if err := verifyRemotePluginArchiveBundle(ctx, client, signing, candidate.Release.Signing, bundle); err != nil {
+		return activeRoot, err
+	}
 	installedRoot, err := installRemotePluginBundle(codexHome, marketplaceName, name, version, candidate.ID, candidate.Release.AppManifest, bundle)
 	if err != nil {
 		return activeRoot, err
 	}
 	return installedRoot, nil
+}
+
+// verifyRemotePluginArchiveBundle checks a downloaded archive before its bytes
+// reach extraction (Rust #63487/#63489). A release without signing metadata
+// keeps the legacy path; metadata that exists must verify against the
+// authenticated Plugin Service release key.
+func verifyRemotePluginArchiveBundle(ctx context.Context, client interface {
+	Do(*http.Request) (*http.Response, error)
+}, signing remotePluginArchiveSigningContext, raw json.RawMessage, archive []byte) error {
+	metadata := plugin.ParsePluginArchiveSigning(raw)
+	if !metadata.Present && !metadata.Malformed {
+		return nil
+	}
+	if metadata.Malformed {
+		return pluginArchiveVerificationError(plugin.PluginArchiveMalformedMetadataCode)
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(signing.ServiceBaseURL), "/")
+	if baseURL == "" {
+		return pluginArchiveVerificationError(plugin.PluginArchiveSigningKeysUnavailableCode)
+	}
+	keys, err := plugin.FetchPluginArchiveSigningKeys(ctx, plugin.HTTPDoer(client), baseURL+plugin.PluginArchiveSigningKeysPath, signing.Headers)
+	if err != nil {
+		return pluginArchiveVerificationError(plugin.PluginArchiveFailureCode(err))
+	}
+	if _, _, err := plugin.VerifyPluginArchive(archive, metadata, keys); err != nil {
+		return pluginArchiveVerificationError(plugin.PluginArchiveFailureCode(err))
+	}
+	return nil
+}
+
+// pluginArchiveVerificationError reports one bounded failure category so the
+// install error never carries signature or key material.
+func pluginArchiveVerificationError(code string) error {
+	return fmt.Errorf("plugin archive verification failed: %s", code)
 }
 
 func activeRemotePluginRoot(pluginBase string) string {

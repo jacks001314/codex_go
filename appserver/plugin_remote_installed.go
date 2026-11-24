@@ -56,6 +56,7 @@ type remoteInstalledPlugin struct {
 		DisplayName       string          `json:"display_name"`
 		Description       string          `json:"description"`
 		BundleDownloadURL *string         `json:"bundle_download_url"`
+		Signing           json.RawMessage `json:"signing"`
 		AppManifest       json.RawMessage `json:"app_manifest"`
 	} `json:"release"`
 }
@@ -174,6 +175,18 @@ func fetchInstalledRemotePluginDetails(ctx context.Context, client interface {
 	Do(*http.Request) (*http.Response, error)
 }, baseURL string, token string, accountID string, productSKU string, codexHome string) (map[string][]plugin.PluginDetail, error) {
 	clearRemoteInstalledPluginSyncFailures()
+	// The archive signing-key request uses the same resolved credentials as
+	// the installed-plugin listing (Rust #63487).
+	signingHeaders := http.Header{}
+	signingHeaders.Set("Authorization", "Bearer "+token)
+	if strings.TrimSpace(accountID) != "" {
+		signingHeaders.Set("ChatGPT-Account-ID", accountID)
+	}
+	sku := strings.TrimSpace(productSKU)
+	if sku == "" {
+		sku = plugin.CODEXProductSKU
+	}
+	signingHeaders.Set("OAI-Product-Sku", sku)
 	installed := map[string]remoteInstalledPlugin{}
 	for _, scope := range []string{"GLOBAL", "USER", "WORKSPACE"} {
 		pageToken := ""
@@ -248,7 +261,7 @@ func fetchInstalledRemotePluginDetails(ctx context.Context, client interface {
 			installedNamesByMarketplace[marketplaceName] = map[string]struct{}{}
 		}
 		installedNamesByMarketplace[marketplaceName][name] = struct{}{}
-		root, err := ensureRemoteInstalledPluginCache(ctx, client, codexHome, marketplaceName, candidate)
+		root, err := ensureRemoteInstalledPluginCache(ctx, client, codexHome, marketplaceName, candidate, remotePluginArchiveSigningContext{ServiceBaseURL: baseURL, Headers: signingHeaders})
 		if err != nil || root == "" {
 			if candidate.Enabled {
 				recordRemoteInstalledPluginMaterializationFailure(candidate.ID)

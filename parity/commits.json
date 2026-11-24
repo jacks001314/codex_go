@@ -55559,11 +55559,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Batch 164: partial - Rust adds digest and signature verification for Plugin Service archives (`plugin-archive-verification/src/archive_verification.rs`, signing-key manifest fixtures). Go downloads and stages plugin releases (`plugin/cache_refresh.go`) and packs/unpacks bundles (`plugin/bundle_archive.go`) without verifying a release digest or signature. Residual: implement archive verification and reject mismatched archives before staging."
+    "Complete. Go adds plugin/archive_verification.go: ParsePluginArchiveSigning reads a release's signing value (absent or null keeps the legacy path, unreadable metadata fails at the download boundary), FetchPluginArchiveSigningKeys reads the authenticated /ps/plugins/signing-keys response with the 128 KiB, 64-key, duplicate-key and SPKI size bounds and rejects a redirected response, and VerifyPluginArchive checks the lowercase SHA-256 digest and then the RSA_PKCS1_SHA256 detached signature against the named release key, reporting Rust's bounded categories (malformed_metadata, unsupported_archive_algorithm, digest_mismatch, unknown_signing_key, unsupported_key_algorithm, invalid_public_key, signature_mismatch).",
+    "Tests: TestVerifyPluginArchiveLikeRust, TestParsePluginArchiveSigningLikeRust and TestFetchPluginArchiveSigningKeysLikeRust (plugin). Verified: go test ./plugin -count=1, go vet ./plugin ./appserver, go build ./..., go test ./parity -count=1."
    ],
    "kind": "runtime",
    "sha": "05d375287dd258f91a78965af1db32c40d7bd0d7",
-   "status": "partial",
+   "status": "complete",
    "subject": "Add signature verification for Plugin Service archives (#63487)"
   },
   {
@@ -55571,11 +55572,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Batch 164: partial - Rust verifies remote plugin archives before extraction for installs, updates, shared checkouts and measurement references, fetching signing keys over the authenticated plugin-service transport and still accepting releases without signing metadata. Go's remote plugin refresh stages the downloaded tree with no verification step, so a tampered archive would be extracted. Residual: verify before extraction and keep unsigned releases working."
+    "Complete. Every bundle Go extracts is verified first: ensureRemoteInstalledPluginCache (installs and updates) and the measurement reference materializer call verifyRemotePluginArchiveBundle before installRemotePluginBundle. remotePluginArchiveSigningContext carries the Plugin Service base URL plus the resolved Authorization / ChatGPT-Account-ID / OAI-Product-Sku headers used by the installed-plugin listing, so the key request is authenticated the same way. A release without signing metadata still installs; a tampered or malformed one never reaches extraction. Go has no shared-checkout path.",
+    "Tests: TestRemoteInstalledPluginArchiveSignatureVerifiedBeforeExtractionLikeRust (the tampered archive fails with digest_mismatch and leaves no extracted root; the test fails when the verification call is bypassed) and TestMeasurementBundleFetchVerifiesArchiveSignatureLikeRust. Verified: go test ./appserver -run 'Plugin|Measurement' -count=1, go test ./plugin -count=1, go build ./..., go vet ./plugin ./appserver, go test ./parity -count=1."
    ],
    "kind": "runtime",
    "sha": "e173e7b9b29a63f4a5b5171c1b9a610179bc38a2",
-   "status": "partial",
+   "status": "complete",
    "subject": "Verify signed remote plugin archives before extraction (#63489)"
   },
   {

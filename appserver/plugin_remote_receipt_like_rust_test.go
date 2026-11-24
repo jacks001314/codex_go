@@ -60,7 +60,7 @@ func TestRemoteInstalledPluginReusesCacheOnlyWithMatchingReceiptLikeRust(t *test
 	home := t.TempDir()
 	pluginBase, root := writeReceiptTestCache(t, home, "1.2.3", "plugins~Plugin_a", true)
 	client := &receiptTestClient{}
-	got, err := ensureRemoteInstalledPluginCache(context.Background(), client, home, remoteInstalledGlobalMarketplace, receiptTestCandidate("1.2.3", "https://example.invalid/bundle.tar.gz"))
+	got, err := ensureRemoteInstalledPluginCache(context.Background(), client, home, remoteInstalledGlobalMarketplace, receiptTestCandidate("1.2.3", "https://example.invalid/bundle.tar.gz"), remotePluginArchiveSigningContext{})
 	if err != nil {
 		t.Fatalf("ensureRemoteInstalledPluginCache() error = %v", err)
 	}
@@ -79,7 +79,7 @@ func TestRemoteInstalledPluginMigratesReceiptlessCacheLikeRust(t *testing.T) {
 	home := t.TempDir()
 	pluginBase, root := writeReceiptTestCache(t, home, "1.2.3", "", false)
 	client := &receiptTestClient{}
-	got, err := ensureRemoteInstalledPluginCache(context.Background(), client, home, remoteInstalledGlobalMarketplace, receiptTestCandidate("1.2.3", "https://example.invalid/bundle.tar.gz"))
+	got, err := ensureRemoteInstalledPluginCache(context.Background(), client, home, remoteInstalledGlobalMarketplace, receiptTestCandidate("1.2.3", "https://example.invalid/bundle.tar.gz"), remotePluginArchiveSigningContext{})
 	if err != nil {
 		t.Fatalf("ensureRemoteInstalledPluginCache() error = %v", err)
 	}
@@ -97,7 +97,7 @@ func TestRemoteInstalledPluginReinstallsConflictingReceiptLikeRust(t *testing.T)
 	// Without a download URL the cache cannot be replaced, and the original
 	// receipt must survive the failed attempt.
 	client := &receiptTestClient{}
-	if got, err := ensureRemoteInstalledPluginCache(context.Background(), client, home, remoteInstalledGlobalMarketplace, receiptTestCandidate("1.2.3", "")); err != nil || got != root {
+	if got, err := ensureRemoteInstalledPluginCache(context.Background(), client, home, remoteInstalledGlobalMarketplace, receiptTestCandidate("1.2.3", ""), remotePluginArchiveSigningContext{}); err != nil || got != root {
 		t.Fatalf("ensureRemoteInstalledPluginCache() = (%q, %v), want the cached root", got, err)
 	}
 	if persisted, err := readRemotePluginInstallMetadata(pluginBase); err != nil || persisted != "plugins~Plugin_original" {
@@ -106,7 +106,7 @@ func TestRemoteInstalledPluginReinstallsConflictingReceiptLikeRust(t *testing.T)
 	// A download attempt is made once a URL exists; its failure keeps the
 	// original receipt too.
 	client.err = errors.New("download unavailable")
-	if _, err := ensureRemoteInstalledPluginCache(context.Background(), client, home, remoteInstalledGlobalMarketplace, receiptTestCandidate("1.2.3", "https://example.invalid/bundle.tar.gz")); err == nil {
+	if _, err := ensureRemoteInstalledPluginCache(context.Background(), client, home, remoteInstalledGlobalMarketplace, receiptTestCandidate("1.2.3", "https://example.invalid/bundle.tar.gz"), remotePluginArchiveSigningContext{}); err == nil {
 		t.Fatal("ensureRemoteInstalledPluginCache() accepted a failed replacement download")
 	}
 	if client.calls != 1 {
@@ -124,7 +124,7 @@ func TestRemoteInstalledPluginReinstallsUnreadableReceiptLikeRust(t *testing.T) 
 		t.Fatalf("write corrupt receipt: %v", err)
 	}
 	client := &receiptTestClient{err: errors.New("download unavailable")}
-	if _, err := ensureRemoteInstalledPluginCache(context.Background(), client, home, remoteInstalledGlobalMarketplace, receiptTestCandidate("1.2.3", "https://example.invalid/bundle.tar.gz")); err == nil {
+	if _, err := ensureRemoteInstalledPluginCache(context.Background(), client, home, remoteInstalledGlobalMarketplace, receiptTestCandidate("1.2.3", "https://example.invalid/bundle.tar.gz"), remotePluginArchiveSigningContext{}); err == nil {
 		t.Fatal("ensureRemoteInstalledPluginCache() trusted an unreadable receipt")
 	}
 	if client.calls != 1 {

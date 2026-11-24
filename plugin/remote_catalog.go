@@ -50,12 +50,15 @@ type RemoteCatalogOptions struct {
 
 // RemoteCatalogRelease is the release metadata returned by the remote catalog.
 type RemoteCatalogRelease struct {
-	Version           *string         `json:"version"`
-	DisplayName       string          `json:"display_name"`
-	Description       string          `json:"description"`
-	BundleDownloadURL *string         `json:"bundle_download_url"`
-	AppManifest       json.RawMessage `json:"app_manifest"`
-	Keywords          []string        `json:"keywords"`
+	Version           *string `json:"version"`
+	DisplayName       string  `json:"display_name"`
+	Description       string  `json:"description"`
+	BundleDownloadURL *string `json:"bundle_download_url"`
+	// Signing is the release archive signing metadata; missing metadata keeps
+	// the legacy unsigned install path (Rust #63487).
+	Signing     json.RawMessage `json:"signing"`
+	AppManifest json.RawMessage `json:"app_manifest"`
+	Keywords    []string        `json:"keywords"`
 }
 
 // RemoteCatalogPlugin is one remote plugin directory entry.
