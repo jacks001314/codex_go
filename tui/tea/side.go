@@ -89,6 +89,11 @@ type SideStartParams struct {
 	ApprovalPolicy  string
 	Sandbox         string
 	ServiceTier     string
+	// PermissionProfile is the parent conversation's named permission profile.
+	// Rust #59767 hands the active PermissionProfileSelection to the sidebar
+	// fork so the side conversation starts under the profile the parent had when
+	// it was created and keeps it while the parent's selection changes.
+	PermissionProfile string
 	// Storage asks for a saved attached side chat when the host can support
 	// one. The host falls back to a temporary fork (Rust sidebar_fork).
 	Storage SideChatStorage
@@ -679,16 +684,17 @@ func (m *Model) startSideConversation(commandName string, userMessage string) bu
 		storage = SideChatStorageAttached
 	}
 	params := SideStartParams{
-		CommandName:     commandName,
-		ParentThreadID:  parentThreadID,
-		UserMessage:     strings.TrimSpace(userMessage),
-		CWD:             strings.TrimSpace(m.sessionCWD),
-		Model:           strings.TrimSpace(m.State.Model),
-		ReasoningEffort: strings.TrimSpace(m.State.EffectiveReasoningEffort()),
-		ApprovalPolicy:  strings.TrimSpace(m.State.ApprovalPolicy),
-		Sandbox:         strings.TrimSpace(m.State.Sandbox),
-		ServiceTier:     strings.TrimSpace(m.State.ServiceTier),
-		Storage:         storage,
+		CommandName:       commandName,
+		ParentThreadID:    parentThreadID,
+		UserMessage:       strings.TrimSpace(userMessage),
+		CWD:               strings.TrimSpace(m.sessionCWD),
+		Model:             strings.TrimSpace(m.State.Model),
+		ReasoningEffort:   strings.TrimSpace(m.State.EffectiveReasoningEffort()),
+		ApprovalPolicy:    strings.TrimSpace(m.State.ApprovalPolicy),
+		Sandbox:           strings.TrimSpace(m.State.Sandbox),
+		ServiceTier:       strings.TrimSpace(m.State.ServiceTier),
+		PermissionProfile: strings.TrimSpace(m.State.ActivePermissionProfile),
+		Storage:           storage,
 		// Rust #46494: a side conversation is a Session-sourced fork, so it
 		// forwards the active session's server-resolved runtime workspace roots
 		// (a fork with a CWD override would otherwise drop them).

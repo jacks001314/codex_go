@@ -6917,6 +6917,15 @@ func remoteSideThreadForkParamsForMode(mode ThreadParamsMode, root *cli.RootOpti
 		AttachToSource:        storage.Attached(),
 		ExcludeTurns:          storage.Attached(),
 	}
+	if state != nil {
+		// Rust #59767: the sidebar fork inherits the parent conversation's named
+		// permission profile, and thread/fork rejects combining a profile with a
+		// sandbox override.
+		if profile := strings.TrimSpace(state.ActivePermissionProfile); profile != "" {
+			params.Permissions = &profile
+			params.Sandbox = nil
+		}
+	}
 	if cwd := strings.TrimSpace(shared.CWD); cwd != "" {
 		params.CWD = &cwd
 	}

@@ -43371,7 +43371,8 @@
     "codex_go"
    ],
    "evidence": [
-    "update/plan_2026_11_06.md: partial: the sidebar paints a ` Side chat ` / ` + ` tab strip, `focus_sidebar_tabs` (leader `t`) opens the chooser, and side creation stays asynchronous with a loading state; deferred MCP startup notifications and inherited permission profiles are not part of the Go side start path."
+    "update/plan_2026_11_06.md: partial: the sidebar paints a ` Side chat ` / ` + ` tab strip, `focus_sidebar_tabs` (leader `t`) opens the chooser, and side creation stays asynchronous with a loading state; deferred MCP startup notifications and inherited permission profiles are not part of the Go side start path.",
+    "Batch 289: the permission-profile half of the side start path now exists. SideStartParams carries the parent conversation's ActivePermissionProfile (tui/tea/side.go), the local side coordinator sends it as thread/fork permissions and drops the sandbox override that cannot be combined with a named profile, then records it on the child's metadata (app/side_tui.go), and the remote side fork inherits state.ActivePermissionProfile the same way (app/remote_tui.go). Tests: tui/tea/side_permission_profile_like_rust_test.go and app/side_permission_profile_like_rust_test.go (the side keeps side-reader after the parent selects full-access). Residual: deferred MCP startup notifications are still not part of the Go side start path."
    ],
    "kind": "runtime",
    "sha": "9df200a0680f5653ffb69725ecac6a201e2790fb",

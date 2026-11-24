@@ -118,6 +118,13 @@ func (c *interactiveLocalSideCoordinator) Start(params codextea.SideStartParams)
 		if len(runtimeWorkspaceRoots) > 0 {
 			forkParams.RuntimeWorkspaceRoots = append([]string(nil), runtimeWorkspaceRoots...)
 		}
+		// Rust #59767: the side conversation inherits the parent's named
+		// permission profile. thread/fork rejects a profile combined with a
+		// sandbox override, so the profile replaces the sandbox value.
+		if profile := strings.TrimSpace(params.PermissionProfile); profile != "" {
+			forkParams.Permissions = &profile
+			forkParams.Sandbox = nil
+		}
 		source := appserver.ThreadSourceUser
 		if storage.Attached() {
 			source = appserver.ThreadSource(codextea.AttachedSideChatThreadSource)
@@ -193,8 +200,11 @@ func (c *interactiveLocalSideCoordinator) Start(params codextea.SideStartParams)
 		if approvalPolicy := strings.TrimSpace(params.ApprovalPolicy); approvalPolicy != "" {
 			patch.ApprovalPolicy = &approvalPolicy
 		}
-		if sandboxPolicy := strings.TrimSpace(params.Sandbox); sandboxPolicy != "" {
+		if sandboxPolicy := strings.TrimSpace(params.Sandbox); sandboxPolicy != "" && strings.TrimSpace(params.PermissionProfile) == "" {
 			patch.SandboxPolicy = &sandboxPolicy
+		}
+		if profile := strings.TrimSpace(params.PermissionProfile); profile != "" {
+			patch.ActivePermissionProfile = &profile
 		}
 		if serviceTier := strings.TrimSpace(params.ServiceTier); serviceTier != "" {
 			patch.ServiceTier = &serviceTier
