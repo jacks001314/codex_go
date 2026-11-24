@@ -964,7 +964,10 @@ func BuildPromptPartsWithSectionCosts(
 	if len(options.RootUserAuthorization) > 0 {
 		messages := make([]RootMessage, 0, len(options.RootUserAuthorization))
 		for _, message := range options.RootUserAuthorization {
-			if strings.TrimSpace(message.Text) == "" {
+			// Host notices render fixed text with an empty Text field, so the
+			// rendered form decides whether evidence exists (Rust #59003 keeps
+			// its authorization warnings in both prompt presentations).
+			if message.Render() == "" {
 				continue
 			}
 			// The host resolves roles before composition so assistant context

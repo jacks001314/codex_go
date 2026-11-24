@@ -60,15 +60,10 @@ func composeGuardianElasticPromptSections(
 		}
 		sections = append(sections, GuardianElasticSectionOutput{ID: id, Items: items, Native: native})
 	}
-	if len(options.RootUserAuthorization) > 0 {
-		messages := make([]RootMessage, 0, len(options.RootUserAuthorization))
-		for _, message := range options.RootUserAuthorization {
-			if strings.TrimSpace(message.Text) != "" {
-				messages = append(messages, message)
-			}
-		}
-		items := RootConversationSectionItems(messages)
-		add("root_conversation", guardianElasticTextItems(items, GuardianElasticRequired(), false), false)
+	if items := RootConversationElasticItems(options.RootUserAuthorization); len(items) > 0 {
+		// Rust #59003 keeps root-conversation framing and host notices whole
+		// while allowing the user and assistant evidence inside to be capped.
+		add("root_conversation", items, false)
 	}
 	if items := SenderUserMessagesSectionItems(options.RetainedContext); len(items) > 0 {
 		add("sender_user_messages", guardianElasticTextItems(items, GuardianElasticRequired(), true), false)

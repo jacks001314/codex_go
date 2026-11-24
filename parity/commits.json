@@ -41222,11 +41222,12 @@
     "codex_go"
    ],
    "evidence": [
-    "update/plan_2026_11_03.md: partial: sender evidence is now framed by protected partial-context boundaries and a warning that missing evidence does not transfer permission; elastic items gained a `Protected` flag that entry capping skips. Threading protection through root conversation, trusted answers and node_repl composition needs the prompt composition layer Go does not have."
+    "update/plan_2026_11_03.md: partial: sender evidence is now framed by protected partial-context boundaries and a warning that missing evidence does not transfer permission; elastic items gained a `Protected` flag that entry capping skips. Threading protection through root conversation, trusted answers and node_repl composition needs the prompt composition layer Go does not have.",
+    "Batch 210: complete - Rust #59003 keeps Guardian review framing and authorization warnings intact under elastic entry caps. `RootConversationElasticItems` now emits the ROOT CONVERSATION start marker, its authorization notice, host scope/omission notices and the end marker as protected items while user and assistant evidence stays required and cappable, and both prompt builders select root messages by their rendered form so host notices that only carry fixed text (empty `Text`) reach the reviewer instead of being filtered out. Trusted answers stay whole through `VerifiedAnswer`, sender evidence keeps its protected boundaries, and the planned action stays exact. Carrier note: node_repl evidence is delivered as one protected unit, a safe superset of Rust's framing-only protection, because the fragment already bounds its own rendering."
    ],
    "kind": "runtime",
    "sha": "857415f7f202eb806cbe1308bfb196218b1d8d83",
-   "status": "partial",
+   "status": "complete",
    "subject": "Preserve Guardian review framing under elastic context limits (#59003)"
   },
   {

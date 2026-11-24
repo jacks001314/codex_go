@@ -114,6 +114,44 @@ func renderRoleLabeledLines(role string, text string) string {
 	return out.String()
 }
 
+// Protected reports whether elastic entry caps must keep this root-conversation
+// item intact. Rust #59003 protects host scope, omission notices and section
+// markers while user and assistant evidence stays shortenable.
+func (m RootMessage) Protected() bool {
+	switch m.Kind {
+	case RootMessageIncompleteVerifiedAnswers, RootMessageIncompleteRootInstructions,
+		RootMessageIncompleteAssistantContext, RootMessageRetainedContextScope,
+		RootMessageLegacyContextScope:
+		return true
+	default:
+		return false
+	}
+}
+
+// RootConversationElasticItems mirrors Rust #59003's protection metadata for the
+// elastic composer: the section markers, the authorization notice and host
+// notices keep their full text, while user and assistant evidence remains
+// required but cappable.
+func RootConversationElasticItems(messages []RootMessage) []GuardianElasticItem {
+	if len(messages) == 0 {
+		return nil
+	}
+	items := make([]GuardianElasticItem, 0, len(messages)+3)
+	add := func(text string, protected bool) {
+		if text == "" {
+			return
+		}
+		items = append(items, GuardianElasticItem{Text: text, Retention: GuardianElasticRequired(), Protected: protected})
+	}
+	add(rootConversationSectionStart, true)
+	add(rootConversationSectionNotice, true)
+	for _, message := range messages {
+		add(message.Render(), message.Protected())
+	}
+	add(rootConversationSectionEnd, true)
+	return items
+}
+
 // RootConversationSectionItems mirrors Rust's RootConversationSection::contribute
 // item list: nothing when the conversation is empty, otherwise the marked
 // section. Rust delivers these as separate content items; every item already ends
