@@ -172,6 +172,9 @@ func (m *Model) openSidebarDocumentAt(path string, linkIndex int, location *mark
 	if parent == "" || path == "" {
 		return nil
 	}
+	// Rust activate_sidebar_tab clears zoomed_thread when a document tab takes
+	// the pane, so opening a preview starts from the ordinary split.
+	m.sideZoomed = false
 	// Rust reuses a loaded document for the same backend and path, and drops a
 	// failed one so the reopen can retry.
 	for _, tab := range m.sidebarDocumentsFor(parent) {
@@ -333,6 +336,9 @@ func (m *Model) closeSidebarDocumentTab(id string) bubbletea.Cmd {
 	}
 	if len(kept) == 0 {
 		delete(m.sidebarDocuments, parent)
+		// A zoom belongs to the preview that owned the workspace, so closing it
+		// gives the split back (Rust #61889 resets zoomed_thread with the tab).
+		m.sideZoomed = false
 	} else {
 		m.sidebarDocuments[parent] = kept
 	}

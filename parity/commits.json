@@ -49724,11 +49724,12 @@
    ],
    "evidence": [
     "Document search, selection and link navigation need a TranscriptView equivalent, which Go does not have yet.",
-    "plan: update/plan_2026_11_16.md batch 74"
+    "plan: update/plan_2026_11_16.md batch 74",
+    "Batch 316: the preview reader now zooms. side_panels.go sidePaneLayout keeps the split for a zoomed document and gives the preview the whole width, renderSideWorkspace paints that column without a divider or the conversation, pane_motion.go sideWorkspaceOpen keeps the workspace open for a zoomed document while a conversation zoom still collapses it, and side_pane_resize.go togglePaneZoom accepts a document pane with no side conversation (Rust #61889 open_pane_focus targets the visible sidebar content). Opening a preview, stepping to a chat tab and closing the last document tab all clear the zoom, matching activate_sidebar_tab. Tests: tui/tea/sidebar_document_zoom_like_rust_test.go (the zoomed layout is left 0 and the full width, the workspace paints the preview without the conversation or the divider, the second toggle restores the split, closing the preview clears the zoom). go test ./tui/tea, go vet ./tui/tea and go build ./... pass. Status moves from blocked_precondition to partial: the preview reader the blocker named exists and already carries find, keyboard and mouse selection with copy, link cycling with relative path resolution, tab titles and footer hints, but scroll indicators, opening web links in the browser, and cancelling a pending PRIMARY publication when the preview is hidden are still missing."
    ],
    "kind": "runtime",
    "sha": "7c3f5e2cc2904c7a41742f337a65d606e1da8fe9",
-   "status": "blocked_precondition",
+   "status": "partial",
    "subject": "Add search, selection, and link navigation to document previews (#61889)"
   },
   {

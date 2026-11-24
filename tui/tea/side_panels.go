@@ -126,8 +126,13 @@ func (m *Model) sidePaneLayout(width int) (leftWidth int, rightWidth int, sideFo
 		return 0, 0, false, false
 	}
 	// Zoom shows the focused conversation full width, which is the ordinary
-	// single-transcript path (Rust #59595 layout returns None when zoomed).
+	// single-transcript path (Rust #59595 layout returns None when zoomed). A
+	// preview is the one pane that keeps the split and takes all of it
+	// (Rust #61889 sidebar::content_layout zoomed_document).
 	if m.sideZoomed {
+		if document {
+			return 0, width, m.sidebarChooserFocused, true
+		}
 		return 0, 0, false, false
 	}
 	if m.sideResize != nil {
@@ -197,13 +202,18 @@ func (m *Model) renderSideWorkspace(width int, height int) (string, bool) {
 		// A preview owns the sidebar exactly like the chooser does: the parent
 		// conversation keeps the left column and the preview paints on the
 		// right (Rust sidebar::SidebarContent::Document).
-		left := m.renderFocusedPane(leftWidth, height)
 		right := strings.Split(m.renderSidebarDocument(rightWidth, height), "\n")
 		for index := range right {
 			right[index] = padSidePaneLine(codextui.TruncateToWidth(right[index], rightWidth), rightWidth)
 		}
 		m.sidebarTabStripTop = 0
 		m.snapshotSidebarColumn(right, rightWidth)
+		if leftWidth <= 0 {
+			// Rust #61889: a zoomed document replaces the conversation, so the
+			// document paints the whole workspace with no divider beside it.
+			return padSideWorkspaceRows(strings.Join(fitSidebarColumn(right, paintRight, height), "\n"), width), true
+		}
+		left := m.renderFocusedPane(leftWidth, height)
 		if paintRight != rightWidth {
 			left = m.renderFocusedPane(paintLeft, height)
 		}

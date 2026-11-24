@@ -80,6 +80,9 @@ func (m *Model) selectSidebarTab(index int) bubbletea.Cmd {
 	}
 	m.sidebarTabHover = -1
 	m.sidebarDocumentActive = ""
+	// Rust activate_sidebar_tab: a preview's zoom does not follow the pane onto
+	// a chat tab (Rust #61889 clears zoomed_thread for documents and chats).
+	m.sideZoomed = false
 	m.suppressCurrentViewKeyUntilRelease()
 	return batchSideCommands(m.closeSidebarChooser(), m.activateRetainedSideConversation(tabs[index], ""))
 }
@@ -247,7 +250,7 @@ func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd)
 		if msg.Button != mousemsg.MouseButtonLeft {
 			return false, nil
 		}
-		if msg.X >= dividerStart && msg.X <= dividerEnd {
+		if left > 0 && msg.X >= dividerStart && msg.X <= dividerEnd {
 			m.sideDrag = &sidePaneDrag{active: true}
 			m.sideResize = &sidePaneResize{previewWidth: right}
 			return true, nil

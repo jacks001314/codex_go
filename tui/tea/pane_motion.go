@@ -30,7 +30,10 @@ type paneMotionState struct {
 // sideWorkspaceOpen reports whether the workspace asks for a side pane, which
 // is the motion's target state.
 func (m *Model) sideWorkspaceOpen() bool {
-	if m == nil || !m.sideWorkspaceEnabled() || m.transcriptUnavailableForPanes() || m.sideZoomed {
+	// A zoomed document keeps the split and fills it (Rust #61889), so only a
+	// conversation zoom closes the workspace.
+	if m == nil || !m.sideWorkspaceEnabled() || m.transcriptUnavailableForPanes() ||
+		(m.sideZoomed && !m.sidebarDocumentVisible()) {
 		return false
 	}
 	return m.activeSide != nil || m.sidebarChooserVisible() || m.sidebarDocumentVisible()

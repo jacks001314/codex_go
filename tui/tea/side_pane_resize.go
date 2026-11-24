@@ -46,7 +46,12 @@ func (m *Model) sideBarResizableSplitAvailable() bool {
 }
 
 func (m *Model) togglePaneZoom() bubbletea.Cmd {
-	if m == nil || m.activeSide == nil || !m.sideWorkspaceEnabled() {
+	if m == nil || !m.sideWorkspaceEnabled() {
+		return nil
+	}
+	// Rust #61889 open_pane_focus targets the visible sidebar content, so a
+	// document preview zooms even when no side conversation exists.
+	if m.activeSide == nil && !m.sidebarDocumentVisible() {
 		return nil
 	}
 	m.sideResize = nil
