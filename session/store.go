@@ -1060,7 +1060,9 @@ func (s *Store) readLocked(threadID ThreadID, includeArchived bool, includeHisto
 	}
 	if !includeHistory {
 		record.Items = nil
+		return record, nil
 	}
+	sanitizeReferencedAgentForkItems(record)
 	return record, nil
 }
 
