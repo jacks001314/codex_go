@@ -213,7 +213,9 @@ func localGoalFS(router interactiveGoalRouter) appServerGoalFS {
 			if !ok || response == nil {
 				return nil, errors.New("invalid fs/readFile response")
 			}
-			return base64.StdEncoding.DecodeString(response.DataBase64)
+			// The in-process router fills Data with raw bytes; only a transport
+			// encodes them. Base64 handles both shapes.
+			return base64.StdEncoding.DecodeString(response.Base64())
 		},
 		remove: func(path string, recursive bool) error {
 			_, err := request(appserver.MethodFSRemove, appserver.RemoveParams{Path: path, Recursive: &recursive})
