@@ -384,6 +384,24 @@ func (t *TranscriptComponent) NoteReplayedAssistantMessages(messages []codextui.
 		t.noteReplayedCloudItem("", itemID, strings.TrimSpace(message.Text) != "", false)
 	}
 }
+// NoteOlderAssistantMessages records replies spliced in from an older history
+// page. They take negative positions, so they always sort before anything the
+// view observed live (Rust #62403 older_response_order).
+func (t *TranscriptComponent) NoteOlderAssistantMessages(messages []codextui.Message) {
+	if t == nil {
+		return
+	}
+	for _, message := range messages {
+		if message.Role != codextui.RoleAssistant {
+			continue
+		}
+		itemID := strings.TrimSpace(message.ItemID)
+		if itemID == "" {
+			continue
+		}
+		t.noteReplayedCloudItem("", itemID, strings.TrimSpace(message.Text) != "", true)
+	}
+}
 
 // ReplayedCloudItemFinished mirrors Rust has_replayed_cloud_text: only an item
 // recorded as finished may suppress its live completion.

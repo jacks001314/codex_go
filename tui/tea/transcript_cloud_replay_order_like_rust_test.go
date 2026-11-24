@@ -84,3 +84,30 @@ func TestNotificationFallbackUsesReplyOrderLikeRust(t *testing.T) {
 		t.Fatalf("notification fallback = %q, want the higher-order reply", got)
 	}
 }
+
+// TestOlderHistoryPageRegistersNegativeOrderLikeRust mirrors Rust #62403:
+// replies spliced in from an older history page sort before live replies and,
+// even when they are the last message, do not become the notification text.
+func TestOlderHistoryPageRegistersNegativeOrderLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-a")
+	state.Messages = []codextui.Message{{Role: codextui.RoleAssistant, Text: "live reply", ItemID: "live-item"}}
+	model := NewModel(state, Options{Width: 100, Height: 30})
+	model.Transcript.NoteReplayedAssistantMessages(state.Messages)
+	model.Transcript.mergeAssistantFinalForItem(state, "live-item", "live reply", 80)
+
+	model.applyOlderHistoryPage("thread-a", OlderHistoryPage{
+		Messages: []codextui.Message{{Role: codextui.RoleAssistant, Text: "older reply", ItemID: "old-item"}},
+	}, nil)
+	order, ok := model.Transcript.replayedCloudText[""]["old-item"]
+	if !ok || order.order >= 0 {
+		t.Fatalf("older page order = %#v, want a negative position", order)
+	}
+	live := model.Transcript.replayedCloudText[""]["live-item"]
+	if order.order >= live.order {
+		t.Fatalf("older order %d, live order %d", order.order, live.order)
+	}
+	if got := model.lastAssistantNotificationResponse(); got != "live reply" {
+		t.Fatalf("notification after older page = %q, want the live reply", got)
+	}
+}

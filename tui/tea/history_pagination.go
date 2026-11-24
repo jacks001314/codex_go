@@ -107,6 +107,9 @@ func (m *Model) applyOlderHistoryPage(threadID string, page OlderHistoryPage, er
 		m.backtrack.NthUserMessage += tuiapp.UserCount(inserted)
 	}
 	m.State.InsertMessages(insertAt, inserted)
+	// Rust #62403: replies from an older page sort before everything the
+	// view observed live.
+	m.Transcript.NoteOlderAssistantMessages(inserted)
 	m.registerCollabTranscriptRows(inserted)
 	m.refreshTranscript()
 	if !inlineFollowing {
