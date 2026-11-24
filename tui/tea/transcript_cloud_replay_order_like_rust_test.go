@@ -60,3 +60,27 @@ func TestReplayedCloudItemOrderLikeRust(t *testing.T) {
 		t.Fatalf("older history order = %d, live order = %d, want the older page first", old, live)
 	}
 }
+
+// TestNotificationFallbackUsesReplyOrderLikeRust mirrors Rust #62403: when a
+// turn completion carries no text, the fallback picks the reply with the
+// highest observation order even if an older completion was appended later.
+func TestNotificationFallbackUsesReplyOrderLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-a")
+	model := NewModel(state, Options{Width: 100, Height: 30})
+	model.Transcript.NoteReplayedAssistantMessages([]codextui.Message{
+		{Role: codextui.RoleAssistant, Text: "older reply", ItemID: "item-1"},
+		{Role: codextui.RoleAssistant, Text: "live reply", ItemID: "item-2"},
+	})
+	model.Transcript.activeAssistantDeltaItemID = "item-2"
+	model.State.Messages = []codextui.Message{
+		{Role: codextui.RoleAssistant, Text: "older reply", ItemID: "item-1"},
+		{Role: codextui.RoleAssistant, Text: "live reply", ItemID: "item-2"},
+	}
+	model.Transcript.mergeAssistantFinalForItem(model.State, "item-2", "live reply", 80)
+	model.State.Messages = model.State.Messages[1:]
+	model.Transcript.mergeAssistantFinalForItem(model.State, "item-1", "older reply final", 80)
+	if got := model.lastAssistantNotificationResponse(); got != "live reply" {
+		t.Fatalf("notification fallback = %q, want the higher-order reply", got)
+	}
+}

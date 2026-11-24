@@ -67,6 +67,11 @@ func (m *Model) lastAssistantNotificationResponse() string {
 	if m == nil || m.State == nil {
 		return ""
 	}
+	// Rust #62403: prefer the reply with the highest observation order, so a
+	// late completion of an older reply cannot become the notification text.
+	if text := strings.TrimSpace(m.Transcript.LatestCompletedResponse()); text != "" {
+		return text
+	}
 	for i := len(m.State.Messages) - 1; i >= 0; i-- {
 		message := m.State.Messages[i]
 		if message.Role != codextui.RoleAssistant {
