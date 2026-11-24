@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -89,7 +90,9 @@ func TestRemoteVoiceOwnedCallCreatesClientCallLikeRust(t *testing.T) {
 	if params.Model != nil || params.Voice != nil {
 		t.Fatalf("existingCall start carried session configuration: model=%#v voice=%#v", params.Model, params.Voice)
 	}
-	if params.RealtimeSessionID == nil || *params.RealtimeSessionID != "thread-voice" {
+	// Rust #62299: the attachment carries the call id this TUI created, not the
+	// thread id, so successive calls on one thread keep distinct history.
+	if params.RealtimeSessionID == nil || *params.RealtimeSessionID != "rtc_client_owned" {
 		t.Fatalf("realtimeSessionId = %#v", params.RealtimeSessionID)
 	}
 
@@ -145,6 +148,55 @@ func TestVoiceSessionIDsArePerCallLikeRust(t *testing.T) {
 			t.Fatalf("newVoiceSessionID() repeated %q", id)
 		}
 		seen[id] = true
+	}
+}
+
+// Successive calls on one thread attach with their own call ids, so their
+// persisted realtime history stays separate (Rust #62299).
+func TestRemoteVoiceOwnedCallsUseDistinctCallIDsLikeRust(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		calls int
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		mu.Lock()
+		calls++
+		id := calls
+		mu.Unlock()
+		_, _ = io.ReadAll(request.Body)
+		writer.Header().Set("Location", "/v1/live/rtc_call_"+strconv.Itoa(id))
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte("v=0 answer"))
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(`openai_base_url = "`+server.URL+`/v1"`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.NewStoreWithOptions(home, auth.StoreOptionsFromConfig("file", false)).Save(auth.AuthDotJSON{
+		OpenAIAPIKey: "sk-test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var sessions []string
+	for i := 0; i < 2; i++ {
+		params, _, err := negotiateVoiceOwnedCall(context.Background(), home, nil, nil,
+			"thread-voice", "v=0 offer", VoiceSettings{})
+		if err != nil {
+			t.Fatalf("negotiateVoiceOwnedCall() %d error = %v", i, err)
+		}
+		if params.RealtimeSessionID == nil {
+			t.Fatalf("call %d carried no realtimeSessionId", i)
+		}
+		if params.Transport == nil || params.Transport.CallID != *params.RealtimeSessionID {
+			t.Fatalf("call %d attached to %#v with session id %q", i, params.Transport, *params.RealtimeSessionID)
+		}
+		sessions = append(sessions, *params.RealtimeSessionID)
+	}
+	if sessions[0] != "rtc_call_1" || sessions[1] != "rtc_call_2" {
+		t.Fatalf("realtime session ids = %#v, want each call's own id", sessions)
 	}
 }
 

@@ -139,7 +139,9 @@ func negotiateVoiceOwnedCall(
 	clientManagedHandoffs := true
 	includeStartupContext := false
 	version := realtime.VersionV3
-	realtimeSessionID := threadID
+	// Rust #62299: attach history to the call this TUI just created, so two
+	// calls on one thread keep distinct realtime session ids.
+	realtimeSessionID := callID
 	params := realtime.StartParams{
 		ThreadID:              threadID,
 		ClientManagedHandoffs: &clientManagedHandoffs,
