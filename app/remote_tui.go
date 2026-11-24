@@ -4142,7 +4142,7 @@ func (c *remoteAppServerTUIClient) connect(ctx context.Context) error {
 	case appserverdaemon.RemoteEndpointCloud:
 		// Rust #59828: the hosted Cloud backend serves the same app-server
 		// protocol, so the TUI talks to it through an in-process transport.
-		requester, err := openCloudTUIAppServer(ctx, c.root)
+		requester, err := openCloudTUIAppServerForSession(ctx, c.root)
 		if err != nil {
 			return asRemoteTransportError(err)
 		}
@@ -4152,6 +4152,11 @@ func (c *remoteAppServerTUIClient) connect(ctx context.Context) error {
 		return fmt.Errorf("unknown remote app-server endpoint kind %q", c.endpoint.Kind)
 	}
 }
+
+// openCloudTUIAppServerForSession opens the hosted Cloud backend for one TUI
+// connection. Tests replace it to drive the real client over an in-process
+// fake transport.
+var openCloudTUIAppServerForSession = openCloudTUIAppServer
 
 func (c *remoteAppServerTUIClient) close() {
 	// Rust #51611 closes the elicitation router on MCP runtime shutdown: any
