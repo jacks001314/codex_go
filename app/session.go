@@ -20,6 +20,7 @@ import (
 	"codex_go/config"
 	"codex_go/prompt"
 	"codex_go/rollout"
+	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/state"
 	codextui "codex_go/tui"
@@ -85,7 +86,17 @@ func runSessionResume(opts *cli.SessionOptions, root *cli.RootOptions, stdin io.
 	if err := requireSessionTUIStreams(stdin, stdout); err != nil {
 		return err
 	}
+	// Rust #63589: `--approve-for-me` is a resume preset that must be scoped to
+	// one selected conversation. The picker has not selected one yet, and a
+	// persistent remote task keeps the permissions saved on its server.
+	approveForMe := sessionResumeApproveForMe(opts, root)
+	if approveForMe && needsSessionPicker(opts) {
+		return errors.New(resumeApproveForMeNoSelectionMessage)
+	}
 	if endpoint != nil {
+		if approveForMe {
+			return errors.New(remoteResumePermissionOverrideMessage)
+		}
 		return runRemoteSessionResume(context.Background(), endpoint, opts, stdout)
 	}
 	store := newSessionStore()
@@ -117,6 +128,11 @@ func runSessionResume(opts *cli.SessionOptions, root *cli.RootOptions, stdin io.
 		if err := validateResumeTargetSource(string(response.Thread.Source), parentThreadID); err != nil {
 			return err
 		}
+		if approveForMe {
+			if err := applyResumeApproveForMePreset(store, opts, root, target, response.Thread.CWD, nil); err != nil {
+				return err
+			}
+		}
 		return writeSessionSummary(stdout, "resumed", sessionRecordFromAppServerThread(response.Thread, false))
 	}
 	record, err := store.Read(target, true, true)
@@ -125,6 +141,11 @@ func runSessionResume(opts *cli.SessionOptions, root *cli.RootOptions, stdin io.
 	}
 	if err := validateResumeTargetSource(record.Metadata.Source, string(record.ParentThreadID)); err != nil {
 		return err
+	}
+	if approveForMe {
+		if err := applyResumeApproveForMePreset(store, opts, root, target, record.Metadata.CWD, sessionRecordRuntimeWorkspaceRoots(record)); err != nil {
+			return err
+		}
 	}
 	return writeSessionSummary(stdout, "resumed", record)
 }
@@ -1039,6 +1060,199 @@ func latestSessionCWD(opts *cli.SessionOptions) string {
 		return cwd
 	}
 	return ""
+}
+
+const (
+	// resumeApproveForMeNoSelectionMessage mirrors Rust lib.rs #63589: the
+	// preset needs an explicitly selected conversation to scope to.
+	resumeApproveForMeNoSelectionMessage = "No conversation selected to resume with --approve-for-me."
+	// resumeApproveForMeWorkspaceMessage mirrors resume_permissions.rs
+	// initial_resume_update: the loaded thread must run in the launch workspace.
+	resumeApproveForMeWorkspaceMessage = "Cannot apply --approve-for-me to a different workspace."
+)
+
+// sessionResumeApproveForMe reports whether this launch selected Rust's
+// `resume --approve-for-me` preset. The flag is parsed into the shared options
+// of both the resume command and the global launch surface.
+func sessionResumeApproveForMe(opts *cli.SessionOptions, root *cli.RootOptions) bool {
+	if opts != nil && opts.Shared.ApproveForMe {
+		return true
+	}
+	return root != nil && root.Shared.ApproveForMe
+}
+
+// resumeApproveForMeLaunchCWD is the workspace the preset was resolved for:
+// the explicit --cd of either scope, otherwise the process directory.
+func resumeApproveForMeLaunchCWD(opts *cli.SessionOptions, root *cli.RootOptions) string {
+	if opts != nil {
+		if cwd := strings.TrimSpace(opts.Shared.CWD); cwd != "" {
+			return filepath.Clean(cwd)
+		}
+	}
+	if root != nil {
+		if cwd := strings.TrimSpace(root.Shared.CWD); cwd != "" {
+			return filepath.Clean(cwd)
+		}
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		return filepath.Clean(cwd)
+	}
+	return ""
+}
+
+// resumeApproveForMeRequestedRoots is the set of directories the preset grants:
+// the launch workspace plus every --add-dir of either scope.
+func resumeApproveForMeRequestedRoots(opts *cli.SessionOptions, root *cli.RootOptions, cwd string) []string {
+	if cwd == "" {
+		return nil
+	}
+	roots := []string{cwd}
+	seen := map[string]bool{cwd: true}
+	add := func(list []string) {
+		for _, raw := range list {
+			root := strings.TrimSpace(raw)
+			if root == "" {
+				continue
+			}
+			if !filepath.IsAbs(root) {
+				root = filepath.Join(cwd, root)
+			}
+			root = filepath.Clean(root)
+			if seen[root] {
+				continue
+			}
+			seen[root] = true
+			roots = append(roots, root)
+		}
+	}
+	if opts != nil {
+		add(opts.Shared.AddDirs)
+	}
+	if root != nil {
+		add(root.Shared.AddDirs)
+	}
+	return roots
+}
+
+// sessionRecordRuntimeWorkspaceRoots reads the thread's saved runtime roots so
+// the preset can reject a conversation that reaches outside the launch
+// workspace, like Rust's `active_roots ⊆ requested_roots` check.
+func sessionRecordRuntimeWorkspaceRoots(record *session.Record) []string {
+	if record == nil || record.Metadata.Extra == nil {
+		return nil
+	}
+	raw, ok := record.Metadata.Extra["runtime_workspace_roots"]
+	if !ok {
+		return nil
+	}
+	switch values := raw.(type) {
+	case []string:
+		return append([]string(nil), values...)
+	case []any:
+		roots := make([]string, 0, len(values))
+		for _, value := range values {
+			if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+				roots = append(roots, strings.TrimSpace(text))
+			}
+		}
+		return roots
+	}
+	return nil
+}
+
+// validateResumeApproveForMeWorkspace mirrors Rust's initial_resume_update
+// check: the loaded conversation must report the launch workspace, and every
+// active runtime root must stay inside the requested set.
+func validateResumeApproveForMeWorkspace(opts *cli.SessionOptions, root *cli.RootOptions, threadCWD string, activeRoots []string) error {
+	cwd := resumeApproveForMeLaunchCWD(opts, root)
+	if cwd == "" {
+		return nil
+	}
+	if threadCWD = strings.TrimSpace(threadCWD); threadCWD != "" && !remoteTUISameCWD(threadCWD, cwd) {
+		return errors.New(resumeApproveForMeWorkspaceMessage)
+	}
+	requested := resumeApproveForMeRequestedRoots(opts, root, cwd)
+	for _, active := range activeRoots {
+		active = strings.TrimSpace(active)
+		if active == "" {
+			continue
+		}
+		inside := false
+		for _, allowed := range requested {
+			if remoteTUISameCWD(active, allowed) {
+				inside = true
+				break
+			}
+		}
+		if !inside {
+			return errors.New(resumeApproveForMeWorkspaceMessage)
+		}
+	}
+	return nil
+}
+
+// applyResumeApproveForMePreset resolves the resume preset under the resumed
+// conversation's workspace and persists it as that thread's settings, the way
+// Rust sends thread/settings/update after thread/resume. The preset stays out
+// of the launch configuration, so later /new and /resume pick their own
+// permissions.
+func applyResumeApproveForMePreset(store *session.Store, opts *cli.SessionOptions, root *cli.RootOptions, target session.ThreadID, threadCWD string, activeRoots []string) error {
+	if err := validateResumeApproveForMeWorkspace(opts, root, threadCWD, activeRoots); err != nil {
+		return err
+	}
+	cwd := resumeApproveForMeLaunchCWD(opts, root)
+	if cwd == "" {
+		cwd = strings.TrimSpace(threadCWD)
+	}
+	policy := string(sandbox.ApprovalOnRequest)
+	reviewer := string(config.ApprovalsReviewerAutoReview)
+	sandboxMode := string(sandbox.SandboxWorkspaceWrite)
+	// The metadata is the embedded store's thread-settings surface when a Go
+	// snapshot exists; a Rust-only rollout has none, and the snapshot below is
+	// what an embedded resume restores in either case.
+	if store != nil {
+		if _, readErr := store.Read(target, true, false); readErr == nil {
+			if _, err := store.UpdateMetadata(target, &session.MetadataPatch{
+				ApprovalPolicy: &policy,
+				SandboxPolicy:  &sandboxMode,
+			}, true); err != nil {
+				return err
+			}
+		}
+	}
+	return appendResumeApproveForMeRolloutSettings(store, target, cwd, policy, reviewer)
+}
+
+// appendResumeApproveForMeRolloutSettings writes the thread-settings snapshot
+// that Rust's thread/settings/update checkpoints, so exec/TUI resumes restore
+// on-request approvals, the auto reviewer and workspace-write.
+func appendResumeApproveForMeRolloutSettings(store *session.Store, target session.ThreadID, cwd string, policy string, reviewer string) error {
+	if store == nil {
+		return nil
+	}
+	path, found, err := rollout.FindRolloutPathByRolloutID(sessionCodexHome(store), string(target))
+	if err != nil || !found || strings.TrimSpace(path) == "" {
+		return nil
+	}
+	recorder, err := rollout.Resume(path)
+	if err != nil {
+		return err
+	}
+	defer recorder.Close()
+	profileJSON, err := sandbox.RuntimePermissionProfileJSON(sandbox.WorkspaceWritePermissionProfile())
+	if err != nil {
+		return err
+	}
+	roots := []string{cwd}
+	requested := reviewer
+	return recorder.AppendThreadSettingsAppliedSnapshot(string(target), rollout.ThreadSettingsApplied{
+		ApprovalPolicy:             policy,
+		ApprovalsReviewer:          reviewer,
+		RequestedApprovalsReviewer: &requested,
+		PermissionProfile:          json.RawMessage(profileJSON),
+		CWD:                        cwd,
+		RuntimeWorkspaceRoots:      &roots,
+	}, time.Now().UTC())
 }
 
 func sessionIDByName(store *session.Store, opts *cli.SessionOptions, name string) (session.ThreadID, error) {
