@@ -425,7 +425,7 @@ func (m *Model) renderPassiveSidePane(side *activeSideConversation, sidePassive 
 	var rows []string
 	var clamped, maxFirst int
 	if sidePassive && watchOnlySidePane(side) {
-		rows, clamped, maxFirst = m.composeWatchOnlySidePane(content, height, first)
+		rows, clamped, maxFirst = m.composeWatchOnlySidePane(content, width, height, first)
 	} else {
 		rows, clamped, maxFirst = m.composeSidePane(threadID, content, m.paneStatusForThread(threadID), draft, width, height, first)
 	}
@@ -640,14 +640,20 @@ func watchOnlySidePaneFrame(height int) sidePaneFrame {
 
 // composeWatchOnlySidePane paints a read-only subagent transcript without the
 // composer, draft preview, or status rows a side chat reserves.
-func (m *Model) composeWatchOnlySidePane(content string, height int, first int) ([]string, int, int) {
+func (m *Model) composeWatchOnlySidePane(content string, width int, height int, first int) ([]string, int, int) {
 	frame := watchOnlySidePaneFrame(height)
 	lines, clamped, maxFirst := sidePaneWindow(content, frame.transcript, first)
 	rows := make([]string, 0, height)
 	// Rust paint_agent_reader: the reader's first row advertises Escape's
 	// destination, so the transcript below it keeps no misleading back hint.
 	rows = append(rows, "\x1b[2m"+m.watchOnlyReaderHeading()+"\x1b[0m")
-	rows = append(rows, lines...)
+	for index, line := range lines {
+		// A pointer drag selects cells in the reader's own transcript.
+		if from, to, ok := m.sidebarReaderSelection.spanFor(clamped+index, codextui.DisplayWidth(line)); ok {
+			line = highlightDisplayCells(line, from, to)
+		}
+		rows = append(rows, line)
+	}
 	for len(rows) < height {
 		rows = append(rows, "")
 	}

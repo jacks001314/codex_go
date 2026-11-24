@@ -72,9 +72,15 @@ func TestSidebarReaderPaneFocusScrollsTranscriptLikeRust(t *testing.T) {
 	if !ok {
 		t.Fatal("split layout unavailable")
 	}
+	// The reader heading sits below the pane's tab strip; a press there gives
+	// the reader focus without starting a transcript selection.
+	headingRow := 0
+	if model.sidebarTabStripVisible() {
+		headingRow = 1
+	}
 	handled, cmd := model.handleSidePaneMouse(mousemsg.MouseMsg{
 		Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft,
-		X: left + sideWorkspaceDividerWidth, Y: 3,
+		X: left + sideWorkspaceDividerWidth, Y: headingRow,
 	})
 	if !handled {
 		t.Fatal("press on the reader was not handled")

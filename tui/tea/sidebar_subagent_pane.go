@@ -4,8 +4,11 @@ import (
 	"strings"
 
 	bubbletea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
+	codextui "codex_go/tui"
 	"codex_go/tui/keymsg"
+	mousemsg "codex_go/tui/mousemsg"
 )
 
 // Rust parity: codex-rs/tui/src/app/sidebar_subagents.rs (#62157). Selecting a
@@ -96,6 +99,7 @@ func (m *Model) applySidebarSubagentTranscript(open *sidebarSubagentOpen, messag
 	m.retainSideConversation(side)
 	m.activeSide = side
 	m.sidebarReaderFocused = false
+	m.sidebarReaderSelection.clear()
 	m.resetSidePaneViewState()
 	m.notice = label + " transcript"
 	m.refreshTranscript()
@@ -117,6 +121,7 @@ func (m *Model) closeSidebarSubagentTranscript(side *activeSideConversation) bub
 	if m.activeSide == side {
 		m.activeSide = nil
 		m.sidebarReaderFocused = false
+		m.sidebarReaderSelection.clear()
 		m.resetSidePaneViewState()
 	}
 	m.notice = "Closed subagent transcript."
@@ -176,6 +181,12 @@ func (m *Model) updateSidebarReaderKey(msg keymsg.KeyMsg) (bubbletea.Cmd, bool) 
 	page := max(m.transcript.Height-1, 1)
 	switch msg.Type {
 	case keymsg.KeyEsc:
+		// Rust ends the transcript selection before the reader leaves.
+		if m.sidebarReaderSelection.active {
+			m.sidebarReaderSelection.clear()
+			m.refreshTranscript()
+			return nil, true
+		}
 		m.sidebarReaderFocused = false
 		cmd, _ := m.escapeWatchOnlyReader()
 		m.suppressCurrentViewKeyUntilRelease()
@@ -190,6 +201,156 @@ func (m *Model) updateSidebarReaderKey(msg keymsg.KeyMsg) (bubbletea.Cmd, bool) 
 		return m.scrollSidebarReader(page), true
 	}
 	return nil, true
+}
+
+// sidebarReaderLines returns the watch-only transcript exactly as painted: the
+// window at the current offset, its first absolute row, and the pane width. A
+// selection and a copy read the same rows the pointer sees.
+func (m *Model) sidebarReaderLines(side *activeSideConversation) ([]string, int, int) {
+	if m == nil || side == nil || !watchOnlySidePane(side) {
+		return nil, 0, 0
+	}
+	_, rightWidth, _, ok := m.sidePaneLayout(firstPositive(m.width, defaultWidth))
+	if !ok || rightWidth <= 0 {
+		return nil, 0, 0
+	}
+	cache := &transcriptMessageCache{}
+	content := m.renderSidePaneContent(cache, side.SideThreadID, side.SideMessages, rightWidth)
+	height := max(m.transcript.Height, 1)
+	if m.sidebarTabStripVisible() && height > 1 {
+		// The pane's tab strip costs the reader column one row.
+		height--
+	}
+	frame := watchOnlySidePaneFrame(height)
+	first := sidePaneTail
+	if side.SideInteractionSaved {
+		first = side.SideScroll
+	}
+	lines, start, _ := sidePaneWindow(content, frame.transcript, first)
+	return lines, start, rightWidth
+}
+
+// handleSidebarReaderMouse drags a text selection inside the watch-only
+// transcript. Rust #62157 shows the agent in the transcript view, so the
+// reader keeps that view's copy-on-select selection.
+func (m *Model) handleSidebarReaderMouse(msg mousemsg.MouseMsg, left int, dividerWidth int) (bool, bubbletea.Cmd) {
+	if m == nil {
+		return false, nil
+	}
+	side := m.activeSide
+	if !watchOnlySidePane(side) || side.ShowingSide {
+		return false, nil
+	}
+	height := max(m.transcript.Height, 1)
+	if msg.Y < 0 || msg.Y >= height {
+		return false, nil
+	}
+	inside := msg.X >= left+dividerWidth
+	column := max(msg.X-(left+dividerWidth), 0)
+	// The pane's tab strip and the reader heading sit above the transcript.
+	bodyTop := 1
+	if m.sidebarTabStripVisible() {
+		bodyTop++
+	}
+	switch msg.Action {
+	case mousemsg.MouseActionPress:
+		if msg.Button != mousemsg.MouseButtonLeft || !inside || msg.Y < bodyTop {
+			return false, nil
+		}
+		lines, first, _ := m.sidebarReaderLines(side)
+		if len(lines) == 0 {
+			return false, nil
+		}
+		row := min(first+msg.Y-bodyTop, first+len(lines)-1)
+		m.sidebarReaderSelection.start(row, column)
+		m.focusSidebarReader()
+		m.refreshTranscript()
+		return true, nil
+	case mousemsg.MouseActionMotion:
+		if !m.sidebarReaderSelection.active || !inside {
+			return false, nil
+		}
+		m.extendSidebarReaderSelection(side, msg.Y, column)
+		return true, nil
+	case mousemsg.MouseActionRelease:
+		if msg.Button != mousemsg.MouseButtonLeft || !m.sidebarReaderSelection.active {
+			return false, nil
+		}
+		m.extendSidebarReaderSelection(side, msg.Y, column)
+		return true, m.finishSidebarReaderSelection(side)
+	}
+	return false, nil
+}
+
+// extendSidebarReaderSelection follows the pointer over the reader's rows.
+func (m *Model) extendSidebarReaderSelection(side *activeSideConversation, y int, column int) {
+	lines, first, _ := m.sidebarReaderLines(side)
+	if len(lines) == 0 {
+		return
+	}
+	bodyTop := 1
+	if m.sidebarTabStripVisible() {
+		bodyTop++
+	}
+	row := clampModalInt(first+y-bodyTop, first, first+len(lines)-1)
+	m.sidebarReaderSelection.extend(row, column)
+	m.refreshTranscript()
+}
+
+// finishSidebarReaderSelection copies a completed drag when copy_on_select is
+// enabled, like a transcript selection (Rust #62157 reuses that view).
+func (m *Model) finishSidebarReaderSelection(side *activeSideConversation) bubbletea.Cmd {
+	if m == nil || side == nil || !m.sidebarReaderSelection.active {
+		return nil
+	}
+	if m.sidebarReaderSelection.empty() {
+		m.sidebarReaderSelection.clear()
+		m.refreshTranscript()
+		return nil
+	}
+	if !m.copyOnSelectEnabled() {
+		return nil
+	}
+	text := m.sidebarReaderSelectionText(side)
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	cmd := m.clipboardWriteCmd("agent reader selection", text, false, false)
+	if m.copyOnSelectClear {
+		m.sidebarReaderSelection.clear()
+		m.refreshTranscript()
+	}
+	return bubbletea.Batch(cmd, m.publishPrimarySelectionCmd(text))
+}
+
+// sidebarReaderSelectionText extracts the selected cells from the painted
+// reader rows, trimming the padding every row carries.
+func (m *Model) sidebarReaderSelectionText(side *activeSideConversation) string {
+	if m == nil || side == nil || !m.sidebarReaderSelection.active {
+		return ""
+	}
+	lines, first, _ := m.sidebarReaderLines(side)
+	if len(lines) == 0 {
+		return ""
+	}
+	startRow, startCol, endRow, endCol := m.sidebarReaderSelection.normalized()
+	out := make([]string, 0, endRow-startRow+1)
+	for row := startRow; row <= endRow; row++ {
+		index := row - first
+		if index < 0 || index >= len(lines) {
+			continue
+		}
+		plain := ansi.Strip(lines[index])
+		from, to := 0, codextui.DisplayWidth(plain)
+		if row == startRow {
+			from = startCol
+		}
+		if row == endRow {
+			to = endCol + 1
+		}
+		out = append(out, strings.TrimRight(sliceDisplayCells(plain, from, to), " "))
+	}
+	return strings.TrimRight(strings.Join(out, "\n"), "\n")
 }
 
 // scrollSidebarReader moves the reader's own transcript window.

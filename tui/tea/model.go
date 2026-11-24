@@ -3313,6 +3313,9 @@ type Model struct {
 	// sidebarReaderFocused marks the watch-only subagent reader as the input
 	// owner, so arrows scroll its transcript (Rust #62157 pane focus).
 	sidebarReaderFocused bool
+	// sidebarReaderSelection is the pointer selection inside that transcript
+	// (Rust #62157 reuses the transcript view's selection in the reader).
+	sidebarReaderSelection sidebarDocumentSelection
 	// paneMotion drives the sidebar open/close slide (Rust #59739).
 	paneMotion paneMotionState
 	// sidebarClosingLines retains the last settled right column so a closing

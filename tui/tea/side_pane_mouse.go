@@ -219,6 +219,11 @@ func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd)
 		return false, nil
 	}
 	dividerWidth := ansi.StringWidth(sideWorkspaceDivider)
+	// Rust #62157 reuses the transcript view in the docked agent reader, so a
+	// drag there selects text before the pane treats the press as a focus.
+	if handled, cmd := m.handleSidebarReaderMouse(msg, left, dividerWidth); handled {
+		return true, cmd
+	}
 	dividerStart := left
 	dividerEnd := left + dividerWidth - 1
 	// Rust #59527 scrolls whichever pane the wheel is over: the focused pane
