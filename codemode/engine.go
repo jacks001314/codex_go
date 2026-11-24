@@ -16,6 +16,9 @@ type EngineRequest struct {
 	EnabledTools []ProtocolToolDefinition
 	// Preloads are trusted host helpers evaluated before the cell's source.
 	Preloads []ToolPreload
+	// MCPResultDedup omits an MCP text fallback that duplicates
+	// structuredContent when text() prints the result (Rust #63540).
+	MCPResultDedup bool
 }
 
 type EngineResult struct {

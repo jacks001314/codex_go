@@ -22,6 +22,7 @@ func CreateSessionWithOptions(provider tool.CodeModeRemoteProvider, delegate too
 		return optionsProvider.NewSessionWithOptions(delegate, tool.CodeModeSessionOptions{
 			CellExecutionLimits: cellExecutionLimitsFromSessionOptions(options),
 			OutputTruncation:    tool.CodeModeOutputTruncation(options.OutputTruncation),
+			MCPResultDedup:      options.MCPResultDedup,
 		}), nil
 	}
 	if options.OutputTruncation == OutputTruncationServer {
@@ -33,7 +34,7 @@ func CreateSessionWithOptions(provider tool.CodeModeRemoteProvider, delegate too
 // sessionOptionsFromTool maps the tool-package options shared with Core onto
 // the protocol-level session options.
 func sessionOptionsFromTool(options tool.CodeModeSessionOptions) SessionOptions {
-	out := SessionOptions{OutputTruncation: OutputTruncation(options.OutputTruncation)}
+	out := SessionOptions{OutputTruncation: OutputTruncation(options.OutputTruncation), MCPResultDedup: options.MCPResultDedup}
 	if limits := options.CellExecutionLimits; limits != nil {
 		out.CellExecutionLimits = &CellExecutionLimits{MaxYieldTimeMS: limits.MaxYieldTimeMS, MaxHeapSizeBytes: limits.MaxHeapSizeBytes}
 	}

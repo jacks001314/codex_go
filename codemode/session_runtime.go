@@ -36,6 +36,8 @@ type SessionRuntime struct {
 	// toolPreloads are the trusted host helpers every cell of this session
 	// installs when its catalog exposes the matching nested tool (Rust #62430).
 	toolPreloads []ToolPreload
+	// mcpResultDedup is captured when the session opens (Rust #63540).
+	mcpResultDedup bool
 }
 
 func NewSessionRuntime() *SessionRuntime {
@@ -73,6 +75,17 @@ func (r *SessionRuntime) SetCellExecutionLimits(limits *CellExecutionLimits) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.cellExecutionLimits = limits
+}
+
+// SetMCPResultDedup captures whether text() omits an MCP text fallback that
+// duplicates structuredContent (Rust #63540).
+func (r *SessionRuntime) SetMCPResultDedup(enabled bool) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.mcpResultDedup = enabled
 }
 
 // SetToolPreloads installs the session's trusted tool helpers. Rust's host
@@ -155,9 +168,10 @@ func (r *SessionRuntime) Execute(ctx context.Context, request *ExecuteRequest, p
 	engineState := r.registerEngine(cellID.String(), engine)
 	r.mu.Lock()
 	preloads := cloneToolPreloads(r.toolPreloads)
+	dedupMCPResults := r.mcpResultDedup
 	r.mu.Unlock()
 	go func() {
-		result, execErr := engine.Execute(ctx, EngineRequest{ToolCallID: request.ToolCallID, Source: request.Source, EnabledTools: request.EnabledTools, Preloads: preloads})
+		result, execErr := engine.Execute(ctx, EngineRequest{ToolCallID: request.ToolCallID, Source: request.Source, EnabledTools: request.EnabledTools, Preloads: preloads, MCPResultDedup: dedupMCPResults})
 		_ = engine.Close()
 		r.publishEngineOutcome(cellID.String(), engineOutcome{result: result, execErr: execErr})
 	}()

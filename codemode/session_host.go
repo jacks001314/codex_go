@@ -11,6 +11,7 @@ type SessionHost struct {
 	runtime             *SessionRuntime
 	cellExecutionLimits *CellExecutionLimits
 	outputTruncation    OutputTruncation
+	mcpResultDedup      bool
 }
 
 func NewSessionHost(runtime *SessionRuntime) *SessionHost {
@@ -54,6 +55,10 @@ func (h *SessionHost) Handle(ctx context.Context, request *HostRequest, yield *t
 			h.outputTruncation = *request.OutputTruncation
 		}
 		h.runtime.SetOutputTruncation(h.outputTruncation)
+		// Rust #63540: the dedup request is captured with the session so a
+		// later execute only sees the option its session opened with.
+		h.mcpResultDedup = request.MCPResultDedup != nil && *request.MCPResultDedup
+		h.runtime.SetMCPResultDedup(h.mcpResultDedup)
 		return &HostResponse{Type: "session/ready", SessionID: request.SessionID}, nil, nil
 	case "session/execute":
 		if request.Request == nil {

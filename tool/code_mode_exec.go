@@ -290,6 +290,9 @@ const (
 type CodeModeSessionOptions struct {
 	CellExecutionLimits *CodeModeCellExecutionLimits
 	OutputTruncation    CodeModeOutputTruncation
+	// MCPResultDedup omits an MCP text fallback duplicating structuredContent
+	// when Code Mode prints the tool result (Rust #63540).
+	MCPResultDedup bool
 }
 
 // CodeModeCellExecutionLimits mirrors Rust CodeModeSessionCellExecutionLimits.

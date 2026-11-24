@@ -20,6 +20,9 @@ type sobekExecutionState struct {
 	terminationCause error
 	terminating      atomic.Bool
 	exitRequested    atomic.Bool
+	// mcpResultDedup omits an MCP text fallback that duplicates
+	// structuredContent when text() prints the result (Rust #63540).
+	mcpResultDedup bool
 }
 
 func (s *sobekExecutionState) requestTermination(cause error) {
@@ -81,7 +84,7 @@ func (e *SobekEngine) Execute(ctx context.Context, request EngineRequest) (*Engi
 		return nil, fmt.Errorf("sobek engine is already executing")
 	}
 	runtime := sobek.New()
-	state := &sobekExecutionState{}
+	state := &sobekExecutionState{mcpResultDedup: request.MCPResultDedup}
 	e.runtime = runtime
 	e.state = state
 	e.mu.Unlock()

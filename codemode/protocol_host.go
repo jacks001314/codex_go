@@ -607,6 +607,9 @@ type HostRequest struct {
 	OutputTruncation *OutputTruncation `json:"outputTruncation,omitempty"`
 	// MaxOutputTokens bounds a wait or terminate observation in server mode.
 	MaxOutputTokens *int `json:"maxOutputTokens,omitempty"`
+	// MCPResultDedup enables Rust #63540's text() deduplication for this
+	// session; omission keeps the legacy wire shape.
+	MCPResultDedup *bool `json:"mcpResultDedup,omitempty"`
 }
 
 func (r *HostRequest) UnmarshalJSON(data []byte) error {
@@ -621,11 +624,12 @@ func (r *HostRequest) UnmarshalJSON(data []byte) error {
 		CellExecutionLimits *CellExecutionLimits `json:"cellExecutionLimits"`
 		OutputTruncation    *OutputTruncation    `json:"outputTruncation"`
 		MaxOutputTokens     *int                 `json:"maxOutputTokens"`
+		MCPResultDedup      *bool                `json:"mcpResultDedup"`
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return err
 	}
-	*r = HostRequest{Method: envelope.Method, SessionID: envelope.SessionID, CellID: envelope.CellID, CellExecutionLimits: envelope.CellExecutionLimits, OutputTruncation: envelope.OutputTruncation, MaxOutputTokens: envelope.MaxOutputTokens}
+	*r = HostRequest{Method: envelope.Method, SessionID: envelope.SessionID, CellID: envelope.CellID, CellExecutionLimits: envelope.CellExecutionLimits, OutputTruncation: envelope.OutputTruncation, MaxOutputTokens: envelope.MaxOutputTokens, MCPResultDedup: envelope.MCPResultDedup}
 	if len(envelope.Request) == 0 || string(envelope.Request) == "null" {
 		return nil
 	}
@@ -669,6 +673,10 @@ func OpenSessionRequestWithOptions(sessionID SessionID, options SessionOptions) 
 	if options.OutputTruncation != "" && options.OutputTruncation != OutputTruncationClient {
 		truncation := options.OutputTruncation
 		request.OutputTruncation = &truncation
+	}
+	if options.MCPResultDedup {
+		dedup := true
+		request.MCPResultDedup = &dedup
 	}
 	return request
 }

@@ -1679,7 +1679,13 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 			ownedCodeModeProvider, _ = provider.(interface{ Close() error })
 		}
 		runForRouter.CodeModeProvider = provider
-		runForRouter.CodeModeRuntime = tool.NewCodeModeRuntime(provider, run.DisableCodeModeFallback)
+		// Rust #63540: the opt-in flag lets text() omit an MCP text fallback
+		// that duplicates structuredContent when it prints the tool result.
+		runtimeOptions := tool.CodeModeSessionOptions{}
+		if run.Config != nil && features.Enabled(run.Config.FeatureSettings(), "code_mode_mcp_result_dedup") {
+			runtimeOptions.MCPResultDedup = true
+		}
+		runForRouter.CodeModeRuntime = tool.NewCodeModeRuntimeWithOptions(provider, run.DisableCodeModeFallback, runtimeOptions)
 	}
 	if runForRouter.CodeModeRuntime != nil {
 		defer runForRouter.CodeModeRuntime.Close()

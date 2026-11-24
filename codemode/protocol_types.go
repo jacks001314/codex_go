@@ -172,6 +172,9 @@ const (
 type SessionOptions struct {
 	CellExecutionLimits *CellExecutionLimits
 	OutputTruncation    OutputTruncation
+	// MCPResultDedup asks the host's text() helper to omit an MCP text
+	// fallback that duplicates structuredContent (Rust #63540).
+	MCPResultDedup bool
 }
 
 // ValidateSessionOptions rejects malformed truncation settings. Whether a
