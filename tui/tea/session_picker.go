@@ -950,6 +950,9 @@ func (m *Model) applyResumeResponseWithCWD(threadID string, response SessionResu
 	}
 	m.setThreadUnavailable(false)
 	m.State.Messages = append([]codextui.Message(nil), response.Messages...)
+	// Rust #62403: record the replies projected from history so their late
+	// completions keep the replay order for copy selection.
+	m.Transcript.NoteReplayedAssistantMessages(m.State.Messages)
 	m.registerCollabTranscriptRows(m.State.Messages)
 	m.State.BumpMessagesRevision()
 	m.insertThreadLineage(response.Summary)

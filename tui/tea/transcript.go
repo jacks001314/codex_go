@@ -38,6 +38,27 @@ type TranscriptComponent struct {
 	activeAssistantDeltaTurnID string
 	lastFlushedAssistantItemID string
 	lastFlushedAssistantTurnID string
+
+	// replayedCloudText tracks each assistant item projected from Cloud history
+	// or live streaming, keyed by turn and item, with the completion flag and
+	// observation order (Rust #62403 ReplayedCloudItems).
+	replayedCloudText map[string]map[string]replayedCloudItem
+	// responseOrder orders completed replies and proposed plans.
+	responseOrder int
+	// olderResponseOrder hands negative positions to replies prepended by older
+	// history pages (Rust older_response_order).
+	olderResponseOrder int
+	// lastCompletedResponse keeps the highest-order completed reply so a late
+	// completion of an older reply cannot become the latest copyable text.
+	lastCompletedResponse      string
+	lastCompletedResponseOrder int
+}
+
+// replayedCloudItem is one Cloud assistant item's completion state and
+// observation order within its turn.
+type replayedCloudItem struct {
+	finished bool
+	order    int
 }
 
 // newTranscriptComponent initializes the transcript sub-component.
@@ -285,10 +306,141 @@ func (t *TranscriptComponent) mergeAssistantFinalForItem(state *codextui.State, 
 		return
 	}
 	if t.replaceAssistantMessageForItem(state, itemID, text, "") {
+		t.noteCompletedReply(itemID, text)
+		return
+	}
+	// Rust #62403: a late completion of another reply must not be merged into
+	// the reply that is still streaming. Keep them separate so each keeps its
+	// own copy source and the live stream is not interrupted.
+	if itemID = strings.TrimSpace(itemID); itemID != "" && t.activeAssistantDeltaItemID != "" &&
+		t.activeAssistantDeltaItemID != itemID && strings.TrimSpace(text) != "" {
+		completed := codextui.NormalizeCompletedAssistantMarkdown(text)
+		if completed != "" {
+			state.Messages = append(state.Messages, codextui.Message{
+				Role:    codextui.RoleAssistant,
+				Text:    completed,
+				RawText: completed,
+				ItemID:  itemID,
+			})
+			state.BumpMessagesRevisionFrom(len(state.Messages) - 1)
+		}
+		t.noteCompletedReply(itemID, completed)
 		return
 	}
 	state.Messages = mergeAssistantFinalToMessages(state.Messages, text)
 	state.BumpMessagesRevisionFrom(len(state.Messages) - 1)
+	t.noteCompletedReply(itemID, text)
+}
+
+// noteReplayedCloudItem records one Cloud assistant item. Older history pages
+// receive negative positions so they stay older than anything observed live.
+func (t *TranscriptComponent) noteReplayedCloudItem(turnID string, itemID string, finished bool, older bool) bool {
+	if t == nil {
+		return false
+	}
+	turnID = strings.TrimSpace(turnID)
+	itemID = strings.TrimSpace(itemID)
+	if itemID == "" {
+		return false
+	}
+	if t.replayedCloudText == nil {
+		t.replayedCloudText = map[string]map[string]replayedCloudItem{}
+	}
+	items := t.replayedCloudText[turnID]
+	if items == nil {
+		items = map[string]replayedCloudItem{}
+		t.replayedCloudText[turnID] = items
+	}
+	entry, seen := items[itemID]
+	if !seen {
+		if older {
+			t.olderResponseOrder--
+			entry.order = t.olderResponseOrder
+		} else {
+			t.responseOrder++
+			entry.order = t.responseOrder
+		}
+	}
+	entry.finished = entry.finished || finished
+	items[itemID] = entry
+	return !seen
+}
+
+// NoteReplayedAssistantMessages records assistant items projected from thread
+// history so a late live completion keeps the replay position for copy ordering
+// (Rust #62403). A message with visible text counts as finished.
+func (t *TranscriptComponent) NoteReplayedAssistantMessages(messages []codextui.Message) {
+	if t == nil {
+		return
+	}
+	for _, message := range messages {
+		if message.Role != codextui.RoleAssistant {
+			continue
+		}
+		itemID := strings.TrimSpace(message.ItemID)
+		if itemID == "" {
+			continue
+		}
+		t.noteReplayedCloudItem("", itemID, strings.TrimSpace(message.Text) != "", false)
+	}
+}
+
+// ReplayedCloudItemFinished mirrors Rust has_replayed_cloud_text: only an item
+// recorded as finished may suppress its live completion.
+func (t *TranscriptComponent) ReplayedCloudItemFinished(turnID string, itemID string) bool {
+	if t == nil {
+		return false
+	}
+	items := t.replayedCloudText[strings.TrimSpace(turnID)]
+	entry, ok := items[strings.TrimSpace(itemID)]
+	return ok && entry.finished
+}
+
+// noteCompletedReply orders a completed reply and keeps the highest-order text
+// as the latest copyable response.
+func (t *TranscriptComponent) noteCompletedReply(itemID string, text string) {
+	if t == nil {
+		return
+	}
+	order := 0
+	if itemID = strings.TrimSpace(itemID); itemID != "" {
+		if t.replayedCloudText == nil {
+			t.replayedCloudText = map[string]map[string]replayedCloudItem{}
+		}
+		items := t.replayedCloudText[""]
+		if items == nil {
+			items = map[string]replayedCloudItem{}
+			t.replayedCloudText[""] = items
+		}
+		entry := items[itemID]
+		if entry.order == 0 {
+			// A first observation takes the next position; a reply that was
+			// already replayed keeps its recorded position so its late
+			// completion stays older for copy ordering (Rust #62403).
+			t.responseOrder++
+			entry.order = t.responseOrder
+		}
+		entry.finished = true
+		order = entry.order
+		items[itemID] = entry
+	} else {
+		t.responseOrder++
+		order = t.responseOrder
+	}
+	if text = strings.TrimSpace(text); text != "" && order > t.lastCompletedResponseOrder {
+		t.lastCompletedResponse = text
+		t.lastCompletedResponseOrder = order
+	}
+}
+
+// LatestCompletedResponse returns the highest-order completed reply text
+// (Rust #62403's copy-order bookkeeping), so a late completion of an older
+// reply never replaces a newer copy source.
+func (t *TranscriptComponent) LatestCompletedResponse() string {
+	if t == nil {
+		return ""
+	}
+	return t.lastCompletedResponse
 }
 
 func (t *TranscriptComponent) replaceAssistantMessageForItem(state *codextui.State, itemID string, text string, phase string) bool {
