@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/chatwidget"
 )
 
 // setAppServerDisconnected enters or leaves the offline TUI state after the
@@ -39,6 +40,20 @@ func (m *Model) setAppServerDisconnected(disconnected bool) {
 	}
 	m.refreshSlashPopup()
 	m.restoreSlashPopupSelection(previous)
+}
+
+// clearStaleMCPStartupOnDisconnect drops the in-flight MCP startup round
+// (Rust #63599 pause_for_disconnect: mcp_startup_status.take()). Startup
+// notifications from the disconnected transport can no longer finish, so they
+// must not keep local commands busy; a real running turn keeps its own busy
+// state.
+func (m *Model) clearStaleMCPStartupOnDisconnect() {
+	if m == nil || !m.mcpStartupActive {
+		return
+	}
+	m.mcpStartup = chatwidget.NewMcpStartupRoundState()
+	m.mcpStartupActive = false
+	m.mcpStartupHeader = ""
 }
 
 // firstLineOfText returns everything before the first newline.

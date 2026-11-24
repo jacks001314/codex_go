@@ -55937,7 +55937,8 @@
     "codex_go"
    ],
    "evidence": [
-    "Partial: Go tracks remote connection status and reconnect handlers (tui/status/remote_connection.go, tui/app/event_dispatch.go), but there is no Ctrl+R retry binding in a disconnected conversation, no footer retry hint, and no fresh reconnect timer."
+    "Partial: tui/tea now clears a stale MCP startup round when the app-server transport disconnects (clearStaleMCPStartupOnDisconnect, wired into AppServerDisconnectMsg, mirroring Rust #63599 pause_for_disconnect's mcp_startup_status.take() and task-running refresh). A startup round that can no longer finish stops keeping local commands busy, while a real running turn keeps its busy state. Test: tui/tea/disconnect_mcp_startup_like_rust_test.go. The offline composer, slash-command availability marking and reconnect-status tracking from earlier rounds stay in place.",
+    "Residual: there is no Ctrl+R retry binding in a disconnected conversation, no footer reconnect hint, no fresh reconnect timer/attempt and no retry eligibility rule (offline + failed + non-embedded/cloud + a displayed thread) because Go's remote TUI has no reconnect attempt loop to restart; the agents overview notice still says 'relaunch to retry' instead of directing the user back to Ctrl+R."
    ],
    "kind": "runtime",
    "sha": "8e757686c1ba2d4dc0864edfb8aa286f7029d90d",

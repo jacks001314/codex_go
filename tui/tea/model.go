@@ -4826,6 +4826,10 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		reconnectThreads := m.retireThreadApprovalsForReconnect()
 		m.dropStaleBackendRequests()
 		m.handleAppServerDisconnect()
+		// Rust #63599: startup notifications from the disconnected transport
+		// can no longer finish, so stale MCP startup activity must not keep
+		// local commands busy. A real running turn keeps its busy state.
+		m.clearStaleMCPStartupOnDisconnect()
 		// Rust #63258: the composer keeps working offline, but the slash popup
 		// marks server-dependent commands and local ones stay runnable.
 		m.setAppServerDisconnected(true)
