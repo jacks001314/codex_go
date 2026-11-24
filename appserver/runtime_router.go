@@ -467,6 +467,9 @@ type RuntimeRouter struct {
 	// could not be confirmed (Rust #62299); further frame writes fail closed
 	// until the thread is reloaded and verified.
 	realtimeHistoryRecovery map[string]bool
+	// guardianPolicyWake replaces the default pending-work wake after a
+	// Guardian policy refresh unblocks a thread (Rust #62585).
+	guardianPolicyWake func(threadID string)
 	// completedCommandItems remembers command items that already reported a
 	// terminal status. A turn transition can complete an approval-opened item
 	// before the tool result arrives, and the later result must not publish a

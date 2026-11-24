@@ -372,11 +372,13 @@ func (r *RuntimeRouter) applyGuardianPolicyToThread(threadID string, snapshot *c
 	var (
 		blockedReason string
 		applied       bool
+		wasBlocked    bool
 	)
 	r.threads.UpdateTurn(threadID, active.TurnID, func(live *activeRuntimeTurn) {
 		if live == nil || live.RunConfig == nil || live.RunConfig.Config == nil {
 			return
 		}
+		wasBlocked = live.GuardianPolicyBlocked
 		next := live.RunConfig.Config.CloneForGuardianPolicy()
 		if err := next.ApplyGuardianPolicy(snapshot); err != nil {
 			blockedReason = err.Error()
@@ -421,6 +423,11 @@ func (r *RuntimeRouter) applyGuardianPolicyToThread(threadID string, snapshot *c
 		return nil
 	}
 	if blockedReason == "" {
+		if wasBlocked {
+			// Rust #62585: a later refresh that permits the model wakes the
+			// automatic work that waited behind the block.
+			r.wakeGuardianPolicyBlockedWork(threadID)
+		}
 		return nil
 	}
 	return &guardianPolicyRejection{ThreadID: threadID, Reason: blockedReason}
@@ -457,4 +464,30 @@ func (r *RuntimeRouter) guardianPolicyStepCheck(threadID string, next func() err
 		}
 		return nil
 	}
+}
+
+// wakeGuardianPolicyBlockedWork mirrors Rust #62585's pending_work_wake. A live
+// turn resumes on its next step check; an idle thread retries its queued-mail
+// wake so a new turn can supply a compliant replacement model. A draining
+// server keeps the mail for its handoff, as Rust's shutting_down guard does.
+func (r *RuntimeRouter) wakeGuardianPolicyBlockedWork(threadID string) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	if r.guardianPolicyWake != nil {
+		r.guardianPolicyWake(threadID)
+		return
+	}
+	if r.threads != nil && r.threads.IsClosing() {
+		return
+	}
+	if r.activeRuntimeTurnSnapshot(threadID) != nil {
+		return
+	}
+	r.maybeWakeRootForPendingAgentMessages(threadID)
+	r.wakeRootForRecordedAgentMail(threadID)
 }
