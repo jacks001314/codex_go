@@ -3309,6 +3309,12 @@ type Model struct {
 	sideExactWidth sideExactWidth
 	// sideResize is the active keyboard resize preview, if any.
 	sideResize *sidePaneResize
+	// paneMotion drives the sidebar open/close slide (Rust #59739).
+	paneMotion paneMotionState
+	// sidebarClosingLines retains the last settled right column so a closing
+	// slide can shrink what was painted after the pane state is gone.
+	sidebarClosingLines []string
+	sidebarClosingWidth int
 	// sidePaneRendering guards the focused-column render: while the focused
 	// conversation is drawn at its pane size, viewString must stay on the
 	// single-conversation path instead of splitting itself again.

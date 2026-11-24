@@ -1,6 +1,7 @@
 package tea
 
 import (
+	"math"
 	"strconv"
 	"strings"
 
@@ -166,6 +167,18 @@ func (m *Model) renderSideWorkspace(width int, height int) (string, bool) {
 	if m == nil || m.sidePaneRendering || m.State == nil {
 		return "", false
 	}
+	// Rust #59739 slides the sidebar from its last painted width. A detached
+	// requester (tests, embedders) snaps instead of animating.
+	open := m.sideWorkspaceOpen()
+	fraction := m.advancePaneMotion(open, m.animationsEnabled && m.frames.attached())
+	if !open {
+		if fraction <= 0 || len(m.sidebarClosingLines) == 0 {
+			m.sidebarClosingLines = nil
+			m.sideResize = nil
+			return "", false
+		}
+		return m.renderClosingSideWorkspace(width, height, fraction)
+	}
 	leftWidth, rightWidth, sideFocused, ok := m.sidePaneLayout(width)
 	if !ok {
 		// Rust #59595 discards a resize preview when the split layout is no
@@ -179,6 +192,7 @@ func (m *Model) renderSideWorkspace(width int, height int) (string, bool) {
 	if resizing && height > 1 {
 		height--
 	}
+	paintLeft, paintRight := m.sidePanePaintWidths(width, rightWidth, fraction)
 	if m.sidebarDocumentVisible() {
 		// A preview owns the sidebar exactly like the chooser does: the parent
 		// conversation keeps the left column and the preview paints on the
@@ -189,9 +203,13 @@ func (m *Model) renderSideWorkspace(width int, height int) (string, bool) {
 			right[index] = padSidePaneLine(codextui.TruncateToWidth(right[index], rightWidth), rightWidth)
 		}
 		m.sidebarTabStripTop = 0
-		rendered := m.zipSidePanes(left, right, leftWidth, height)
+		m.snapshotSidebarColumn(right, rightWidth)
+		if paintRight != rightWidth {
+			left = m.renderFocusedPane(paintLeft, height)
+		}
+		rendered := m.zipSidePanes(left, fitSidebarColumn(right, paintRight, height), paintLeft, height)
 		if resizing {
-			rendered += "\n" + m.sideResizeHint(rightWidth)
+			rendered += "\n" + m.sideResizeHint(paintRight)
 		}
 		return padSideWorkspaceRows(rendered, width), true
 	}
@@ -210,9 +228,13 @@ func (m *Model) renderSideWorkspace(width int, height int) (string, bool) {
 		if m.sidebarTabStripVisible() {
 			m.sidebarTabStripTop = 0
 		}
-		rendered := m.zipSidePanes(left, right, leftWidth, height)
+		m.snapshotSidebarColumn(right, rightWidth)
+		if paintRight != rightWidth {
+			left = m.renderFocusedPane(paintLeft, height)
+		}
+		rendered := m.zipSidePanes(left, fitSidebarColumn(right, paintRight, height), paintLeft, height)
 		if resizing {
-			rendered += "\n" + m.sideResizeHint(rightWidth)
+			rendered += "\n" + m.sideResizeHint(paintRight)
 		}
 		return padSideWorkspaceRows(rendered, width), true
 	}
@@ -257,14 +279,56 @@ func (m *Model) renderSideWorkspace(width int, height int) (string, bool) {
 		m.sidebarTabStripTop = 0
 		stripOffset = 1
 	}
+	m.snapshotSidebarColumn(rightLines, rightWidth)
+	if paintRight != rightWidth {
+		// Re-render both columns at the sliding width; the snapshot keeps the
+		// settled column for a reversed or closing slide.
+		if sideFocused {
+			leftLines, _, side.ParentViewMax = m.renderPassiveSidePane(side, false, paintLeft, height)
+			rightLines = m.renderFocusedPane(paintRight, rightHeight)
+			m.offsetFocusedPanePointer(paintLeft+ansi.StringWidth(sideWorkspaceDivider), 0)
+			if strip {
+				m.offsetFocusedPanePointer(0, 1)
+			}
+		} else {
+			leftLines = m.renderFocusedPane(paintLeft, height)
+			rightLines, _, side.SideViewMax = m.renderPassiveSidePane(side, true, paintRight, rightHeight)
+		}
+		if strip {
+			stripRow := padSidePaneLine(m.renderSidebarTabStrip(paintRight), paintRight)
+			rightLines = append([]string{stripRow}, rightLines...)
+		}
+	}
 	if !sideFocused {
 		// The passive column is the only one that can hold a watch-only reader.
-		m.recordSidePaneThreadLinks(side, rightLines[stripOffset:], leftWidth+ansi.StringWidth(sideWorkspaceDivider), stripOffset)
+		m.recordSidePaneThreadLinks(side, rightLines[stripOffset:], paintLeft+ansi.StringWidth(sideWorkspaceDivider), stripOffset)
 	}
-	rendered := m.zipSidePanes(leftLines, rightLines, leftWidth, height)
+	rendered := m.zipSidePanes(leftLines, fitSidebarColumn(rightLines, paintRight, height), paintLeft, height)
 	if resizing {
-		rendered += "\n" + m.sideResizeHint(rightWidth)
+		rendered += "\n" + m.sideResizeHint(paintRight)
 	}
+	return padSideWorkspaceRows(rendered, width), true
+}
+
+// renderClosingSideWorkspace paints the retained right column shrinking toward
+// zero after the pane closed, so the sidebar slides out instead of vanishing
+// (Rust #59739 PaneMotion).
+func (m *Model) renderClosingSideWorkspace(width int, height int, fraction float64) (string, bool) {
+	height = max(height, 1)
+	settled := m.sidebarClosingWidth
+	if settled <= 0 || len(m.sidebarClosingLines) == 0 {
+		m.sidebarClosingLines = nil
+		return "", false
+	}
+	paintRight := int(math.Round(float64(settled) * fraction))
+	if paintRight <= 0 {
+		m.sidebarClosingLines = nil
+		return "", false
+	}
+	m.sidePaneThreadLinks = nil
+	paintLeft := max(width-ansi.StringWidth(sideWorkspaceDivider)-paintRight, 1)
+	left := m.renderFocusedPane(paintLeft, height)
+	rendered := m.zipSidePanes(left, fitSidebarColumn(m.sidebarClosingLines, paintRight, height), paintLeft, height)
 	return padSideWorkspaceRows(rendered, width), true
 }
 
