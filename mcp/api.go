@@ -2207,7 +2207,7 @@ func retainedToolCatalogInventory(status MCPServerStatus) *stdioInventory {
 // can change between reads. Runtime auth (Go's ApplyHTTPRequest), EMA, stored
 // OAuth, and environment-driven transport credentials all disqualify reuse.
 func mcpServerHasFixedStatusCredentials(config *ServerConfig) bool {
-	if config == nil || config.Auth == ServerAuthEMAAuth || config.ApplyHTTPRequest != nil {
+	if config == nil || config.Auth == ServerAuthEMAAuth || config.ApplyHTTPRequest != nil || config.RequestAuthSession != nil {
 		return false
 	}
 	if config.URL != "" {
@@ -4073,6 +4073,13 @@ func mcpConnectionCacheKeyWithFeatures(config *ServerConfig, openAIForm bool, us
 	}
 	key := fmt.Sprintf("%s|openaiForm=%t|userVerification=%t|requestAuth=%t|protocolMode=%d|readOnlyTools=%t|credentialPolicy=%s", data, openAIForm, userVerification, applyHTTPRequest, config.ProtocolMode, config.RequiresReadOnlyTools, credentialPolicy)
 	key += "|appsOwner=" + config.appsDiscoveryOwner
+	if config.RequestAuthSession != nil {
+		// Rust #63532: the in-process provider and its bound owner are part of
+		// the connection identity. A credential refresh keeps the same scope, so
+		// the connection survives it; an owner change moves the scope and
+		// rebuilds the connection.
+		key += "|requestAuth=" + config.RequestAuthSession.Scope() + "|current=" + config.RequestAuthSession.CurrentScope()
+	}
 	for _, reference := range mcpReferencedEnvironmentVariables(config) {
 		key += "\x1f" + reference
 	}
@@ -4447,7 +4454,7 @@ func (s *MCPService) authStatusForConfig(name string, config *ServerConfig) MCPA
 		}
 		return MCPAuthUnsupported
 	}
-	if config.ApplyHTTPRequest != nil || configuredAuthorizationHeader(config) {
+	if config.ApplyHTTPRequest != nil || config.RequestAuthSession != nil || configuredAuthorizationHeader(config) {
 		return MCPAuthBearerToken
 	}
 	store := s.oauth

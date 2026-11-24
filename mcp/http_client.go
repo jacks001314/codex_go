@@ -533,6 +533,16 @@ func newMCPHTTPClientWithCapabilities(config *ServerConfig, features mcpClientFe
 			client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 		}
 	}
+	if config != nil && (config.DisableRedirects || config.RequestAuthSession != nil) {
+		// Rust #63532: a provider-backed connection must not follow a redirect
+		// away from the origin its per-request credentials were issued for.
+		client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	}
+	if config != nil && config.RequestAuthSession != nil {
+		// Fresh headers on every request, including the session delete, while the
+		// transport keeps the connection across credential refreshes.
+		client.Transport = &mcpRequestAuthTransport{base: client.Transport, session: config.RequestAuthSession}
+	}
 	protocolMode := MCPProtocolLegacy
 	if config != nil {
 		protocolMode = config.ProtocolMode

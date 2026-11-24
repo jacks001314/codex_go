@@ -139,6 +139,13 @@ type ServerConfig struct {
 	ToolTimeout               time.Duration                     `json:"-"`
 	CatalogItemLimit          int                               `json:"-"`
 	ApplyHTTPRequest          func(*http.Request, []byte) error `json:"-"`
+	// RequestAuthProvider is an in-process credential source for a host-local
+	// HTTP server (Rust #63532 SetWithAuthProvider). RequestAuthSession is the
+	// owner bound for one connection; DisableRedirects keeps provider headers on
+	// the original origin.
+	RequestAuthProvider *McpRequestAuthProvider `json:"-"`
+	RequestAuthSession  *McpRequestAuthSession  `json:"-"`
+	DisableRedirects    bool                    `json:"-"`
 	// HTTPClient overrides the runtime's shared HTTP transport for this server.
 	// Executor-discovered HTTP MCP servers use a route-bound client so their
 	// requests originate from the selected executor.
