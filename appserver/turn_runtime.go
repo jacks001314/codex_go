@@ -1158,6 +1158,10 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 	}
 	state.rememberResponse(event)
 	if event.Kind == model.ResponsesStreamEventCreated {
+		// Rust #62571 clears the pending serving value when a new response
+		// starts, so a flag from an earlier response can never match a later
+		// item.
+		state.pendingGuardianAssessment = nil
 		r.recordRuntimeTurnResponseID(threadID, turnID, event.ResponseID, event.RoutingAffinity)
 	}
 	if event.Kind == model.ResponsesStreamEventGuardianAssessment && event.GuardianAssessment != nil {

@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"context"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"codex_go/model"
 	"codex_go/sandbox"
 	"codex_go/state"
+	"codex_go/tool"
 )
 
 // guardianServingAuthorization captures the authorization and policy a serving
@@ -156,4 +158,97 @@ func (r *RuntimeRouter) applyStreamGuardianAssessment(threadID, turnID string, e
 		RequiresReview: pending.RequiresReview,
 		Authorization:  r.guardianServingAuthorization(threadID, turnID),
 	})
+}
+
+// guardianProbeComparisonEvent mirrors Rust's codex.guardian_probe_comparison
+// record (#62571): the streamed serving flag is an observation joined to the
+// tool call, the async classification and the synchronous review by action id.
+const guardianProbeComparisonEvent = "codex.guardian_probe_comparison"
+
+// emitGuardianProbeComparison writes one shadow-comparison record to the
+// thread's session telemetry. The record never influences a decision.
+func (r *RuntimeRouter) emitGuardianProbeComparison(threadID string, fields map[string]string) {
+	if r == nil || len(fields) == 0 {
+		return
+	}
+	session := r.sessionTelemetryForThread(strings.TrimSpace(threadID))
+	if session == nil {
+		return
+	}
+	session.LogEvent(context.Background(), guardianProbeComparisonEvent, fields, nil)
+}
+
+// guardianProbeKey names the item whose serving flag describes an invocation:
+// a nested Code Mode call inherits its enclosing cell's item (#62571), while a
+// direct call uses its own item id. The scope names which of the two applied.
+func guardianProbeKey(invocation *tool.Invocation) (string, string) {
+	if invocation == nil {
+		return "", "tool_item"
+	}
+	if strings.TrimSpace(invocation.Source) == tool.InvocationSourceCodeMode {
+		if cellID, _ := invocation.Context[tool.CodeModeCellIDContextKey].(string); strings.TrimSpace(cellID) != "" {
+			return strings.TrimSpace(cellID), "enclosing_item"
+		}
+	}
+	return strings.TrimSpace(invocation.CallID), "tool_item"
+}
+
+// carryGuardianProbeToCodeModeCall copies the enclosing cell's serving value to
+// the nested call so its review and comparison record see the same flag. A
+// value recorded for the call itself wins.
+func (r *RuntimeRouter) carryGuardianProbeToCodeModeCall(threadID, turnID string, invocation *tool.Invocation) {
+	if r == nil || invocation == nil || strings.TrimSpace(invocation.Source) != tool.InvocationSourceCodeMode {
+		return
+	}
+	key, scope := guardianProbeKey(invocation)
+	callID := strings.TrimSpace(invocation.CallID)
+	if scope != "enclosing_item" || key == "" || callID == "" || key == callID {
+		return
+	}
+	if r.guardianServingAssessmentFor(threadID, turnID, callID) != nil {
+		return
+	}
+	if cell := r.guardianServingAssessmentFor(threadID, turnID, key); cell != nil {
+		r.recordGuardianServingAssessment(threadID, turnID, callID, *cell)
+	}
+}
+
+// guardianProbeToolStageFields builds the tool half of the comparison record.
+func guardianProbeToolStageFields(threadID, turnID, callID, model string, contextMode state.GuardianContextMode, scope, probe string) map[string]string {
+	threadID = strings.TrimSpace(threadID)
+	callID = strings.TrimSpace(callID)
+	if threadID == "" || callID == "" {
+		return nil
+	}
+	mode := contextMode.String()
+	if mode == "" {
+		mode = "not_reported"
+	}
+	return map[string]string{
+		"stage":                 "tool",
+		"thread_id":             threadID,
+		"turn_id":               strings.TrimSpace(turnID),
+		"call_id":               callID,
+		"model":                 strings.TrimSpace(model),
+		"guardian_context_mode": mode,
+		"scope":                 scope,
+		"probe_review":          probe,
+	}
+}
+
+// logGuardianProbeToolStage records the tool-side observation for one
+// invocation before its review starts.
+func (r *RuntimeRouter) logGuardianProbeToolStage(threadID, turnID string, invocation *tool.Invocation) {
+	if r == nil || invocation == nil {
+		return
+	}
+	key, scope := guardianProbeKey(invocation)
+	model := ""
+	if invocation.StepAttribution != nil {
+		model = invocation.StepAttribution.Model
+	}
+	fields := guardianProbeToolStageFields(threadID, turnID, invocation.CallID, model,
+		r.guardianContextModeForTurn(threadID, turnID), scope,
+		guardianProbeReviewLabel(r.guardianServingAssessmentFor(threadID, turnID, key)))
+	r.emitGuardianProbeComparison(threadID, fields)
 }

@@ -304,6 +304,10 @@ type modelGuardianReviewer struct {
 	// keeps that probe observational: it is logged while preparing the review and
 	// never decides the approval.
 	probeAssessment func(threadID, turnID, callID string) *state.ServingAssessment
+	// probeLog writes one codex.guardian_probe_comparison record (Rust #62571).
+	// The serving flag is shadow telemetry: the verdict always follows the
+	// review, and a nil hook keeps a reviewer built without a router quiet.
+	probeLog func(threadID string, fields map[string]string)
 	// servingAuthorization captures the current authorization and policy the
 	// assessment is revalidated against.
 	servingAuthorization func(threadID, turnID string) state.ServingAuthorization
@@ -1195,7 +1199,16 @@ func (r *modelGuardianReviewer) ReviewAssessment(ctx context.Context, threadID, 
 	return r.review(ctx, threadID, turnID, targetItemID, action)
 }
 
+// review runs one verdict and records the synchronous half of the Guardian
+// probe comparison (Rust #62571). The record is written for every outcome so
+// the tool and sync observations share the action id.
 func (r *modelGuardianReviewer) review(ctx context.Context, threadID, turnID, targetItemID string, action state.Action) (state.ReviewDecision, *state.Assessment, string, error) {
+	decision, assessment, message, err := r.reviewOutcome(ctx, threadID, turnID, targetItemID, action)
+	r.logGuardianSyncProbeComparison(threadID, turnID, targetItemID, decision, err)
+	return decision, assessment, message, err
+}
+
+func (r *modelGuardianReviewer) reviewOutcome(ctx context.Context, threadID, turnID, targetItemID string, action state.Action) (state.ReviewDecision, *state.Assessment, string, error) {
 	if r == nil || r.agent == nil {
 		return state.DecisionAborted, nil, "", errors.New("guardian reviewer is unavailable")
 	}
@@ -2451,6 +2464,55 @@ func guardianProbeReviewLabel(assessment *state.ServingAssessment) string {
 		return "required"
 	}
 	return "not_required"
+}
+
+// logGuardianSyncProbeComparison records the synchronous review outcome beside
+// the serving flag that accompanied the action (Rust #62571). A quick fast
+// decision still reports the review it short-circuited as completed only when a
+// verdict was produced; otherwise the outcome is a failure.
+func (r *modelGuardianReviewer) logGuardianSyncProbeComparison(threadID, turnID, callID string, decision state.ReviewDecision, err error) {
+	if r == nil || r.probeLog == nil {
+		return
+	}
+	outcome, syncDecision := "failure", "not_reported"
+	switch decision {
+	case state.DecisionApproved:
+		outcome, syncDecision = "completed", "allow"
+	case state.DecisionDenied:
+		outcome, syncDecision = "completed", "deny"
+	}
+	fields := map[string]string{
+		"stage":                 "sync_guardian",
+		"thread_id":             strings.TrimSpace(threadID),
+		"turn_id":               strings.TrimSpace(turnID),
+		"call_id":               strings.TrimSpace(callID),
+		"model":                 r.syncProbeModel(threadID, turnID),
+		"guardian_context_mode": r.syncProbeContextMode(threadID, turnID),
+		"probe_review":          guardianProbeReviewLabel(r.guardianProbeAssessment(threadID, turnID, callID)),
+		"sync_outcome":          outcome,
+		"sync_decision":         syncDecision,
+	}
+	if err != nil {
+		fields["failure_reason"] = err.Error()
+	}
+	r.probeLog(threadID, fields)
+}
+
+func (r *modelGuardianReviewer) syncProbeModel(threadID, turnID string) string {
+	if r == nil || (r.reviewPlan == nil && r.reviewPlanContext == nil) {
+		return ""
+	}
+	return strings.TrimSpace(r.modelForTurn(threadID, turnID))
+}
+
+func (r *modelGuardianReviewer) syncProbeContextMode(threadID, turnID string) string {
+	if r == nil || r.contextMode == nil {
+		return "not_reported"
+	}
+	if mode := r.contextMode(threadID, turnID).String(); mode != "" {
+		return mode
+	}
+	return "not_reported"
 }
 
 func (r *modelGuardianReviewer) emit(threadID string, event *state.Event) {

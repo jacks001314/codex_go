@@ -42,6 +42,10 @@ func (r *RuntimeRouter) nativeToolGuardianReview(threadID, turnID string) tool.G
 				r.forgetGuardianServingAssessment(threadID, turnID, invocation.CallID)
 			}
 		}
+		// Rust #62571: a nested Code Mode call inherits its enclosing item's
+		// serving flag, and the tool-side observation is logged before review.
+		r.carryGuardianProbeToCodeModeCall(threadID, turnID, invocation)
+		r.logGuardianProbeToolStage(threadID, turnID, invocation)
 		action, err := r.nativeToolGuardianAction(threadID, invocation)
 		if err != nil {
 			return err
