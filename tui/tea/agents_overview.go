@@ -10,6 +10,7 @@ import (
 	agentsoverview "codex_go/tui/agents_overview"
 	"codex_go/tui/keymsg"
 	"codex_go/tui/markdown"
+	mousemsg "codex_go/tui/mousemsg"
 )
 
 // In-session `/agents` dashboard (Rust #39094/#39112). The dashboard is a
@@ -743,15 +744,7 @@ func (m *Model) updateAgentsOverviewKey(msg keymsg.KeyMsg) bubbletea.Cmd {
 			return m.openAgentsOverviewThread(m.agentsOverview.SelectedThreadID())
 		}
 	case "enter":
-		name := strings.TrimSpace(m.agentsOverview.State.Input)
-		switch action := m.agentsOverview.Activate(); action {
-		case agentsoverview.ActionRenameThread:
-			return m.renameAgentsOverviewCmd(name)
-		case agentsoverview.ActionOpenThread:
-			return m.openAgentsOverviewThread(m.agentsOverview.SelectedThreadID())
-		case agentsoverview.ActionShowMore:
-			return m.showMoreAgentsOverviewCmd()
-		}
+		return m.activateAgentsOverviewSelection()
 	case "esc":
 		if action := m.agentsOverview.Cancel(); action == agentsoverview.ActionExit {
 			m.closeAgentsOverview()
@@ -1790,6 +1783,55 @@ func (m *Model) agentsOverviewKeyChordHints() []agentsoverview.KeyChordHint {
 		return nil
 	}
 	return []agentsoverview.KeyChordHint{{Keys: keys, Action: "chord\u2026"}}
+}
+
+// activateAgentsOverviewSelection runs the action of the selected row, shared
+// by Enter and a pointer click (Rust #62990 click_row activates the clicked
+// task).
+func (m *Model) activateAgentsOverviewSelection() bubbletea.Cmd {
+	if m == nil || m.agentsOverview == nil {
+		return nil
+	}
+	name := strings.TrimSpace(m.agentsOverview.State.Input)
+	switch action := m.agentsOverview.Activate(); action {
+	case agentsoverview.ActionRenameThread:
+		return m.renameAgentsOverviewCmd(name)
+	case agentsoverview.ActionOpenThread:
+		return m.openAgentsOverviewThread(m.agentsOverview.SelectedThreadID())
+	case agentsoverview.ActionShowMore:
+		return m.showMoreAgentsOverviewCmd()
+	}
+	return nil
+}
+
+// updateAgentsOverviewMouse selects and opens the task painted under a left
+// click. Rust #62990 click_row moves focus to the list and activates the row;
+// metadata editors, help, lifecycle work and modals keep their input.
+func (m *Model) updateAgentsOverviewMouse(msg mousemsg.MouseMsg) (bubbletea.Cmd, bool) {
+	if m == nil || m.agentsOverview == nil {
+		return nil, false
+	}
+	if msg.Action != mousemsg.MouseActionPress || msg.Button != mousemsg.MouseButtonLeft {
+		return nil, false
+	}
+	if m.modal != nil || m.agentsOverviewLifecycleProgress != "" ||
+		m.agentsOverview.State.CreatingWorktree || m.agentsOverview.State.Help ||
+		m.agentsOverview.State.Renaming {
+		return nil, false
+	}
+	if m.agentsOverview.ShowMoreAtRow(msg.Y) {
+		if !m.agentsOverview.SelectShowMore() {
+			return nil, false
+		}
+		m.agentsOverview.FocusList()
+		return m.activateAgentsOverviewSelection(), true
+	}
+	threadID, ok := m.agentsOverview.ThreadAtRow(msg.Y)
+	if !ok || !m.agentsOverview.SelectThread(threadID) {
+		return nil, false
+	}
+	m.agentsOverview.FocusList()
+	return m.activateAgentsOverviewSelection(), true
 }
 
 // applyThreadScopedSettingsUpdated patches a listed task's model from a

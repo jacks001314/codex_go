@@ -33,6 +33,8 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 		maxWidth = 0
 	}
 
+	v.rowHits = nil
+	v.showMoreHits = nil
 	lines := make([]string, 0, termHeight)
 	// header
 	grouping := "Group: " + v.State.Grouping.DisplayLabel()
@@ -128,15 +130,19 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 
 	if v.State.Help {
 		lines = append(lines, v.renderHelp(bodyWidth, styled)...)
-	} else if bodyWidth >= 90 {
-		listWidth := bodyWidth - 3 - 38
-		if listWidth < 46 {
-			listWidth = 46
-		}
-		lines = append(lines, v.renderRows(bodyHeight, listWidth, styled, footerProgress)...)
-		lines = append(lines, v.renderDetails(38, bodyHeight, styled)...)
 	} else {
-		lines = append(lines, v.renderRows(bodyHeight, bodyWidth, styled, footerProgress)...)
+		listTop := len(lines)
+		if bodyWidth >= 90 {
+			listWidth := bodyWidth - 3 - 38
+			if listWidth < 46 {
+				listWidth = 46
+			}
+			lines = append(lines, v.renderRows(bodyHeight, listWidth, styled, footerProgress)...)
+			lines = append(lines, v.renderDetails(38, bodyHeight, styled)...)
+		} else {
+			lines = append(lines, v.renderRows(bodyHeight, bodyWidth, styled, footerProgress)...)
+		}
+		v.recordRowHits(listTop)
 	}
 
 	// footer
@@ -626,6 +632,7 @@ func (v *View) renderRows(height, listWidth int, styled bool, progressInFooter b
 		first--
 	}
 
+	v.pendingHits = v.pendingHits[:0]
 	lines := make([]string, 0, height)
 	var previousGroup *string
 	for _, index := range visible[first:] {
@@ -658,6 +665,7 @@ func (v *View) renderRows(height, listWidth int, styled bool, progressInFooter b
 		if len(lines) >= height {
 			break
 		}
+		v.pendingHits = append(v.pendingHits, rowHit{lineOffset: len(lines), threadID: v.Rows[index].ThreadID})
 		lines = append(lines, renderLine("", v.renderRowSpans(index, grouping != GroupingStatus, listWidth), listWidth, styled))
 	}
 	// Rust #49106: a selectable "Show more" row closes the list while another
@@ -666,9 +674,48 @@ func (v *View) renderRows(height, listWidth int, styled bool, progressInFooter b
 		if previousGroup != nil && len(lines)+1 < height {
 			lines = append(lines, "")
 		}
+		v.pendingHits = append(v.pendingHits, rowHit{lineOffset: len(lines), showMore: true})
 		lines = append(lines, v.renderShowMoreRow(listWidth, styled))
 	}
 	return lines
+}
+
+// recordRowHits stores the painted task rows in absolute screen coordinates so
+// a pointer click can find the row it landed on (Rust #62990 click_row).
+func (v *View) recordRowHits(listTop int) {
+	if v == nil || len(v.pendingHits) == 0 {
+		return
+	}
+	v.rowHits = make(map[int]string, len(v.pendingHits))
+	v.showMoreHits = map[int]struct{}{}
+	for _, hit := range v.pendingHits {
+		row := listTop + hit.lineOffset
+		if hit.showMore {
+			v.showMoreHits[row] = struct{}{}
+			continue
+		}
+		if threadID := strings.TrimSpace(hit.threadID); threadID != "" {
+			v.rowHits[row] = threadID
+		}
+	}
+}
+
+// ThreadAtRow reports the task painted at screen row y by the last render.
+func (v *View) ThreadAtRow(y int) (string, bool) {
+	if v == nil || v.rowHits == nil {
+		return "", false
+	}
+	threadID, ok := v.rowHits[y]
+	return threadID, ok
+}
+
+// ShowMoreAtRow reports whether the last render painted the "Show more" row at y.
+func (v *View) ShowMoreAtRow(y int) bool {
+	if v == nil || v.showMoreHits == nil {
+		return false
+	}
+	_, ok := v.showMoreHits[y]
+	return ok
 }
 
 // renderShowMoreRow renders the "Show more" / "Loading more…" / retry row with

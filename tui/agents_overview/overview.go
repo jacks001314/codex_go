@@ -488,6 +488,13 @@ func (v *View) searchTimestamp(index int) int64 {
 }
 
 // View is the dashboard model.
+// rowHit is one painted task or "Show more" row from the last render.
+type rowHit struct {
+	lineOffset int
+	threadID   string
+	showMore   bool
+}
+
 type View struct {
 	Rows         []Row
 	Selected     int
@@ -515,6 +522,12 @@ type View struct {
 	// pageHeight is the visible list height from the last render. PageUp and
 	// PageDown move by this many displayed rows (Rust #46837).
 	pageHeight int
+	// rowHits maps an absolute screen row to the task painted there, and
+	// showMoreHits marks the painted "Show more" row, so a pointer click can
+	// select and activate it (Rust #62990 click_row keeps the painted rects).
+	rowHits      map[int]string
+	showMoreHits map[int]struct{}
+	pendingHits  []rowHit
 
 	// pinRanks maps a pinned thread id to its shared-section position (Rust
 	// #51500 pinned_thread_ranks). Nil means shared pinning is unavailable
@@ -2154,6 +2167,36 @@ func (v *View) ApplyRefresh(rows []Row, selectedThreadID string) {
 		view.State.InputCursor = 0
 	}
 	*v = *view
+}
+
+// SelectThread moves the selection to the visible task with this id and
+// reports whether it is on screen (Rust #62990 click_row selects the clicked
+// task before activating it).
+func (v *View) SelectThread(threadID string) bool {
+	threadID = strings.TrimSpace(threadID)
+	if v == nil || threadID == "" {
+		return false
+	}
+	for _, index := range v.VisibleIndices() {
+		if index < 0 || index >= len(v.Rows) {
+			continue
+		}
+		if strings.TrimSpace(v.Rows[index].ThreadID) == threadID {
+			v.Selected = index
+			return true
+		}
+	}
+	return false
+}
+
+// SelectShowMore moves the selection to the painted "Show more" row when
+// another page exists.
+func (v *View) SelectShowMore() bool {
+	if v == nil || !v.hasMore {
+		return false
+	}
+	v.Selected = ShowMoreIndex
+	return true
 }
 
 func (v *View) SelectedThreadID() string {

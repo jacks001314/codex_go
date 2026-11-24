@@ -6016,6 +6016,12 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			return m, m.insertComposerNewline()
 		}
 	case mousemsg.MouseMsg:
+		if m.agentsOverview != nil {
+			// Rust #62990: a click selects and opens the painted task row.
+			if cmd, handled := m.updateAgentsOverviewMouse(msg); handled {
+				return m, cmd
+			}
+		}
 		// Rust #62390: the painted link under the pointer is highlighted on the
 		// next draw, which this message already triggers.
 		if msg.Action == mousemsg.MouseActionMotion {
