@@ -1905,6 +1905,10 @@ type Options struct {
 	OnReadMCPInventory             func(detail bool) ([]historycell.McpServerStatus, error)
 	OnStartMCPLogin                func(name, environmentID, threadID string) (MCPLoginStart, error)
 	OnListModels                   func(cwd string, provider string, includeHidden bool) ([]codextui.ModelPickerOption, error)
+	// DefaultModelProvider names the configured provider a new thread uses. A
+	// model picked on another provider applies to the current session only
+	// (Rust #63553). Empty disables that distinction.
+	DefaultModelProvider string
 	// StartupConfigWarnings carries the requirement-driven config warnings known
 	// at startup so they coalesce into the startup warnings entry (Rust
 	// config.startup_warnings -> ConfigWarning notifications).
@@ -2731,6 +2735,8 @@ type Model struct {
 	mcpLoginResultsByThread          map[string][]MCPLoginCompletedMsg
 	nextMCPLoginRequestID            uint64
 	onListModels                     func(cwd string, provider string, includeHidden bool) ([]codextui.ModelPickerOption, error)
+	// defaultModelProvider is the configured provider new threads use.
+	defaultModelProvider string
 	nextModelsRequestID              uint64
 	pendingModelsRequestID           uint64
 	nextMCPInventoryRequestID        uint64
@@ -3879,6 +3885,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		activeMCPLoginIDs:                map[string]string{},
 		mcpLoginResultsByThread:          map[string][]MCPLoginCompletedMsg{},
 		onListModels:                     options.OnListModels,
+		defaultModelProvider:             strings.TrimSpace(options.DefaultModelProvider),
 		pendingMCPInventoryMessageIndex:  -1,
 		mcpStartup:                       chatwidget.NewMcpStartupRoundState(),
 		initialMessages:                  options.InitialMessages,

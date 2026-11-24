@@ -163,6 +163,9 @@ type PickerDecision struct {
 	Value           string
 	ReasoningEffort string
 	Scope           string
+	// SessionOnly keeps an alternate-provider model choice on the current
+	// session instead of persisting it as the user default (Rust #63553).
+	SessionOnly bool
 }
 
 type UserInputDecision struct {
@@ -1821,6 +1824,7 @@ func (m *Model) resolveModelPickerModal(modal *modalState, optionID string, canc
 			Value:           modelID,
 			ReasoningEffort: effort,
 			Scope:           string(scopeOption.Scope),
+			SessionOnly:     m.modelSelectionIsSessionOnly(),
 		}, notice, true
 	}
 	if modal.modelReasoning != nil {
@@ -1837,7 +1841,7 @@ func (m *Model) resolveModelPickerModal(modal *modalState, optionID string, canc
 		m.refreshServiceTierCommands()
 		notice := strings.TrimSpace(m.State.RenderSetting("Model", m.State.Model)) + "\n" +
 			strings.TrimSpace(m.State.RenderSetting("Reasoning", m.State.ReasoningEffort))
-		return &PickerDecision{Kind: "model_reasoning", Value: m.State.Model, ReasoningEffort: m.State.ReasoningEffort}, notice, true
+		return &PickerDecision{Kind: "model_reasoning", Value: m.State.Model, ReasoningEffort: m.State.ReasoningEffort, SessionOnly: m.modelSelectionIsSessionOnly()}, notice, true
 	}
 	if modal.modelPicker == nil {
 		return nil, "", true
@@ -1866,7 +1870,7 @@ func (m *Model) resolveModelPickerModal(modal *modalState, optionID string, canc
 	// A manual model change releases any Reserve-switch hold.
 	m.clearRateLimitRecoveryHold()
 	m.refreshServiceTierCommands()
-	return &PickerDecision{Kind: "model", Value: option.ID, ReasoningEffort: m.State.ReasoningEffort}, strings.TrimSpace(m.State.RenderSetting("Model", m.State.Model)), true
+	return &PickerDecision{Kind: "model", Value: option.ID, ReasoningEffort: m.State.ReasoningEffort, SessionOnly: m.modelSelectionIsSessionOnly()}, strings.TrimSpace(m.State.RenderSetting("Model", m.State.Model)), true
 }
 
 func (m *Model) resolveElicitationModal(modal *modalState, optionID string, cancelled bool) (*ElicitationDecision, bool) {

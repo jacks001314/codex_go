@@ -1854,6 +1854,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		WindowsSandboxStartupPrompt: interactiveWindowsSandboxStartupPrompt(root, settings.PermissionRequirements),
 		WindowsSandboxLevel:         interactiveWindowsSandboxLevelForTUI(root),
 		OnSessionAction:             interactiveSessionActionHandler(root),
+		DefaultModelProvider:        interactiveDefaultModelProvider(root),
 		OnListPermissionProfiles:    interactiveLocalListPermissionProfiles(root),
 		OnListModelProviders:        interactiveLocalModelProviderList(root),
 		OnWriteModelProviderConfig:  interactiveLocalModelProviderWriter(root),
@@ -2401,6 +2402,21 @@ func interactiveAccountDisplay(account *auth.Account) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// interactiveDefaultModelProvider resolves the provider a new thread uses
+// (Rust #63553's model_provider_id). The picker keeps a model chosen on any
+// other provider on the current session instead of saving it as the user
+// default.
+func interactiveDefaultModelProvider(root *cli.RootOptions) string {
+	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root))
+	if err != nil || loaded == nil {
+		return ""
+	}
+	if provider := strings.TrimSpace(interactiveStringFromConfig(loaded.Values, "model_provider")); provider != "" {
+		return provider
+	}
+	return modelpkg.OpenAIProviderID
 }
 
 // interactiveOnListModels builds the TUI model-picker catalog fetch callback

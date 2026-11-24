@@ -66,10 +66,12 @@ func ResolveModelSelection(decision *PickerDecision) (ModelSelectionPlan, bool) 
 			return plan, true
 		}
 		plan.ThreadModel = &model
-		plan.Persist = append(plan.Persist, ModelSelectionPersist{
-			Label: modelSelectionPersistLabel,
-			Edits: modelSelectionEdits(model, effort),
-		})
+		if !decision.SessionOnly {
+			plan.Persist = append(plan.Persist, ModelSelectionPersist{
+				Label: modelSelectionPersistLabel,
+				Edits: modelSelectionEdits(model, effort),
+			})
+		}
 		return plan, true
 	case "plan_reasoning_scope":
 		if model == "" {
@@ -80,7 +82,7 @@ func ResolveModelSelection(decision *PickerDecision) (ModelSelectionPlan, bool) 
 			Label: planModeReasoningPersistLabel,
 			Edits: []SettingsEdit{{KeyPath: "plan_mode_reasoning_effort", Value: nullableEffort(effort)}},
 		})
-		if decision.Scope == string(codextui.PlanReasoningScopeAllModes) {
+		if decision.Scope == string(codextui.PlanReasoningScopeAllModes) && !decision.SessionOnly {
 			plan.Persist = append(plan.Persist, ModelSelectionPersist{
 				Label: modelSelectionPersistLabel,
 				Edits: modelSelectionEdits(model, effort),
@@ -104,6 +106,21 @@ func ResolveModelSelection(decision *PickerDecision) (ModelSelectionPlan, bool) 
 	default:
 		return ModelSelectionPlan{}, false
 	}
+}
+
+// modelSelectionIsSessionOnly reports whether the active thread runs on a
+// provider other than the configured default. Rust #63553 applies model choices
+// made on an alternate provider to the current session only.
+func (m *Model) modelSelectionIsSessionOnly() bool {
+	if m == nil || m.State == nil {
+		return false
+	}
+	provider := strings.TrimSpace(m.State.Provider)
+	configured := strings.TrimSpace(m.defaultModelProvider)
+	if provider == "" || configured == "" {
+		return false
+	}
+	return !strings.EqualFold(provider, configured)
 }
 
 // modelSelectionEdits mirrors Rust's build_model_selection_edits: replace the
