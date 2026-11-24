@@ -96,31 +96,79 @@ func (m *Model) rememberModelPickerOptions(provider string, options []codextui.M
 }
 
 // selectModelPickerProvider switches the catalog every picker surface reads to
-// a cached provider catalog (Rust #63553 ModelCatalog::select_provider). An
-// uncached provider keeps the current list until its fetch lands.
+// a provider catalog (Rust #63553 ModelCatalog::select_provider and
+// set_model_provider). Rust dismisses a stale model picker and reads the
+// provider's own list, so an uncached provider must not keep showing the
+// previous provider's models; the refresh flag fetches its catalog next.
 func (m *Model) selectModelPickerProvider(provider string) {
 	if m == nil {
 		return
 	}
-	cached, ok := m.modelPickerOptsByProvider[strings.TrimSpace(provider)]
-	if !ok {
+	provider = strings.TrimSpace(provider)
+	if provider == m.modelPickerProvider {
 		return
 	}
-	m.modelPickerOpts = append([]codextui.ModelPickerOption(nil), cached...)
+	// Until a thread names its provider, the applied catalog is the server
+	// default's unscoped list (the empty cache key). A thread on that same
+	// default only labels the list; every other provider owns a catalog.
+	if m.modelPickerProvider == "" && strings.EqualFold(provider, strings.TrimSpace(m.defaultModelProvider)) {
+		m.modelPickerProvider = provider
+		m.refreshModelPicker()
+		m.refreshServiceTierCommands()
+		return
+	}
+	m.dismissStaleModelPicker()
+	m.modelPickerProvider = provider
+	if cached, ok := m.modelPickerOptsByProvider[provider]; ok {
+		m.modelPickerOpts = append([]codextui.ModelPickerOption(nil), cached...)
+	} else {
+		m.modelPickerOpts = nil
+		m.modelCatalogRefreshPending = true
+	}
 	m.refreshModelPicker()
 	m.refreshServiceTierCommands()
 }
 
-// modelPickerOptionsFor returns the cached catalog for provider, falling back
-// to the last applied catalog while a fresh fetch is pending.
+// dismissStaleModelPicker closes a model picker bound to the previous
+// provider (Rust #63553 dismiss_stale_model_picker). Its rows no longer
+// describe the active thread's provider.
+func (m *Model) dismissStaleModelPicker() {
+	if m == nil || m.modal == nil || m.modal.kind != ModalKindPicker {
+		return
+	}
+	switch m.modal.id {
+	case "model-picker", "model-reasoning-picker", "advanced-reasoning-picker", "plan-reasoning-scope-picker":
+		m.modal = nil
+		m.notice = ""
+	}
+}
+
+// consumeModelCatalogRefresh issues the catalog fetch a provider switch
+// asked for (Rust #63553 refresh_account_scoped_models).
+func (m *Model) consumeModelCatalogRefresh() bubbletea.Cmd {
+	if m == nil || !m.modelCatalogRefreshPending {
+		return nil
+	}
+	m.modelCatalogRefreshPending = false
+	return m.fetchModelsForPicker()
+}
+
+// modelPickerOptionsFor returns the cached catalog for provider. The last
+// applied catalog stands in only for the provider it was read from, so a
+// switch to an uncached provider does not offer another provider's models
+// (Rust #63553 ModelCatalog::models_for).
 func (m *Model) modelPickerOptionsFor(provider string) []codextui.ModelPickerOption {
 	if m == nil {
 		return nil
 	}
-	if cached, ok := m.modelPickerOptsByProvider[strings.TrimSpace(provider)]; ok {
+	provider = strings.TrimSpace(provider)
+	if cached, ok := m.modelPickerOptsByProvider[provider]; ok {
 		return append([]codextui.ModelPickerOption(nil), cached...)
 	}
-	return append([]codextui.ModelPickerOption(nil), m.modelPickerOpts...)
+	if provider == m.modelPickerProvider {
+		return append([]codextui.ModelPickerOption(nil), m.modelPickerOpts...)
+	}
+	return nil
 }
 
 // modelListProvider is the model provider whose catalog the picker should read
@@ -156,6 +204,7 @@ func (m *Model) applyModelsResult(msg ModelsResultMsg) {
 	// provider).
 	if msg.Provider == m.modelListProvider() {
 		m.modelPickerOpts = options
+		m.modelPickerProvider = strings.TrimSpace(msg.Provider)
 		m.refreshModelPicker()
 		m.refreshServiceTierCommands()
 	}

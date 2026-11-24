@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"codex_go/appserver"
 	appserverdaemon "codex_go/appserverdaemon"
@@ -12,6 +14,61 @@ import (
 	"codex_go/model"
 	codextea "codex_go/tui/tea"
 )
+
+// interactiveRemoteDefaultModelProvider resolves the provider a new thread
+// uses on the connected app server (Rust #63553 startup_catalog_provider).
+// Servers from 0.169 answer provider/list with their default provider id;
+// Cloud, older servers, and failed lookups keep the configured provider.
+func interactiveRemoteDefaultModelProvider(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) string {
+	if endpoint == nil || threadParamsModeForEndpoint(endpoint) == ThreadParamsModeCloud {
+		return ""
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	client, err := openRemoteSessionClient(reqCtx, endpoint)
+	if err != nil {
+		return ""
+	}
+	defer client.close()
+	if !remoteServerSupportsProviderCatalog(client.serverVersion) {
+		return ""
+	}
+	var response model.ProviderListResponse
+	if err := remoteSessionRequest(reqCtx, client, appserver.MethodModelProviderList, model.ProviderListParams{}, &response); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(response.DefaultProviderID)
+}
+
+// remoteServerSupportsProviderCatalog reports whether a server advertises
+// modelProvider/list without ignoring the selector (Rust 0.169.0).
+func remoteServerSupportsProviderCatalog(version string) bool {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return false
+	}
+	if index := strings.IndexAny(version, "-+"); index >= 0 {
+		version = version[:index]
+	}
+	parts := strings.Split(version, ".")
+	if len(parts) < 2 {
+		return false
+	}
+	numbers := [3]int{}
+	for i := 0; i < len(parts) && i < len(numbers); i++ {
+		value, err := strconv.Atoi(parts[i])
+		if err != nil || value < 0 {
+			return false
+		}
+		numbers[i] = value
+	}
+	for i, threshold := range [3]int{0, 169, 0} {
+		if numbers[i] != threshold {
+			return numbers[i] > threshold
+		}
+	}
+	return true
+}
 
 // interactiveRemoteModelProviderList browses the connected app server's
 // provider catalog (Rust #59541 app::provider). It opens a short-lived session

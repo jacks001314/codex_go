@@ -2688,6 +2688,12 @@ type Model struct {
 	// alternate provider keeps the default (and every other) catalog available
 	// (Rust #63553 ModelCatalog::models_by_provider).
 	modelPickerOptsByProvider map[string][]codextui.ModelPickerOption
+	// modelPickerProvider names the provider whose catalog modelPickerOpts
+	// holds (Rust #63553 ModelCatalog::provider).
+	modelPickerProvider string
+	// modelCatalogRefreshPending requests a provider-scoped catalog refresh
+	// after a thread switch to a provider without a cached list.
+	modelCatalogRefreshPending bool
 	serviceTierCommands           []bottompane.ServiceTierCommand
 
 	// savedServiceTier is Rust's config.service_tier: the user's persisted
@@ -4524,6 +4530,13 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 			cmd = providerCmd
 		} else {
 			cmd = bubbletea.Batch(cmd, providerCmd)
+		}
+	}
+	if catalogCmd := next.consumeModelCatalogRefresh(); catalogCmd != nil {
+		if cmd == nil {
+			cmd = catalogCmd
+		} else {
+			cmd = bubbletea.Batch(cmd, catalogCmd)
 		}
 	}
 	if replayCmd := next.reconcileApprovalThread(); replayCmd != nil {

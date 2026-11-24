@@ -84,6 +84,9 @@ type remoteAppServerTUIClient struct {
 	codexHome       string
 	platformFamily  string
 	platformOS      string
+	// serverVersion is the connected app server's version from initialize
+	// (Rust #63553 startup_catalog_provider gates provider/list on 0.169).
+	serverVersion string
 	turnCompleted   bool
 	turnInterrupted bool
 	// turnFailed records the completed turn's failed status so the final
@@ -709,6 +712,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		WorktreesEnabled: false,
 		// Rust #43340: the connected server owns named permission profiles.
 		OnListModels:                interactiveRemoteListModels(ctx, endpoint),
+		DefaultModelProvider:        interactiveRemoteDefaultModelProvider(ctx, endpoint),
 		OnListPermissionProfiles:    interactiveRemoteListPermissionProfiles(ctx, endpoint),
 		OnListModelProviders:        interactiveRemoteModelProviderList(ctx, endpoint),
 		OnWriteModelProviderConfig:  interactiveRemoteModelProviderWriter(ctx, endpoint),
@@ -4284,6 +4288,10 @@ func (c *remoteAppServerTUIClient) initialize(ctx context.Context) error {
 	c.codexHome = strings.TrimSpace(response.CodexHome)
 	c.platformFamily = strings.TrimSpace(response.PlatformFamily)
 	c.platformOS = strings.TrimSpace(response.PlatformOS)
+	c.serverVersion = ""
+	if version, err := appserver.ParseAppServerVersionFromUserAgent(response.UserAgent); err == nil {
+		c.serverVersion = strings.TrimSpace(version)
+	}
 	return nil
 }
 
