@@ -43895,13 +43895,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Go 的 openai-docs 资产仍是 Rust 收窄前的版本（与 4980f9585a^ 内容逐字节相同，仅行尾 CRLF）：systemskills/assets/samples/openai-docs/SKILL.md:3 仍是宽口径 description，agents/openai.yaml:3/:6 仍是旧 short_description/default_prompt",
-    "缺：按 748ab55ca7 重 vendor + 保留 :12 的 broad-setup 段落（#59949）+ 行尾改 LF",
-    "plan: update/plan_2026_11_08_tail5.md §4（#59944）"
+    "Batch 185: complete - Rust narrows the bundled openai-docs skill to Codex and ChatGPT Work behavior plus first-time OpenAI API integrations: it skips API questions about an existing integration, action requests, and tasks fully answered by supplied text or data, keeps model migration only for an explicit openai-docs invocation, and replaces the routing workflow with tool/setting checks, product-surface documentation, and changelog/quickstart guidance, with matching display metadata. Go embedded sample now carries the same asset: systemskills/assets/samples/openai-docs/SKILL.md matches codex-rs/skills/src/assets/samples/openai-docs/SKILL.md at the pinned anchor byte for byte (narrowed description, Codex/ChatGPT Work body, changelog and quickstart links, GPT-6.2 migration quickstart, model-selection reference), and agents/openai.yaml reports the narrowed short_description and default_prompt. TestOpenAIDocsSkillIsNarrowedLikeRust installs the system skills and pins the new text while rejecting the old description and routing sections."
    ],
    "kind": "runtime",
    "sha": "4980f9585a0a2dea0cdc4bb0cee4e631b75fcf5c",
-   "status": "partial",
+   "status": "complete",
    "subject": "Narrow openai-docs to product Q&A and first-time API setup (#59944)"
   },
   {
