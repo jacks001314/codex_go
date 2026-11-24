@@ -3316,6 +3316,13 @@ type Model struct {
 	// sidebarReaderSelection is the pointer selection inside that transcript
 	// (Rust #62157 reuses the transcript view's selection in the reader).
 	sidebarReaderSelection sidebarDocumentSelection
+	// sidebarReaderFind is that transcript's Find state (Rust #62157 reuses
+	// the transcript view's search).
+	sidebarReaderFind sidebarDocumentFind
+	// sidebarReaderFindScroll is where the reader sat when Find opened, so
+	// cancelling a query restores it (Rust Search::saved_position).
+	sidebarReaderFindScroll      int
+	sidebarReaderFindScrollSaved bool
 	// paneMotion drives the sidebar open/close slide (Rust #59739).
 	paneMotion paneMotionState
 	// sidebarClosingLines retains the last settled right column so a closing

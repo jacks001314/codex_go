@@ -641,18 +641,33 @@ func watchOnlySidePaneFrame(height int) sidePaneFrame {
 // composeWatchOnlySidePane paints a read-only subagent transcript without the
 // composer, draft preview, or status rows a side chat reserves.
 func (m *Model) composeWatchOnlySidePane(content string, width int, height int, first int) ([]string, int, int) {
-	frame := watchOnlySidePaneFrame(height)
-	lines, clamped, maxFirst := sidePaneWindow(content, frame.transcript, first)
+	lines, clamped, maxFirst := sidePaneWindow(content, m.sidebarReaderTranscriptRows(height), first)
 	rows := make([]string, 0, height)
 	// Rust paint_agent_reader: the reader's first row advertises Escape's
 	// destination, so the transcript below it keeps no misleading back hint.
 	rows = append(rows, "\x1b[2m"+m.watchOnlyReaderHeading()+"\x1b[0m")
+	matchRow := -1
+	if row, ok := m.sidebarReaderFind.selected(); ok {
+		matchRow = row
+	}
 	for index, line := range lines {
+		row := clamped + index
 		// A pointer drag selects cells in the reader's own transcript.
-		if from, to, ok := m.sidebarReaderSelection.spanFor(clamped+index, codextui.DisplayWidth(line)); ok {
+		if from, to, ok := m.sidebarReaderSelection.spanFor(row, codextui.DisplayWidth(line)); ok {
 			line = highlightDisplayCells(line, from, to)
 		}
+		if row == matchRow {
+			line = reverseVideoTranscriptLine(line)
+		}
 		rows = append(rows, line)
+	}
+	if m.sidebarReaderFind.active() && height > 1 {
+		// Rust paints the Find bar in the row the hints normally use, at the
+		// bottom of the reader column.
+		for len(rows) < height-1 {
+			rows = append(rows, "")
+		}
+		rows = append(rows, "\x1b[2m"+m.sidebarReaderFind.barLine(width)+"\x1b[0m")
 	}
 	for len(rows) < height {
 		rows = append(rows, "")

@@ -179,6 +179,15 @@ func (m *Model) updateSidebarReaderKey(msg keymsg.KeyMsg) (bubbletea.Cmd, bool) 
 		return nil, false
 	}
 	page := max(m.transcript.Height-1, 1)
+	if m.sidebarReaderFind.active() {
+		if cmd, handled := m.updateSidebarReaderFindKey(msg); handled {
+			return cmd, true
+		}
+	} else if m.keyMatches("global", "find_transcript", keySpecFromKeyMsg(msg)) ||
+		m.keyMatches("pager", "find", keySpecFromKeyMsg(msg)) {
+		m.beginSidebarReaderFind()
+		return nil, true
+	}
 	switch msg.Type {
 	case keymsg.KeyEsc:
 		// Rust ends the transcript selection before the reader leaves.
@@ -221,13 +230,229 @@ func (m *Model) sidebarReaderLines(side *activeSideConversation) ([]string, int,
 		// The pane's tab strip costs the reader column one row.
 		height--
 	}
-	frame := watchOnlySidePaneFrame(height)
 	first := sidePaneTail
 	if side.SideInteractionSaved {
 		first = side.SideScroll
 	}
-	lines, start, _ := sidePaneWindow(content, frame.transcript, first)
+	lines, start, _ := sidePaneWindow(content, m.sidebarReaderTranscriptRows(height), first)
 	return lines, start, rightWidth
+}
+
+// sidebarReaderTranscriptLines is the reader's whole transcript at the current
+// pane width, so find scans every row instead of only the painted window.
+func (m *Model) sidebarReaderTranscriptLines(side *activeSideConversation) ([]string, int, int) {
+	if m == nil || side == nil || !watchOnlySidePane(side) {
+		return nil, 0, 0
+	}
+	_, rightWidth, _, ok := m.sidePaneLayout(firstPositive(m.width, defaultWidth))
+	if !ok || rightWidth <= 0 {
+		return nil, 0, 0
+	}
+	cache := &transcriptMessageCache{}
+	content := m.renderSidePaneContent(cache, side.SideThreadID, side.SideMessages, rightWidth)
+	height := max(m.transcript.Height, 1)
+	if m.sidebarTabStripVisible() && height > 1 {
+		height--
+	}
+	return strings.Split(content, "\n"), m.sidebarReaderTranscriptRows(height), rightWidth
+}
+
+// sidebarReaderTranscriptRows is the reader's transcript height inside a pane
+// of the given height: the heading row, plus the Find bar while it is open.
+func (m *Model) sidebarReaderTranscriptRows(height int) int {
+	rows := watchOnlySidePaneFrame(height).transcript
+	if m != nil && m.sidebarReaderFind.active() && rows > 1 {
+		rows--
+	}
+	return rows
+}
+
+// beginSidebarReaderFind opens the query editor over the reader transcript
+// (Rust TranscriptView::search through the docked agent reader).
+func (m *Model) beginSidebarReaderFind() {
+	if m == nil {
+		return
+	}
+	if !m.sidebarReaderFind.active() && m.activeSide != nil {
+		// Rust's Search::saved_position restores the view when a query is
+		// cancelled from the editor.
+		m.sidebarReaderFindScroll = m.activeSide.SideScroll
+		m.sidebarReaderFindScrollSaved = true
+	}
+	m.sidebarReaderFind.editing = true
+	m.sidebarReaderFind.exhausted = false
+	m.sidebarReaderSelection.clear()
+	if m.sidebarReaderFind.query != "" {
+		m.refreshSidebarReaderFindMatches(false)
+	}
+	m.refreshTranscript()
+}
+
+func (m *Model) cancelSidebarReaderFind() {
+	if m == nil {
+		return
+	}
+	wasEditing := m.sidebarReaderFind.editing
+	side := m.activeSide
+	m.sidebarReaderFind = sidebarDocumentFind{}
+	restore := 0
+	hasRestore := false
+	if side != nil {
+		lines, rows, _ := m.sidebarReaderTranscriptLines(side)
+		maxFirst := max(len(lines)-rows, 0)
+		switch {
+		case wasEditing && m.sidebarReaderFindScrollSaved:
+			restore = m.sidebarReaderFindScroll
+			hasRestore = true
+		case !wasEditing:
+			// Rust's reading-mode Escape goes back to the newest row.
+			restore = maxFirst
+			hasRestore = true
+		}
+		if hasRestore {
+			side.SideScroll = clampViewportOffset(restore, 0, maxFirst)
+			side.SideInteractionSaved = true
+			side.SideViewMax = maxFirst
+		}
+	}
+	m.sidebarReaderFindScrollSaved = false
+	m.refreshTranscript()
+}
+
+// refreshSidebarReaderFindMatches rescans the whole reader transcript.
+func (m *Model) refreshSidebarReaderFindMatches(resetSelection bool) {
+	if m == nil {
+		return
+	}
+	f := &m.sidebarReaderFind
+	f.matches = nil
+	lines, rows, _ := m.sidebarReaderTranscriptLines(m.activeSide)
+	if f.query == "" || len(lines) == 0 {
+		f.index = -1
+		return
+	}
+	folded := strings.ToLower(f.query)
+	for row, line := range lines {
+		if strings.Contains(strings.ToLower(ansi.Strip(line)), folded) {
+			f.matches = append(f.matches, row)
+		}
+	}
+	if len(f.matches) == 0 {
+		f.index = -1
+		return
+	}
+	if resetSelection || f.index < 0 || f.index >= len(f.matches) {
+		f.index = 0
+	}
+	m.revealSidebarReaderRow(m.activeSide, len(lines), rows, f.matches[f.index])
+}
+
+// stepSidebarReaderFind moves to the older or newer match without wrapping.
+func (m *Model) stepSidebarReaderFind(delta int) bool {
+	if m == nil || len(m.sidebarReaderFind.matches) == 0 {
+		return false
+	}
+	f := &m.sidebarReaderFind
+	next := f.index + delta
+	if next < 0 || next >= len(f.matches) {
+		f.exhausted = true
+		m.refreshTranscript()
+		return false
+	}
+	f.index = next
+	f.exhausted = false
+	lines, rows, _ := m.sidebarReaderTranscriptLines(m.activeSide)
+	m.revealSidebarReaderRow(m.activeSide, len(lines), rows, f.matches[next])
+	m.refreshTranscript()
+	return true
+}
+
+// revealSidebarReaderRow scrolls the reader window until row is visible.
+func (m *Model) revealSidebarReaderRow(side *activeSideConversation, totalLines int, rows int, row int) {
+	if m == nil || side == nil || row < 0 {
+		return
+	}
+	maxFirst := max(totalLines-rows, 0)
+	offset := &side.SideScroll
+	if !side.SideInteractionSaved {
+		*offset = maxFirst
+		side.SideInteractionSaved = true
+	}
+	if row < *offset {
+		*offset = row
+	}
+	if row >= *offset+rows {
+		*offset = row - rows + 1
+	}
+	*offset = clampViewportOffset(*offset, 0, maxFirst)
+	side.SideViewMax = maxFirst
+}
+
+// updateSidebarReaderFindKey owns the reader's Find keys. In reading mode the
+// pager keys still reach the transcript, matching Rust's active search.
+func (m *Model) updateSidebarReaderFindKey(msg keymsg.KeyMsg) (bubbletea.Cmd, bool) {
+	f := &m.sidebarReaderFind
+	if m == nil || !f.active() {
+		return nil, false
+	}
+	switch msg.Type {
+	case keymsg.KeyEsc, keymsg.KeyCtrlC:
+		m.cancelSidebarReaderFind()
+		return nil, true
+	case keymsg.KeyEnter:
+		if f.query != "" && len(f.matches) > 0 {
+			f.editing = false
+			f.exhausted = false
+			m.refreshTranscript()
+		}
+		return nil, true
+	case keymsg.KeyCtrlP:
+		if !f.editing {
+			m.stepSidebarReaderFind(-1)
+		}
+		return nil, true
+	case keymsg.KeyCtrlN:
+		if !f.editing {
+			m.stepSidebarReaderFind(1)
+		}
+		return nil, true
+	}
+	if !f.editing {
+		if m.keyMatches("global", "find_transcript", keySpecFromKeyMsg(msg)) ||
+			m.keyMatches("pager", "find", keySpecFromKeyMsg(msg)) {
+			m.beginSidebarReaderFind()
+			return nil, true
+		}
+		return nil, false
+	}
+	switch msg.Type {
+	case keymsg.KeyBackspace:
+		if f.query == "" {
+			return nil, true
+		}
+		runes := []rune(f.query)
+		f.query = string(runes[:len(runes)-1])
+		f.truncated = false
+	case keymsg.KeyRunes, keymsg.KeySpace:
+		text := string(msg.Runes)
+		if msg.Type == keymsg.KeySpace {
+			text = " "
+		}
+		if text == "" {
+			return nil, true
+		}
+		if len(f.query)+len(text) > mainFindQueryBytes {
+			f.truncated = true
+			return nil, true
+		}
+		f.query += text
+		f.exhausted = false
+	default:
+		return nil, true
+	}
+	m.refreshSidebarReaderFindMatches(true)
+	m.refreshTranscript()
+	return nil, true
 }
 
 // handleSidebarReaderMouse drags a text selection inside the watch-only
