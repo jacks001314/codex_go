@@ -19,6 +19,10 @@ type RealtimeHandoffMetadata struct {
 	HandoffID         string              `json:"handoff_id"`
 	Mode              RealtimeHandoffMode `json:"mode"`
 	SourceEventIDs    []string            `json:"source_event_ids"`
+	// TurnID is Go's carrier for the turn the handoff entered. Rust reads it
+	// from the response item's metadata passthrough; Go records it beside the
+	// provenance when the host assigns the turn.
+	TurnID string `json:"turn_id,omitempty"`
 }
 
 // RealtimeSessionInputMetadata is Rust's
@@ -124,7 +128,11 @@ func RealtimeItemFromResponseItem(payload json.RawMessage, metadata json.RawMess
 	switch {
 	case provenance.Handoff != nil:
 		handoff := provenance.Handoff
-		if message.TurnID == "" || !validHandoffMode(handoff.Mode) {
+		turnID := message.TurnID
+		if turnID == "" {
+			turnID = strings.TrimSpace(handoff.TurnID)
+		}
+		if turnID == "" || !validHandoffMode(handoff.Mode) {
 			return nil, false
 		}
 		return &RealtimeItem{
@@ -134,7 +142,7 @@ func RealtimeItemFromResponseItem(payload json.RawMessage, metadata json.RawMess
 			Content: RealtimeItemContent{
 				Kind:         RealtimeItemKindTurnInputAccepted,
 				HandoffID:    handoff.HandoffID,
-				TurnID:       message.TurnID,
+				TurnID:       turnID,
 				HandoffMode:  handoff.Mode,
 				SourceEvents: append([]string(nil), handoff.SourceEventIDs...),
 				InputItemID:  message.ID,

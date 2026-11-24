@@ -6541,6 +6541,62 @@ func (r *RuntimeRouter) runtimeUserPromptSessionItem(turnID string, params *turn
 	return runtimeUserPromptSessionItemWithPreparedContent(turnID, params, createdAt, prepared)
 }
 
+// withRealtimeHandoffTurn records the turn the accepted handoff entered. Go's
+// user response items do not carry the metadata passthrough Rust reads the turn
+// id from, so the provenance keeps it for the receipt projection.
+func withRealtimeHandoffTurn(provenance map[string]any, turnID string) map[string]any {
+	if len(provenance) == 0 || strings.TrimSpace(turnID) == "" {
+		return provenance
+	}
+	copied := make(map[string]any, len(provenance)+1)
+	for key, value := range provenance {
+		copied[key] = value
+	}
+	copied["turn_id"] = strings.TrimSpace(turnID)
+	return copied
+}
+
+// attachRealtimeProvenance stores host-only realtime provenance in the user
+// message's harness metadata, the sidecar Rust #62251 reads back to project a
+// turnInputAccepted receipt (the message itself keeps the only text copy).
+func attachRealtimeProvenance(data map[string]any, provenance map[string]any) map[string]any {
+	return attachRealtimeProvenanceMember(data, "realtime_handoff", provenance)
+}
+
+// attachRealtimeProvenanceMember stores one realtime provenance member (a
+// handoff or a saved transcript chunk) beside a user message.
+func attachRealtimeProvenanceMember(data map[string]any, member string, provenance map[string]any) map[string]any {
+	if len(provenance) == 0 || strings.TrimSpace(member) == "" {
+		return data
+	}
+	if data == nil {
+		data = map[string]any{}
+	}
+	harness := map[string]any{}
+	switch existing := data["harness_metadata"].(type) {
+	case map[string]any:
+		for key, value := range existing {
+			harness[key] = value
+		}
+	case json.RawMessage:
+		if len(existing) > 0 {
+			var decoded map[string]any
+			if json.Unmarshal(existing, &decoded) == nil {
+				for key, value := range decoded {
+					harness[key] = value
+				}
+			}
+		}
+	}
+	harness[member] = provenance
+	encoded, err := json.Marshal(harness)
+	if err != nil {
+		return data
+	}
+	data["harness_metadata"] = json.RawMessage(encoded)
+	return data
+}
+
 func runtimeUserPromptSessionItemWithPreparedContent(turnID string, params *turn.TurnStartParams, createdAt time.Time, prepared []map[string]any) (session.Item, bool) {
 	prompt := promptFromTurnStart(params)
 	content := sessionContentFromTurnStart(params)
@@ -6558,6 +6614,10 @@ func runtimeUserPromptSessionItemWithPreparedContent(turnID string, params *turn
 	if params != nil {
 		clientID = params.ClientUserMessageID
 	}
+	data := userPromptThreadItemData(dataContent)
+	if params != nil {
+		data = attachRealtimeProvenance(data, withRealtimeHandoffTurn(params.RealtimeHandoffProvenance, turnID))
+	}
 	return session.Item{
 		ID:             runtimeUserPromptSessionItemID(turnID),
 		ResponseItemID: userInputResponseItemID(userItemUUIDFromTurnStart(params)),
@@ -6566,7 +6626,7 @@ func runtimeUserPromptSessionItemWithPreparedContent(turnID string, params *turn
 		Text:           prompt,
 		Content:        content,
 		CreatedAt:      createdAt,
-		Data:           userPromptThreadItemData(dataContent),
+		Data:           data,
 		Metadata: appTurnMetadata(turnID, map[string]any{
 			"clientId":            clientID,
 			"client_user_message": clientID,
@@ -14724,6 +14784,10 @@ func sessionItemFromTurnSteer(params *turn.TurnSteerParams) (session.Item, bool)
 	if len(params.AdditionalContext) > 0 {
 		metadata["additionalContext"] = additionalContextMetadata(params.AdditionalContext)
 	}
+	data := runtimeUserInputThreadItemData(params.Prompt, params.Input)
+	if params.RealtimeHandoffProvenance != nil {
+		data = attachRealtimeProvenance(data, withRealtimeHandoffTurn(params.RealtimeHandoffProvenance, params.ExpectedTurnID))
+	}
 	return session.Item{
 		ID:             itemID,
 		ResponseItemID: responseItemID,
@@ -14732,7 +14796,7 @@ func sessionItemFromTurnSteer(params *turn.TurnSteerParams) (session.Item, bool)
 		Text:           text,
 		Content:        content,
 		CreatedAt:      now,
-		Data:           runtimeUserInputThreadItemData(params.Prompt, params.Input),
+		Data:           data,
 		Metadata:       metadata,
 	}, true
 }

@@ -333,6 +333,11 @@ type TurnStartParams struct {
 	// completion callback (Rust #59455). It never enters model input, the
 	// app-server wire, or persisted history.
 	UserInputExtensionData map[string]any `json:"-"`
+	// RealtimeHandoffProvenance is the host-only realtime provenance of the input
+	// this turn accepts (Rust #62251 CodexHarnessMetadata::realtime_handoff). It is
+	// persisted beside the model user message so a receipt can be derived later,
+	// and never crosses the app-server wire.
+	RealtimeHandoffProvenance map[string]any `json:"-"`
 	// HookEncryptedContexts carries ciphertext a synchronous MCP SessionStart
 	// hook returned. Host-only: it reaches the model as standalone encrypted
 	// function_call_output items and never crosses the app-server wire
@@ -620,8 +625,12 @@ type TurnSteerParams struct {
 	// UserInputExtensionData is host-only data delivered with this steer's
 	// user-message completion (Rust #59455). It is never model-visible or
 	// persisted.
-	UserInputExtensionData map[string]any    `json:"-"`
-	ResponsesAPIMetadata   map[string]string `json:"responsesapiClientMetadata,omitempty"`
+	UserInputExtensionData map[string]any `json:"-"`
+	// RealtimeHandoffProvenance is the host-only realtime provenance of the input
+	// this steer accepts (Rust #62251 CodexHarnessMetadata::realtime_handoff). It
+	// is persisted beside the model user message, never on the wire.
+	RealtimeHandoffProvenance map[string]any    `json:"-"`
+	ResponsesAPIMetadata      map[string]string `json:"responsesapiClientMetadata,omitempty"`
 	// ResponsesAPIMetadataPatch adds or overwrites individual client
 	// metadata entries without replacing the map. It is applied after
 	// ResponsesAPIMetadata when both are supplied (Rust #54053).

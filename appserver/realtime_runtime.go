@@ -784,7 +784,7 @@ func (r *RuntimeRouter) handleRealtimeEvent(threadID string, event realtime.Even
 	if len(event.CompletedTranscript) > 0 {
 		text := wrapRealtimeDelegation("", formatRealtimeTranscript(event.CompletedTranscript))
 		if text != "" {
-			if _, err := r.recordRealtimeTranscriptMessage(threadID, text, realtimeTranscriptChunkKind, "transcript_delta"); err != nil {
+			if _, err := r.recordRealtimeTranscriptMessage(threadID, text, realtimeTranscriptChunkKind, "transcript_delta", event.RealtimeSessionID, realtimeEventSourceIDs(event)); err != nil {
 				return
 			}
 		}
@@ -814,15 +814,17 @@ func (r *RuntimeRouter) handleRealtimeEvent(threadID string, event realtime.Even
 	}
 	if active := r.activeRuntimeTurnSnapshot(threadID); active != nil {
 		_, _ = r.handleTurnSteer(requestWithInternalParams(MethodTurnSteer, turn.TurnSteerParams{
-			ThreadID:       threadID,
-			ExpectedTurnID: active.ID,
-			Prompt:         delegation,
+			ThreadID:                  threadID,
+			ExpectedTurnID:            active.ID,
+			Prompt:                    delegation,
+			RealtimeHandoffProvenance: r.realtimeHandoffProvenance(threadID, event, realtime.RealtimeHandoffModeSteer),
 		}))
 		return
 	}
 	_, _ = r.handleTurnStart(requestWithInternalParams(MethodTurnStart, turn.TurnStartParams{
-		ThreadID: threadID,
-		Prompt:   delegation,
+		ThreadID:                  threadID,
+		Prompt:                    delegation,
+		RealtimeHandoffProvenance: r.realtimeHandoffProvenance(threadID, event, realtime.RealtimeHandoffModeStart),
 	}))
 }
 
@@ -846,14 +848,14 @@ func (r *RuntimeRouter) recordRealtimeTranscriptTail(threadID string, event real
 	if text == "" {
 		return
 	}
-	_, _ = r.recordRealtimeTranscriptMessage(threadID, text, realtimeTranscriptTailKind, "transcript_tail_flush")
+	_, _ = r.recordRealtimeTranscriptMessage(threadID, text, realtimeTranscriptTailKind, "transcript_tail_flush", event.RealtimeSessionID, nil)
 }
 
 // recordRealtimeTranscriptMessage persists one realtime transcript message. A
 // running turn absorbs the message; when the thread is idle the message is
 // recorded under its own completed history turn, which keeps the transcript
 // visible to the next text turn immediately.
-func (r *RuntimeRouter) recordRealtimeTranscriptMessage(threadID string, text string, kind string, source string) (*session.Item, error) {
+func (r *RuntimeRouter) recordRealtimeTranscriptMessage(threadID string, text string, kind string, source string, sessionID string, sourceEventIDs []string) (*session.Item, error) {
 	if !r.hasRuntimeThreadStore() || text == "" {
 		return nil, nil
 	}
@@ -869,16 +871,26 @@ func (r *RuntimeRouter) recordRealtimeTranscriptMessage(threadID string, text st
 		turnID = "realtime-transcript-" + safeIdentifier(fmt.Sprintf("%d", now.UnixNano()))
 		_ = r.appendRuntimeTurnStarted(threadID, turnID, turnID, now)
 	}
+	itemID := "user-realtime-transcript-" + safeIdentifier(fmt.Sprintf("%d", now.UnixNano()))
 	item := session.Item{
-		ID:        "user-realtime-transcript-" + safeIdentifier(fmt.Sprintf("%d", now.UnixNano())),
-		Type:      "message",
-		Role:      "user",
-		Text:      text,
-		CreatedAt: now,
+		ID: itemID,
+		// The Responses identity lets a derived receipt name the saved input
+		// (Rust #62251 input_item_id); the display id stays the thread item id.
+		ResponseItemID: userInputResponseItemID(""),
+		Type:           "message",
+		Role:           "user",
+		Text:           text,
+		CreatedAt:      now,
 		Metadata: appTurnMetadata(turnID, map[string]any{
 			"kind":   kind,
 			"source": source,
 		}),
+	}
+	// Rust #62251 keeps the text on this model message and derives the
+	// sessionInputSaved(chunk) receipt from its provenance; a tail flush has no
+	// provenance because it closes the session instead of saving a chunk.
+	if kind == realtimeTranscriptChunkKind {
+		item.Data = attachRealtimeProvenanceMember(nil, "realtime_session_input", r.realtimeSessionInputProvenance(threadID, item.ID, sessionID, sourceEventIDs, now))
 	}
 	if _, err := r.runtimeAppendItem(session.ThreadID(threadID), item); err != nil {
 		if recordingTurn {
@@ -904,6 +916,59 @@ func (r *RuntimeRouter) recordRealtimeTranscriptMessage(threadID string, text st
 		_ = r.appendRuntimeTurnComplete(threadID, turnID, turnID, now, 0)
 	}
 	return &item, nil
+}
+
+// realtimeEventSourceIDs lists the realtime frames one event names, used as
+// provenance for the receipt derived from the message it saves.
+func realtimeEventSourceIDs(event realtime.Event) []string {
+	id := strings.TrimSpace(event.ItemID)
+	if id == "" {
+		return nil
+	}
+	return []string{id}
+}
+
+// realtimeSessionInputProvenance describes the transcript chunk saved as an
+// ordinary user message (Rust #62251 RealtimeSessionInputMetadata).
+func (r *RuntimeRouter) realtimeSessionInputProvenance(threadID string, itemID string, sessionID string, sourceEventIDs []string, now time.Time) map[string]any {
+	resolved := strings.TrimSpace(sessionID)
+	if resolved == "" && r.services.Realtime != nil {
+		resolved = r.requireRealtime().ActiveRealtimeSessionID(threadID)
+	}
+	sources := append([]string{}, sourceEventIDs...)
+	if sources == nil {
+		sources = []string{}
+	}
+	return map[string]any{
+		"event_id":            itemID,
+		"realtime_session_id": resolved,
+		"observed_at_ms":      now.UTC().UnixMilli(),
+		"source_event_ids":    sources,
+	}
+}
+
+// realtimeHandoffProvenance describes the accepted handoff that enters a turn,
+// so the turn's user message carries the receipt facts (Rust #62251
+// RealtimeHandoffMetadata).
+func (r *RuntimeRouter) realtimeHandoffProvenance(threadID string, event realtime.Event, mode realtime.RealtimeHandoffMode) map[string]any {
+	now := runtimeRouterNow(r).UTC()
+	eventID := "realtime-handoff-" + safeIdentifier(firstNonEmpty(strings.TrimSpace(event.HandoffID), strings.TrimSpace(event.ItemID))) + "-" + safeIdentifier(fmt.Sprintf("%d", now.UnixNano()))
+	sessionID := strings.TrimSpace(event.RealtimeSessionID)
+	if sessionID == "" && r.services.Realtime != nil {
+		sessionID = r.requireRealtime().ActiveRealtimeSessionID(threadID)
+	}
+	sources := realtimeEventSourceIDs(event)
+	if sources == nil {
+		sources = []string{}
+	}
+	return map[string]any{
+		"event_id":            eventID,
+		"realtime_session_id": sessionID,
+		"observed_at_ms":      now.UnixMilli(),
+		"handoff_id":          strings.TrimSpace(event.HandoffID),
+		"mode":                string(mode),
+		"source_event_ids":    sources,
+	}
 }
 
 // realtimeTranscriptTailText renders the tail entries as the plain transcript
