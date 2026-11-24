@@ -4080,6 +4080,70 @@ type EnvironmentConnectionNotification struct {
 // entry; a slug the catalog does not know still resolves, with
 // UsedFallbackModelMetadata set, which is exactly the case a fallback warning
 // explains.
+// selectedModelInfoFromCatalogModel maps a resolved catalog entry onto the
+// thread wire shape. A nil entry keeps the bundled lookup so older call paths
+// behave as before (Rust #59987 resolves the entry from the thread's catalog).
+func selectedModelInfoFromCatalogModel(modelID string, catalog *model.CatalogModel) *SelectedModelInfo {
+	if catalog == nil {
+		return selectedModelInfoForModel(modelID)
+	}
+	info := catalog.Model
+	return &SelectedModelInfo{
+		Slug:                      firstNonEmpty(strings.TrimSpace(info.Slug), strings.TrimSpace(modelID)),
+		DisplayName:               info.DisplayName,
+		DefaultReasoningLevel:     info.DefaultReasoningLevel,
+		UsedFallbackModelMetadata: info.UsedFallbackModelMetadata,
+		Origin:                    string(catalog.Origin),
+	}
+}
+
+// selectedModelInfoFromRecord prefers the catalog entry resolved when the
+// thread started (Rust #59987 reports the thread's own catalog on every read)
+// and falls back to the bundled catalog for older records or a model that
+// changed after start.
+func selectedModelInfoFromRecord(record *session.Record) *SelectedModelInfo {
+	if record == nil {
+		return nil
+	}
+	modelID := strings.TrimSpace(record.Metadata.Model)
+	if modelID == "" {
+		return nil
+	}
+	if raw, ok := record.Metadata.Extra["selected_model_info"]; ok && raw != nil {
+		if info := decodeSelectedModelInfo(raw); info != nil &&
+			strings.EqualFold(strings.TrimSpace(info.Slug), modelID) {
+			return info
+		}
+	}
+	return selectedModelInfoForModel(modelID)
+}
+
+func decodeSelectedModelInfo(raw any) *SelectedModelInfo {
+	switch value := raw.(type) {
+	case *SelectedModelInfo:
+		if value == nil {
+			return nil
+		}
+		cloned := *value
+		return &cloned
+	case SelectedModelInfo:
+		cloned := value
+		return &cloned
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var info SelectedModelInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		return nil
+	}
+	if strings.TrimSpace(info.Slug) == "" {
+		return nil
+	}
+	return &info
+}
+
 func selectedModelInfoForModel(slug string) *SelectedModelInfo {
 	slug = strings.TrimSpace(slug)
 	if slug == "" {
@@ -4144,7 +4208,7 @@ func BuildThread(record *session.Record, path string, includeTurns bool) *Thread
 		HistoryMode:                        historyMode,
 		ModelProvider:                      modelProvider,
 		Model:                              stringPtrIfNotEmpty(record.Metadata.Model),
-		SelectedModelInfo:                  selectedModelInfoForModel(record.Metadata.Model),
+		SelectedModelInfo:                  selectedModelInfoFromRecord(record),
 		ReasoningEffort:                    reasoningEffortFromRecord(record),
 		CreatedAt:                          unixOrZero(record.CreatedAt),
 		UpdatedAt:                          unixOrZero(record.UpdatedAt),

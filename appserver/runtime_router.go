@@ -7150,19 +7150,7 @@ func (r *RuntimeRouter) applyThreadStartConfigSnapshot(response *ThreadStartResp
 	modelID := firstNonEmpty(strings.TrimSpace(params.Model), stringConfigValue(cfg, "model"))
 	providerID := firstNonEmpty(strings.TrimSpace(params.ModelProvider), stringConfigValue(cfg, "model_provider"), stringConfigValue(cfg, "modelProvider"), model.OpenAIProviderID)
 	originator := r.threadStartOriginator(&params, request)
-	if modelID == "" && threadStartProviderHasExplicitCatalog(cfg, providerID) {
-		presets := r.requireModels().PresetsForOriginator(model.RefreshOnline, originator)
-		for _, preset := range presets {
-			if preset.IsDefault {
-				modelID = preset.Model
-				break
-			}
-		}
-		if modelID == "" && len(presets) > 0 {
-			modelID = presets[0].Model
-		}
-	}
-	modelID = threadStartProviderFallbackModel(modelID, providerID, params.AllowProviderModelFallback)
+	modelID, catalogModel := r.resolveThreadStartModel(cfg, &params, originator, modelID, providerID)
 	reasoningEffort := firstNonEmpty(stringConfigValue(cfg, "model_reasoning_effort"), stringConfigValue(cfg, "modelReasoningEffort"))
 	serviceTier := r.threadStartServiceTier(cfg, &params, modelID)
 	selectedServiceTier := r.threadStartSelectedServiceTier(cfg, &params)
@@ -7174,10 +7162,10 @@ func (r *RuntimeRouter) applyThreadStartConfigSnapshot(response *ThreadStartResp
 	if modelID != "" {
 		response.Model = modelID
 		response.Thread.Model = stringPtrIfNotEmpty(modelID)
-		// Rust #59958: the start response carries the catalog entry behind the
-		// model it just resolved, so it matches thread/read instead of exposing
-		// the persisted value it was built from.
-		response.Thread.SelectedModelInfo = selectedModelInfoForModel(modelID)
+		// Rust #59958/#59987: the start response carries the catalog entry behind
+		// the model it just resolved, so it matches thread/read instead of
+		// exposing the persisted value it was built from.
+		response.Thread.SelectedModelInfo = selectedModelInfoFromCatalogModel(modelID, catalogModel)
 	}
 	if providerID != "" {
 		response.ModelProvider = providerID
@@ -7202,6 +7190,13 @@ func (r *RuntimeRouter) applyThreadStartConfigSnapshot(response *ThreadStartResp
 	}
 	if providerID != "" {
 		record.Metadata.ModelProvider = providerID
+	}
+	if modelID != "" && catalogModel != nil {
+		// Keep the resolved catalog entry with the thread so thread/read and a
+		// cold resume report the same metadata the start response delivered
+		// (Rust #59987 resolves it from the thread's catalog on every read).
+		record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
+		record.Metadata.Extra["selected_model_info"] = selectedModelInfoFromCatalogModel(modelID, catalogModel)
 	}
 	record.Metadata.ServiceTier = serviceTier
 	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
@@ -7712,6 +7707,75 @@ func appendProjectTrustLevel(codexHome string, trustTarget string) error {
 	}
 	body += fmt.Sprintf("[projects.%q]\ntrust_level = \"trusted\"\n", filepath.Clean(trustTarget))
 	return os.WriteFile(path, []byte(body), 0o600)
+}
+
+// resolveThreadStartModel mirrors Rust #59987's resolve_startup_model: the
+// thread start model and its catalog entry come from the same catalog,
+// configuration overrides and provider fallback the started thread will use,
+// so the start response, the persisted record and thread/read agree.
+func (r *RuntimeRouter) resolveThreadStartModel(cfg *config.Config, params *ThreadStartParams, originator string, modelID string, providerID string) (string, *model.CatalogModel) {
+	allowFallback := params != nil && params.AllowProviderModelFallback
+	if model.IsBedrockProviderID(strings.TrimSpace(providerID)) {
+		// Rust #38470/#59987: the Bedrock provider resolves both the slug and
+		// its entry from the provider's own static catalog.
+		manager := model.NewStaticModelsManager(model.AmazonBedrockCatalogForProviderID(providerID))
+		modelID = manager.GetDefaultModel(modelID, allowFallback, model.RefreshOffline)
+		if strings.TrimSpace(modelID) == "" {
+			return modelID, nil
+		}
+		info := manager.GetCatalogModel(modelID, modelConfigForAppTurn(cfg))
+		return modelID, &info
+	}
+	// Only a catalog the host can trust decides the slug: the configured model
+	// catalog or a provider that advertises its own catalog. Providers without
+	// one keep the requested slug and defer the default to the turn layer, as
+	// Go did before Rust #59987.
+	configuredCatalog := model.ModelsCatalogFromConfigValues(configValues(cfg))
+	explicitProviderCatalog := threadStartProviderHasExplicitCatalog(cfg, providerID)
+	if configuredCatalog != nil || explicitProviderCatalog {
+		if manager := r.threadStartModelsManager(cfg, originator); manager != nil {
+			if resolved := strings.TrimSpace(manager.GetDefaultModel(modelID, allowFallback, model.RefreshOnlineIfUncached)); resolved != "" {
+				modelID = resolved
+			}
+			if strings.TrimSpace(modelID) == "" {
+				return modelID, nil
+			}
+			info := manager.GetCatalogModel(modelID, modelConfigForAppTurn(cfg))
+			return modelID, &info
+		}
+		if strings.TrimSpace(modelID) == "" {
+			presets := r.requireModels().PresetsForOriginator(model.RefreshOnline, originator)
+			for _, preset := range presets {
+				if preset.IsDefault {
+					modelID = preset.Model
+					break
+				}
+			}
+			if strings.TrimSpace(modelID) == "" && len(presets) > 0 {
+				modelID = presets[0].Model
+			}
+		}
+	}
+	// The static provider catalog (Bedrock) resolved its own fallback above; a
+	// provider without a trusted catalog keeps the requested slug here.
+	modelID = threadStartProviderFallbackModel(modelID, providerID, allowFallback)
+	return modelID, nil
+}
+
+// threadStartModelsManager resolves the catalog a thread uses on start or cold
+// resume: a configured model catalog, the provider-scoped manager, or the
+// process-wide startup manager (Rust #59987 models_manager_for_startup).
+func (r *RuntimeRouter) threadStartModelsManager(cfg *config.Config, originator string) model.ModelsManager {
+	if catalog := model.ModelsCatalogFromConfigValues(configValues(cfg)); catalog != nil {
+		return model.NewStaticModelsManager(*catalog)
+	}
+	if manager := r.modelsManagerForConfig(cfg); manager != nil {
+		return model.ModelsManagerForOriginator(manager, originator)
+	}
+	if r == nil {
+		return nil
+	}
+	return model.ModelsManagerForOriginator(r.requireModels().Manager(), originator)
 }
 
 func threadStartProviderFallbackModel(modelID string, providerID string, allowFallback bool) string {
@@ -11389,7 +11453,10 @@ func applyThreadModelSettings(thread *Thread, settings *Settings) {
 		thread.Model = stringPtrIfNotEmpty(model)
 		// Overlaying a live model must carry its catalog entry too, otherwise a
 		// loaded thread keeps the metadata of the model it was persisted with.
-		thread.SelectedModelInfo = selectedModelInfoForModel(model)
+		// An unchanged model keeps the entry resolved at start (Rust #59987).
+		if thread.SelectedModelInfo == nil || !strings.EqualFold(strings.TrimSpace(thread.SelectedModelInfo.Slug), model) {
+			thread.SelectedModelInfo = selectedModelInfoForModel(model)
+		}
 	}
 	if settings.Effort != nil {
 		thread.ReasoningEffort = reasoningEffortPtr(*settings.Effort)

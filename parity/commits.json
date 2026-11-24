@@ -44080,11 +44080,12 @@
    "evidence": [
     "缺「按 thread 创建选项解析启动模型」：Go 的模型解析不读 thread 创建时的 provider，provider 路由门独立于模型解析",
     "Go 锚点：appserver/（turn 启动）、model/（catalog/auth 选择）",
-    "plan: update/plan_2026_11_08_model_1.md（#59987），契约 startup-model-from-thread-options"
+    "plan: update/plan_2026_11_08_model_1.md（#59987），契约 startup-model-from-thread-options",
+    "Batch 212: complete - Rust resolves the startup model from the thread creation options, so the model slug and its catalog entry come from the catalog the started thread will use, the provider fallback setting decides whether an unknown slug resolves to the catalog default, and thread/read reports the same entry the start response delivered. Go's RuntimeRouter.applyThreadStartConfigSnapshot now calls resolveThreadStartModel, which resolves the slug and the catalog entry together: a configured model_catalog_json or a provider that advertises its own catalog goes through threadStartModelsManager (model.ModelsManagerForOriginator over the provider-scoped or process-wide manager), and the Bedrock provider resolves both from its own static catalog. The start response maps the entry through selectedModelInfoFromCatalogModel, and the record keeps it in Metadata.Extra[\"selected_model_info\"] so BuildThread reports it on thread/read; applyThreadModelSettings only recomputes bundled metadata when the live model actually changed. Carrier note: a provider with no trusted catalog keeps the requested slug and defers its default to the turn layer, because Go's provider catalog is not fetched at thread start. Tests: TestThreadStartModelUsesCreationCatalogLikeRust (creation catalog default, display name, configured context-window override, thread/read agreement), TestThreadStartModelHonorsProviderFallbackLikeRust, TestThreadStartBedrockModelCarriesCatalogEntryLikeRust."
    ],
    "kind": "runtime",
    "sha": "cf39544acd74ad649d98b96ceb43320b6e9b88ec",
-   "status": "partial",
+   "status": "complete",
    "subject": "Resolve startup models using thread creation options (#59987)"
   },
   {
