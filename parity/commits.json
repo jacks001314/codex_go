@@ -55698,11 +55698,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Batch 164: blocked_precondition - Rust caches Plugin Service signing keys so archive verification does not refetch them per bundle. Go has no archive verifier or signing-key transport yet (#63487/#63489 are partial), so a key cache has nothing to hold. Unblock once the verifier lands."
+    "Batch 164: blocked_precondition - Rust caches Plugin Service signing keys so archive verification does not refetch them per bundle. Go has no archive verifier or signing-key transport yet (#63487/#63489 are partial), so a key cache has nothing to hold. Unblock once the verifier lands.",
+    "Batch 318: the Plugin Service signing-key cache exists in Go. plugin/signing_key_cache.go adds SigningKeyCache, scoped by service endpoint plus a SHA-256 fingerprint of the sorted outgoing headers (an empty Authorization means every lookup fetches, since external providers can authenticate with custom headers), keeping at most 8 scopes most-recently-used first. A scoped cache reuses a listing while the server-provided cache_ttl_seconds has not expired, refreshes when the requested key ID is missing or the TTL passed, and clears the previous listing before the request so a denied refresh leaves nothing reusable. FetchPluginArchiveSigningKeysWithTTL exposes cache_ttl_seconds while FetchPluginArchiveSigningKeys keeps its signature. appserver/plugin_remote_bundle.go verifies an archive through the cache when one is supplied, looking up the metadata key ID and handing that key to VerifyPluginArchive, and keeps the fetch-every-key path otherwise; fetchInstalledRemotePluginDetails creates one cache per materialization pass so every signed plugin that shares the endpoint and credentials reuses the listing. Tests: plugin/signing_key_cache_like_rust_test.go (reuse within the TTL, expiry, zero TTL, no-Authorization fetch every time, credential isolation, missing key ID refresh, keys dropped after a denied refresh) and appserver/plugin_signing_key_cache_reuse_like_rust_test.go (two signed installs in one pass share one listing, a second owner fetches again). go test ./plugin, go test ./appserver -run Plugin, go vet ./plugin ./appserver and go build ./... pass."
    ],
    "kind": "runtime",
    "sha": "9340f3c232344af7f734538e5c712588dbd43383",
-   "status": "blocked_precondition",
+   "status": "complete",
    "subject": "Cache Plugin Service signing keys for archive verification (#63490)"
   },
   {
@@ -55710,11 +55711,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Batch 164: blocked_precondition - Rust coalesces concurrent signing-key fetches inside `plugin-archive-verification` so parallel verifications share one request. Go has no verifier or key fetch to coalesce until #63489/#63490 land."
+    "Batch 164: blocked_precondition - Rust coalesces concurrent signing-key fetches inside `plugin-archive-verification` so parallel verifications share one request. Go has no verifier or key fetch to coalesce until #63489/#63490 land.",
+    "Batch 318: overlapping lookups share one fetch. A per-scope single-flight token plus a completed-fetch counter let a lookup that overlapped a refresh return the shared refresh result instead of issuing another request, even when the response has an immediately expired TTL, omits the requested key, or failed; each lookup resolves its own key ID from the shared listing. A refresh canceled by its caller context is not recorded as completed, so a waiting or later lookup with a live context retries instead of inheriting the cancellation. Tests: TestSigningKeyCacheCoalescesConcurrentFetchesLikeRust (five concurrent lookups against a zero-TTL response make exactly one request) and TestSigningKeyCacheRetriesAfterCanceledRefreshLikeRust (a canceled refresh is followed by a successful retry with a second request). go test ./plugin and go build ./... pass."
    ],
    "kind": "runtime",
    "sha": "188940258d413b4f0b3b160136ab097dac031a22",
-   "status": "blocked_precondition",
+   "status": "complete",
    "subject": "Coalesce concurrent plugin signing key fetches (#63491)"
   },
   {

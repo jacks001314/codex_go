@@ -38,6 +38,15 @@ type remotePluginArchiveSigningContext struct {
 func ensureRemoteInstalledPluginCache(ctx context.Context, client interface {
 	Do(*http.Request) (*http.Response, error)
 }, codexHome string, marketplaceName string, candidate remoteInstalledPlugin, signing remotePluginArchiveSigningContext) (string, error) {
+	return ensureRemoteInstalledPluginCacheWithKeys(ctx, client, codexHome, marketplaceName, candidate, signing, nil)
+}
+
+// ensureRemoteInstalledPluginCacheWithKeys carries the owner's signing-key
+// cache so one materialization pass reuses a listing across its plugins
+// (Rust #63490/#63491).
+func ensureRemoteInstalledPluginCacheWithKeys(ctx context.Context, client interface {
+	Do(*http.Request) (*http.Response, error)
+}, codexHome string, marketplaceName string, candidate remoteInstalledPlugin, signing remotePluginArchiveSigningContext, signingKeys *plugin.SigningKeyCache) (string, error) {
 	name := strings.TrimSpace(candidate.Name)
 	pluginBase := filepath.Join(codexHome, "plugins", "cache", marketplaceName, name)
 	activeRoot := activeRemotePluginRoot(pluginBase)
@@ -89,7 +98,7 @@ func ensureRemoteInstalledPluginCache(ctx context.Context, client interface {
 	if err != nil {
 		return activeRoot, err
 	}
-	if err := verifyRemotePluginArchiveBundle(ctx, client, signing, candidate.Release.Signing, bundle); err != nil {
+	if err := verifyRemotePluginArchiveBundle(ctx, client, signing, signingKeys, candidate.Release.Signing, bundle); err != nil {
 		return activeRoot, err
 	}
 	installedRoot, err := installRemotePluginBundle(codexHome, marketplaceName, name, version, candidate.ID, candidate.Release.AppManifest, bundle)
@@ -105,7 +114,7 @@ func ensureRemoteInstalledPluginCache(ctx context.Context, client interface {
 // authenticated Plugin Service release key.
 func verifyRemotePluginArchiveBundle(ctx context.Context, client interface {
 	Do(*http.Request) (*http.Response, error)
-}, signing remotePluginArchiveSigningContext, raw json.RawMessage, archive []byte) error {
+}, signing remotePluginArchiveSigningContext, signingKeys *plugin.SigningKeyCache, raw json.RawMessage, archive []byte) error {
 	metadata := plugin.ParsePluginArchiveSigning(raw)
 	if !metadata.Present && !metadata.Malformed {
 		return nil
@@ -117,9 +126,21 @@ func verifyRemotePluginArchiveBundle(ctx context.Context, client interface {
 	if baseURL == "" {
 		return pluginArchiveVerificationError(plugin.PluginArchiveSigningKeysUnavailableCode)
 	}
-	keys, err := plugin.FetchPluginArchiveSigningKeys(ctx, plugin.HTTPDoer(client), baseURL+plugin.PluginArchiveSigningKeysPath, signing.Headers)
-	if err != nil {
-		return pluginArchiveVerificationError(plugin.PluginArchiveFailureCode(err))
+	var keys []plugin.PluginArchiveSigningKey
+	if signingKeys != nil {
+		// Rust #63490: reuse the Plugin Service listing for this endpoint and
+		// credential scope instead of fetching the keys for every archive.
+		key, err := signingKeys.LookupPluginArchiveSigningKey(ctx, plugin.HTTPDoer(client), baseURL, signing.Headers, metadata.KeyID)
+		if err != nil {
+			return pluginArchiveVerificationError(plugin.PluginArchiveFailureCode(err))
+		}
+		keys = []plugin.PluginArchiveSigningKey{key}
+	} else {
+		fetched, err := plugin.FetchPluginArchiveSigningKeys(ctx, plugin.HTTPDoer(client), baseURL+plugin.PluginArchiveSigningKeysPath, signing.Headers)
+		if err != nil {
+			return pluginArchiveVerificationError(plugin.PluginArchiveFailureCode(err))
+		}
+		keys = fetched
 	}
 	if _, _, err := plugin.VerifyPluginArchive(archive, metadata, keys); err != nil {
 		return pluginArchiveVerificationError(plugin.PluginArchiveFailureCode(err))

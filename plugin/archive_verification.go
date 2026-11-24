@@ -171,13 +171,20 @@ type pluginArchiveSigningKeysResponse struct {
 // validates its bounds. Older servers publish eval keys in `keys`, so both
 // lists are accepted; a key with another purpose fails the fetch.
 func FetchPluginArchiveSigningKeys(ctx context.Context, client HTTPDoer, keyURL string, headers http.Header) ([]PluginArchiveSigningKey, error) {
+	keys, _, err := FetchPluginArchiveSigningKeysWithTTL(ctx, client, keyURL, headers)
+	return keys, err
+}
+
+// FetchPluginArchiveSigningKeysWithTTL also reports the server-provided
+// cache_ttl_seconds so a caller can reuse the listing (Rust #63490).
+func FetchPluginArchiveSigningKeysWithTTL(ctx context.Context, client HTTPDoer, keyURL string, headers http.Header) ([]PluginArchiveSigningKey, uint64, error) {
 	keyURL = strings.TrimSpace(keyURL)
 	if client == nil || keyURL == "" {
-		return nil, errPluginArchiveKeysUnavailable
+		return nil, 0, errPluginArchiveKeysUnavailable
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, keyURL, nil)
 	if err != nil {
-		return nil, errPluginArchiveKeysUnavailable
+		return nil, 0, errPluginArchiveKeysUnavailable
 	}
 	for name, values := range headers {
 		for _, value := range values {
@@ -186,46 +193,50 @@ func FetchPluginArchiveSigningKeys(ctx context.Context, client HTTPDoer, keyURL 
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return nil, errPluginArchiveKeysUnavailable
+		return nil, 0, errPluginArchiveKeysUnavailable
 	}
 	defer response.Body.Close()
 	// The HTTP client can follow a redirect after dropping the original
 	// credentials, so only the exact requested endpoint is accepted.
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, errPluginArchiveKeysUnavailable
+		return nil, 0, errPluginArchiveKeysUnavailable
 	}
 	if response.Request == nil || response.Request.URL == nil || response.Request.URL.String() != keyURL {
-		return nil, errPluginArchiveKeysUnavailable
+		return nil, 0, errPluginArchiveKeysUnavailable
 	}
 	if response.ContentLength > maxPluginArchiveSigningKeysResponseBytes {
-		return nil, errPluginArchiveKeysInvalid
+		return nil, 0, errPluginArchiveKeysInvalid
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxPluginArchiveSigningKeysResponseBytes+1))
 	if err != nil {
-		return nil, errPluginArchiveKeysUnavailable
+		return nil, 0, errPluginArchiveKeysUnavailable
 	}
 	if len(body) > maxPluginArchiveSigningKeysResponseBytes {
-		return nil, errPluginArchiveKeysInvalid
+		return nil, 0, errPluginArchiveKeysInvalid
 	}
 	var decoded pluginArchiveSigningKeysResponse
 	if err := json.Unmarshal(body, &decoded); err != nil {
-		return nil, errPluginArchiveKeysInvalid
+		return nil, 0, errPluginArchiveKeysInvalid
 	}
 	keys := append(append([]PluginArchiveSigningKey(nil), decoded.Keys...), decoded.EvalKeys...)
 	if len(keys) == 0 || len(keys) > maxPluginArchiveSigningKeys {
-		return nil, errPluginArchiveKeysInvalid
+		return nil, 0, errPluginArchiveKeysInvalid
 	}
 	seen := map[string]bool{}
 	for _, key := range keys {
 		if strings.TrimSpace(key.KeyID) == "" || len(key.PublicKeySPKIDERBase64) > maxPluginArchivePublicKeyBase64Bytes || seen[key.KeyID] {
-			return nil, errPluginArchiveKeysInvalid
+			return nil, 0, errPluginArchiveKeysInvalid
 		}
 		seen[key.KeyID] = true
 		if key.Purpose != PluginArchiveSigningKeyPurpose {
-			return nil, errPluginArchiveKeyPurpose
+			return nil, 0, errPluginArchiveKeyPurpose
 		}
 	}
-	return keys, nil
+	ttl := uint64(0)
+	if decoded.CacheTTLSeconds != nil {
+		ttl = *decoded.CacheTTLSeconds
+	}
+	return keys, ttl, nil
 }
 
 // VerifyPluginArchive checks the archive digest and detached signature. The

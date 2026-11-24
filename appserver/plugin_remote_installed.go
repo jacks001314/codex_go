@@ -187,6 +187,9 @@ func fetchInstalledRemotePluginDetails(ctx context.Context, client interface {
 		sku = plugin.CODEXProductSKU
 	}
 	signingHeaders.Set("OAI-Product-Sku", sku)
+	// One cache per materialization pass: every plugin that shares the Plugin
+	// Service endpoint and credentials reuses the same key listing (Rust #63490).
+	signingKeys := &plugin.SigningKeyCache{}
 	installed := map[string]remoteInstalledPlugin{}
 	for _, scope := range []string{"GLOBAL", "USER", "WORKSPACE"} {
 		pageToken := ""
@@ -261,7 +264,7 @@ func fetchInstalledRemotePluginDetails(ctx context.Context, client interface {
 			installedNamesByMarketplace[marketplaceName] = map[string]struct{}{}
 		}
 		installedNamesByMarketplace[marketplaceName][name] = struct{}{}
-		root, err := ensureRemoteInstalledPluginCache(ctx, client, codexHome, marketplaceName, candidate, remotePluginArchiveSigningContext{ServiceBaseURL: baseURL, Headers: signingHeaders})
+		root, err := ensureRemoteInstalledPluginCacheWithKeys(ctx, client, codexHome, marketplaceName, candidate, remotePluginArchiveSigningContext{ServiceBaseURL: baseURL, Headers: signingHeaders}, signingKeys)
 		if err != nil || root == "" {
 			if candidate.Enabled {
 				recordRemoteInstalledPluginMaterializationFailure(candidate.ID)

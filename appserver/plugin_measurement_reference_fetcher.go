@@ -135,7 +135,7 @@ func (f *authenticatedMeasurementBundleFetcher) FetchMeasurementBundle(ctx conte
 			// Rust #63489: a measurement reference stages the same signed archive
 			// the install path accepts, so a tampered bundle never becomes a trusted
 			// measurement root.
-			if err := verifyRemotePluginArchiveBundle(ctx, f.client, f.archiveSigningContext(), candidate.Release.Signing, bundle); err != nil {
+			if err := verifyRemotePluginArchiveBundle(ctx, f.client, f.archiveSigningContext(), nil, candidate.Release.Signing, bundle); err != nil {
 				return plugin.TrustedPluginRoots{}, err
 			}
 			if _, err := installRemotePluginBundle(home, remoteInstalledGlobalMarketplace, name, version, remoteID, appManifest, bundle); err != nil {
