@@ -950,6 +950,7 @@ func (m *Model) applyResumeResponseWithCWD(threadID string, response SessionResu
 	}
 	m.setThreadUnavailable(false)
 	m.State.Messages = append([]codextui.Message(nil), response.Messages...)
+	m.registerCollabTranscriptRows(m.State.Messages)
 	m.State.BumpMessagesRevision()
 	m.insertThreadLineage(response.Summary)
 	m.insertSessionHeader()

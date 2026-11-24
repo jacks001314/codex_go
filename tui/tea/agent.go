@@ -103,6 +103,7 @@ func (m *Model) applyAgentListResult(message AgentListResultMsg) bubbletea.Cmd {
 		return nil
 	}
 	entries := normalizeAgentEntries(message.Entries, message.CurrentThreadID)
+	m.rememberCollabAgentNicknames(entries)
 	m.updateAgentArchivedVisibility(entries)
 	for threadID, archived := range m.agentPickerVisibilityChanged {
 		if archived {
@@ -757,11 +758,36 @@ func (m *Model) agentEntry(threadID string) (codextui.AgentThreadEntry, bool) {
 // row shows (Rust #63444). Archived entries stay in agentItems so an older row
 // can still be labelled while the thread itself stays out of the picker.
 func (m *Model) collabAgentNickname(threadID string) string {
-	entry, ok := m.agentEntry(threadID)
-	if !ok {
+	threadID = strings.TrimSpace(threadID)
+	if entry, ok := m.agentEntry(threadID); ok {
+		if nickname := strings.TrimSpace(entry.AgentNickname); nickname != "" {
+			return nickname
+		}
+	}
+	if m == nil {
 		return ""
 	}
-	return strings.TrimSpace(entry.AgentNickname)
+	return strings.TrimSpace(m.collabAgentNicknames[threadID])
+}
+
+// rememberCollabAgentNicknames caches every nickname the agent list reported so
+// a row keeps its label once its thread leaves the list, mirroring Rust's
+// cached archived subagent metadata (Rust #63444).
+func (m *Model) rememberCollabAgentNicknames(entries []codextui.AgentThreadEntry) {
+	if m == nil {
+		return
+	}
+	for _, entry := range entries {
+		threadID := strings.TrimSpace(entry.ThreadID)
+		nickname := strings.TrimSpace(entry.AgentNickname)
+		if threadID == "" || nickname == "" {
+			continue
+		}
+		if m.collabAgentNicknames == nil {
+			m.collabAgentNicknames = map[string]string{}
+		}
+		m.collabAgentNicknames[threadID] = nickname
+	}
 }
 
 func (m *Model) visibleAgentEntries(entries []codextui.AgentThreadEntry) []codextui.AgentThreadEntry {

@@ -107,6 +107,7 @@ func (m *Model) applyOlderHistoryPage(threadID string, page OlderHistoryPage, er
 		m.backtrack.NthUserMessage += tuiapp.UserCount(inserted)
 	}
 	m.State.InsertMessages(insertAt, inserted)
+	m.registerCollabTranscriptRows(inserted)
 	m.refreshTranscript()
 	if !inlineFollowing {
 		inserted := len(m.transcript.lines) - inlineRows

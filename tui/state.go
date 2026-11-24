@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"codex_go/eventmap"
+	"codex_go/protocol"
 )
 
 type MessageRole string
@@ -25,6 +26,14 @@ const (
 type DeprecationNoticeContent struct {
 	Summary string
 	Details string
+}
+
+// MessageCollabToolCall is the persisted collab tool call a restored history
+// row was rendered from. Rust #63444 relabels replayed spawn/wait rows when the
+// subagent metadata arrives, so the row keeps its source item.
+type MessageCollabToolCall struct {
+	Item      protocol.ThreadItem
+	Completed bool
 }
 
 type Message struct {
@@ -127,6 +136,10 @@ type Message struct {
 	// ImagePath is the local artifact a rich fullscreen transcript may preview
 	// below this entry. Image rows are layout-only and never searchable text.
 	ImagePath string
+	// CollabToolCall marks a history entry projected from a persisted collab
+	// tool call, so a replayed spawn/wait row is relabelled once subagent
+	// metadata arrives (Rust #63444).
+	CollabToolCall *MessageCollabToolCall
 }
 
 // MessageAsyncQuestion is the transcript-facing projection of one structured

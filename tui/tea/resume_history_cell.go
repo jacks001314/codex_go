@@ -50,7 +50,7 @@ func (b *ResumeTranscriptBuilder) Project(item *protocol.ThreadItem) ([]codextui
 		return b.projectFileChange(*item), true
 	case "dynamictoolcall":
 		return b.projectDynamicTool(*item), true
-	case "collabagenttoolcall":
+	case "collabagenttoolcall", "collabtoolcall":
 		return b.projectCollab(*item), true
 	case "subagentactivity":
 		return b.projectSubAgentActivity(*item), true
@@ -281,7 +281,13 @@ func (b *ResumeTranscriptBuilder) projectCollab(item protocol.ThreadItem) []code
 		}
 		return b.Flush()
 	}
-	return b.flushThen(cell)
+	messages := b.flushThen(cell)
+	if len(messages) > 0 {
+		// Rust #63444: the restored row keeps the item it was projected from so
+		// a nickname that arrives after resume can relabel it.
+		messages[len(messages)-1].CollabToolCall = &codextui.MessageCollabToolCall{Item: item, Completed: completed}
+	}
+	return messages
 }
 
 func (b *ResumeTranscriptBuilder) projectSubAgentActivity(item protocol.ThreadItem) []codextui.Message {

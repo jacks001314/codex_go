@@ -9,4 +9,7 @@ type collabTranscriptRow struct {
 	item      protocol.ThreadItem
 	completed bool
 	raw       string
+	// missing names the receivers still waiting for a nickname. Rust #63444
+	// repaints a row only once one of them resolves.
+	missing []string
 }

@@ -49,6 +49,9 @@ func (m *Model) resetThreadScopedState() {
 	m.invalidateStatusProjectRootCache()
 	// The fresh-task starfield belongs to the previous thread/task.
 	m.sparkle = composerSparkleState{}
+	// Rust #63444 rebuilds the transcript per thread: rows still waiting for a
+	// subagent nickname belong to the transcript being left.
+	m.collabTranscriptRows = nil
 	// A fresh thread re-arms the Rust empty-state animation.
 	m.welcomeBlossom = newWelcomeBlossomState()
 	m.misalignmentPolicyStopped = false

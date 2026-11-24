@@ -2262,6 +2262,10 @@ type Model struct {
 	// collabTranscriptRows remembers rendered collab tool calls so a late
 	// subagent nickname can relabel them (Rust #63444).
 	collabTranscriptRows []collabTranscriptRow
+	// collabAgentNicknames caches every nickname the agent list reported, so a
+	// resolved row keeps its label after its thread leaves the list (Rust
+	// #63444 keeps archived subagent metadata for older rows).
+	collabAgentNicknames map[string]string
 	// agentsOverviewInflightFor names the backend that owns the shared refresh
 	// slot, and agentsOverviewBackends keeps queued refreshes, Show more
 	// requests, refill counts, and failures per backend (Rust #61596).
@@ -9734,15 +9738,119 @@ func (m *Model) recordCollabTranscriptRow(item *protocol.ThreadItem, completed b
 	if m == nil || item == nil || cell == nil {
 		return
 	}
+	missing := m.collabTranscriptRowMissing(item)
+	if len(missing) == 0 {
+		return
+	}
+	m.pushCollabTranscriptRow(collabTranscriptRow{
+		item:      *item,
+		completed: completed,
+		raw:       strings.Join(cell.RawLines(), "\n"),
+		missing:   missing,
+	})
+}
+
+// collabTranscriptRowMissing lists the row's receivers whose nickname is still
+// unknown. A receiver the item already reports as not found can never gain a
+// nickname, so it does not keep the row waiting (Rust #63444
+// CollabHistoryCell::Unresolved).
+func (m *Model) collabTranscriptRowMissing(item *protocol.ThreadItem) []string {
+	if m == nil || item == nil || item.ReceiverThreadIDs == nil {
+		return nil
+	}
+	var missing []string
+	for _, receiver := range *item.ReceiverThreadIDs {
+		threadID := strings.TrimSpace(receiver)
+		if threadID == "" {
+			continue
+		}
+		if strings.TrimSpace(m.collabAgentNickname(threadID)) != "" {
+			continue
+		}
+		if item.AgentsStates != nil {
+			if state, ok := (*item.AgentsStates)[threadID]; ok && strings.EqualFold(strings.TrimSpace(state.Status), "not_found") {
+				continue
+			}
+		}
+		missing = append(missing, threadID)
+	}
+	return missing
+}
+
+// registerCollabTranscriptRows indexes the collab rows a resume projection
+// restored, so a replayed spawn/wait row is relabelled by the same refresh as a
+// live one (Rust #63444 refreshes replayed rows too).
+func (m *Model) registerCollabTranscriptRows(messages []codextui.Message) {
+	if m == nil || len(messages) == 0 {
+		return
+	}
+	for index := range messages {
+		call := messages[index].CollabToolCall
+		if call == nil {
+			continue
+		}
+		missing := m.collabTranscriptRowMissing(&call.Item)
+		if len(missing) == 0 {
+			continue
+		}
+		m.pushCollabTranscriptRow(collabTranscriptRow{
+			item:      call.Item,
+			completed: call.Completed,
+			raw:       messages[index].RawText,
+			missing:   missing,
+		})
+	}
+}
+
+// pushCollabTranscriptRow appends one row to the bounded refresh registry.
+func (m *Model) pushCollabTranscriptRow(row collabTranscriptRow) {
 	const maxCollabTranscriptRows = 128
 	if len(m.collabTranscriptRows) >= maxCollabTranscriptRows {
 		m.collabTranscriptRows = m.collabTranscriptRows[1:]
 	}
-	m.collabTranscriptRows = append(m.collabTranscriptRows, collabTranscriptRow{
-		item:      *item,
-		completed: completed,
-		raw:       strings.Join(cell.RawLines(), "\n"),
-	})
+	m.collabTranscriptRows = append(m.collabTranscriptRows, row)
+}
+
+// collabTranscriptTargets lists the transcripts a collab refresh may rewrite:
+// the visible one plus the parent and side snapshots retained for parked panes.
+// Rust #63444 refreshes parked panes as well, so a row that was captured before
+// the metadata landed still gains its label.
+func (m *Model) collabTranscriptTargets() [][]codextui.Message {
+	if m == nil {
+		return nil
+	}
+	targets := make([][]codextui.Message, 0, 1+2*len(m.sideConversations))
+	if m.State != nil && len(m.State.Messages) > 0 {
+		targets = append(targets, m.State.Messages)
+	}
+	for _, side := range m.sideConversations {
+		if side == nil {
+			continue
+		}
+		if len(side.ParentMessages) > 0 {
+			targets = append(targets, side.ParentMessages)
+		}
+		if len(side.SideMessages) > 0 {
+			targets = append(targets, side.SideMessages)
+		}
+	}
+	return targets
+}
+
+// collabTranscriptRowGainedNickname reports that at least one receiver the row
+// is waiting on has a nickname now. A row is never repainted merely because the
+// metadata changed, so a resolved label cannot fall back to the thread id
+// (Rust #63444 CollabHistoryCell::refreshed).
+func (m *Model) collabTranscriptRowGainedNickname(row *collabTranscriptRow) bool {
+	if m == nil || row == nil {
+		return false
+	}
+	for _, threadID := range row.missing {
+		if strings.TrimSpace(m.collabAgentNickname(threadID)) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // refreshCollabTranscriptRows repaints the registered collab rows after agent
@@ -9755,6 +9863,9 @@ func (m *Model) refreshCollabTranscriptRows() {
 	changed := false
 	for index := range m.collabTranscriptRows {
 		row := &m.collabTranscriptRows[index]
+		if !m.collabTranscriptRowGainedNickname(row) {
+			continue
+		}
 		cell, ok := historycell.NewCollabAgentToolCallWithResolver(&row.item, row.completed, m.collabAgentNickname)
 		if !ok {
 			continue
@@ -9768,17 +9879,24 @@ func (m *Model) refreshCollabTranscriptRows() {
 		if raw == row.raw {
 			continue
 		}
-		for messageIndex := range m.State.Messages {
-			message := &m.State.Messages[messageIndex]
-			if message.RawText != row.raw {
-				continue
+		replaced := false
+		for _, messages := range m.collabTranscriptTargets() {
+			for messageIndex := range messages {
+				message := &messages[messageIndex]
+				if message.RawText != row.raw {
+					continue
+				}
+				message.Text = text
+				message.RawText = raw
+				replaced = true
 			}
-			message.Text = text
-			message.RawText = raw
-			row.raw = raw
-			changed = true
-			break
 		}
+		if !replaced {
+			continue
+		}
+		row.raw = raw
+		row.missing = m.collabTranscriptRowMissing(&row.item)
+		changed = true
 	}
 	if changed {
 		m.State.BumpMessagesRevision()
