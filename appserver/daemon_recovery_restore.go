@@ -29,9 +29,10 @@ import (
 // owns the restored threads; a client that resumes one of them attaches to the
 // shared on-disk state instead of to this router. Making the connection routers
 // share this daemon-level owner is the registered "daemon-level thread owner /
-// cross-connection shared router" structural item; Rust's
-// `turn_admission.admit()` bound has no Go equivalent, so the restore loop is
-// sequential (concurrency 1) as its own bound.
+// cross-connection shared router" structural item. The restore loop is not a
+// client dispatch, so it runs sequentially (concurrency 1) instead of taking a
+// dispatch-time turn admission permit; ThreadManager's permit plumbing exists,
+// but it gates client requests rather than this background restore.
 
 // daemonRecoveryConsume mirrors the read+remove half of Rust `start_recovery`
 // (app-server/src/daemon_thread_recovery.rs:32): read the snapshot, then remove
@@ -111,9 +112,9 @@ func (r *daemonRecoveryRestore) close() {
 // restoreDaemonThreads mirrors Rust `MessageProcessor::restore_daemon_threads`
 // (app-server/src/message_processor.rs:778): resume every saved thread with
 // `exclude_turns: true`, then hand each saved interrupted turn to
-// `continue_daemon_turn` so unfinished work resumes without a client. The loop
-// is sequential, which replaces Rust's turn-admission permit as the bound, and a
-// single thread's failure only warns and continues.
+// @B@continue_daemon_turn@B@ so unfinished work resumes without a client. The loop
+// is sequential, which bounds the restore without a dispatch-time turn admission
+// permit, and a single thread's failure only warns and continues.
 func (r *RuntimeRouter) restoreDaemonThreads(snapshot daemonrecovery.Snapshot) {
 	if r == nil {
 		return
