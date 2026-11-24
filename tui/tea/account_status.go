@@ -36,6 +36,9 @@ func (m *Model) applyAccountStatusUpdated(message AccountStatusUpdatedMsg) bubbl
 		// Rust #50140 also drops the cached server permission catalog, which is
 		// scoped to the account the connected server authenticated.
 		m.invalidatePermissionDiscoveryCache()
+		// Rust #63553 clears the cached model catalogs on an account change;
+		// each provider list belongs to the account the server authenticated.
+		m.clearModelPickerCatalogs()
 	}
 	// Rust update_account_state always rebinds the account plan and drops the
 	// quota plan, which spoke for the previous account (#61978).

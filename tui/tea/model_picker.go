@@ -71,6 +71,17 @@ func (m *Model) modelListCWD() string {
 	return ""
 }
 
+// clearModelPickerCatalogs drops every cached provider catalog
+// (Rust #63553 ModelCatalog::clear_models). The last applied list stays so the
+// picker can still open while its refresh is in flight; the next response
+// repopulates the per-provider cache.
+func (m *Model) clearModelPickerCatalogs() {
+	if m == nil {
+		return
+	}
+	m.modelPickerOptsByProvider = nil
+}
+
 // rememberModelPickerOptions caches one provider catalog (Rust #63553
 // ModelCatalog::set_models). The empty key is the app-server default catalog a
 // new thread reads.

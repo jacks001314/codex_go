@@ -66,3 +66,37 @@ func TestModelPickerKeepsDefaultCatalogWhenSwitchingProvidersLikeRust(t *testing
 		t.Fatalf("default picker = %#v", m.modal)
 	}
 }
+
+// TestAccountChangeClearsProviderCatalogsLikeRust mirrors Rust #63553: the
+// cached catalogs belong to the authenticated account, so an account change
+// drops them while the last applied list stays for the in-flight refresh.
+func TestAccountChangeClearsProviderCatalogsLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.AccountDisplay = "old@example.com"
+	m := NewModel(state, Options{Width: 100, Height: 30})
+	m.pendingModelsRequestID = 1
+	m.applyModelsResult(ModelsResultMsg{
+		RequestID: 1,
+		Provider:  "",
+		Options:   []codextui.ModelPickerOption{{ID: "default-model", Label: "Default"}},
+	})
+	state.Provider = "acme"
+	m.pendingModelsRequestID = 2
+	m.applyModelsResult(ModelsResultMsg{
+		RequestID: 2,
+		Provider:  "acme",
+		Options:   []codextui.ModelPickerOption{{ID: "acme-model", Label: "Acme"}},
+	})
+	if len(m.modelPickerOptsByProvider) != 2 {
+		t.Fatalf("cached catalogs = %d, want 2", len(m.modelPickerOptsByProvider))
+	}
+
+	updated, _ := m.Update(AccountStatusUpdatedMsg{Display: "new@example.com"})
+	m = updated.(*Model)
+	if len(m.modelPickerOptsByProvider) != 0 {
+		t.Fatalf("account change kept %d cached catalogs", len(m.modelPickerOptsByProvider))
+	}
+	if len(m.modelPickerOpts) != 1 || m.modelPickerOpts[0].ID != "acme-model" {
+		t.Fatalf("applied catalog after account change = %#v", m.modelPickerOpts)
+	}
+}
