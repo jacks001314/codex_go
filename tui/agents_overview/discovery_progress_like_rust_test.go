@@ -45,3 +45,17 @@ func TestAgentCenterFooterShowsDiscoveryProgressLikeRust(t *testing.T) {
 		t.Fatalf("notice did not take footer priority: %#v", lines)
 	}
 }
+
+// Rust #63146 rows.rs: when the footer reports discovery progress the empty
+// center does not repeat the loading label.
+func TestAgentCenterDiscoveryProgressReplacesCenterLabelLikeRust(t *testing.T) {
+	view := New(nil, "", false)
+	view.Loading = true
+	lines := strings.Join(view.Render(120, 20), "\n")
+	if !strings.Contains(lines, "Loading additional tasks\u2026") {
+		t.Fatalf("footer progress missing: %s", lines)
+	}
+	if strings.Contains(lines, "Loading tasks\u2026") {
+		t.Fatalf("center repeated the loading label: %s", lines)
+	}
+}

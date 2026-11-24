@@ -70,10 +70,13 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 	// Rust #63146: initial discovery reports progress in the footer while the
 	// already-published tasks stay visible. The shorter label fits narrow
 	// layouts where the full label would wrap.
+	footerProgress := false
 	if v.openingThread != "" && !v.State.Help && strings.TrimSpace(v.Notice) == "" && len(v.KeyChordHints) == 0 {
 		footerRows = [][]span{{{text: " ", style: spanPlain}, {text: "Opening task…", style: spanDim}}}
+		footerProgress = true
 	} else if label := v.discoveryProgressLabel(footerWidth); label != "" {
 		footerRows = [][]span{{{text: " ", style: spanPlain}, {text: label, style: spanDim}}}
+		footerProgress = true
 	}
 	// header + summary + divider + editor + footer rows
 	bodyHeight := termHeight - 4 - len(footerRows)
@@ -130,10 +133,10 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 		if listWidth < 46 {
 			listWidth = 46
 		}
-		lines = append(lines, v.renderRows(bodyHeight, listWidth, styled)...)
+		lines = append(lines, v.renderRows(bodyHeight, listWidth, styled, footerProgress)...)
 		lines = append(lines, v.renderDetails(38, bodyHeight, styled)...)
 	} else {
-		lines = append(lines, v.renderRows(bodyHeight, bodyWidth, styled)...)
+		lines = append(lines, v.renderRows(bodyHeight, bodyWidth, styled, footerProgress)...)
 	}
 
 	// footer
@@ -568,7 +571,7 @@ func itoa(value int) string {
 
 // renderRows renders the list body (group headers + rows), mirroring Rust
 // AgentsOverviewView::render_rows including scroll-to-selection behavior.
-func (v *View) renderRows(height, listWidth int, styled bool) []string {
+func (v *View) renderRows(height, listWidth int, styled bool, progressInFooter bool) []string {
 	visible := v.VisibleIndices()
 	if height > 0 {
 		v.pageHeight = height
@@ -577,7 +580,13 @@ func (v *View) renderRows(height, listWidth int, styled bool) []string {
 		message := "No matching tasks"
 		switch {
 		case v.Loading && len(v.Rows) == 0:
-			message = "Loading tasks\u2026"
+			// Rust #63146 rows.rs: the footer already reports progress, so the
+			// empty center does not repeat the label.
+			if progressInFooter {
+				message = ""
+			} else {
+				message = "Loading tasks\u2026"
+			}
 		case len(v.Rows) == 0:
 			message = "No tasks yet"
 		}

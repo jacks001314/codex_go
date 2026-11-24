@@ -54,7 +54,9 @@ func TestAgentCenterSearchRowAboveTaskListLikeRust(t *testing.T) {
 func TestAgentCenterEmptyAndLoadingStatesLikeRust(t *testing.T) {
 	loading := New(nil, "", false)
 	loading.Loading = true
-	if lines := loading.Render(100, 20); !strings.Contains(strings.Join(lines, "\n"), "Loading tasks\u2026") {
+	// Rust #63146: the footer owns discovery progress instead of the empty
+	// center, and the wide layout uses the longer label.
+	if lines := loading.Render(100, 20); !strings.Contains(strings.Join(lines, "\n"), "Loading additional tasks\u2026") {
 		t.Fatalf("loading state missing: %#v", lines)
 	}
 	empty := New(nil, "", false)
