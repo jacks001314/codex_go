@@ -93,3 +93,50 @@ func TestThreadOnConfiguredDefaultKeepsStartupCatalogLikeRust(t *testing.T) {
 		t.Fatalf("default provider catalog = %#v", got)
 	}
 }
+
+// TestAPIKeyProviderSwitchClearsAccessProgramsLikeRust mirrors Rust #63553
+// refresh_account_scoped_models: an API-key account scopes cyber access
+// metadata to the thread and cwd, so switching providers drops the cached
+// programs and reads the catalog again.
+func TestAPIKeyProviderSwitchClearsAccessProgramsLikeRust(t *testing.T) {
+	cases := []struct {
+		name        string
+		account     string
+		wantProgram bool
+		wantRefresh bool
+	}{
+		{name: "api key", account: "API key configured", wantProgram: false, wantRefresh: true},
+		{name: "chatgpt", account: "user@example.com", wantProgram: true, wantRefresh: false},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			state := codextui.NewState(nil)
+			state.SetThreadID("thread-a")
+			state.AccountDisplay = testCase.account
+			m := NewModel(state, Options{Width: 100, Height: 30})
+			m.pendingModelsRequestID = 1
+			m.applyModelsResult(ModelsResultMsg{
+				RequestID: 1,
+				Provider:  "acme",
+				Options:   []codextui.ModelPickerOption{{ID: "acme-model", Label: "Acme", AvailableCyberPrograms: []string{"standard"}}},
+			})
+			m.applyThreadSettingsValues(appserver.Settings{ModelProvider: "acme"})
+			if len(m.modelPickerOpts) != 1 || m.modelPickerOpts[0].ID != "acme-model" {
+				t.Fatalf("selected catalog = %#v", m.modelPickerOpts)
+			}
+			hasProgram := m.modelPickerOpts[0].AvailableCyberPrograms != nil
+			if hasProgram != testCase.wantProgram {
+				t.Fatalf("access programs present = %v, want %v", hasProgram, testCase.wantProgram)
+			}
+			if m.modelCatalogRefreshPending != testCase.wantRefresh {
+				t.Fatalf("refresh pending = %v, want %v", m.modelCatalogRefreshPending, testCase.wantRefresh)
+			}
+			if testCase.wantProgram {
+				cached := m.modelPickerOptsByProvider["acme"]
+				if len(cached) != 1 || cached[0].AvailableCyberPrograms == nil {
+					t.Fatalf("cached programs were cleared: %#v", cached)
+				}
+			}
+		})
+	}
+}

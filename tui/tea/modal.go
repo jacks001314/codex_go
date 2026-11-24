@@ -232,6 +232,9 @@ type modalState struct {
 	// appLinkActionsDelivered counts the view events already handed to the host.
 	appLinkActionsDelivered int
 	modelPicker             *codextui.ModelPicker
+	// modelPickerLoading marks Rust #63553's model loading view: the picker
+	// opened before the provider's catalog arrived.
+	modelPickerLoading bool
 	modelReasoning          *codextui.ModelReasoningPicker
 	planReasoningScope      *codextui.PlanReasoningScopePicker
 	sessionPicker           *codextui.SessionPickerState

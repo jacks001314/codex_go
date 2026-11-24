@@ -89,6 +89,7 @@ type configPanelProviderWriteResultMsg struct {
 	kind         string
 	providerID   string
 	providerName string
+	backend      codextui.BackendID
 	response     config.ConfigWriteResponse
 	err          error
 }
@@ -848,8 +849,10 @@ func (m *Model) writeConfigProviderDefaultCmd(browser *configProviderBrowserStat
 	browser.saving = true
 	browser.notice = "Saving model provider…"
 	// Rust #63553 write.rs holds the backend's provider_write lock for the
-	// duration of the default-provider save.
-	m.modelProviderWritePending = true
+	// duration of the default-provider save. The result is attributed to the
+	// backend that started it, even if the TUI switches backends meanwhile.
+	backend := m.backendID
+	m.markModelProviderWritePending(backend)
 	generation := browser.generation
 	providerID := provider.ID
 	providerName := strings.TrimSpace(provider.Name)
@@ -863,6 +866,7 @@ func (m *Model) writeConfigProviderDefaultCmd(browser *configProviderBrowserStat
 			response, err := setDefault(model.ProviderDefaultSetParams{ProviderID: providerID})
 			return configPanelProviderWriteResultMsg{
 				generation:   generation,
+				backend:      backend,
 				kind:         "default",
 				providerID:   providerID,
 				providerName: providerName,
@@ -871,13 +875,13 @@ func (m *Model) writeConfigProviderDefaultCmd(browser *configProviderBrowserStat
 			}
 		}
 		if writer == nil {
-			return configPanelProviderWriteResultMsg{generation: generation, kind: "default", providerID: providerID, err: errors.New("config/batchWrite is unavailable")}
+			return configPanelProviderWriteResultMsg{generation: generation, backend: backend, kind: "default", providerID: providerID, err: errors.New("config/batchWrite is unavailable")}
 		}
 		err := writer(config.ConfigBatchWriteParams{
 			Edits:            []config.ConfigEdit{{KeyPath: "model_provider", Value: providerID, MergeStrategy: config.MergeReplace}},
 			ReloadUserConfig: true,
 		})
-		return configPanelProviderWriteResultMsg{generation: generation, kind: "default", providerID: providerID, providerName: providerName, err: err}
+		return configPanelProviderWriteResultMsg{generation: generation, backend: backend, kind: "default", providerID: providerID, providerName: providerName, err: err}
 	}
 }
 
@@ -911,12 +915,11 @@ func (m *Model) applyConfigPanelProviderWriteResult(msg configPanelProviderWrite
 	if msg.kind == "default" {
 		// Rust #63553 write.rs releases provider_write when the RPC finishes and
 		// marks the untagged catalog unsafe after a confirmed switch or an
-		// unconfirmed transport failure.
-		m.modelProviderWritePending = false
-		if errors.Is(msg.err, ErrModelProviderDefaultUnconfirmed) ||
-			(msg.err == nil && (msg.response.Status == "" || msg.response.Status == config.WriteOK)) {
-			m.modelProviderWriteChanged = true
-		}
+		// unconfirmed transport failure. Both state the backend that started the
+		// save.
+		changed := errors.Is(msg.err, ErrModelProviderDefaultUnconfirmed) ||
+			(msg.err == nil && (msg.response.Status == "" || msg.response.Status == config.WriteOK))
+		m.finishModelProviderWrite(msg.backend, changed)
 	}
 	if m.modal == nil || m.modal.kind != ModalKindConfig || m.modal.configPanel == nil {
 		return nil

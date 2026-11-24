@@ -2694,13 +2694,14 @@ type Model struct {
 	// modelCatalogRefreshPending requests a provider-scoped catalog refresh
 	// after a thread switch to a provider without a cached list.
 	modelCatalogRefreshPending bool
-	// modelProviderWritePending is Rust #63553's held provider_write lock: a
-	// default-provider save is in flight, so the picker's catalog may not match
-	// the saved default.
-	modelProviderWritePending bool
-	// modelProviderWriteChanged marks a confirmed or possible default-provider
-	// switch; the untagged catalog is unsafe for the rest of the session.
-	modelProviderWriteChanged bool
+	// modelProviderWritePending is Rust #63553's provider_write lock per
+	// backend: a default-provider save is in flight there, so that backend's
+	// picker catalog may not match the saved default.
+	modelProviderWritePending map[codextui.BackendID]bool
+	// modelProviderWriteChanged marks a backend whose default provider was
+	// confirmed or possibly switched; its untagged catalog is unsafe for the
+	// rest of the session (Rust provider_writes is per backend).
+	modelProviderWriteChanged map[codextui.BackendID]bool
 	serviceTierCommands           []bottompane.ServiceTierCommand
 
 	// savedServiceTier is Rust's config.service_tier: the user's persisted

@@ -15,7 +15,7 @@ func TestProviderSaveBlocksModelPickerLikeRust(t *testing.T) {
 	state := codextui.NewState(nil)
 	state.SetThreadID("thread-a")
 	m := NewModel(state, Options{Width: 100, Height: 30})
-	m.modelProviderWritePending = true
+	m.markModelProviderWritePending(m.backendID)
 	const want = "Saving the default provider. Try /model after the save finishes."
 
 	if cmd := m.openModelPicker(); cmd != nil || m.modal != nil {
@@ -40,7 +40,7 @@ func TestProviderSwitchMarksUntaggedCatalogUnsafeLikeRust(t *testing.T) {
 	state := codextui.NewState(nil)
 	state.SetThreadID("thread-a")
 	m := NewModel(state, Options{Width: 100, Height: 30})
-	m.modelProviderWriteChanged = true
+	m.finishModelProviderWrite(m.backendID, true)
 
 	m.pendingModelsRequestID = 1
 	m.applyModelsResult(ModelsResultMsg{
@@ -76,6 +76,33 @@ func TestProviderSwitchMarksUntaggedCatalogUnsafeLikeRust(t *testing.T) {
 	}
 }
 
+// TestProviderWriteGuardIsPerBackendLikeRust mirrors Rust #63553
+// provider_writes being keyed by BackendId: a save or switch on one backend
+// leaves another backend's /model usable.
+func TestProviderWriteGuardIsPerBackendLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-a")
+	m := NewModel(state, Options{Width: 100, Height: 30})
+	backendA := codextui.NewBackendID()
+	backendB := codextui.NewBackendID()
+	m.backendID = backendA
+	m.markModelProviderWritePending(backendA)
+	m.finishModelProviderWrite(backendA, true)
+
+	m.backendID = backendB
+	if message := m.modelPickerUnavailable(); message != "" {
+		t.Fatalf("backend B inherited backend A's guard: %q", message)
+	}
+	if cmd := m.openModelPicker(); m.modal == nil {
+		t.Fatalf("backend B picker did not open (cmd nil=%v)", cmd == nil)
+	}
+
+	m.backendID = backendA
+	if message := m.modelPickerUnavailable(); message == "" {
+		t.Fatal("backend A lost its guard")
+	}
+}
+
 // TestProviderSaveResultTransitionsLikeRust mirrors Rust #63553 write.rs: the
 // pending lock clears on every result, a confirmed switch (or an unconfirmed
 // transport failure) marks the catalog unsafe, and an overridden or failed
@@ -97,17 +124,19 @@ func TestProviderSaveResultTransitionsLikeRust(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			state := codextui.NewState(nil)
 			m := NewModel(state, Options{Width: 100, Height: 30})
-			m.modelProviderWritePending = true
+			backend := m.backendID
+			m.markModelProviderWritePending(backend)
 			m.applyConfigPanelProviderWriteResult(configPanelProviderWriteResultMsg{
+				backend:  backend,
 				kind:     "default",
 				response: testCase.response,
 				err:      testCase.err,
 			})
-			if m.modelProviderWritePending {
+			if m.modelProviderWritePending[backend] {
 				t.Fatal("pending provider save was not released")
 			}
-			if m.modelProviderWriteChanged != testCase.wantChanged {
-				t.Fatalf("changed = %v, want %v", m.modelProviderWriteChanged, testCase.wantChanged)
+			if got := m.modelProviderWriteChanged[backend]; got != testCase.wantChanged {
+				t.Fatalf("changed = %v, want %v", got, testCase.wantChanged)
 			}
 		})
 	}

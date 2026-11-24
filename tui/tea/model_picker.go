@@ -20,6 +20,21 @@ func (m *Model) openModelPicker() bubbletea.Cmd {
 		return nil
 	}
 	options := m.modelPickerOptionsFor(m.modelListProvider())
+	if len(options) == 0 && m.onListModels != nil {
+		// Rust #63553 model_popups: an uncached provider opens a loading view
+		// while its catalog is fetched, instead of offering bundled presets
+		// that may not belong to the provider.
+		m.openModal(ModalRequestMsg{
+			ID:      "model-picker",
+			Kind:    ModalKindPicker,
+			Title:   "Select Model and Effort",
+			Options: []ModalOption{{ID: "loading", Label: "Loading models\u2026", Disabled: true}},
+		})
+		if m.modal != nil {
+			m.modal.modelPickerLoading = true
+		}
+		return m.fetchModelsForPicker()
+	}
 	if len(options) == 0 {
 		options = codextui.BundledModelPickerOptions()
 	}
@@ -52,13 +67,43 @@ func (m *Model) modelPickerUnavailable() string {
 	if m == nil {
 		return ""
 	}
-	if m.modelProviderWritePending {
+	if m.modelProviderWritePending[m.backendID] {
 		return "Saving the default provider. Try /model after the save finishes."
 	}
-	if m.modelProviderWriteChanged {
+	if m.modelProviderWriteChanged[m.backendID] {
 		return "The model list may be out of date. Restart the app server and TUI to refresh /model."
 	}
 	return ""
+}
+
+// markModelProviderWritePending holds the backend's provider_write lock
+// (Rust #63553 write.rs).
+func (m *Model) markModelProviderWritePending(backend codextui.BackendID) {
+	if m == nil {
+		return
+	}
+	if m.modelProviderWritePending == nil {
+		m.modelProviderWritePending = map[codextui.BackendID]bool{}
+	}
+	m.modelProviderWritePending[backend] = true
+}
+
+// finishModelProviderWrite releases the backend's lock and, when the default
+// may have changed, keeps its untagged catalog unsafe for the session.
+func (m *Model) finishModelProviderWrite(backend codextui.BackendID, changed bool) {
+	if m == nil {
+		return
+	}
+	if m.modelProviderWritePending != nil {
+		delete(m.modelProviderWritePending, backend)
+	}
+	if !changed {
+		return
+	}
+	if m.modelProviderWriteChanged == nil {
+		m.modelProviderWriteChanged = map[codextui.BackendID]bool{}
+	}
+	m.modelProviderWriteChanged[backend] = true
 }
 
 // fetchModelsForPicker asynchronously fetches the current model catalog from the
@@ -134,22 +179,59 @@ func (m *Model) selectModelPickerProvider(provider string) {
 	// Until a thread names its provider, the applied catalog is the server
 	// default's unscoped list (the empty cache key). A thread on that same
 	// default only labels the list; every other provider owns a catalog.
-	if m.modelPickerProvider == "" && strings.EqualFold(provider, strings.TrimSpace(m.defaultModelProvider)) {
-		m.modelPickerProvider = provider
-		m.refreshModelPicker()
-		m.refreshServiceTierCommands()
-		return
+	labelOnly := m.modelPickerProvider == "" && strings.EqualFold(provider, strings.TrimSpace(m.defaultModelProvider))
+	if !labelOnly {
+		m.dismissStaleModelPicker()
 	}
-	m.dismissStaleModelPicker()
 	m.modelPickerProvider = provider
 	if cached, ok := m.modelPickerOptsByProvider[provider]; ok {
 		m.modelPickerOpts = append([]codextui.ModelPickerOption(nil), cached...)
-	} else {
+	} else if !labelOnly {
 		m.modelPickerOpts = nil
+		m.modelCatalogRefreshPending = true
+	}
+	if m.modelAccountUsesAPIKey() {
+		// Rust #63553 refresh_account_scoped_models: API-key access metadata is
+		// scoped to the thread and working directory, so a provider switch drops
+		// the cached programs and reads the catalog again.
+		m.clearModelPickerCyberPrograms(provider)
 		m.modelCatalogRefreshPending = true
 	}
 	m.refreshModelPicker()
 	m.refreshServiceTierCommands()
+}
+
+// modelAccountUsesAPIKey reports Rust's StatusAccountDisplay::ApiKey, which
+// scopes catalog access metadata to the thread and working directory.
+func (m *Model) modelAccountUsesAPIKey() bool {
+	if m == nil || m.State == nil {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(m.State.AccountDisplay), "API key configured")
+}
+
+// clearModelPickerCyberPrograms drops the catalog-advertised cyber programs
+// from the applied and cached options for one provider.
+func (m *Model) clearModelPickerCyberPrograms(provider string) {
+	if m == nil {
+		return
+	}
+	for i := range m.modelPickerOpts {
+		m.modelPickerOpts[i].AvailableCyberPrograms = nil
+	}
+	provider = strings.TrimSpace(provider)
+	cached, ok := m.modelPickerOptsByProvider[provider]
+	if !ok {
+		return
+	}
+	cached = append([]codextui.ModelPickerOption(nil), cached...)
+	for i := range cached {
+		cached[i].AvailableCyberPrograms = nil
+	}
+	if m.modelPickerOptsByProvider == nil {
+		m.modelPickerOptsByProvider = map[string][]codextui.ModelPickerOption{}
+	}
+	m.modelPickerOptsByProvider[provider] = cached
 }
 
 // dismissStaleModelPicker closes a model picker bound to the previous
@@ -214,12 +296,19 @@ func (m *Model) applyModelsResult(msg ModelsResultMsg) {
 	}
 	m.pendingModelsRequestID = 0
 	if msg.Err != nil || len(msg.Options) == 0 {
+		// Rust on_models_loaded: a failed load replaces the loading view with an
+		// error instead of leaving it spinning.
+		if m.modal != nil && m.modal.modelPickerLoading && strings.TrimSpace(msg.Provider) == m.modelListProvider() {
+			m.modal = nil
+			m.notice = "Could not load models. Try /model again."
+			m.refreshTranscript()
+		}
 		return
 	}
 	// Rust #63553: after a confirmed or possible default-provider switch the
 	// server's untagged list may describe the old default, so it is never
 	// applied again in this session.
-	if m.modelProviderWriteChanged && strings.TrimSpace(msg.Provider) == "" {
+	if m.modelProviderWriteChanged[m.backendID] && strings.TrimSpace(msg.Provider) == "" {
 		return
 	}
 	// Rust #51253 (app_server_session bootstrap): the catalog the server hands
@@ -357,6 +446,18 @@ func serviceTierPolicyFeatureChanged(before map[string]bool, after map[string]bo
 func (m *Model) refreshModelPicker() {
 	if m == nil || m.modal == nil {
 		return
+	}
+	if m.modal.modelPickerLoading {
+		// Rust on_models_loaded dismisses the loading view and opens the fetched
+		// presets in place.
+		if len(m.modelPickerOpts) == 0 {
+			return
+		}
+		m.modal.modelPickerLoading = false
+		if picker := codextui.NewModelPicker(append([]codextui.ModelPickerOption(nil), m.modelPickerOpts...), m.State.Model); picker != nil {
+			m.modal.modelPicker = picker
+			m.modal.selected = picker.Selected
+		}
 	}
 	// Rust #41467: apply accepted catalog updates to the new-thread default. If
 	// the current model is no longer available, fall back to the catalog default
