@@ -418,6 +418,139 @@ SELECT EXISTS(
 	}, nil
 }
 
+// ThreadRealtimeSession is one logical realtime call recovered from durable
+// history (Rust ThreadStore::load_realtime_session).
+type ThreadRealtimeSession struct {
+	SessionID string
+	Items     []ThreadRealtimeEntry
+}
+
+// LoadThreadRealtimeSession loads one logical call from authoritative persisted
+// history. A session without a persisted start record reports no session, so a
+// lagging projection fails closed instead of inventing one.
+func (r *StateRuntime) LoadThreadRealtimeSession(ctx context.Context, threadID string, sessionID string) (*ThreadRealtimeSession, error) {
+	if r == nil {
+		return nil, invalidThreadHistory("thread history is not available")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	threadID = strings.TrimSpace(threadID)
+	sessionID = strings.TrimSpace(sessionID)
+	if threadID == "" || sessionID == "" {
+		return nil, invalidThreadHistory("thread id and realtime session id are required")
+	}
+	db, err := r.ThreadHistoryDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, `
+SELECT rollout_ordinal, json_extract(item_json, '$.observed_at_ms'), item_json, item_type
+FROM thread_realtime_items
+WHERE thread_id = ? AND json_extract(item_json, '$.realtime_session_id') = ?
+ORDER BY rollout_ordinal, item_id`, threadID, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("load realtime session: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	session := &ThreadRealtimeSession{SessionID: sessionID}
+	started := false
+	for rows.Next() {
+		var entry ThreadRealtimeEntry
+		var observed sql.NullInt64
+		var itemJSON string
+		var itemType string
+		if err := rows.Scan(&entry.Position, &observed, &itemJSON, &itemType); err != nil {
+			return nil, fmt.Errorf("scan realtime session item: %w", err)
+		}
+		if observed.Valid {
+			value := observed.Int64
+			entry.ObservedAtMS = &value
+		}
+		entry.ItemJSON = json.RawMessage(itemJSON)
+		if itemType == "realtime_session_started" {
+			started = true
+		}
+		session.Items = append(session.Items, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read realtime session items: %w", err)
+	}
+	if !started {
+		return nil, nil
+	}
+	return session, nil
+}
+
+// LatestThreadRealtimeSession returns the newest logical session id from
+// persisted start records, including a closed session (Rust
+// ThreadStore::load_realtime_session_head). A newly requested id that has no
+// persisted session yet falls back to this head.
+func (r *StateRuntime) LatestThreadRealtimeSession(ctx context.Context, threadID string) (string, bool, error) {
+	if r == nil {
+		return "", false, invalidThreadHistory("thread history is not available")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return "", false, invalidThreadHistory("thread id is required")
+	}
+	db, err := r.ThreadHistoryDB(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	var sessionID sql.NullString
+	err = db.QueryRowContext(ctx, `
+SELECT json_extract(item_json, '$.realtime_session_id')
+FROM thread_realtime_items
+WHERE thread_id = ? AND item_type = 'realtime_session_started'
+ORDER BY rollout_ordinal DESC, item_id DESC
+LIMIT 1`, threadID).Scan(&sessionID)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("read latest realtime session: %w", err)
+	}
+	value := strings.TrimSpace(sessionID.String)
+	if value == "" {
+		return "", false, nil
+	}
+	return value, true, nil
+}
+
+// ThreadRealtimeEnrolled reports whether durable history already holds a
+// canonical realtime session start. Rust #62271 keeps such a thread enrolled
+// after the `features.realtime_frames_local` flag is turned off, so a call that
+// is still streaming does not lose its frames.
+func (r *StateRuntime) ThreadRealtimeEnrolled(ctx context.Context, threadID string) (bool, error) {
+	if r == nil {
+		return false, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return false, nil
+	}
+	db, err := r.ThreadHistoryDB(ctx)
+	if err != nil {
+		return false, err
+	}
+	var exists bool
+	if err := db.QueryRowContext(ctx, `
+SELECT EXISTS(
+    SELECT 1 FROM thread_realtime_items
+    WHERE thread_id = ? AND item_type = 'realtime_session_started'
+)`, threadID).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check realtime enrollment: %w", err)
+	}
+	return exists, nil
+}
+
 func parseThreadRealtimeCursor(raw *string) (*threadRealtimeCursor, error) {
 	if raw == nil {
 		return nil, nil

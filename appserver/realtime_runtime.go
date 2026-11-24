@@ -1094,7 +1094,18 @@ func (r *RuntimeRouter) realtimeFramesEnabled(threadID string) bool {
 	if r.services.ThreadRouter != nil {
 		defaultMode = r.services.ThreadRouter.defaultHistoryMode
 	}
-	return realtimeFramesEligible(cfg, mode, defaultMode)
+	if realtimeFramesEligible(cfg, mode, defaultMode) {
+		return true
+	}
+	// Rust #62271 keeps a thread enrolled once it has a persisted canonical
+	// realtime session start, so disabling the flag cannot cut off a call that
+	// is still recording frames.
+	if r.services.StateRuntime != nil {
+		if enrolled, err := r.services.StateRuntime.ThreadRealtimeEnrolled(context.Background(), threadID); err == nil && enrolled {
+			return true
+		}
+	}
+	return false
 }
 
 // realtimeFramesBackingReady reports whether the runtime has the state database
