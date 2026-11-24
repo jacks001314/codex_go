@@ -727,14 +727,34 @@ func (r *Router) configureThreadHistoryRecorder(recorder *rollout.Recorder, thre
 		return
 	}
 	paginated := recorder.IsPaginated()
+	// Rust #63456: a rollback-journal pool (network filesystem) defers the
+	// SQLite projection on the live write path, so a long journal lock cannot
+	// stall recording thread activity; history pages materialize on demand.
+	deferProjection := paginated && r.threadHistoryPrefersRollbackJournal()
 	recorder.SetAfterFlush(func(path string) {
 		if r.state != nil {
 			_ = r.state.ReconcileRollout(context.Background(), path, false)
 		}
-		if paginated {
+		if paginated && !deferProjection {
 			_ = r.materializeThreadHistory(threadID, path)
 		}
 	})
+}
+
+// threadHistoryPrefersRollbackJournal reports whether the thread history
+// database keeps SQLite's rollback journal instead of WAL (Rust #63456).
+func (r *Router) threadHistoryPrefersRollbackJournal() bool {
+	if r == nil {
+		return false
+	}
+	if r.state != nil {
+		return r.state.SQLite().PrefersRollbackJournal()
+	}
+	config, err := state.NewSqliteConfig(rustSQLiteHome(codexHomeFromSessionStore(r.store)))
+	if err != nil {
+		return false
+	}
+	return config.PrefersRollbackJournal()
 }
 
 func (r *Router) materializeThreadHistory(threadID session.ThreadID, path string) error {
@@ -3492,13 +3512,21 @@ func (r *Router) handleThreadDelete(request *Request) (*ThreadDeleteResponse, er
 		if err := r.store.Delete(threadID); err != nil && !errors.Is(err, session.ErrThreadNotFound) {
 			return nil, err
 		}
+		// Rust #63456: an existing history database must be reachable before any
+		// rollout is removed, and rollouts are unlinked before their projection
+		// checkpoints are cleared so a queued batch cannot recreate deleted rows.
 		if r.state != nil {
-			if err := r.state.DeleteThreadHistory(context.Background(), string(threadID)); err != nil {
+			if err := r.state.EnsureThreadHistoryDB(context.Background()); err != nil {
 				return nil, err
 			}
 		}
 		if err := r.deleteThreadRolloutsStrict(threadID); err != nil {
 			return nil, err
+		}
+		if r.state != nil {
+			if err := r.state.DeleteThreadHistory(context.Background(), string(threadID)); err != nil {
+				return nil, err
+			}
 		}
 		if err := rollout.RemoveThreadNameEntries(codexHomeFromSessionStore(r.store), string(threadID)); err != nil {
 			return nil, err

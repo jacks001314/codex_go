@@ -36,6 +36,15 @@ const (
 	QueueSQLiteFilename         = "queue_1.sqlite"
 	ThreadHistorySQLiteFilename = "thread_history_1.sqlite"
 	SQLiteMaxOpenConnections    = 5
+	// sqliteRollbackJournalMaxOpenConnections caps pools that keep a rollback
+	// journal: rollback mode serializes writers on a file lock, so extra
+	// connections only queue (Rust #63456).
+	sqliteRollbackJournalMaxOpenConnections = 2
+	// sqliteBusyTimeoutMS is the default lock wait every writable pool carries.
+	sqliteBusyTimeoutMS = 5000
+	// sqliteRollbackJournalBusyTimeoutMS lets a rollback-journal pool ride out a
+	// long NFS write instead of surfacing SQLITE_BUSY (Rust #63456).
+	sqliteRollbackJournalBusyTimeoutMS = 60000
 
 	// sqliteJournalModeDelete is SQLite's rollback-journal mode. Rust #54389
 	// (`1ef30bcb`) preserves the journal mode of an initialized database and
@@ -198,6 +207,16 @@ func (c SqliteConfig) WithNFSDeleteEnforcement(enforce bool) SqliteConfig {
 // is active for this config.
 func (c SqliteConfig) EnforcesNFSDelete() bool {
 	return c.enforceDeleteOnNFS
+}
+
+// PrefersRollbackJournal reports whether writable pools for this home keep
+// SQLite's rollback journal instead of WAL (Rust
+// `SqliteConfig::prefers_rollback_journal`, #63456): a network filesystem gets
+// DELETE journaling whether or not the managed requirement enforces it, and a
+// probe failure keeps the default WAL behavior.
+func (c SqliteConfig) PrefersRollbackJournal() bool {
+	nfs, err := c.IsNFS()
+	return err == nil && nfs
 }
 
 func NewSqliteConfig(sqliteHome string) (SqliteConfig, error) {
@@ -447,10 +466,6 @@ func (c SqliteConfig) OpenReadWrite(ctx context.Context, path string) (*sql.DB, 
 	if err := c.prepareLogsDirectory(path); err != nil {
 		return nil, err
 	}
-	dsn, err := sqliteFileDSN(path, false)
-	if err != nil {
-		return nil, err
-	}
 	// Rust initializes the writable pool with `after_connect`, so the opener owns
 	// the first initialization error instead of a pooled retry hiding it (#49102,
 	// upstream c2d2f422e6), and retries a busy opener before that error surfaces
@@ -477,6 +492,19 @@ func (c SqliteConfig) OpenReadWrite(ctx context.Context, path string) (*sql.DB, 
 	} else if nfs {
 		policy = sqliteJournalModeInitializeDelete
 	}
+	// Rust #63456: a rollback-journal pool waits longer for locks and keeps two
+	// connections, because its writers serialize on the journal file anyway.
+	rollbackJournal := policy != sqliteJournalModeInitializeWAL
+	busyTimeoutMS := sqliteBusyTimeoutMS
+	maxOpenConnections := SQLiteMaxOpenConnections
+	if rollbackJournal {
+		busyTimeoutMS = sqliteRollbackJournalBusyTimeoutMS
+		maxOpenConnections = sqliteRollbackJournalMaxOpenConnections
+	}
+	dsn, err := sqliteFileDSNWithBusyTimeout(path, false, busyTimeoutMS)
+	if err != nil {
+		return nil, err
+	}
 	return retryOnSQLiteBusy(func() (*sql.DB, error) {
 		db := sql.OpenDB(newWritableSQLiteConnector(dsn, policy == sqliteJournalModeRequireDelete))
 		if err := RequireSQLiteVersion(ctx, db); err != nil {
@@ -487,8 +515,8 @@ func (c SqliteConfig) OpenReadWrite(ctx context.Context, path string) (*sql.DB, 
 			_ = db.Close()
 			return nil, err
 		}
-		db.SetMaxOpenConns(SQLiteMaxOpenConnections)
-		db.SetMaxIdleConns(SQLiteMaxOpenConnections)
+		db.SetMaxOpenConns(maxOpenConnections)
+		db.SetMaxIdleConns(maxOpenConnections)
 		return db, nil
 	})
 }
@@ -704,11 +732,17 @@ func (c SqliteConfig) OpenReadOnly(ctx context.Context, path string) (*sql.DB, e
 }
 
 func sqliteFileDSN(path string, readOnly bool) (string, error) {
+	return sqliteFileDSNWithBusyTimeout(path, readOnly, sqliteBusyTimeoutMS)
+}
+
+// sqliteFileDSNWithBusyTimeout builds the DSN with an explicit lock wait, so a
+// rollback-journal pool can ask for the longer NFS budget (Rust #63456).
+func sqliteFileDSNWithBusyTimeout(path string, readOnly bool, busyTimeoutMS int) (string, error) {
 	mode := "rwc"
 	if readOnly {
 		mode = "ro"
 	}
-	return sqliteFileDSNWithMode(path, mode, !readOnly)
+	return sqliteFileDSNWithModeAndBusyTimeout(path, mode, !readOnly, busyTimeoutMS)
 }
 
 // sqliteFileDSNWithMode builds a `file:` DSN for an explicit SQLite open mode
@@ -717,6 +751,10 @@ func sqliteFileDSN(path string, readOnly bool) (string, error) {
 // legacy database never blocks the background sweep (Rust #55978 opens legacy
 // cleanup with a zero busy timeout).
 func sqliteFileDSNWithMode(path string, mode string, pragmas bool) (string, error) {
+	return sqliteFileDSNWithModeAndBusyTimeout(path, mode, pragmas, sqliteBusyTimeoutMS)
+}
+
+func sqliteFileDSNWithModeAndBusyTimeout(path string, mode string, pragmas bool, busyTimeoutMS int) (string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return "", fmt.Errorf("sqlite database path is required")
@@ -732,6 +770,9 @@ func sqliteFileDSNWithMode(path string, mode string, pragmas bool) (string, erro
 	u := &url.URL{Scheme: "file", Path: uriPath}
 	query := u.Query()
 	query.Set("mode", mode)
+	if busyTimeoutMS <= 0 {
+		busyTimeoutMS = sqliteBusyTimeoutMS
+	}
 	if mode == "ro" {
 		// sqlx defaults read-only pools to a 5s busy timeout (Rust
 		// `open_read_only_pool` with `busy_timeout: None`), which lets feedback
@@ -744,7 +785,7 @@ func sqliteFileDSNWithMode(path string, mode string, pragmas bool) (string, erro
 		// existing database keeps its journal and vacuum modes without taking the
 		// writer lock (#49102, #54389). `synchronous(NORMAL)` is the pool default;
 		// the connection hook raises it to EXTRA for a preserved DELETE journal.
-		query.Add("_pragma", "busy_timeout(5000)")
+		query.Add("_pragma", "busy_timeout("+strconv.Itoa(busyTimeoutMS)+")")
 		query.Add("_pragma", "synchronous(NORMAL)")
 		query.Add("_pragma", "foreign_keys(ON)")
 	}

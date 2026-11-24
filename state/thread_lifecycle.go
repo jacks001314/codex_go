@@ -139,6 +139,23 @@ func (r *StateRuntime) DeleteThreadHistory(ctx context.Context, threadID string)
 	return deleteThreadHistoryRows(ctx, db, threadID)
 }
 
+// EnsureThreadHistoryDB opens an existing history database without changing it.
+// Deletion checks this before removing rollout files, so a database that cannot
+// be opened leaves the canonical history in place (Rust #63456
+// `history_db_for_delete`).
+func (r *StateRuntime) EnsureThreadHistoryDB(ctx context.Context) error {
+	if r == nil {
+		return errors.New("state runtime is nil")
+	}
+	if _, err := os.Stat(r.sqlite.ThreadHistoryDBPath()); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("stat thread history database: %w", err)
+	}
+	_, err := r.ThreadHistoryDB(ctx)
+	return err
+}
+
 func deleteThreadHistoryRows(ctx context.Context, db *sql.DB, threadID string) (err error) {
 	if ctx == nil {
 		ctx = context.Background()

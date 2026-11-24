@@ -199,8 +199,14 @@ func materializeThreadHistory(ctx context.Context, db *sql.DB, admit func(contex
 	if len(steps) == 0 && startOffset == nextOffset {
 		return nil
 	}
-	return applyThreadHistoryProjection(ctx, db, admit, threadID, startOffset, nextOffset, initialOrdinal, subagentHistoryStartOrdinal, steps)
+	return applyThreadHistoryProjection(ctx, db, admit, threadID, rolloutPath, startOffset, nextOffset, initialOrdinal, subagentHistoryStartOrdinal, steps)
 }
+
+// ErrThreadHistoryNotFound reports a projection batch whose thread no longer
+// exists: deletion removed the rollout before clearing its checkpoint, so a
+// batch already read from that file must not recreate the history (Rust
+// #63456 `ThreadNotFound`).
+var ErrThreadHistoryNotFound = errors.New("thread not found")
 
 // readThreadHistoryProjectionSteps mirrors Rust #53947's
 // `read_projection_steps` (`read_projection_steps_sync(..., || stop.is_closed())`
@@ -231,7 +237,7 @@ func readThreadHistoryProjectionSteps(ctx context.Context, rolloutPath string, s
 	})
 }
 
-func applyThreadHistoryProjection(ctx context.Context, db *sql.DB, admit func(context.Context) (func(), error), threadID string, startOffset uint64, nextOffset uint64, initialOrdinal uint64, subagentHistoryStartOrdinal *uint64, steps []rollout.ProjectionStep) (err error) {
+func applyThreadHistoryProjection(ctx context.Context, db *sql.DB, admit func(context.Context) (func(), error), threadID string, rolloutPath string, startOffset uint64, nextOffset uint64, initialOrdinal uint64, subagentHistoryStartOrdinal *uint64, steps []rollout.ProjectionStep) (err error) {
 	if startOffset > maxSQLiteInteger || nextOffset > maxSQLiteInteger || initialOrdinal > maxSQLiteInteger {
 		return errors.New("thread history projection checkpoint exceeds SQLite integer range")
 	}
@@ -262,7 +268,7 @@ func applyThreadHistoryProjection(ctx context.Context, db *sql.DB, admit func(co
 		}
 	}()
 
-	expectedOffset, nextOrdinal := uint64(0), initialOrdinal
+	expectedOffset, committedOrdinal := uint64(0), initialOrdinal
 	var storedOffset, storedOrdinal int64
 	queryErr := conn.QueryRowContext(ctx, `
 SELECT next_rollout_byte_offset, next_rollout_ordinal
@@ -273,21 +279,47 @@ WHERE thread_id = ?`, threadID).Scan(&storedOffset, &storedOrdinal)
 		if storedOffset < 0 || storedOrdinal < 0 {
 			return fmt.Errorf("thread history projection for %s has a negative checkpoint", threadID)
 		}
-		expectedOffset, nextOrdinal = uint64(storedOffset), uint64(storedOrdinal)
+		expectedOffset, committedOrdinal = uint64(storedOffset), uint64(storedOrdinal)
 	case queryErr != sql.ErrNoRows:
 		return fmt.Errorf("read transactional thread history projection: %w", queryErr)
+	default:
+		// Rust #63456: deletion unlinks the rollout before clearing the
+		// checkpoint, so a missing checkpoint next to a missing rollout means a
+		// batch read from the deleted file must not recreate its history.
+		if strings.TrimSpace(rolloutPath) != "" {
+			if _, exists := rollout.ExistingRolloutPath(rolloutPath); !exists {
+				return fmt.Errorf("%w: %s", ErrThreadHistoryNotFound, threadID)
+			}
+		}
 	}
-	if expectedOffset != startOffset {
+	if expectedOffset < startOffset {
 		return fmt.Errorf("thread history projection for %s is behind durable rollout", threadID)
 	}
+	// Another reader may have committed part of this batch. Rust #63456 replays
+	// the covered prefix instead of failing, and a batch that is fully covered
+	// commits nothing.
+	replaying := expectedOffset > startOffset
+	if replaying && expectedOffset >= nextOffset {
+		if _, err := conn.ExecContext(context.Background(), `ROLLBACK`); err != nil {
+			return fmt.Errorf("rollback covered thread history projection: %w", err)
+		}
+		return nil
+	}
+	nextOrdinal := committedOrdinal
 	for _, step := range steps {
 		switch step.Kind {
 		case rollout.ProjectionSkippedOrdinalRange:
+			if replaying && step.EndOrdinalExclusive <= committedOrdinal {
+				continue
+			}
 			if step.Ordinal != nextOrdinal || step.EndOrdinalExclusive <= step.Ordinal {
 				return fmt.Errorf("thread history projection for %s has an invalid skipped ordinal range", threadID)
 			}
 			nextOrdinal = step.EndOrdinalExclusive
 		case rollout.ProjectionLine:
+			if replaying && step.EndByteOffset <= expectedOffset {
+				continue
+			}
 			if step.Ordinal != nextOrdinal || step.Line == nil {
 				return fmt.Errorf("thread history projection for %s expected ordinal %d, got %d", threadID, nextOrdinal, step.Ordinal)
 			}
