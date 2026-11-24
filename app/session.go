@@ -1204,9 +1204,13 @@ func applyResumeApproveForMePreset(store *session.Store, opts *cli.SessionOption
 	if cwd == "" {
 		cwd = strings.TrimSpace(threadCWD)
 	}
-	policy := string(sandbox.ApprovalOnRequest)
-	reviewer := string(config.ApprovalsReviewerAutoReview)
-	sandboxMode := string(sandbox.SandboxWorkspaceWrite)
+	preset, err := resolveResumeApproveForMePreset(store)
+	if err != nil {
+		return err
+	}
+	policy := string(preset.ApprovalPolicy)
+	reviewer := string(preset.ApprovalsReviewer)
+	sandboxMode := string(preset.SandboxMode)
 	// The metadata is the embedded store's thread-settings surface when a Go
 	// snapshot exists; a Rust-only rollout has none, and the snapshot below is
 	// what an embedded resume restores in either case.
@@ -1220,13 +1224,50 @@ func applyResumeApproveForMePreset(store *session.Store, opts *cli.SessionOption
 			}
 		}
 	}
-	return appendResumeApproveForMeRolloutSettings(store, target, cwd, policy, reviewer)
+	return appendResumeApproveForMeRolloutSettings(store, target, cwd, policy, reviewer, preset.SandboxMode)
+}
+
+// resolveResumeApproveForMePreset resolves Rust #63589's --approve-for-me
+// preset under the resumed conversation's managed requirements: a managed
+// allow-list replaces a disallowed preset value with the requirement default,
+// and a malformed requirements file stops the resume before any settings are
+// written.
+func resolveResumeApproveForMePreset(store *session.Store) (config.ManagedPermissionRequest, error) {
+	request := config.ManagedPermissionRequest{
+		ApprovalPolicy:    sandbox.ApprovalOnRequest,
+		ApprovalsReviewer: config.ApprovalsReviewerAutoReview,
+		SandboxMode:       sandbox.SandboxWorkspaceWrite,
+	}
+	requirements, err := config.LoadManagedRequirements(sessionCodexHome(store), nil)
+	if err != nil {
+		return request, fmt.Errorf("cannot verify managed requirements for --approve-for-me: %w", err)
+	}
+	resolved, _, err := config.ResolveManagedPermissionRequest(requirements, request)
+	if err != nil {
+		return request, fmt.Errorf("cannot resolve --approve-for-me against managed requirements: %w", err)
+	}
+	return resolved, nil
+}
+
+// resumeApproveForMePermissionProfile maps the resolved sandbox mode to the
+// permission profile checkpointed with the preset.
+func resumeApproveForMePermissionProfile(mode sandbox.SandboxMode) (sandbox.PermissionProfile, bool) {
+	switch mode {
+	case sandbox.SandboxWorkspaceWrite:
+		return sandbox.WorkspaceWritePermissionProfile(), true
+	case sandbox.SandboxReadOnly:
+		return sandbox.ReadOnlyPermissionProfile(), true
+	case sandbox.SandboxDangerFullAccess:
+		return sandbox.FullAccessPermissionProfile(), true
+	default:
+		return sandbox.PermissionProfile{}, false
+	}
 }
 
 // appendResumeApproveForMeRolloutSettings writes the thread-settings snapshot
 // that Rust's thread/settings/update checkpoints, so exec/TUI resumes restore
 // on-request approvals, the auto reviewer and workspace-write.
-func appendResumeApproveForMeRolloutSettings(store *session.Store, target session.ThreadID, cwd string, policy string, reviewer string) error {
+func appendResumeApproveForMeRolloutSettings(store *session.Store, target session.ThreadID, cwd string, policy string, reviewer string, mode sandbox.SandboxMode) error {
 	if store == nil {
 		return nil
 	}
@@ -1239,7 +1280,11 @@ func appendResumeApproveForMeRolloutSettings(store *session.Store, target sessio
 		return err
 	}
 	defer recorder.Close()
-	profileJSON, err := sandbox.RuntimePermissionProfileJSON(sandbox.WorkspaceWritePermissionProfile())
+	profile, ok := resumeApproveForMePermissionProfile(mode)
+	if !ok {
+		return fmt.Errorf("cannot checkpoint unsupported sandbox mode %q for --approve-for-me", mode)
+	}
+	profileJSON, err := sandbox.RuntimePermissionProfileJSON(profile)
 	if err != nil {
 		return err
 	}

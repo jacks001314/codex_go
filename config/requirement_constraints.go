@@ -77,6 +77,66 @@ func applyManagedConstrainedOverrides(values map[string]any, requirements *Confi
 	return nil
 }
 
+// ManagedPermissionRequest is a requested approval policy, approvals reviewer
+// and sandbox mode that managed requirements may constrain.
+type ManagedPermissionRequest struct {
+	ApprovalPolicy    sandbox.AskForApproval
+	ApprovalsReviewer ApprovalsReviewer
+	SandboxMode       sandbox.SandboxMode
+}
+
+// ResolveManagedPermissionRequest mirrors Rust's
+// apply_requirement_constrained_value for the three enum-shaped settings: a
+// managed allow-list replaces a disallowed request with the requirement default
+// (the first allowed entry, or the preferred allowed sandbox mode) and reports
+// the replacement. A malformed allow-list that permits nothing is an error,
+// mirroring Rust's ConstraintError::empty_field.
+func ResolveManagedPermissionRequest(requirements *ConfigRequirements, request ManagedPermissionRequest) (ManagedPermissionRequest, bool, error) {
+	if requirements == nil {
+		return request, false, nil
+	}
+	resolved := request
+	constrained := false
+	if requirements.AllowedApprovalPolicies != nil {
+		effective, _, err := resolveRequirementConstrainedApprovalPolicy(
+			string(request.ApprovalPolicy),
+			requirements.AllowedApprovalPolicies,
+		)
+		if err != nil {
+			return request, false, err
+		}
+		if sandbox.AskForApproval(effective) != request.ApprovalPolicy {
+			resolved.ApprovalPolicy = sandbox.AskForApproval(effective)
+			constrained = true
+		}
+	}
+	if requirements.AllowedApprovalsReviewers != nil {
+		effective, _, err := resolveRequirementConstrainedApprovalsReviewer(
+			string(request.ApprovalsReviewer),
+			requirements.AllowedApprovalsReviewers,
+		)
+		if err != nil {
+			return request, false, err
+		}
+		if ApprovalsReviewer(effective) != request.ApprovalsReviewer {
+			resolved.ApprovalsReviewer = ApprovalsReviewer(effective)
+			constrained = true
+		}
+	}
+	if len(requirements.AllowedSandboxModes) > 0 &&
+		!sandboxModeAllowed(requirements.AllowedSandboxModes, request.SandboxMode) {
+		mode, ok := permissionProfileSandboxMode(
+			permissionProfileForAllowedSandboxModes(requirements.AllowedSandboxModes),
+		)
+		if !ok {
+			return request, false, fmt.Errorf("requirements.toml allows no usable sandbox mode")
+		}
+		resolved.SandboxMode = mode
+		constrained = true
+	}
+	return resolved, constrained, nil
+}
+
 // configuredApprovalPolicyValue reads the configured approval policy, including
 // the granular table form.
 func configuredApprovalPolicyValue(raw any) string {
