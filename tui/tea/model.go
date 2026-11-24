@@ -2230,6 +2230,9 @@ type Model struct {
 	// for the exact draft it was dismissed on (Rust dismissed_argument_token).
 	slashArgumentDismissed string
 	agentsOverview         *agentsoverview.View
+	// agentsOverviewOpening is the task whose resume request is in flight while
+	// the command center keeps its frame visible (Rust #63146).
+	agentsOverviewOpening string
 	// analyticsDashboard is the retained /usage analytics view. It keeps its
 	// navigation state across open/close and cancels pending loads on close
 	// (Rust #45764 App::retained_analytics).
@@ -5250,7 +5253,16 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		m.applyRightClickPasteRead(msg)
 		return m, nil
 	case AgentSwitchResultMsg:
+		opening := m.agentsOverviewOpening
 		m.applyAgentSwitchResult(msg)
+		if opening != "" && opening == strings.TrimSpace(msg.ThreadID) {
+			if m.agentsOverview != nil && msg.Err != nil {
+				m.agentsOverview.ClearOpening()
+				m.agentsOverviewOpening = ""
+			} else {
+				m.closeAgentsOverview()
+			}
+		}
 		// Rust #63184: returning to the calling conversation shows the file the
 		// model asked for while another thread was visible.
 		return m, batchSideCommands(m.refreshStatusControlsCmd(), m.drainPendingSidebarOpens())

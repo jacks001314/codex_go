@@ -481,14 +481,23 @@ func TestModelAgentsDashboardOpenAttachesViaSwitchAgent(t *testing.T) {
 	model.agentsOverview.Selected = 1 // root-2
 	updated, command := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
-	if model.agentsOverview != nil {
-		t.Fatal("open did not close the dashboard")
-	}
+	// Rust #63146: the command center keeps its outgoing frame visible while
+	// the destination loads and marks the selected row.
 	if command == nil {
 		t.Fatal("open returned no attach command")
 	}
+	if model.agentsOverview == nil {
+		t.Fatal("open closed the dashboard before the destination attached")
+	}
+	if got := model.agentsOverview.OpeningThread(); got != "root-2" {
+		t.Fatalf("OpeningThread() = %q, want root-2", got)
+	}
 	message := command()
-	model.Update(message)
+	updated, _ = model.Update(message)
+	model = updated.(*Model)
+	if model.agentsOverview != nil {
+		t.Fatal("the dashboard stayed open after the destination attached")
+	}
 	if len(switched) != 1 || switched[0] != "root-2" {
 		t.Fatalf("switched = %v, want [root-2]", switched)
 	}

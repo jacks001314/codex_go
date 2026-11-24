@@ -41,8 +41,10 @@ func TestModelAgentsDashboardOpenShowsSwitchNoticeLikeRust(t *testing.T) {
 	if !strings.HasPrefix(pendingNotice, "Switching to ") {
 		t.Fatalf("pending attach notice = %q, want a switching notice", pendingNotice)
 	}
-	if output := utils.StripANSI(model.viewString()); !strings.Contains(output, pendingNotice) {
-		t.Fatalf("pending attach notice is not rendered:\n%s", output)
+	// Rust #63146: while the destination loads the outgoing command-center
+	// frame reports the opening task instead of the chat's switching notice.
+	if output := utils.StripANSI(model.viewString()); !strings.Contains(output, "Opening task\u2026") {
+		t.Fatalf("pending opening frame is not rendered:\n%s", output)
 	}
 
 	updated, _ = model.Update(command())

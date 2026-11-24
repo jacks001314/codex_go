@@ -1539,6 +1539,7 @@ func (m *Model) openAgentsOverviewThread(threadID string) bubbletea.Cmd {
 	if threadID != "" && threadID != current && strings.TrimSpace(m.pendingServerProfile) != "" {
 		m.addErrorHistoryMessage("Wait for permissions to update before switching tasks.")
 		m.refreshTranscript()
+		m.closeAgentsOverview()
 		return nil
 	}
 	// Rust #63146: the destination's replay can outlast the press window, so
@@ -1549,13 +1550,14 @@ func (m *Model) openAgentsOverviewThread(threadID string) bubbletea.Cmd {
 		m.agentsOverview.UnhideThread(threadID)
 	}
 	delete(m.agentsOverviewHidden, threadID)
-	m.closeAgentsOverview()
 	if threadID == "" {
+		m.closeAgentsOverview()
 		m.notice = "This session is no longer available."
 		return nil
 	}
 	if threadID == current {
 		m.notice = "Already showing this session."
+		m.closeAgentsOverview()
 		return nil
 	}
 	// Rust select_agents_overview_thread: preserve the current thread's
@@ -1592,6 +1594,16 @@ func (m *Model) openAgentsOverviewThread(threadID string) bubbletea.Cmd {
 		m.applyAgentSwitchResult(AgentSwitchResultMsg{ThreadID: threadID, Response: blank})
 		return m.refreshStatusControlsCmd()
 	}
+	if m.onSwitchAgent != nil {
+		// Rust #63146: keep the outgoing command-center frame visible and mark
+		// the row while the destination loads; AgentSwitchResultMsg closes it.
+		if m.agentsOverview != nil {
+			m.agentsOverview.MarkOpening(threadID)
+		}
+		m.agentsOverviewOpening = threadID
+		return m.applyAgentModalOption(threadID)
+	}
+	m.closeAgentsOverview()
 	return m.applyAgentModalOption(threadID)
 }
 
@@ -1669,6 +1681,7 @@ func (m *Model) closeAgentsOverview() {
 		m.agentsOverviewHidden = m.agentsOverview.HiddenThreads()
 	}
 	m.agentsOverview = nil
+	m.agentsOverviewOpening = ""
 	m.agentsOverviewPolling = false
 	m.agentsOverviewNotice = ""
 	m.agentsOverviewBusy = false
