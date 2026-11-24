@@ -312,6 +312,28 @@ func (s *ProxyServer) runtimePolicy() *proxyRuntimePolicy {
 	return &proxyRuntimePolicy{broker: NewProxyCredentialBroker(false)}
 }
 
+// validateProxyConfigUpdate mirrors Rust NetworkProxy::validate_config_update
+// (#60046): an in-place reload may change policy, but every setting that
+// decides which listeners the process already bound must stay put.
+func validateProxyConfigUpdate(current ProxySettings, next ProxySettings) error {
+	if next.Enabled != current.Enabled {
+		return fmt.Errorf("cannot update network.enabled on a running proxy")
+	}
+	if next.ProxyURL != current.ProxyURL {
+		return fmt.Errorf("cannot update network.proxy_url on a running proxy")
+	}
+	if next.SocksURL != current.SocksURL {
+		return fmt.Errorf("cannot update network.socks_url on a running proxy")
+	}
+	if next.EnableSocks5 != current.EnableSocks5 {
+		return fmt.Errorf("cannot update network.enable_socks5 on a running proxy")
+	}
+	if next.EnableSocks5UDP != current.EnableSocks5UDP {
+		return fmt.Errorf("cannot update network.enable_socks5_udp on a running proxy")
+	}
+	return nil
+}
+
 func (s *ProxyServer) ReloadConfig(config ProxyConfig) error {
 	if s == nil {
 		return fmt.Errorf("network proxy is unavailable")
@@ -320,11 +342,11 @@ func (s *ProxyServer) ReloadConfig(config ProxyConfig) error {
 		return err
 	}
 	settings := config.Network
+	if err := validateProxyConfigUpdate(s.runtimePolicy().settings, settings); err != nil {
+		return err
+	}
 	if settings.EnableSocks5 != (s.socksListener != nil) {
 		return fmt.Errorf("changing enable_socks5 requires restarting the network proxy")
-	}
-	if settings.EnableSocks5UDP != s.runtimePolicy().settings.EnableSocks5UDP {
-		return fmt.Errorf("changing enable_socks5_udp requires restarting the network proxy")
 	}
 	if settings.MITM && s.mitm == nil {
 		return fmt.Errorf("enabling MITM requires restarting the network proxy")

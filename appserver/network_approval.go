@@ -166,17 +166,6 @@ func newNetworkApprovalService(router *RuntimeRouter) *networkApprovalService {
 	}
 }
 
-// persistNetworkPolicyAmendment appends an approved amendment through the
-// configured persistence function.
-func (s *networkApprovalService) persistNetworkPolicyAmendment(amendment *NetworkPolicyAmendment, protocol NetworkApprovalProtocol) error {
-	if s == nil || s.persistAmendment == nil {
-		return errors.New("network policy persistence is unavailable")
-	}
-	s.persistMu.Lock()
-	defer s.persistMu.Unlock()
-	return s.persistAmendment(amendment, protocol)
-}
-
 // applyCommandNetworkPolicyAmendment applies an amendment chosen on a shell
 // command approval. Rust Session::resolve_exec_approval shares the same policy
 // path as the network approval, so the command side must persist the rule and
@@ -191,17 +180,37 @@ func (s *networkApprovalService) applyCommandNetworkPolicyAmendment(threadID str
 		environmentID: "local",
 		host:          host,
 	}
-	if action == NetworkPolicyRuleDeny {
+	return s.applyNetworkPolicyAmendment(
+		key,
+		&NetworkPolicyAmendment{Host: host, Action: action},
+		NetworkApprovalHTTPS,
+	)
+}
+
+// applyNetworkPolicyAmendment publishes, persists and publishes again under the
+// update lock, mirroring Rust ExecPolicyManager::apply_network_rule_and_persist
+// (#60046). The lock spans the whole sequence, so a later amendment cannot
+// publish a decision before an earlier one is durable (Rust update_lock). A
+// denial is still published before the fallible write, and a grant becomes
+// effective only after the write succeeded.
+func (s *networkApprovalService) applyNetworkPolicyAmendment(
+	key networkApprovalKey,
+	amendment *NetworkPolicyAmendment,
+	protocol NetworkApprovalProtocol,
+) error {
+	if s == nil || s.persistAmendment == nil {
+		return errors.New("network policy persistence is unavailable")
+	}
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+	if amendment.Action == NetworkPolicyRuleDeny {
 		// The denial is effective even when the write fails (Rust #59917).
 		s.publishNetworkDenial(key)
 	}
-	if err := s.persistNetworkPolicyAmendment(
-		&NetworkPolicyAmendment{Host: host, Action: action},
-		NetworkApprovalHTTPS,
-	); err != nil {
+	if err := s.persistAmendment(amendment, protocol); err != nil {
 		return err
 	}
-	if action == NetworkPolicyRuleAllow {
+	if amendment.Action == NetworkPolicyRuleAllow {
 		s.publishNetworkGrant(key)
 	}
 	return nil
@@ -641,11 +650,10 @@ func (s *networkApprovalService) requestApproval(ctx context.Context, active *ne
 			// Rust #42746: record the explicit denial before waiting on the
 			// policy commit so process cleanup cannot replace the call outcome.
 			s.recordUserDenialForThread(active.threadID)
-			// Rust #59917: publish the denial before the write, so a failed
-			// commit still blocks this host for later requests.
-			s.publishNetworkDenial(key)
 		}
-		if err := s.persistNetworkPolicyAmendment(amendment, protocol); err != nil {
+		// Rust #59917/#60046: the update lock publishes a denial before the
+		// fallible write and a grant only after it succeeded.
+		if err := s.applyNetworkPolicyAmendment(key, amendment, protocol); err != nil {
 			slog.Warn("Failed to apply network policy amendment", "error", err)
 			s.router.emitToolDecisionRecords(ctx, active.threadID, decisionToolName, decisionCallID,
 				networkApprovalUserDecision(response.Decision, false, false), "")
@@ -653,10 +661,6 @@ func (s *networkApprovalService) requestApproval(ctx context.Context, active *ne
 			return network.DenyProxyDecision(network.ProxyReasonNotAllowed), ""
 		}
 		s.rememberNetworkRuleSaved(active.threadID, active.turnID, amendment)
-		if amendment.Action == NetworkPolicyRuleAllow {
-			// Rust #59917: the grant becomes effective only after the write.
-			s.publishNetworkGrant(key)
-		}
 		s.router.emitToolDecisionRecords(ctx, active.threadID, decisionToolName, decisionCallID,
 			networkApprovalUserDecision(response.Decision, true, amendment.Action == NetworkPolicyRuleAllow), "")
 		if amendment.Action == NetworkPolicyRuleAllow {
