@@ -49738,11 +49738,13 @@
    ],
    "evidence": [
     "Line/column link opening needs the TranscriptView target model plus chooser wiring; the document loader landed in batch 80.",
-    "plan: update/plan_2026_11_16.md batch 74"
+    "plan: update/plan_2026_11_16.md batch 74",
+    "Batch 317: #61890 is carried in Go, so the stale blocker is cleared. app/sidebar_document.go renders a coordinate link or any non-Markdown basename as a source preview with numbered lines, tracks each line start, clamps an out-of-range target, and stops at 1 MiB or 10000 lines with the Rust messages Source preview limit is 1 MiB and Source preview limit is 10000 lines; an extensionless file has no Markdown extension so it previews as source, exactly like is_markdown_file. tui/markdown/local_links.go parses hash fragments into line and column targets (L10, L10C3, L10-L14, L10C3-L14C8), foreign Windows links keep the :line:column anchor, and a location keeps the link label free of an appended destination. The pane opens the target through openSidebarDocumentAt with the SidebarSourceLocation, scrolls the target row into view and paints the highlight (paintSidebarDocumentTarget), and a workspace that cannot preview reports Preview unavailable on Windows or Requires workspace on server host and stays inert. Tests: app/sidebar_document_like_rust_test.go (Markdown link without line numbers, source line starts, coordinate link showing source and clamping, both limits, CRLF line splitting, app-server read and failure paths), app/sidebar_document_host_like_rust_test.go (workspace read, limits, non-text rejection, view of a location), tui/tea/sidebar_document_like_rust_test.go (code gutter, link cycle and follow, path resolution, hover and click, drag selection, find, tab titles and step), and tui/markdown/local_links_test.go plus file_citations_test.go and foreign_windows_links_like_rust_test.go. go test ./app with the document selectors, go test ./tui/tea -run SidebarDocument, go test ./tui/markdown with the link selectors and go build ./... pass.",
+    "Batch 317 follow-up: opening a located link now jumps the viewport to the target. applySidebarDocumentLoaded sets tab.Scroll to the target row, clamped to the document scroll range, once a located read succeeds; this is Rust #61890 jump_to_offset, and the row keeps the paintSidebarDocumentTarget shade. Test: tui/tea/sidebar_document_location_scroll_like_rust_test.go (a 200-line source opened at line 150 scrolls past the first rows, shows body line 150 and no longer paints line 1). go test ./tui/tea passes in 42s."
    ],
    "kind": "runtime",
    "sha": "3a51865c8cca4409dbdc77a22839a52a6bb1f8f9",
-   "status": "blocked_precondition",
+   "status": "complete",
    "subject": "Open source file links at line and column targets in the TUI (#61890)"
   },
   {

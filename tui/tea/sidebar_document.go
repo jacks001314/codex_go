@@ -300,6 +300,13 @@ func (m *Model) applySidebarDocumentLoaded(msg SidebarDocumentLoadedMsg) bubblet
 		} else if strings.TrimSpace(previousErr) != "" {
 			tab.Scroll = tab.readScroll
 		}
+		// Rust #61890 jump_to_offset: a link location opens the preview at its
+		// target, so the viewport shows the highlighted line instead of the top.
+		if msg.View.Err == "" && tab.View.Target != nil && !tab.TargetCleared {
+			row := max(tab.View.Target.Line-1, 0)
+			tab.Scroll = clampModalInt(row, 0, m.sidebarDocumentMaxScroll(tab))
+			tab.readScroll = tab.Scroll
+		}
 		tab.HoverLink = -1
 		tab.Selection.clear()
 		// Rust loaded() dismisses the path view but keeps a finished copy
