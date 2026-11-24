@@ -20,6 +20,11 @@ const (
 	// exec outputs the host selected by nested tool name so they receive their
 	// own reservation and entry cap (Rust #60914). Omitted, it reserves zero.
 	GuardianElasticSectionTranscriptSelectedExecResults GuardianElasticSection = "transcript_selected_exec_results"
+	// GuardianElasticSectionTranscriptAudio isolates completed speech from user
+	// recordings and tool results when a reviewer configures it (Rust #63368).
+	// Omitted, user audio uses the message group and tool audio the tool group,
+	// and the group reserves zero.
+	GuardianElasticSectionTranscriptAudio GuardianElasticSection = "transcript_audio"
 	// Round 1017 (#58388) renamed the remaining groups for the source section
 	// that owns their evidence.
 	GuardianElasticSectionRootConversationMessages GuardianElasticSection = "root_conversation_messages"
@@ -233,8 +238,9 @@ func (c GuardianElasticBudgetConfig) SectionLimits(section GuardianElasticSectio
 		tokens = entries.MessageTokens
 	case GuardianElasticSectionTranscriptTools:
 		tokens = entries.ToolTokens
-	case GuardianElasticSectionTranscriptSelectedExecResults:
-		// Rust #60914: selected exec results reserve nothing unless configured.
+	case GuardianElasticSectionTranscriptSelectedExecResults, GuardianElasticSectionTranscriptAudio:
+		// Rust #60914/#63368: selected exec results and audio transcripts use
+		// their dedicated groups only when configured.
 		return GuardianElasticSectionLimits{}
 	}
 	if tokens <= 0 {

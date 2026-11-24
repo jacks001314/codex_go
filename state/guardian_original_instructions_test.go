@@ -18,7 +18,7 @@ func TestElasticRetainedSectionsKeepLargeOriginalsInBothPresentations(t *testing
 		if strings.Contains(strings.Join(fixed.Instructions, ""), user) {
 			t.Fatal("fixture fits fixed limit")
 		}
-		sections, err := composeGuardianElasticPromptSections(Action{Type: "command", Command: "echo hello", CWD: "/workspace"}, nil, BuildPromptOptions{RetainedContext: context, Presentation: presentation})
+		sections, err := composeGuardianElasticPromptSections(Action{Type: "command", Command: "echo hello", CWD: "/workspace"}, nil, BuildPromptOptions{RetainedContext: context, Presentation: presentation}, GuardianElasticBudgetConfig{})
 		if err != nil {
 			t.Fatal(err)
 		}

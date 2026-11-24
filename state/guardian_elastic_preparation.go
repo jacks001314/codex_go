@@ -1,6 +1,8 @@
 package state
 
 import (
+	"strings"
+
 	codexctx "codex_go/context"
 	"codex_go/utils"
 )
@@ -52,6 +54,16 @@ func PrepareGuardianElasticEntries(context GuardianElasticContext, config Guardi
 				budget = 0
 			}
 			truncated := guardianElasticTruncateTextToFit(item.Text, budget)
+			if prefix, body, suffix, ok := splitGuardianElasticAudioItem(item); ok {
+				// Rust #63368 shortens only the speech body, keeping the host
+				// label, quotes and line framing so a truncated audio entry
+				// still says which turn or call produced it.
+				labelBudget := budget - utils.ApproxTokenCount(prefix+suffix)
+				if labelBudget < 0 {
+					labelBudget = 0
+				}
+				truncated = prefix + guardianElasticTruncateTextToFit(body, labelBudget) + suffix
+			}
 			if utils.ApproxTokenCount(truncated) >= originalTokens {
 				// Shortening saved nothing, so the original representation stays.
 				continue
@@ -79,6 +91,27 @@ func PrepareGuardianElasticEntries(context GuardianElasticContext, config Guardi
 // both ends and the omission marker are kept, and the minimum marker survives
 // a cap too small to hold it. The original text returns when shortening saves
 // nothing.
+// splitGuardianElasticAudioItem separates a composed audio transcript line into
+// its host label framing, quoted body and line ending so elastic preparation can
+// shorten the speech without losing the label (Rust #63368).
+func splitGuardianElasticAudioItem(item *GuardianElasticItem) (prefix string, body string, suffix string, ok bool) {
+	if item.TranscriptLabel == "" {
+		return "", "", "", false
+	}
+	prefix = "- " + item.TranscriptLabel + ": \""
+	if !strings.HasPrefix(item.Text, prefix) {
+		return "", "", "", false
+	}
+	rest := item.Text[len(prefix):]
+	trimmed := strings.TrimRight(rest, "\n")
+	if !strings.HasSuffix(trimmed, "\"") {
+		return "", "", "", false
+	}
+	body = trimmed[:len(trimmed)-1]
+	suffix = rest[len(body):]
+	return prefix, body, suffix, true
+}
+
 func guardianElasticTruncateTextToFit(text string, maxTokens int) string {
 	originalTokens := utils.ApproxTokenCount(text)
 	if originalTokens <= maxTokens {

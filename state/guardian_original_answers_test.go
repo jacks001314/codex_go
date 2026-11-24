@@ -12,7 +12,7 @@ func TestElasticRequestRetainsAnswerBeyondFixedRenderLimit(t *testing.T) {
 		t.Fatal("fixture must exceed fixed answer limit")
 	}
 	for _, presentation := range []ActionPresentation{ActionPresentationSyncFull, ActionPresentationAsync} {
-		sections, err := composeGuardianElasticPromptSections(Action{Type: "command", Command: "echo hello", CWD: "/workspace"}, nil, BuildPromptOptions{RetainedContext: retained, Presentation: presentation})
+		sections, err := composeGuardianElasticPromptSections(Action{Type: "command", Command: "echo hello", CWD: "/workspace"}, nil, BuildPromptOptions{RetainedContext: retained, Presentation: presentation}, GuardianElasticBudgetConfig{})
 		if err != nil {
 			t.Fatal(err)
 		}

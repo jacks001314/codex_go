@@ -22,6 +22,12 @@ const GuardianElasticPriorityTool = "tool"
 // BudgetPriority::SelectedExecResult, #60914).
 const GuardianElasticPrioritySelectedExecResult = "selected_exec_result"
 
+// GuardianElasticPriorityAudioTranscript names the optional retention priority
+// of completed speech from a user recording or a tool result (Rust
+// BudgetPriority::AudioTranscript, #63368). It selects the transcript_audio
+// group only when that group is configured.
+const GuardianElasticPriorityAudioTranscript = "audio_transcript"
+
 // GuardianElasticRetention marks one item required or optional. Required and
 // historical evidence is never removed by elastic allocation.
 type GuardianElasticRetention struct {
@@ -68,6 +74,10 @@ type GuardianElasticItem struct {
 	// Source identifies the complete original revision this transcript entry
 	// proves was delivered.
 	Source *retainedctx.RetainedSource
+	// TranscriptLabel names the host role label of a completed audio transcript.
+	// Rust #63368 keeps that label and the record framing when the entry cap
+	// shortens the speech, so truncation replaces only the quoted body.
+	TranscriptLabel string
 }
 
 func (item GuardianElasticItem) protected() bool {
@@ -297,6 +307,9 @@ func guardianElasticAllocationSection(section string, retention GuardianElasticR
 		if retention.Optional && retention.Priority == GuardianElasticPrioritySelectedExecResult {
 			return GuardianElasticSectionTranscriptSelectedExecResults, nil
 		}
+		if retention.Optional && retention.Priority == GuardianElasticPriorityAudioTranscript {
+			return GuardianElasticSectionTranscriptAudio, nil
+		}
 		if retention.Optional && retention.Priority == GuardianElasticPriorityTool {
 			return GuardianElasticSectionTranscriptTools, nil
 		}
@@ -448,6 +461,7 @@ var guardianElasticSectionOrder = []GuardianElasticSection{
 	GuardianElasticSectionTranscriptMessages,
 	GuardianElasticSectionTranscriptTools,
 	GuardianElasticSectionTranscriptSelectedExecResults,
+	GuardianElasticSectionTranscriptAudio,
 	GuardianElasticSectionRootConversationMessages,
 	GuardianElasticSectionRetainedUserInstructions,
 	GuardianElasticSectionTrustedUserAnswers,

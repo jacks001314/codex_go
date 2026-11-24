@@ -23,7 +23,7 @@ func BuildGuardianElasticPromptPartsWithSectionCosts(
 	if err := action.Validate(); err != nil {
 		return nil, nil, err
 	}
-	sections, err := composeGuardianElasticPromptSections(action, transcript, options)
+	sections, err := composeGuardianElasticPromptSections(action, transcript, options, config)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -51,6 +51,7 @@ func composeGuardianElasticPromptSections(
 	action Action,
 	transcript []GuardianTranscriptEntry,
 	options BuildPromptOptions,
+	config GuardianElasticBudgetConfig,
 ) ([]GuardianElasticSectionOutput, error) {
 	var sections []GuardianElasticSectionOutput
 	add := func(id string, items []GuardianElasticItem, native bool) {
@@ -82,6 +83,16 @@ func composeGuardianElasticPromptSections(
 		add("trusted_user_answers", guardianElasticVerifiedAnswerItems(items), false)
 	}
 
+	// Rust #63368 gives completed audio transcripts their own group only when
+	// the reviewer configured transcript_audio; otherwise user audio keeps the
+	// message group and tool audio the tool group.
+	_, reserveAudio := config.Sections[GuardianElasticSectionTranscriptAudio]
+	audioRetention := func(entry GuardianTranscriptEntry) GuardianElasticRetention {
+		if reserveAudio && entry.AudioTranscript {
+			return GuardianElasticOptional(GuardianElasticPriorityAudioTranscript)
+		}
+		return entry.Retention()
+	}
 	transcriptText := []GuardianElasticItem{{Text: "Recent transcript:\n", Retention: GuardianElasticRequired(), Protected: true}}
 	flushTranscript := func() {
 		if len(transcriptText) > 0 {
@@ -99,11 +110,19 @@ func composeGuardianElasticPromptSections(
 		if line == "" {
 			continue
 		}
-		transcriptText = append(transcriptText, GuardianElasticItem{
+		item := GuardianElasticItem{
 			Text:      "- " + line + "\n",
-			Retention: entry.Retention(),
+			Retention: audioRetention(entry),
 			Source:    entry.RetainedSource,
-		})
+		}
+		if entry.AudioTranscript {
+			label := strings.TrimSpace(entry.LineRole)
+			if label == "" {
+				label = strings.TrimSpace(entry.Label)
+			}
+			item.TranscriptLabel = label
+		}
+		transcriptText = append(transcriptText, item)
 	}
 	if options.TranscriptOmissionNote != "" {
 		transcriptText = append(transcriptText, GuardianElasticItem{

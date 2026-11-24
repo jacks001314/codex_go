@@ -2,9 +2,12 @@ package state
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
 
+	"codex_go/guardiancontext"
 	"codex_go/retainedctx"
 	"codex_go/utils"
 )
@@ -77,7 +80,12 @@ type GuardianTranscriptEntry struct {
 	// budget may shorten them, oldest first, after optional evidence is gone
 	// (Rust HistoryTruncation, #44570).
 	Historical bool
-	Text       string
+	// AudioTranscript marks completed speech transcribed from a user recording
+	// or a tool result (Rust #63368). Line rendering quotes and escapes the
+	// text so it can never forge a role header, and an elastic reviewer that
+	// configures transcript_audio allocates it to that group.
+	AudioTranscript bool
+	Text            string
 	// Native carries a complete encrypted agent-message item. Rust delivers
 	// these as native response items (ciphertext cannot be truncated or
 	// rendered as text), so they are excluded from the text rendering and
@@ -147,14 +155,90 @@ func (e GuardianTranscriptEntry) Render(format GuardianTranscriptFormat) string 
 	if role == "" {
 		role = strings.TrimSpace(e.Author)
 	}
-	if role == "" {
-		return e.Text
+	text := e.Text
+	if e.AudioTranscript {
+		// Rust #63368: keep transcribed speech on one line so it cannot
+		// introduce a new role header, mirroring TranscriptRecord's Debug
+		// quoting.
+		text = quoteGuardianAudioTranscript(text)
 	}
-	rendered := role + ": " + e.Text
+	if role == "" {
+		return text
+	}
+	rendered := role + ": " + text
 	if e.Async {
 		rendered += "\n"
 	}
 	return rendered
+}
+
+// quoteGuardianAudioTranscript renders completed speech as one quoted line
+// whose control characters, quotes, backslashes and line separators are
+// escaped, mirroring Rust's str::escape_debug output inside TranscriptRecord's
+// line format (Rust #63368).
+func quoteGuardianAudioTranscript(text string) string {
+	var builder strings.Builder
+	builder.WriteByte('"')
+	for _, character := range text {
+		switch character {
+		case 0:
+			builder.WriteString("\\0")
+		case '\t':
+			builder.WriteString("\\t")
+		case '\r':
+			builder.WriteString("\\r")
+		case '\n':
+			builder.WriteString("\\n")
+		case '\\':
+			builder.WriteString("\\\\")
+		case '"':
+			builder.WriteString("\\\"")
+		case '\u2028', '\u2029':
+			fmt.Fprintf(&builder, "\\u{%x}", character)
+		default:
+			if unicode.IsControl(character) {
+				if character < 0x80 {
+					fmt.Fprintf(&builder, "\\x%02x", character)
+				} else {
+					fmt.Fprintf(&builder, "\\u{%x}", character)
+				}
+				continue
+			}
+			builder.WriteRune(character)
+		}
+	}
+	builder.WriteByte('"')
+	return builder.String()
+}
+
+// UserAudioTranscriptEntry builds the host-attributed transcript record for
+// speech transcribed from a recording submitted on a user turn (Rust #63368).
+// The author stays "audio_transcript" so JSON review, like line review, keeps
+// the speech distinct from the typed user message.
+func UserAudioTranscriptEntry(turnID string, text string) GuardianTranscriptEntry {
+	label := guardiancontext.UserAudioTranscriptKind(turnID).Role()
+	return GuardianTranscriptEntry{
+		Author:          "audio_transcript",
+		Label:           label,
+		LineRole:        label,
+		Text:            text,
+		Optional:        true,
+		AudioTranscript: true,
+	}
+}
+
+// ToolAudioTranscriptEntry builds the host-attributed transcript record for
+// speech transcribed from audio a tool call returned (Rust #63368).
+func ToolAudioTranscriptEntry(callID string, text string) GuardianTranscriptEntry {
+	label := guardiancontext.ToolAudioTranscriptKind(callID).Role()
+	return GuardianTranscriptEntry{
+		Author:          "tool",
+		Label:           label,
+		LineRole:        label,
+		Text:            text,
+		Optional:        true,
+		AudioTranscript: true,
+	}
 }
 
 // GuardianTranscriptRetainedSources returns the complete originals this
