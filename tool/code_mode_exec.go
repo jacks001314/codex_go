@@ -1587,12 +1587,13 @@ func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *In
 		}
 	}()
 	texts := make([]string, 0)
+	originalResults := make([]*sobek.Object, 0)
 	contentItems := make([]map[string]any, 0)
 	commands := make([]string, 0)
 	nestedOutputs := make([]string, 0)
 	exitCodes := make([]int, 0)
 	if err := runtime.Set("text", func(call sobek.FunctionCall) sobek.Value {
-		text := renderCodeModeValue(call.Argument(0))
+		text := renderCodeModeValue(call.Argument(0), e.sessionOptions.MCPResultDedup, originalResults)
 		texts = append(texts, text)
 		contentItems = append(contentItems, map[string]any{"type": "input_text", "text": text})
 		if cell != nil {
@@ -1609,7 +1610,7 @@ func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *In
 		return nil, err
 	}
 	if err := runtime.Set("notify", func(call sobek.FunctionCall) sobek.Value {
-		text := renderCodeModeValue(call.Argument(0))
+		text := renderCodeModeValue(call.Argument(0), false, nil)
 		if notify, ok := invocation.Context["code_mode_notify"].(CodeModeNotifyFunc); ok {
 			notify(invocation.CallID, text)
 		}
@@ -1880,7 +1881,13 @@ func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *In
 				}
 				continue
 			}
-			if err := completed.resolve(result); err != nil {
+			resolved := runtime.ToValue(result)
+			if object, ok := resolved.(*sobek.Object); ok {
+				// Rust #63540 keeps the result format beside the value. Go tracks
+				// the object identity instead, so a script copy stays ordinary JSON.
+				originalResults = append(originalResults, object)
+			}
+			if err := completed.resolve(resolved); err != nil {
 				return nil, err
 			}
 		}
@@ -2767,7 +2774,7 @@ func payloadCommand(payload Payload) (string, bool) {
 	return command, command != ""
 }
 
-func renderCodeModeValue(value sobek.Value) string {
+func renderCodeModeValue(value sobek.Value, dedupeMCPFallback bool, originalResults []*sobek.Object) string {
 	if sobek.IsUndefined(value) {
 		return "undefined"
 	}
@@ -2777,13 +2784,33 @@ func renderCodeModeValue(value sobek.Value) string {
 	if text, ok := value.Export().(string); ok {
 		return text
 	}
-	encoded, err := json.Marshal(value.Export())
+	exported := value.Export()
+	if dedupeMCPFallback {
+		// Only the object a nested tool returned is an original MCP result; a
+		// copy the script built prints both fields like Rust's ordinary JSON.
+		if object, ok := value.(*sobek.Object); ok && codeModeOriginalResult(object, originalResults) {
+			if deduped, changed := DedupeMCPTextFallback(exported); changed {
+				exported = deduped
+			}
+		}
+	}
+	encoded, err := json.Marshal(exported)
 	if err == nil {
 		return string(encoded)
 	}
 	return value.String()
 }
 
+// codeModeOriginalResult reports whether the value is one the executor resolved
+// from a nested tool result rather than a copy the script created.
+func codeModeOriginalResult(object *sobek.Object, originals []*sobek.Object) bool {
+	for _, original := range originals {
+		if original == object {
+			return true
+		}
+	}
+	return false
+}
 func codeModeIdentifier(value string) string {
 	var b strings.Builder
 	for index, char := range value {
