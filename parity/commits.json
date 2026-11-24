@@ -55004,10 +55004,11 @@
    "evidence": [
     "Batch 122: partial - Rust preserves Guardian v3 evidence delivery across root thread reloads. Go clears/rebuilds guardian review history per thread (appserver/guardian_review_history.go) and has no v3 evidence delivery queue that survives a root reload.",
     "Batch 268: Guardian live delivery can now be kept per root thread across reloads, mirroring Rust #63361 (codex-rs/ext/guardian-v3 actor delivery state). GuardianLiveDeliveries is a registry keyed by root: ForRoot reuses the same GuardianLiveDelivery so a root reload keeps its surviving child reviewers' inboxes, subscriptions and queued evidence, Existing inspects without creating, and Retire/RetireAll close and forget a root's stream. GuardianLiveDelivery.CloseAll closes every actor inbox, marks the stream Closed and makes Publish fail with 'Guardian delivery is closed', so a root reloaded after shutdown starts from a fresh empty stream while an in-process reload keeps the old one. Tests: agentboard/guardian_delivery_registry_like_rust_test.go (reload reuses the stream and its queue, Retire/RetireAll start fresh and reject publishes). Residual: catch-up from the last completed original when a root reload resumes intake, and the review-preparation check that catch-up completed against the current root intake, still need the host-side reviewer."
-   ],
+   ,
+   "Batch 281: the remaining host-side intake now has its Go carrier, closing the residual. agentboard/guardian_intake.go adds GuardianIntake, which keeps a root's live delivery stream and routing watermark together, catches up by reading the durable tail, handing that position to the housekeeper and returning the acknowledgement only once the watermark covers it (Rust RootEvidence::request_catch_up), and refuses another root's tail; GuardianIntakes reuses the same intake across a reload so routing progress, subscriptions and queued evidence survive an unload while the child reviewer stays alive, and Retire/RetireAll close the stream and stop the watermark so the next load starts fresh. GuardianPreparedReview.PrepareForIntake refuses a preparation whose watermark is no longer the root's current intake with ErrGuardianEvidenceUnavailable, so a review cannot be acknowledged against a replaced stream. Tests: agentboard/guardian_intake_like_rust_test.go (catch-up gated on routing with the tail enqueued, reload reuses routing progress, a retired intake is replaced and the old preparation refused, foreign tail and stopped intake rejected)."],
    "kind": "runtime",
    "sha": "8b02797a2ea1feaca69242db7e13581553c0da70",
-   "status": "partial",
+   "status": "complete",
    "subject": "Preserve Guardian v3 evidence delivery across root reloads (#63361)"
   },
   {
