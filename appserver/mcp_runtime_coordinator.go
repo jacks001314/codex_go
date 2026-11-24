@@ -99,6 +99,24 @@ func (c *mcpRuntimeCoordinator) claimReprojectOnNextTurn(threadID string) bool {
 	return true
 }
 
+// markThreadDirty records an immediate reprojection without discarding cached
+// MCP resources. The next service lookup rebuilds the contributor projection;
+// the caller schedules the prewarm that drives that lookup (Rust #62876).
+func (c *mcpRuntimeCoordinator) markThreadDirty(threadID string) {
+	threadID = strings.TrimSpace(threadID)
+	if c == nil || threadID == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return
+	}
+	if binding := c.bindings[threadID]; binding != nil {
+		binding.dirty = true
+	}
+}
+
 func (c *mcpRuntimeCoordinator) serviceForThread(
 	threadID string,
 	cfg *config.Config,

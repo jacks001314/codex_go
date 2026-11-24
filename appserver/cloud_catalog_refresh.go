@@ -124,7 +124,34 @@ type cloudCatalogRefreshState struct {
 	// skillWarningTurn deduplicates the cloud skill discovery warning to once
 	// per turn (Rust #55957).
 	skillWarningTurn string
-	now              func() time.Time
+	// startupRetryPending leaves a failed MCP startup check for the next holder
+	// of refreshMu if this discovery is cancelled before it completes. It is
+	// protected by mu and mirrors Rust's CatalogRefreshState (#62876).
+	startupRetryPending bool
+	now                 func() time.Time
+}
+
+// queueMCPStartupRetry marks the current catalog refresh as responsible for
+// checking failed MCP startups when it finishes.
+func (s *cloudCatalogRefreshState) queueMCPStartupRetry() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.startupRetryPending = true
+	s.mu.Unlock()
+}
+
+// takeMCPStartupRetry consumes the pending startup check exactly once.
+func (s *cloudCatalogRefreshState) takeMCPStartupRetry() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pending := s.startupRetryPending
+	s.startupRetryPending = false
+	return pending
 }
 
 func (s *cloudCatalogRefreshState) clock() time.Time {
@@ -247,51 +274,82 @@ func (r *RuntimeRouter) cloudSkillCatalogScope(service *mcp.MCPService) string {
 	return fmt.Sprintf("%s\x00%d", remoteInstalledPluginsAuthIdentityKey(identity), generation)
 }
 
+// finishCloudCatalogStartup performs the retry check that a cancelled
+// discovery left for the next catalog lock holder. Only completed, eligible
+// startup failures schedule another prewarm (Rust #62876).
+func (r *RuntimeRouter) finishCloudCatalogStartup(threadID string, state *cloudCatalogRefreshState) {
+	if r == nil || state == nil || r.mcpRuntimes == nil || !state.takeMCPStartupRetry() {
+		return
+	}
+	service := r.mcpRuntimes.publishedService(threadID)
+	if service == nil || !service.HasFailedStartupForRetry() {
+		return
+	}
+	r.requestMCPRuntimeReprojection(threadID)
+}
+
 // refreshCloudPluginCatalogForStep refreshes the cloud plugin catalog before a
 // model step when the authentication scope changed mid-turn. A successful
-// discovery is reused for the rest of the turn, failures back off, and
-// concurrent refreshes for one thread are serialized (Rust #55957/#55968).
+// discovery is reused for the rest of the turn, failures back off, concurrent
+// refreshes for one thread are serialized (Rust #55957/#55968), and MCP startup
+// is queued as soon as publication changes the contributor set (Rust #62876).
 func (r *RuntimeRouter) refreshCloudPluginCatalogForStep(ctx context.Context, cfg *config.Config, threadID string, turnID string) {
 	if r == nil || r.services.Plugins == nil {
 		return
 	}
 	state := r.cloudCatalogs.forThread(threadID)
 	if cfg == nil || !features.Enabled(cfg.FeatureSettings(), "plugins") || r.services.PluginCatalogProvider == nil {
+		hadCatalog := r.services.Plugins.CloudPluginCatalogKey() != "" || r.services.Plugins.CloudPluginCatalog() != nil
 		r.services.Plugins.SetCloudPluginCatalog(nil, "")
 		state.resetPlugin()
+		if hadCatalog {
+			r.requestMCPRuntimeReprojection(threadID)
+		}
 		return
 	}
 	scope := r.cloudPluginCatalogScope()
 	if scope == "" {
 		return
 	}
-	if state.pluginCatalogComplete(scope) {
-		return
-	}
-	if state.pluginBackoffPending(scope) {
-		return
-	}
-	r.lockCloudCatalogRefresh(ctx, state)
-	defer state.refreshMu.Unlock()
 	if state.pluginCatalogComplete(scope) || state.pluginBackoffPending(scope) {
 		return
 	}
+	// Leave the retry flag set while waiting for the lock so cancellation keeps
+	// the startup check for the next discovery.
+	state.queueMCPStartupRetry()
+	r.lockCloudCatalogRefresh(ctx, state)
+	defer state.refreshMu.Unlock()
+	r.finishCloudCatalogStartup(threadID, state)
+	if state.pluginCatalogComplete(scope) || state.pluginBackoffPending(scope) {
+		return
+	}
+	// Re-arm the check for this discovery. It must survive a cancellation that
+	// returns before the end-of-refresh check below.
+	state.queueMCPStartupRetry()
 	catalog, err := plugin.ListPluginCatalog(ctx, r.services.PluginCatalogProvider, plugin.PluginListQuery{
 		ThreadID: strings.TrimSpace(threadID),
 		TurnID:   strings.TrimSpace(turnID),
 	})
 	if err != nil {
-		if !cloudCatalogDiscoveryCanceled(err) {
-			state.recordPluginFailure(scope)
+		if cloudCatalogDiscoveryCanceled(err) {
+			// The pending flag survives for the next lock holder.
+			return
 		}
+		state.recordPluginFailure(scope)
+		r.finishCloudCatalogStartup(threadID, state)
 		return
 	}
 	if r.cloudPluginCatalogScope() != scope {
+		r.finishCloudCatalogStartup(threadID, state)
 		return
 	}
 	r.services.Plugins.SetCloudPluginCatalog(catalog, scope)
+	// Queue the prewarm before metrics or a slower sibling's completion so the
+	// MCP servers can start while cloud discovery is still winding down.
+	r.requestMCPRuntimeReprojection(threadID)
 	needsRetry := catalog == nil || catalog.IsPartial || len(catalog.Warnings) > 0
 	state.recordPluginResult(scope, needsRetry)
 	// Rust #56530 measures the published cloud plugin catalog.
 	r.recordCatalogEntries(pluginCatalogEntriesMetric, catalogStageCloud, len(catalog.Entries), catalog.IsPartial, len(catalog.Warnings))
+	r.finishCloudCatalogStartup(threadID, state)
 }

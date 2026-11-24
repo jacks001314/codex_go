@@ -17881,6 +17881,19 @@ func (r *RuntimeRouter) prewarmMCPThread(threadID string) {
 	})
 }
 
+// requestMCPRuntimeReprojection marks the thread's MCP projection dirty and
+// starts a background prewarm. Cloud catalog publication uses this immediate
+// path so a slow skill lookup or a cancelled sibling cannot postpone MCP
+// startup until the first turn (Rust #62876).
+func (r *RuntimeRouter) requestMCPRuntimeReprojection(threadID string) {
+	threadID = strings.TrimSpace(threadID)
+	if r == nil || threadID == "" || r.mcpRuntimes == nil {
+		return
+	}
+	r.mcpRuntimes.markThreadDirty(threadID)
+	r.prewarmMCPThread(threadID)
+}
+
 // requestMCPReprojectOnNextTurn is the app-server equivalent of Rust's
 // CodexThread::reproject_mcp_on_next_turn (#61356): the next regular turn
 // rebuilds the MCP projection after turn start and before tools are bound.
@@ -19915,8 +19928,12 @@ func (r *RuntimeRouter) refreshCloudPluginCatalogForTurn(ctx context.Context, cf
 		return
 	}
 	if cfg == nil || !features.Enabled(cfg.FeatureSettings(), "plugins") || r.services.PluginCatalogProvider == nil {
+		hadCatalog := r.services.Plugins.CloudPluginCatalogKey() != "" || r.services.Plugins.CloudPluginCatalog() != nil
 		r.services.Plugins.SetCloudPluginCatalog(nil, "")
 		r.cloudCatalogs.forThread(threadID).resetPlugin()
+		if hadCatalog {
+			r.requestMCPRuntimeReprojection(threadID)
+		}
 		return
 	}
 	cacheKey := r.cloudPluginCatalogScope()
@@ -19924,6 +19941,7 @@ func (r *RuntimeRouter) refreshCloudPluginCatalogForTurn(ctx context.Context, cf
 	// not leak into this turn while the refresh is in flight.
 	if current := r.services.Plugins.CloudPluginCatalogKey(); current != "" && current != cacheKey {
 		r.services.Plugins.SetCloudPluginCatalog(nil, "")
+		r.requestMCPRuntimeReprojection(threadID)
 	}
 	// Failures back off across steps and turns, and a successful discovery is
 	// reused for the rest of the turn (Rust #55957/#55968).

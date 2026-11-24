@@ -1679,6 +1679,31 @@ func (s *MCPService) ListStatusChecked(params *MCPListServerStatusParams) (*MCPL
 	return s.ListStatusCheckedWithObserver(params, nil)
 }
 
+// HasFailedStartupForRetry reports whether a completed server startup failed
+// for a reason the cloud catalog refresh may retry. Starting or cancelled
+// handshakes keep their existing recovery path, as do authentication failures
+// and the Apps registration that owns its reconnect (Rust #62876).
+func (s *MCPService) HasFailedStartupForRetry() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, status := range s.servers {
+		if status.State != MCPServerFailed || IsCodexAppsMCPServerName(status.effectiveName()) {
+			continue
+		}
+		if status.FailureReason != nil && *status.FailureReason == mcpFailureReasonReauthenticationRequired {
+			continue
+		}
+		if status.AuthStatus == MCPAuthNotLoggedIn {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // ValidateRequiredServers waits for the current required MCP servers to finish
 // their startup inventory and reports all failures together. This mirrors the
 // Rust session initialization gate: optional server failures remain

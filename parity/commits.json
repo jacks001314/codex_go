@@ -53875,11 +53875,13 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1270: partial - Rust prewarms MCP servers while a cloud catalog refresh runs, so a slow skill lookup does not delay MCP startup and a canceled refresh still gets its chance. Go has MCP catalog refresh and priority handling (mcp/catalog_priority.go, mcp/binding_test.go catalog refresh cases) but nothing prewarms a server during the refresh: there is no prewarm call anywhere in the mcp package."
+    "Cloud plugin discovery queues MCP reprojection immediately after a catalog is published or cleared. appserver/cloud_catalog_refresh.go calls requestMCPRuntimeReprojection at publication and clear points, appserver/runtime_router.go marks the thread projection dirty and schedules prewarmMCPThread, and appserver/mcp_runtime_coordinator.go provides the dirty-only mark so cached MCP resources survive contributor reprojection.",
+    "At the end of a refresh, or when the next catalog lock holder resumes after cancellation, finishCloudCatalogStartup checks MCPService.HasFailedStartupForRetry. mcp/api.go accepts only completed failures of ordinary servers and excludes reauthentication, logged-out, and Codex Apps registrations; the pending check is consumed once, so a persistent failure is retried once per refresh rather than looped.",
+    "go test ./mcp -run 'HasFailedStartupForRetry|Startup|Status' -count=1; go test ./appserver -run 'CloudCatalog|MCP' -count=1; go build ./...; go vet ./appserver ./mcp; go test ./parity -count=1"
    ],
    "kind": "runtime",
    "sha": "66618f0512ccd43ebd9784f3f0af3f9e93ca6d0c",
-   "status": "partial",
+   "status": "complete",
    "subject": "Prewarm MCP servers during cloud catalog refresh (#62876)"
   },
   {
