@@ -146,7 +146,7 @@ func (r *RuntimeRouter) runPendingSessionStartHook(ctx context.Context, params *
 		if len(hooks) == 0 {
 			return false, nil
 		}
-		result, err := r.requireHookRunner().RunSessionStart(ctx, &HookSessionStartRequest{
+		request := &HookSessionStartRequest{
 			ThreadID:       params.ThreadID,
 			CWD:            cwd,
 			TranscriptPath: r.sessionStartTranscriptPath(record),
@@ -154,7 +154,14 @@ func (r *RuntimeRouter) runPendingSessionStartHook(ctx context.Context, params *
 			PermissionMode: r.hookPermissionModeForTurn(params),
 			Source:         source,
 			Hooks:          hooks,
-		})
+		}
+		if deferredSessionStartOnCancel(ctx, hooks, source) {
+			// Rust #63523: a cancelled turn leaves an event queued when a
+			// matching synchronous hook would run, so the next turn retries it.
+			// Events that only match asynchronous hooks still run now.
+			return true, nil
+		}
+		result, err := r.requireHookRunner().RunSessionStart(ctx, request)
 		if err != nil {
 			// The runner failed or the turn was torn down mid-hook: keep the
 			// event queued so the next turn retries it (Rust #63523).
@@ -170,6 +177,28 @@ func (r *RuntimeRouter) runPendingSessionStartHook(ctx context.Context, params *
 		mergeSessionStartEncryptedContext(params, result)
 		return false, nil
 	})
+}
+
+// sessionStartHasSynchronousMatch reports whether a SessionStart event selects
+// at least one synchronous hook. An unset execution mode runs synchronously,
+// matching hooks/list and the runner.
+func sessionStartHasSynchronousMatch(hooks []HookMetadata, source SessionStartSource) bool {
+	for _, metadata := range selectHookHandlers(hooks, HookEventSessionStart, []string{string(source)}) {
+		if metadata.ExecutionMode != HookExecutionAsync {
+			return true
+		}
+	}
+	return false
+}
+
+// deferredSessionStartOnCancel mirrors Rust #63523's cancelled-turn rule: when
+// cancellation was already requested, an event with a matching synchronous hook
+// stays queued instead of running, while asynchronous-only matches still run.
+func deferredSessionStartOnCancel(ctx context.Context, hooks []HookMetadata, source SessionStartSource) bool {
+	if ctx == nil || ctx.Err() == nil {
+		return false
+	}
+	return sessionStartHasSynchronousMatch(hooks, source)
 }
 
 // mergeSessionStartEncryptedContext hands the ciphertext a synchronous MCP
