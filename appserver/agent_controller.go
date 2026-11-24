@@ -1590,6 +1590,14 @@ func (r *RuntimeRouter) startAutomaticWakeTurn(threadID string, record *session.
 		}
 		params.CoreCyberAccessProgram = strings.TrimSpace(previous.CyberAccessProgram)
 	}
+	// Rust #62585: automatic work stays queued while the published Guardian
+	// policy rejects the settings it would start with; a later permitting
+	// refresh retries the parked thread.
+	if err := r.guardianPolicyBlocksAutomaticWake(params); err != nil {
+		r.parkGuardianPolicyWake(threadID)
+		return err
+	}
+	r.clearGuardianPolicyParkedWake(threadID)
 	request := requestWithInternalParams(MethodTurnStart, params)
 	// Rust #62537: an ordinary automatic wake takes a turn admission permit and
 	// holds it through turn registration, so a drain or pause that starts first

@@ -476,6 +476,11 @@ type RuntimeRouter struct {
 	// guardianPolicyWake replaces the default pending-work wake after a
 	// Guardian policy refresh unblocks a thread (Rust #62585).
 	guardianPolicyWake func(threadID string)
+	// guardianPolicyParkedMu guards guardianPolicyParked, the idle threads
+	// whose automatic wake the published Guardian policy refused. A later
+	// permitting refresh retries them (Rust #62585 pending_work_wake).
+	guardianPolicyParkedMu sync.Mutex
+	guardianPolicyParked   map[string]struct{}
 	// completedCommandItems remembers command items that already reported a
 	// terminal status. A turn transition can complete an approval-opened item
 	// before the tool result arrives, and the later result must not publish a

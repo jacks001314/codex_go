@@ -29,6 +29,7 @@ import (
 	"sync"
 
 	"codex_go/config"
+	"codex_go/turn"
 )
 
 // GuardianPolicyLoader reads the current managed Guardian requirements using
@@ -357,6 +358,9 @@ func (r *RuntimeRouter) applyGuardianPolicyToLiveThreads(snapshot *config.Guardi
 	}
 	wg.Wait()
 	sort.Slice(rejections, func(i, j int) bool { return rejections[i].ThreadID < rejections[j].ThreadID })
+	// Rust #62585: a publication retries the automatic work every blocked
+	// thread left queued, whether or not that thread still has a live turn.
+	r.retryGuardianPolicyParkedWakes()
 	return rejections
 }
 
@@ -463,6 +467,79 @@ func (r *RuntimeRouter) guardianPolicyStepCheck(threadID string, next func() err
 			return next()
 		}
 		return nil
+	}
+}
+
+// errGuardianPolicyBlocksAutomaticWake reports automatic work the published
+// Guardian policy keeps queued (Rust #62585 maybe_start_turn_for_pending_work
+// validate gate).
+var errGuardianPolicyBlocksAutomaticWake = errors.New("Guardian policy blocks the automatic wake")
+
+// guardianPolicyBlocksAutomaticWake validates the settings an automatic wake
+// would start with against the current managed requirements. Rust keeps the
+// work queued instead of starting a turn the policy rejects.
+func (r *RuntimeRouter) guardianPolicyBlocksAutomaticWake(params *turn.TurnStartParams) error {
+	if r == nil || params == nil {
+		return nil
+	}
+	if err := r.validateTurnStepSettings(params, false); err != nil {
+		return fmt.Errorf("%w: %v", errGuardianPolicyBlocksAutomaticWake, err)
+	}
+	return nil
+}
+
+// parkGuardianPolicyWake remembers an idle thread whose automatic work a
+// blocking policy left queued so a permitting refresh can retry it.
+func (r *RuntimeRouter) parkGuardianPolicyWake(threadID string) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	r.guardianPolicyParkedMu.Lock()
+	if r.guardianPolicyParked == nil {
+		r.guardianPolicyParked = map[string]struct{}{}
+	}
+	r.guardianPolicyParked[threadID] = struct{}{}
+	r.guardianPolicyParkedMu.Unlock()
+}
+
+// clearGuardianPolicyParkedWake drops the parked marker once a wake attempt
+// validates, so a later refresh does not retry a thread that is already awake.
+func (r *RuntimeRouter) clearGuardianPolicyParkedWake(threadID string) {
+	if r == nil {
+		return
+	}
+	r.guardianPolicyParkedMu.Lock()
+	delete(r.guardianPolicyParked, strings.TrimSpace(threadID))
+	r.guardianPolicyParkedMu.Unlock()
+}
+
+// retryGuardianPolicyParkedWakes re-runs the automatic-wake decision for every
+// parked thread. A refresh that still blocks keeps the work queued; a
+// permitting one wakes the thread exactly once.
+func (r *RuntimeRouter) retryGuardianPolicyParkedWakes() {
+	if r == nil {
+		return
+	}
+	r.guardianPolicyParkedMu.Lock()
+	threadIDs := make([]string, 0, len(r.guardianPolicyParked))
+	for threadID := range r.guardianPolicyParked {
+		threadIDs = append(threadIDs, threadID)
+	}
+	r.guardianPolicyParkedMu.Unlock()
+	sort.Strings(threadIDs)
+	for _, threadID := range threadIDs {
+		params := &turn.TurnStartParams{ThreadID: threadID, AutomaticWake: true}
+		if err := r.guardianPolicyBlocksAutomaticWake(params); err != nil {
+			continue
+		}
+		r.guardianPolicyParkedMu.Lock()
+		delete(r.guardianPolicyParked, threadID)
+		r.guardianPolicyParkedMu.Unlock()
+		r.wakeGuardianPolicyBlockedWork(threadID)
 	}
 }
 
