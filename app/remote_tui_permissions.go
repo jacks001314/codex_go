@@ -209,6 +209,9 @@ func remoteTUIPermissionUpdateUnsupported(err error) bool {
 // profiles for the /permissions picker.
 func interactiveRemoteListPermissionProfiles(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) func() ([]chatwidget.CustomPermissionProfile, bool, error) {
 	return func() ([]chatwidget.CustomPermissionProfile, bool, error) {
+		if err := serverOwnedPermissionDiscoveryError(threadParamsModeForEndpoint(endpoint)); err != nil {
+			return nil, false, err
+		}
 		client, err := openRemoteSessionClient(ctx, endpoint)
 		if err != nil {
 			return nil, false, err
@@ -216,6 +219,20 @@ func interactiveRemoteListPermissionProfiles(ctx context.Context, endpoint *apps
 		defer client.close()
 		return remoteTUIListPermissionProfiles(ctx, client)
 	}
+}
+
+// cloudPermissionDiscoveryMessage mirrors Rust's permission_discovery.rs:95
+// server-selected permissions text (#57267).
+const cloudPermissionDiscoveryMessage = "Cloud conversations use server-selected permissions."
+
+// serverOwnedPermissionDiscoveryError reports the Rust #57267 discovery
+// short-circuit: a conversation whose settings the server owns never asks the
+// app server for permission profiles.
+func serverOwnedPermissionDiscoveryError(mode ThreadParamsMode) error {
+	if mode.SettingsOwner() == ThreadSettingsOwnerServer {
+		return errors.New(cloudPermissionDiscoveryMessage)
+	}
+	return nil
 }
 
 // interactiveRemoteUpdateThreadPermissions asks the server to adopt a
