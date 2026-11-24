@@ -222,7 +222,7 @@ func (h *stdioHostServer) handleRequest(ctx context.Context, id RequestID, reque
 		_, active := h.sessions[request.SessionID]
 		_, reused := h.seen[request.SessionID]
 		if !active && !reused {
-			session := newStdioHostSession(h, request.SessionID)
+			session := newStdioHostSession(h, request.SessionID, request.MCPResultDedup != nil && *request.MCPResultDedup)
 			if request.OutputTruncation != nil {
 				session.outputTruncation = *request.OutputTruncation
 			}
@@ -487,16 +487,22 @@ type stdioHostSession struct {
 	// session/open. Server mode bounds every observation with its own budget;
 	// client mode returns raw output for the caller to truncate (Rust #57272).
 	outputTruncation OutputTruncation
+	// mcpResultDedup records whether text() omits a duplicate MCP text fallback
+	// (Rust #63540); it is captured when the session opens.
+	mcpResultDedup bool
 	// catalogMu guards the session-local tool-catalog revision (Rust #61846).
 	catalogMu       sync.Mutex
 	catalogRevision uint64
 	catalogTools    []ProtocolToolDefinition
 }
 
-func newStdioHostSession(host *stdioHostServer, id SessionID) *stdioHostSession {
+func newStdioHostSession(host *stdioHostServer, id SessionID, mcpResultDedup bool) *stdioHostSession {
 	registry := tool.NewRegistry()
-	execExecutor, waitExecutor := tool.NewCodeModeExecutors(registry)
-	return &stdioHostSession{host: host, id: id, registry: registry, exec: execExecutor, waitExecutor: waitExecutor, definitions: map[string]struct{}{}, outputTruncation: OutputTruncationClient}
+	// Rust #63540: the session opens its code-mode runtime with the requested
+	// text() deduplication so every cell of the session prints the same way.
+	runtime := tool.NewCodeModeRuntimeWithOptions(nil, false, tool.CodeModeSessionOptions{MCPResultDedup: mcpResultDedup})
+	execExecutor, waitExecutor := runtime.Executors(registry)
+	return &stdioHostSession{host: host, id: id, registry: registry, exec: execExecutor, waitExecutor: waitExecutor, definitions: map[string]struct{}{}, outputTruncation: OutputTruncationClient, mcpResultDedup: mcpResultDedup}
 }
 
 func (s *stdioHostSession) nextCellID() CellID {
