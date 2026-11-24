@@ -12,7 +12,7 @@ import (
 )
 
 func (m *Model) openModelPicker() bubbletea.Cmd {
-	options := append([]codextui.ModelPickerOption(nil), m.modelPickerOpts...)
+	options := m.modelPickerOptionsFor(m.modelListProvider())
 	if len(options) == 0 {
 		options = codextui.BundledModelPickerOptions()
 	}
@@ -52,7 +52,7 @@ func (m *Model) fetchModelsForPicker() bubbletea.Cmd {
 	provider := m.modelListProvider()
 	return func() bubbletea.Msg {
 		options, err := m.onListModels(cwd, provider, true)
-		return ModelsResultMsg{RequestID: requestID, Options: options, Err: err}
+		return ModelsResultMsg{RequestID: requestID, Provider: provider, Options: options, Err: err}
 	}
 }
 
@@ -69,6 +69,47 @@ func (m *Model) modelListCWD() string {
 		return strings.TrimSpace(m.State.CWD)
 	}
 	return ""
+}
+
+// rememberModelPickerOptions caches one provider catalog (Rust #63553
+// ModelCatalog::set_models). The empty key is the app-server default catalog a
+// new thread reads.
+func (m *Model) rememberModelPickerOptions(provider string, options []codextui.ModelPickerOption) {
+	if m == nil {
+		return
+	}
+	if m.modelPickerOptsByProvider == nil {
+		m.modelPickerOptsByProvider = map[string][]codextui.ModelPickerOption{}
+	}
+	m.modelPickerOptsByProvider[strings.TrimSpace(provider)] = append([]codextui.ModelPickerOption(nil), options...)
+}
+
+// selectModelPickerProvider switches the catalog every picker surface reads to
+// a cached provider catalog (Rust #63553 ModelCatalog::select_provider). An
+// uncached provider keeps the current list until its fetch lands.
+func (m *Model) selectModelPickerProvider(provider string) {
+	if m == nil {
+		return
+	}
+	cached, ok := m.modelPickerOptsByProvider[strings.TrimSpace(provider)]
+	if !ok {
+		return
+	}
+	m.modelPickerOpts = append([]codextui.ModelPickerOption(nil), cached...)
+	m.refreshModelPicker()
+	m.refreshServiceTierCommands()
+}
+
+// modelPickerOptionsFor returns the cached catalog for provider, falling back
+// to the last applied catalog while a fresh fetch is pending.
+func (m *Model) modelPickerOptionsFor(provider string) []codextui.ModelPickerOption {
+	if m == nil {
+		return nil
+	}
+	if cached, ok := m.modelPickerOptsByProvider[strings.TrimSpace(provider)]; ok {
+		return append([]codextui.ModelPickerOption(nil), cached...)
+	}
+	return append([]codextui.ModelPickerOption(nil), m.modelPickerOpts...)
 }
 
 // modelListProvider is the model provider whose catalog the picker should read
@@ -97,9 +138,16 @@ func (m *Model) applyModelsResult(msg ModelsResultMsg) {
 	// back is constrained by the server's requirements before the picker and the
 	// service-tier commands read it, so an older server's shared Fast gate (and
 	// a server that allows the independent Ultra Fast policy) both hold here.
-	m.modelPickerOpts = codextui.ConstrainServerServiceTierOptions(append([]codextui.ModelPickerOption(nil), msg.Options...), m.serviceTierRequirements)
-	m.refreshModelPicker()
-	m.refreshServiceTierCommands()
+	options := codextui.ConstrainServerServiceTierOptions(append([]codextui.ModelPickerOption(nil), msg.Options...), m.serviceTierRequirements)
+	m.rememberModelPickerOptions(msg.Provider, options)
+	// A response for another provider stays cached without replacing the
+	// catalog the current thread reads (Rust #63553 keeps one catalog per
+	// provider).
+	if msg.Provider == m.modelListProvider() {
+		m.modelPickerOpts = options
+		m.refreshModelPicker()
+		m.refreshServiceTierCommands()
+	}
 }
 
 // refreshServiceTierCommands recomputes the slash-command service-tier entries

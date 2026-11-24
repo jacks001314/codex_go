@@ -91,8 +91,10 @@ func (m *Model) applyThreadSettingsValues(settings appserver.Settings) {
 		m.State.Model = model
 		m.clearRateLimitRecoveryHold()
 	}
-	if provider := strings.TrimSpace(settings.ModelProvider); provider != "" {
+	if provider := strings.TrimSpace(settings.ModelProvider); provider != "" && provider != strings.TrimSpace(m.State.Provider) {
 		m.State.Provider = provider
+		// Rust #63553: the thread's provider selects its cached model catalog.
+		m.selectModelPickerProvider(provider)
 	}
 	// Rust #45519: the resumed thread's server-reported collaboration mode is
 	// authoritative, so the first prompt after a resume keeps the saved Plan

@@ -885,8 +885,11 @@ type MCPLoginCompletedMsg struct {
 // ModelsResultMsg is delivered when an async model-list refresh completes.
 type ModelsResultMsg struct {
 	RequestID uint64
-	Options   []codextui.ModelPickerOption
-	Err       error
+	// Provider is the model provider whose catalog produced Options; an empty
+	// value is the app-server default catalog (Rust #63553).
+	Provider string
+	Options  []codextui.ModelPickerOption
+	Err      error
 }
 
 type MCPStartupFinishAfterLagMsg struct{}
@@ -2677,6 +2680,10 @@ type Model struct {
 	mentionPluginInventoryLoading bool
 	mentionPluginInventoryErr     string
 	modelPickerOpts               []codextui.ModelPickerOption
+	// modelPickerOptsByProvider caches catalogs by provider so refreshing an
+	// alternate provider keeps the default (and every other) catalog available
+	// (Rust #63553 ModelCatalog::models_by_provider).
+	modelPickerOptsByProvider map[string][]codextui.ModelPickerOption
 	serviceTierCommands           []bottompane.ServiceTierCommand
 
 	// savedServiceTier is Rust's config.service_tier: the user's persisted
