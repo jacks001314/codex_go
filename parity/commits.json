@@ -44179,11 +44179,13 @@
     "Tests: TestGuardianChannelSelectionReplacesCatalogMembershipLikeRust, TestGuardianChannelSelectionPreservesLaterChannelsLikeRust, TestGuardianChannelSelectionEmptySetUnsubscribesCatalogLikeRust, TestGuardianChannelSelectionRejectsCatalogEscapeLikeRust, TestGuardianChannelSelectionRejectsDuplicateChannelsLikeRust, TestGuardianChannelSelectionRejectsUnknownFieldsLikeRust, TestGuardianChannelSelectionHonorsCancellationLikeRust, TestGuardianChannelSelectionHonorsDeadlineLikeRust, TestGuardianChannelSelectionEnforcesInputBudgetLikeRust, TestGuardianChannelSelectionFailedSamplingRollsBackLikeRust, TestGuardianChannelSelectionKeepsOtherCallersLikeRust, TestGuardianSubscriptionsReplacePreservesOutsideChannelsLikeRust.",
     "Residual: Go has no isolated reviewer runtime that can run a model-driven sampling turn. agentboard.Prepare accepts a GuardianChannelSampler, but no production host supplies one yet; the sampling/disposition wiring stays outstanding, so #59999 remains partial.",
     "Go anchor: agentboard/guardian_selection.go, agentboard/guardian_subscriptions.go",
-    "plan: update/plan_2026_11_16.md batch 21 (#59999); contract guardian-channel-selection."
+    "plan: update/plan_2026_11_16.md batch 21 (#59999); contract guardian-channel-selection.",
+    "Superseded: Rust #62135 (5916098d02) deleted codex-rs/ext/guardian-v3/src/selection.rs (212 lines) along with tests/retrieval/selection.rs and the exported CHANNEL_SELECTION_INSTRUCTIONS. At the certified head 96681d86f0 the path no longer exists (`git show origin/main:codex-rs/ext/guardian-v3/src/selection.rs` fails) and `git grep ReviewerSubscriptions|CHANNEL_SELECTION_INSTRUCTIONS|ChannelSelection` under codex-rs finds no Guardian selection code, so ReviewerSubscriptions::prepare is not part of the shipped Rust baseline.",
+    "Go followed the successor: commit e90d8174f ported prepare as agentboard/guardian_selection.go with its *_like_rust planner tests, and 307107650 removed that module while porting #62133/#62135, whose live retrieval and caller-scoped subscription tools are the current reviewer surface (agentboard/guardian_retrieval.go, agentboard/guardian_subscriptions.go). The part of this commit that survived upstream, typed sampling with an input byte budget (context_input / to_json_string_bounded in sampling.rs) and OperationResult, is carried by the sampler tracked under #62135's pending host runtime."
    ],
    "kind": "runtime",
    "sha": "af83299ada26148091325c2198286c1373940027",
-   "status": "partial",
+   "status": "not_applicable",
    "subject": "Add model-driven Guardian channel selection (#59999)"
   },
   {
