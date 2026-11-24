@@ -126,7 +126,18 @@ func (m *Model) armQuickDialKeyGuard(keySpec string) {
 	m.quickDialGuardUntil = m.currentTime().Add(quickDialKeyGuardWindow)
 }
 
+// quickDialHUDCommands is the presets panel's command row. Rust wraps the
+// hints into rows and keeps the three-space separator (COMMAND_SEPARATOR)
+// instead of clipping the row.
+var quickDialHUDCommands = []string{"n new", "s from settings", "e edit", "d delete", "esc close"}
+
 func (m *Model) renderQuickDialHUD() string {
+	return m.renderQuickDialHUDWidth(firstPositive(m.width, 80))
+}
+
+// renderQuickDialHUDWidth lays the presets out inside a panel of the given
+// width so the floating overlay can paint it without clipping.
+func (m *Model) renderQuickDialHUDWidth(width int) string {
 	if m == nil || !m.quickDialMenu {
 		return ""
 	}
@@ -139,10 +150,10 @@ func (m *Model) renderQuickDialHUD() string {
 		entries = append(entries, string(slot)+" · "+quickDialLabel(preset))
 	}
 
-	width := m.width
 	if width <= 0 {
 		width = 80
 	}
+	inner := max(width-2, 1)
 	lines := []string{"Presets", ""}
 	if len(entries) == 0 {
 		lines = append(lines, "No presets saved. Press n to create one.")
@@ -151,10 +162,39 @@ func (m *Model) renderQuickDialHUD() string {
 		if len(entries) > 5 && width >= 66 {
 			columns = 2
 		}
-		lines = append(lines, layoutQuickDialEntries(entries, width, columns)...)
+		lines = append(lines, layoutQuickDialEntries(entries, inner, columns)...)
 	}
-	lines = append(lines, "", "n new   s from settings   e edit   d delete   esc close")
+	lines = append(lines, "")
+	lines = append(lines, wrapHUDCommands(quickDialHUDCommands, inner)...)
+	for index, line := range lines {
+		lines[index] = "  " + fitTerminalLine(line, inner)
+	}
 	return strings.Join(lines, "\n")
+}
+
+// wrapHUDCommands packs command hints into rows the way Rust's
+// footer_hint::wrap_hint_rows does, joining hints with three spaces.
+func wrapHUDCommands(commands []string, width int) []string {
+	width = max(width, 1)
+	rows := []string{}
+	row := ""
+	for _, command := range commands {
+		command = fitTerminalLine(command, width)
+		if row == "" {
+			row = command
+			continue
+		}
+		if codextui.DisplayWidth(row)+3+codextui.DisplayWidth(command) <= width {
+			row += "   " + command
+			continue
+		}
+		rows = append(rows, row)
+		row = command
+	}
+	if row != "" {
+		rows = append(rows, row)
+	}
+	return rows
 }
 
 func layoutQuickDialEntries(entries []string, width, columns int) []string {

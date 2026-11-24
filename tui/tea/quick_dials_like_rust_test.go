@@ -46,7 +46,8 @@ func TestQuickDialsSlashCommandOpensHUDLikeRust(t *testing.T) {
 		"1 · Greeting",
 		"2 · first line",
 		"0 · /status",
-		"n new   s from settings   e edit   d delete   esc close",
+		"n new   s from settings   e edit   d delete",
+		"esc close",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("preset HUD missing %q:\n%s", want, view)

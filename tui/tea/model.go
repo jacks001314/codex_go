@@ -6303,10 +6303,6 @@ func (m *Model) viewString() string {
 			workingIndex = len(sections)
 			sections = append(sections, m.bottomStyle.Render(working))
 		}
-		if hud := m.renderQuickDialHUD(); hud != "" {
-			hudIndex = len(sections)
-			sections = append(sections, m.bottomStyle.Render(hud))
-		}
 		// Rust anchors command/skill suggestions directly above the composer.
 		if popup := m.renderSkillPopup(); popup != "" {
 			sections = append(sections, popup)
@@ -13448,9 +13444,6 @@ func (m *Model) bottomReservedRowsExceptVoiceFor(shortcutOverlayVisible bool, sh
 	}
 	if m.noticeRowReplacesComposer() {
 		return rows + m.replacedComposerRows()
-	}
-	if hud := m.renderQuickDialHUD(); hud != "" {
-		rows += sectionHeight(hud)
 	}
 	if working := m.renderWorkingIndicator(); working != "" {
 		rows += sectionHeight(working)

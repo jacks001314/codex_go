@@ -331,6 +331,15 @@ func (m *Model) composeWithKeyChordHUD(view string) string {
 	return m.overlayKeyChordHUD(view)
 }
 
+// workspaceHUDLines picks the panel Rust's workspace_hud paints: an open
+// presets menu owns the overlay, otherwise the pending chord guide does.
+func (m *Model) workspaceHUDLines(width int, height int) string {
+	if hud := m.renderQuickDialHUDWidth(width); hud != "" {
+		return hud
+	}
+	return m.renderKeyChordHUDWidth(width, height)
+}
+
 // overlayKeyChordHUD mirrors Rust ShortcutHud::render_overlay: the panel is
 // anchored to the bottom-right, one row above the frame's last row and two
 // columns from its right edge, and is half the frame wide (at least 32
@@ -358,7 +367,7 @@ func (m *Model) overlayKeyChordHUD(view string) string {
 	if panelWidth < 8 {
 		return view
 	}
-	hud := m.renderKeyChordHUDWidth(panelWidth, avail)
+	hud := m.workspaceHUDLines(panelWidth, avail)
 	if hud == "" {
 		return view
 	}
