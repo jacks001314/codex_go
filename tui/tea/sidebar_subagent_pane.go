@@ -146,6 +146,44 @@ func watchOnlySidePane(side *activeSideConversation) bool {
 	return side != nil && side.WatchOnly
 }
 
+// watchOnlyReaderHeading is the dim top row Rust #62157 paints above the
+// reader. Its back hint follows the resolved list Cancel binding so a custom
+// keymap still advertises the key Escape uses.
+func (m *Model) watchOnlyReaderHeading() string {
+	back := ""
+	if m != nil {
+		back = strings.TrimSpace(m.sidebarChooserListHint("cancel"))
+	}
+	if back == "" {
+		back = "esc"
+	}
+	return back + " back to agents · Watch only"
+}
+
+// escapeWatchOnlyReader mirrors Rust #62157's reader cancel action: Esc drops
+// the reader (agents.detail = None) and returns to the Subagents list with the
+// same agent still highlighted. The parent conversation keeps its composer.
+func (m *Model) escapeWatchOnlyReader() (bubbletea.Cmd, bool) {
+	if m == nil || m.State == nil || m.modal != nil || m.overlay != nil {
+		return nil, false
+	}
+	side := m.activeSide
+	if !watchOnlySidePane(side) || side.ShowingSide {
+		return nil, false
+	}
+	if strings.TrimSpace(m.sidebarParentThreadID()) == "" {
+		return nil, false
+	}
+	// The chooser reads the reader's own agent row before the tab disappears,
+	// which is how the list comes back with the same selection.
+	cmd := m.openSidebarChooser()
+	m.closeSidebarSubagentTranscript(side)
+	// Rust closes agents.detail without narrating it in the parent transcript.
+	m.notice = ""
+	m.refreshTranscript()
+	return cmd, true
+}
+
 // sidebarAgentIsParentOwned reports whether threadID is a descendant of parent
 // in the discovered spawn tree. A transcript link can name an agent the sidebar
 // has not listed yet, so the agent list's spawn ancestry is the fallback

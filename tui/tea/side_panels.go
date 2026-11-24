@@ -555,12 +555,13 @@ func sidePaneFrameFor(height int) sidePaneFrame {
 }
 
 // watchOnlySidePaneFrame is Rust #62157's watch-only reader: the pane has no
-// composer and no status line, so the transcript owns the whole column.
+// composer and no status line, so the transcript owns the column below the
+// reader's heading row.
 func watchOnlySidePaneFrame(height int) sidePaneFrame {
 	if height <= 0 {
 		return sidePaneFrame{transcript: 1}
 	}
-	return sidePaneFrame{transcript: height}
+	return sidePaneFrame{transcript: height - 1}
 }
 
 // composeWatchOnlySidePane paints a read-only subagent transcript without the
@@ -569,6 +570,9 @@ func (m *Model) composeWatchOnlySidePane(content string, height int, first int) 
 	frame := watchOnlySidePaneFrame(height)
 	lines, clamped, maxFirst := sidePaneWindow(content, frame.transcript, first)
 	rows := make([]string, 0, height)
+	// Rust paint_agent_reader: the reader's first row advertises Escape's
+	// destination, so the transcript below it keeps no misleading back hint.
+	rows = append(rows, "\x1b[2m"+m.watchOnlyReaderHeading()+"\x1b[0m")
 	rows = append(rows, lines...)
 	for len(rows) < height {
 		rows = append(rows, "")

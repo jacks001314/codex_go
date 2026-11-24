@@ -5793,6 +5793,15 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 				return m, m.navigateAgent(1)
 			}
 		}
+		if msg.Type == keymsg.KeyEsc && !m.slashPopup.Active && !m.skillPopup.Active {
+			// Rust #62157: Esc leaves the watch-only subagent reader for the
+			// Subagents list with the same agent selected, ahead of backtrack
+			// priming because the reader owns Escape while it is open.
+			if cmd, handled := m.escapeWatchOnlyReader(); handled {
+				m.suppressCurrentViewKeyUntilRelease()
+				return m, cmd
+			}
+		}
 		// Rust app_backtrack: Esc primes/advances prompt editing, Enter confirms
 		// a primed selection, and any other key cancels the primed state.
 		switch msg.Type {
