@@ -2248,6 +2248,13 @@ type Model struct {
 	// for the exact draft it was dismissed on (Rust dismissed_argument_token).
 	slashArgumentDismissed string
 	agentsOverview         *agentsoverview.View
+	// agentsOverviewDockFocus is the docked Command Center's input owner:
+	// agentsOverviewDockCenter or agentsOverviewDockConversation, empty while
+	// the dock is closed (Rust #62986 workspace focus).
+	agentsOverviewDockFocus string
+	// agentsOverviewDockRendering guards the conversation column render so it
+	// does not paint the Command Center again.
+	agentsOverviewDockRendering bool
 	// agentsOverviewOpening is the task whose resume request is in flight while
 	// the command center keeps its frame visible (Rust #63146).
 	agentsOverviewOpening string
@@ -5397,7 +5404,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			if m.agentsOverview != nil && msg.Err != nil {
 				m.agentsOverview.ClearOpening()
 				m.agentsOverviewOpening = ""
-			} else {
+			} else if !m.keepDockedAgentsOverviewAfterOpen() {
 				m.closeAgentsOverview()
 			}
 		}
@@ -5634,7 +5641,12 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			return m, m.analyticsDashboard.nextPollCmd()
 		}
 		if m.agentsOverview != nil {
-			return m, m.updateAgentsOverviewKey(msg)
+			if handled, cmd := m.handleDockedAgentsOverviewKey(msg); handled {
+				return m, cmd
+			}
+			if !m.agentsOverviewDockOpen() || !m.agentsOverviewDockConversationFocused() {
+				return m, m.updateAgentsOverviewKey(msg)
+			}
 		}
 		if m.readOnlyThread {
 			if m.providerError != nil {
@@ -6247,7 +6259,10 @@ func (m *Model) viewString() string {
 		m.hideTranscriptImages()
 		return m.analyticsDashboard.render(m, m.width, m.height)
 	}
-	if m.agentsOverview != nil {
+	if m.agentsOverview != nil && !m.agentsOverviewDockRendering {
+		if docked := m.renderAgentsOverviewDock(); docked != "" {
+			return docked
+		}
 		m.hideTranscriptImages()
 		return m.renderAgentsOverview() + m.agentsOverviewCursorStyleSequence()
 	}

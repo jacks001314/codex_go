@@ -105,6 +105,10 @@ func TestServerVersionNoticeRendersInCommandCenterFooterLikeRust(t *testing.T) {
 			return []agentsoverview.Row{{ThreadID: "root-1", Name: "alpha", Group: agentsoverview.GroupReady}}, nil
 		},
 	})
+	if model.featureSettings == nil {
+		model.featureSettings = map[string]bool{}
+	}
+	model.featureSettings[sideWorkspaceFeatureKey] = false
 	openAgentsDashboard(t, model)
 	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Service v0.152.1 < Codex CLI v0.153.0 \u00b7 /daemon") {

@@ -16,6 +16,9 @@ func TestOpeningTaskKeepsCommandCenterFrameLikeRust(t *testing.T) {
 		state := codextui.NewState(nil)
 		state.SetThreadID("source")
 		model := NewModel(state, Options{Width: 120, Height: 24, OnSwitchAgent: switcher})
+		// The modal Command Center closes after the destination attaches;
+		// the docked behaviour is covered by agents_overview_dock_like_rust_test.go.
+		model.featureSettings = map[string]bool{sideWorkspaceFeatureKey: false}
 		model.agentsOverview = agentsoverview.New([]agentsoverview.Row{{
 			ThreadID: "target", Name: "target", CWD: "work", Model: "gpt-test",
 		}}, "target", false)

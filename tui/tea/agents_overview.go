@@ -190,6 +190,10 @@ func (m *Model) applyAgentsCommand() bubbletea.Cmd {
 	m.syncAgentsOverviewBackendView()
 	m.agentsOverviewLifecycle = nil
 	m.agentsOverviewLifecycleProgress = ""
+	m.agentsOverviewDockFocus = ""
+	if m.agentsOverviewDockOpen() {
+		m.agentsOverviewDockFocus = agentsOverviewDockCenter
+	}
 	m.applyAgentsOverviewKeymapHints()
 	return m.refreshAgentsOverviewCmd()
 }
@@ -1561,7 +1565,9 @@ func (m *Model) openAgentsOverviewThread(threadID string) bubbletea.Cmd {
 	}
 	if threadID == current {
 		m.notice = "Already showing this session."
-		m.closeAgentsOverview()
+		if !m.keepDockedAgentsOverviewAfterOpen() {
+			m.closeAgentsOverview()
+		}
 		return nil
 	}
 	// Rust select_agents_overview_thread: preserve the current thread's
@@ -1594,7 +1600,9 @@ func (m *Model) openAgentsOverviewThread(threadID string) bubbletea.Cmd {
 		// A session started from the command center has no rollout yet, so
 		// thread/resume would fail; reuse its live snapshot instead (Rust #45255
 		// agents_overview.blank_sessions).
-		m.closeAgentsOverview()
+		if !m.keepDockedAgentsOverviewAfterOpen() {
+			m.closeAgentsOverview()
+		}
 		m.applyAgentSwitchResult(AgentSwitchResultMsg{ThreadID: threadID, Response: blank})
 		return m.refreshStatusControlsCmd()
 	}
@@ -1607,7 +1615,9 @@ func (m *Model) openAgentsOverviewThread(threadID string) bubbletea.Cmd {
 		m.agentsOverviewOpening = threadID
 		return m.applyAgentModalOption(threadID)
 	}
-	m.closeAgentsOverview()
+	if !m.keepDockedAgentsOverviewAfterOpen() {
+		m.closeAgentsOverview()
+	}
 	return m.applyAgentModalOption(threadID)
 }
 
@@ -1685,6 +1695,7 @@ func (m *Model) closeAgentsOverview() {
 		m.agentsOverviewHidden = m.agentsOverview.HiddenThreads()
 	}
 	m.agentsOverview = nil
+	m.agentsOverviewDockFocus = ""
 	m.agentsOverviewOpening = ""
 	m.agentsOverviewPolling = false
 	m.agentsOverviewNotice = ""
@@ -1738,6 +1749,16 @@ func (m *Model) renderAgentsOverview() string {
 	if m == nil || m.agentsOverview == nil {
 		return ""
 	}
+	m.syncAgentsOverviewRenderState()
+	return strings.Join(m.agentsOverview.RenderStyled(m.width, m.height), "\n")
+}
+
+// syncAgentsOverviewRenderState refreshes the view fields the dashboard reads
+// right before a render, shared by the full-screen and docked paths.
+func (m *Model) syncAgentsOverviewRenderState() {
+	if m == nil || m.agentsOverview == nil {
+		return
+	}
 	m.agentsOverview.Notice = strings.TrimSpace(m.agentsOverviewNotice)
 	if m.agentsOverview.Notice == "" {
 		m.agentsOverview.Notice = strings.TrimSpace(m.agentsOverviewServerVersionNotice)
@@ -1748,7 +1769,6 @@ func (m *Model) renderAgentsOverview() string {
 	m.agentsOverview.KeyChordHints = m.agentsOverviewKeyChordHints()
 	m.agentsOverview.FilterHint = m.agentsOverviewFilterHint()
 	m.agentsOverview.Loading = (m.agentsOverviewInflight || m.agentsOverviewPending) && len(m.agentsOverview.Rows) == 0
-	return strings.Join(m.agentsOverview.RenderStyled(m.width, m.height), "\n")
 }
 
 // agentsOverviewFilterKeyAvailable reports whether key is free to drive the

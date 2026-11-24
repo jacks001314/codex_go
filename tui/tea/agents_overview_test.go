@@ -25,6 +25,12 @@ func agentsOverviewTestRows() []agentsoverview.Row {
 
 func openAgentsDashboard(t *testing.T, model *Model) {
 	t.Helper()
+	// These tests cover the modal Command Center. The docked workspace is
+	// covered by agents_overview_dock_like_rust_test.go (Rust #62986).
+	if model.featureSettings == nil {
+		model.featureSettings = map[string]bool{}
+	}
+	model.featureSettings[sideWorkspaceFeatureKey] = false
 	typeText(t, model, "/agents")
 	updated, command := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
