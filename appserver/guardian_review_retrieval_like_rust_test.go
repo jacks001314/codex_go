@@ -61,6 +61,42 @@ func TestGuardianBoardRetrievalHonorsCustomStrategyLikeRust(t *testing.T) {
 // guidance kinds are alternatives: a live board reviewer gets the board text
 // even while conversation history tools stay configured and enabled, because
 // Rust's match arms pick one guidance for the tools the session installed.
+// TestGuardianBoardRetrievalForConfigLikeRust wires
+// features.guardianv3.reviewer.retrieval_instructions into the live board
+// guidance (Rust #62372/#63513): the custom strategy replaces the default and
+// the board rules still follow it, while blank or absent settings keep the
+// default prompt.
+func TestGuardianBoardRetrievalForConfigLikeRust(t *testing.T) {
+	custom := &config.Config{Values: map[string]any{
+		"features": map[string]any{
+			"guardianv3": map[string]any{
+				"reviewer": map[string]any{"retrieval_instructions": "  Read the plan channel first.  "},
+			},
+		},
+	}}
+	got := GuardianBoardRetrievalForConfig(custom).Extension
+	if !strings.HasPrefix(got, "Read the plan channel first. ") {
+		t.Fatalf("configured retrieval strategy was not used: %q", got)
+	}
+	if strings.Contains(got, guardianBoardRetrievalStrategyDefault) {
+		t.Fatalf("configured retrieval strategy kept the default: %q", got)
+	}
+	if !strings.HasSuffix(got, guardianBoardRules) {
+		t.Fatalf("configured retrieval strategy dropped the board rules: %q", got)
+	}
+	for _, cfg := range []*config.Config{
+		nil,
+		{Values: map[string]any{}},
+		{Values: map[string]any{"features": map[string]any{"guardianv3": map[string]any{
+			"reviewer": map[string]any{"retrieval_instructions": "   "},
+		}}}},
+	} {
+		if got := GuardianBoardRetrievalForConfig(cfg).Extension; got != GuardianBoardRetrievalGuidance {
+			t.Fatalf("blank retrieval instructions produced %q", got)
+		}
+	}
+}
+
 func TestGuardianRetrievalGuidanceSelectsInstalledToolsLikeRust(t *testing.T) {
 	cfg := &config.Config{Values: map[string]any{
 		"features": map[string]any{

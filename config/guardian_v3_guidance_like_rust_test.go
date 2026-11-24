@@ -37,6 +37,42 @@ retrieval_instructions = "Use my retrieval"
 	}
 }
 
+// TestGuardianV3GuidanceAccessorsLikeRust keeps the validated prompts readable
+// by the consumers that build the housekeeper and reviewer prompts (#62372).
+func TestGuardianV3GuidanceAccessorsLikeRust(t *testing.T) {
+	body := `
+[features.guardianv3]
+enabled = true
+
+[features.guardianv3.housekeeper]
+routing_instructions = "Use my routing"
+
+[features.guardianv3.reviewer]
+retrieval_instructions = "Use my retrieval"
+`
+	dir := t.TempDir()
+	if err := os.WriteFile(ConfigPath(dir), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true})
+	if err != nil {
+		t.Fatalf("guardianv3 guidance config rejected: %v", err)
+	}
+	if got, ok := cfg.GuardianV3RoutingInstructions(); !ok || got != "Use my routing" {
+		t.Fatalf("routing instructions = %q, %v", got, ok)
+	}
+	if got, ok := cfg.GuardianV3RetrievalInstructions(); !ok || got != "Use my retrieval" {
+		t.Fatalf("retrieval instructions = %q, %v", got, ok)
+	}
+	// An unset section reports absence instead of an empty value.
+	if got, ok := (&Config{Values: map[string]any{}}).GuardianV3RoutingInstructions(); ok || got != "" {
+		t.Fatalf("missing routing instructions = %q, %v", got, ok)
+	}
+	if got, ok := (*Config)(nil).GuardianV3RetrievalInstructions(); ok || got != "" {
+		t.Fatalf("nil config retrieval instructions = %q, %v", got, ok)
+	}
+}
+
 func TestGuardianV3GuidanceRejectsBadFieldsLikeRust(t *testing.T) {
 	cases := []struct {
 		name string

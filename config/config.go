@@ -2336,6 +2336,45 @@ func (c *Config) GuardianConversationHistoryPrompt() (string, bool) {
 	return value, ok
 }
 
+// GuardianV3RoutingInstructions returns
+// features.guardianv3.housekeeper.routing_instructions, the host strategy that
+// replaces the housekeeper's built-in routing sentence (Rust #62372). The
+// second result reports that the key was set at all, so a blank value can still
+// be distinguished from an absent one.
+func (c *Config) GuardianV3RoutingInstructions() (string, bool) {
+	return guardianV3StringSetting(c, "housekeeper", "routing_instructions")
+}
+
+// GuardianV3RetrievalInstructions returns
+// features.guardianv3.reviewer.retrieval_instructions, the host strategy that
+// replaces the reviewer's built-in board retrieval sentence (Rust #62372).
+func (c *Config) GuardianV3RetrievalInstructions() (string, bool) {
+	return guardianV3StringSetting(c, "reviewer", "retrieval_instructions")
+}
+
+// guardianV3StringSetting reads one string under features.guardianv3.<section>.
+// Project configuration strips these prompts before they reach a Config, so a
+// value here always came from user configuration.
+func guardianV3StringSetting(c *Config, section string, key string) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	features, ok := c.Values["features"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	guardianV3, ok := features["guardianv3"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	nested, ok := guardianV3[section].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	value, ok := nested[key].(string)
+	return value, ok
+}
+
 // GuardianDenialReconsiderationPrompt returns the optional bounded developer
 // message for the gated denial reconsideration pass (Rust #59107). Blank
 // values are treated as unset, like other Guardian policy overrides.

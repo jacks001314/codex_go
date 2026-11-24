@@ -59,6 +59,15 @@ func guardianBoardRetrieval(instructions string) GuardianReviewRetrieval {
 // session installs the guardian_board tools instead of conversation history.
 var GuardianBoardRetrieval = guardianBoardRetrieval("")
 
+// GuardianBoardRetrievalForConfig selects the live board guidance with the
+// reviewer's configured retrieval strategy (features.guardianv3.reviewer.
+// retrieval_instructions, Rust #62372/#63513). Blank or absent instructions
+// keep the built-in strategy.
+func GuardianBoardRetrievalForConfig(cfg *config.Config) GuardianReviewRetrieval {
+	instructions, _ := cfg.GuardianV3RetrievalInstructions()
+	return guardianBoardRetrieval(instructions)
+}
+
 // guidance resolves the retrieval section appended to the reviewer policy.
 // Host-supplied guidance wins; conversation history otherwise stays behind its
 // two features, and a disabled or blank history prompt contributes nothing
