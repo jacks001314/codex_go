@@ -21,7 +21,7 @@ func TestEmbeddedSidebarDocumentHostReadsWorkspaceLikeRust(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "docs", "readme.md"), []byte(source), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	host := newEmbeddedSidebarDocumentHost(func() string { return workspace })
+	host := newEmbeddedSidebarDocumentHost(func() string { return workspace }, nil)
 	view := host.open(codextea.SidebarDocumentRequest{
 		ParentThreadID: "parent-a",
 		SourceThreadID: "parent-a",
@@ -50,7 +50,7 @@ func TestEmbeddedSidebarDocumentHostLimitsLikeRust(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "long.go"), []byte(lines), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	host := newEmbeddedSidebarDocumentHost(func() string { return workspace })
+	host := newEmbeddedSidebarDocumentHost(func() string { return workspace }, nil)
 
 	view := host.open(codextea.SidebarDocumentRequest{SourceThreadID: "parent-a", Path: "big.go", Link: -1})
 	if view.Err != "Source preview limit is 1 MiB" {
@@ -71,7 +71,7 @@ func TestEmbeddedSidebarDocumentHostRejectsNonTextLikeRust(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "control.txt"), []byte("ok\x07"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	host := newEmbeddedSidebarDocumentHost(func() string { return workspace })
+	host := newEmbeddedSidebarDocumentHost(func() string { return workspace }, nil)
 	if view := host.open(codextea.SidebarDocumentRequest{SourceThreadID: "parent-a", Path: "binary.bin", Link: -1}); view.Err != remotePreviewNotUTF8 {
 		t.Fatalf("binary error = %q", view.Err)
 	}

@@ -54451,14 +54451,15 @@
    ],
    "evidence": [
     "Rust #63184 adds the terminal-side open_in_codex tool, queues model requests until the calling conversation is visible, loads a sandboxed snapshot with the calling thread's permissions, prompts backends that cannot permission-check, and turns a focused snapshot into a live document on Enter.",
-    "Landed earlier: the tool, the per-thread queue drained when the calling conversation becomes visible, the no-keyboard-focus preview tab, and the three-second watch that re-reads a changed file at the same reading position (tui/tea/sidebar_open_request.go, sidebar_document_watch.go; see sidebar_open_request_like_rust_test.go and sidebar_document_watch_like_rust_test.go).",
-    "Batch 207 lands the snapshot/live half: a model-requested tab is a snapshot that paints 'Snapshot · Enter to open live', the watch sweep skips snapshots, and plain Enter on a focused snapshot subscribes it as a live watched document that reloads in place (tui/tea/sidebar_model_document_snapshot_like_rust_test.go).",
-    "Batch 207 also lands the confirmation state: a host without an in-process permissions reader answers Options.OnSidebarDocumentNeedsConfirmation, the tab waits in AwaitingOpen painting 'Open {path}?' (or 'at line N?') plus 'Focus this pane and press Enter to open.', and Enter performs the confirmed read. The remote TUI sets the hook, matching Rust's backends that cannot resolve thread permissions.",
-    "Residual: the embedded host still reads the file directly instead of re-checking the calling thread's own read permissions and workspace roots the way sidebar_document/model_read.rs does (deny-read rules, canonical containment, 8 MiB model-preview limit, and a workspace re-check after the read)."
+    "The tool, the per-thread queue drained when the calling conversation becomes visible, the no-keyboard-focus preview tab, and the three-second watch that re-reads a changed file at the same reading position are in tui/tea/sidebar_open_request.go and sidebar_document_watch.go (sidebar_open_request_like_rust_test.go, sidebar_document_watch_like_rust_test.go).",
+    "Batch 207 added the snapshot/live half (model tabs paint 'Snapshot · Enter to open live', the watch sweep skips them, Enter subscribes a live document) and the AwaitingOpen confirmation state driven by Options.OnSidebarDocumentNeedsConfirmation (tui/tea/sidebar_model_document_snapshot_like_rust_test.go); the remote TUI sets that hook because it has no in-process permissions reader.",
+    "Batch 208 closed the sandboxed read: the embedded host re-checks the calling thread's own profile and workspace roots before reading (app/sidebar_document_host.go validateEmbeddedPreviewRead with sandbox.CanReadPathWithContext, PreparedReadDenials and DeniesReadPath), refuses external-sandbox profiles, applies Rust's 8 MiB model preview limit, and rejects a preview whose workspace changed during the read; app/interactive.go resolves the profile and roots through interactiveSidebarPreviewPermissions.",
+    "Tests: app/sidebar_document_host_permissions_like_rust_test.go covers a permitted read, a path outside the workspace, a deny-read entry, the 8 MiB limit and the workspace-change re-check; removing validateEmbeddedPreviewRead makes the outside-workspace case fail. The Batch 207 and earlier sidebar tests keep the queue, snapshot and confirmation behavior covered.",
+    "Carrier difference: the embedded Go session resolves one workspace root (cwd) unless the profile resolution reports explicit workspace roots, while Rust reads ThreadPermissions.workspace_roots and falls back to the preview workspace. Both reject paths outside the roots after canonicalization."
    ],
    "kind": "runtime",
    "sha": "5824b38693412e0787d45bbd0167be495b69660f",
-   "status": "partial",
+   "status": "complete",
    "subject": "Let Codex open workspace files in the terminal sidebar (#63184)"
   },
   {

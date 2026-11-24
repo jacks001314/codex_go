@@ -390,12 +390,10 @@ func interactiveWorkingDirectoryChangeHandler(root *cli.RootOptions) codextea.Wo
 	}
 }
 
-// interactiveDirectoryPermissions resolves the permissions the embedded TUI
-// will use after /cd. Rust #59369 forks with the current configuration for an
-// embedded session, while remote sessions keep the source thread's saved
-// permissions. A fresh directory with no explicit profile uses the same
-// read-only default as the runtime.
-func interactiveDirectoryPermissions(root *cli.RootOptions, cwd string) (string, string, string, error) {
+// interactivePermissionLoadOptions captures the embedded session's effective
+// configuration for one permission resolution: the keymap/CLI options plus the
+// launch flags that select a sandbox mode or approval policy.
+func interactivePermissionLoadOptions(root *cli.RootOptions, cwd string) *config.EffectiveOptions {
 	options := interactiveKeymapLoadOptions(root)
 	effective := &config.EffectiveOptions{}
 	if options != nil {
@@ -421,7 +419,16 @@ func interactiveDirectoryPermissions(root *cli.RootOptions, cwd string) (string,
 				"sandbox_mode="+strconv.Quote(string(sandbox.SandboxDangerFullAccess)))
 		}
 	}
-	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), effective)
+	return effective
+}
+
+// interactiveDirectoryPermissions resolves the permissions the embedded TUI
+// will use after /cd. Rust #59369 forks with the current configuration for an
+// embedded session, while remote sessions keep the source thread's saved
+// permissions. A fresh directory with no explicit profile uses the same
+// read-only default as the runtime.
+func interactiveDirectoryPermissions(root *cli.RootOptions, cwd string) (string, string, string, error) {
+	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactivePermissionLoadOptions(root, cwd))
 	if err != nil {
 		return "", "", "", err
 	}
@@ -452,6 +459,42 @@ func interactiveDirectoryPermissions(root *cli.RootOptions, cwd string) (string,
 		sandboxPolicy = string(policy.Kind)
 	}
 	return approval, activeProfile, sandboxPolicy, nil
+}
+
+// interactiveSidebarPreviewPermissions resolves the calling thread's read
+// permissions for a model-requested preview (Rust #63184
+// sidebar_document/model_read.rs reads with the thread's own profile and
+// workspace roots). An unavailable profile falls back to the runtime's
+// read-only default, so a preview never widens what the session may read.
+func interactiveSidebarPreviewPermissions(root *cli.RootOptions) sidebarPreviewPermissions {
+	return func(cwd string) (*sandbox.PermissionProfile, []string, error) {
+		loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactivePermissionLoadOptions(root, cwd))
+		if err != nil {
+			return nil, nil, err
+		}
+		resolution, err := loaded.ResolveSandboxPermissionProfile("", cwd)
+		if err != nil {
+			return nil, nil, err
+		}
+		if resolution == nil {
+			if loaded.Values == nil {
+				loaded.Values = map[string]any{}
+			}
+			loaded.Values["sandbox_mode"] = string(sandbox.SandboxReadOnly)
+			resolution, err = loaded.ResolveSandboxPermissionProfile("", cwd)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+		if resolution == nil || resolution.Profile == nil {
+			return nil, nil, errors.New("current permission profile is unavailable")
+		}
+		roots := append([]string(nil), resolution.WorkspaceRoots...)
+		if len(roots) == 0 && strings.TrimSpace(cwd) != "" {
+			roots = []string{strings.TrimSpace(cwd)}
+		}
+		return resolution.Profile, roots, nil
+	}
 }
 
 type interactiveTurnRunner interface {
@@ -1747,7 +1790,10 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	)
 	// Rust #61889: a chooser row opens a read-only preview from the same local
 	// workspace the inventory came from.
-	sidebarDocumentPreviewHost := newEmbeddedSidebarDocumentHost(func() string { return strings.TrimSpace(state.CWD) })
+	sidebarDocumentPreviewHost := newEmbeddedSidebarDocumentHost(
+		func() string { return strings.TrimSpace(state.CWD) },
+		interactiveSidebarPreviewPermissions(root),
+	)
 	options := codextea.Options{
 		// Rust #57516: the status line's profile item reports the profile
 		// selected with --profile.
