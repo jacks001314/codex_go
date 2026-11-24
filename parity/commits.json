@@ -47442,11 +47442,13 @@
     "codex_go"
    ],
    "evidence": [
-    "plan_2026_11_13.md records: 部分：已接入 native/x32/旧别名同条件 BPF 编译，VM 回归及 Linux amd64 交叉编译/vet 通过；真实 Linux 与全模式验证待完成。见 x32_seccomp_2026_11_14.md"
+    "plan_2026_11_13.md records: 部分：已接入 native/x32/旧别名同条件 BPF 编译，VM 回归及 Linux amd64 交叉编译/vet 通过；真实 Linux 与全模式验证待完成。见 x32_seccomp_2026_11_14.md",
+    "Batch 232: sandbox/linuxsandbox/seccomp_rules.go::compileNetworkSeccomp compiles every denied rule for the native number, its x32-flagged number, and the pre-Linux-5.4 unflagged x32 aliases (ptrace 521, recvmmsg 537, sendmmsg 538, process_vm_readv 539, process_vm_writev 540, setsockopt 541, getsockopt 542), with a foreign-ABI guard before reading syscall numbers.",
+    "Batch 232 verifier: seccomp_rules_test.go::TestX32SeccompAliasesAndSocketConditions and seccomp_mode_matrix_like_rust_test.go::TestNetworkSeccompModeSocketMatrixLikeRust assert both ABIs per mode on the real mode groups (Restricted keeps only AF_UNIX sockets and denies connect, ProxyRouted admits AF_INET/AF_INET6 sockets and rejects AF_UNIX, VmSocketRestricted rejects AF_VSOCK). The //go:build linux syscall probes only run on a Linux host; the BPF assertions run on Windows."
    ],
    "kind": "security",
    "sha": "1bda8861137c2a598455702fd259bf2b8fd09e96",
-   "status": "partial",
+   "status": "complete",
    "subject": "Enforce Linux seccomp restrictions for x32 syscalls (#61206)"
   },
   {
@@ -47718,11 +47720,13 @@
     "codex_go"
    ],
    "evidence": [
-    "plan_2026_11_13.md records: 部分：实现已核实（非 VmSocketRestricted 模式拒绝 request_key，含原生探测用例），linux/amd64 交叉构建与 linuxsandbox 包测试通过；真实 Linux 原生执行待补。见 request_key_impl_verify_2026_11_14.md"
+    "plan_2026_11_13.md records: 部分：实现已核实（非 VmSocketRestricted 模式拒绝 request_key，含原生探测用例），linux/amd64 交叉构建与 linuxsandbox 包测试通过；真实 Linux 原生执行待补。见 request_key_impl_verify_2026_11_14.md",
+    "Batch 232: sandbox/linuxsandbox/seccomp_groups.go denies request_key in Restricted, ProxyRouted and ProxyRoutedTransparentTCP and leaves it to the baseline in VmSocketRestricted, matching Rust seccomp.rs's deny_syscall(SYS_request_key).",
+    "Batch 232 verifier: seccomp_mode_matrix_like_rust_test.go::TestRequestKeySeccompMatrixLikeRust probes the compiled filters for native 249 and x32 0x400000f9 per mode and asserts io_uring stays denied everywhere; negative check: removing the request_key entry fails the three restricting modes. The //go:build linux request_key_like_rust_test.go covers real syscall dispatch on a Linux host."
    ],
    "kind": "security",
    "sha": "7eaaee4270006aec62499da46c66b5f140d47160",
-   "status": "partial",
+   "status": "complete",
    "subject": "Block `request_key` in Linux network sandbox filters (#61256)"
   },
   {
