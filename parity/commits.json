@@ -51188,7 +51188,8 @@
   },
   {
    "domains": [
-    "codex_go"
+    "codex_go",
+    "Batch 294: the retained-thread injection carrier now exists. agentboard/guardian_evidence_injection.go adds GuardianEvidenceItem.ResponseItem, which renders an admitted batch as the Responses function-call output Rust sampling::context_input injects (type function_call_output, name guardian_original_evidence, namespace guardian, the routed originals as its plain-text body, and no call id because no model turn called it), plus GuardianEvidenceInjector, the host hook that records response items in a retained reviewer thread without starting a turn, and GuardianInboxAdmit, which adapts an injector to the inbox admission callback. Tests: agentboard/guardian_evidence_injection_like_rust_test.go (rendered shape and default namespace, refusal of a nameless or empty batch, injection before the conversation cursor advances, and a failed injection leaving the evidence queued). Residual: a host implementation of GuardianEvidenceInjector over a real reviewer thread store, and the selection of the retained thread itself."
    ],
    "evidence": [
     "Landed: LocalAgentMessageBoard.ReadPostTextsByID reads whole bodies in caller order for at most one board page and fails on an unknown post (landed 7e854776); GuardianActorInbox.Deliver drains a finite queue prefix up to the observed length, admits one whole-original batch in source order within the reviewer's model budget, advances its cursor only after the callback records the item, and lets a replacement conversation replay the queue (landed fc1afa5b); GuardianHousekeeper publishes each committed original to those inboxes (landed 8a152420).",
