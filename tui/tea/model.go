@@ -2263,6 +2263,14 @@ type Model struct {
 	hoverPointerX   int
 	hoverPointerY   int
 	hoverPointerSet bool
+	// hoverTargetActive records that the last draw recoloured a clickable
+	// target, so View can switch the OSC 22 pointer shape (Rust #62390
+	// set_pointer_shape).
+	hoverTargetActive bool
+	// linkPointer remembers the OSC 22 shape already written, and
+	// linkPointerTerminal caches the terminal identity used to gate it.
+	linkPointer         linkPointerState
+	linkPointerTerminal *shell.TerminalInfo
 	// collabTranscriptRows remembers rendered collab tool calls so a late
 	// subagent nickname can relabel them (Rust #63444).
 	collabTranscriptRows []collabTranscriptRow
@@ -4335,6 +4343,7 @@ func Run(ctx context.Context, state *codextui.State, options Options, input io.R
 	// retries it. The deferred restore also covers Bubble Tea's panic path.
 	defer func() {
 		initialModel.restoreAlternateScroll()
+		initialModel.restorePointerShape(output)
 	}()
 	final, err := program.Run()
 	// Rust #57391: reports the terminal generated while mouse/focus reporting
@@ -5979,7 +5988,9 @@ func (m *Model) View() bubbletea.View {
 	if m == nil {
 		return bubbletea.NewView("")
 	}
-	v := bubbletea.NewView(m.frameOutput())
+	content := m.frameOutput()
+	content = m.pointerShapeOutput() + content
+	v := bubbletea.NewView(content)
 	if m.composerCaretVisible && m.composerCaretRow >= 0 && m.composerCaretRow < strings.Count(v.Content, "\n")+1 {
 		cursor := bubbletea.NewCursor(m.composerCaretX, m.composerCaretRow)
 		cursor.Shape = bubbletea.CursorBar

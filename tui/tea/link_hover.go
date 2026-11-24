@@ -162,6 +162,9 @@ func (m *Model) linkHoverSGR() string {
 // every draw, so scrolling, resizing or new output cannot leave the highlight
 // on stale content (Rust #62390 recomputes the highlight on redraw).
 func (m *Model) applyLinkHover(frame string) string {
+	if m != nil {
+		m.hoverTargetActive = false
+	}
 	if m == nil || !m.hoverPointerSet || frame == "" || !m.linkHoverApplies() {
 		return frame
 	}
@@ -182,6 +185,7 @@ func (m *Model) applyLinkHover(frame string) string {
 	if !ok {
 		return frame
 	}
+	m.hoverTargetActive = true
 	rows[m.hoverPointerY] = restylePaintedLink(row, span, m.linkHoverSGR())
 	return strings.Join(rows, "\n")
 }
