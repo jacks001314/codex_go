@@ -40,7 +40,11 @@ type ThreadManager struct {
 	// paused closes turn admission while a runtime-wide change (a workspace
 	// switch) replaces credentials. Rust #57514 TurnAdmission.pause.
 	paused bool
-	turnWG sync.WaitGroup
+	// admissionResumeHooks run after a workspace pause reopens admission,
+	// so work refused during the pause can retry (Rust #62537
+	// TurnAdmission::admission_updates).
+	admissionResumeHooks []func()
+	turnWG               sync.WaitGroup
 
 	ephemeralMu sync.RWMutex
 	ephemeral   map[string]*session.Record
@@ -566,6 +570,19 @@ type TurnAdmissionPermit struct {
 	once    sync.Once
 }
 
+// turnAdmissionBypassPermit stands in for a permit Rust never asks for: an
+// explicit follow-up or a native child result finishes turn work its sender
+// already admitted, so it may reserve and register while the server drains
+// (Rust #62537 reserve_pending_work_turn's `admission = None`). It carries no
+// manager, so releasing it is a no-op and it never counts as in-flight admitted
+// work.
+var turnAdmissionBypassPermit = &TurnAdmissionPermit{}
+
+// errTurnAdmissionPaused rejects new work while a workspace pause replaces
+// credentials. Automatic mailbox wakes keep their mail queued and retry it when
+// the pause ends (Rust #62537 TurnAdmission::admission_updates).
+var errTurnAdmissionPaused = jsonRPCInvalidRequest("Workspace change in progress; retry when it completes")
+
 // Release drops the permit. It is safe to call more than once and on a nil
 // permit.
 func (p *TurnAdmissionPermit) Release() {
@@ -597,34 +614,42 @@ func (m *ThreadManager) AdmitTurnWork() (*TurnAdmissionPermit, error) {
 		return nil, ErrServerDraining
 	}
 	if m.paused {
-		return nil, jsonRPCInvalidRequest("Workspace change in progress; retry when it completes")
+		return nil, errTurnAdmissionPaused
 	}
 	m.admittedWork++
 	return &TurnAdmissionPermit{manager: m}, nil
 }
 
 func (m *ThreadManager) ReserveTurn(threadID string) error {
-	return m.reserveTurn(threadID, nil)
+	return m.reserveTurn(threadID, nil, false)
 }
 
 // ReserveTurnAdmitted reserves a turn for a request holding a dispatch-time
 // permit, so a drain that started while the request was preparing does not
 // reject it.
 func (m *ThreadManager) ReserveTurnAdmitted(threadID string, permit *TurnAdmissionPermit) error {
-	return m.reserveTurn(threadID, permit)
+	return m.reserveTurn(threadID, permit, false)
 }
 
-func (m *ThreadManager) reserveTurn(threadID string, permit *TurnAdmissionPermit) error {
+// ReserveTurnWithoutAdmission reserves turn work Rust starts without an
+// admission permit: an explicit follow-up or a native child result finishing
+// work the sender already admitted (Rust #62537). It may start while the
+// server drains or while a workspace pause holds admission closed.
+func (m *ThreadManager) ReserveTurnWithoutAdmission(threadID string) error {
+	return m.reserveTurn(threadID, nil, true)
+}
+
+func (m *ThreadManager) reserveTurn(threadID string, permit *TurnAdmissionPermit, bypassAdmission bool) error {
 	if m == nil {
 		return fmt.Errorf("%w: thread manager is nil", ErrInvalidRequest)
 	}
 	m.turnsMu.Lock()
 	defer m.turnsMu.Unlock()
-	if m.closing && permit == nil {
+	if m.closing && !bypassAdmission && permit == nil {
 		return ErrServerDraining
 	}
-	if m.paused {
-		return jsonRPCInvalidRequest("Workspace change in progress; retry when it completes")
+	if m.paused && !bypassAdmission {
+		return errTurnAdmissionPaused
 	}
 	if active := m.active[threadID]; active != nil {
 		return fmt.Errorf("%w: thread %s already has active turn %s", session.ErrConflict, threadID, active.TurnID)
@@ -632,15 +657,29 @@ func (m *ThreadManager) reserveTurn(threadID string, permit *TurnAdmissionPermit
 	// Rust #62640 keeps the thread's discovery cache across turns; an explicit
 	// InvalidateCapabilityDiscoveryV2Cache refreshes it on the next lookup.
 	m.active[threadID] = &activeRuntimeTurn{ThreadID: threadID}
-	if permit != nil {
+	switch {
+	case permit != nil:
 		if m.admittedTurns == nil {
 			m.admittedTurns = make(map[string]*TurnAdmissionPermit)
 		}
 		m.admittedTurns[threadID] = permit
-	} else {
+	case bypassAdmission:
+		if m.admittedTurns == nil {
+			m.admittedTurns = make(map[string]*TurnAdmissionPermit)
+		}
+		m.admittedTurns[threadID] = turnAdmissionBypassPermit
+	default:
 		delete(m.admittedTurns, threadID)
 	}
 	return nil
+}
+
+// turnAdmissionBypassedLocked reports whether the thread's reservation was made
+// without admission, so the turn it prepared may register during a drain or a
+// workspace pause (Rust #62537).
+func (m *ThreadManager) turnAdmissionBypassedLocked(threadID string) bool {
+	permit := m.admittedTurns[threadID]
+	return permit != nil && permit.manager == nil
 }
 
 func (m *ThreadManager) RegisterTurn(threadID string, turnID string, cancel context.CancelFunc, startedAtMS int64, params *turn.TurnStartParams) error {
@@ -663,17 +702,18 @@ func (m *ThreadManager) registerTurn(threadID string, turnID string, cancel cont
 	// A reservation admitted before the drain gate closed keeps its permit, so
 	// the turn it prepared still registers; everything else observes the gate
 	// (Rust keeps the dispatch permit alive while queued turn work runs).
-	if m.closing && (m.active[threadID] == nil || m.admittedTurns[threadID] == nil) {
+	bypassedAdmission := m.turnAdmissionBypassedLocked(threadID)
+	if m.closing && !bypassedAdmission && (m.active[threadID] == nil || m.admittedTurns[threadID] == nil) {
 		if cancel != nil {
 			cancel()
 		}
 		return ErrServerDraining
 	}
-	if m.paused {
+	if m.paused && !bypassedAdmission {
 		if cancel != nil {
 			cancel()
 		}
-		return jsonRPCInvalidRequest("Workspace change in progress; retry when it completes")
+		return errTurnAdmissionPaused
 	}
 	if active := m.active[threadID]; active != nil {
 		if active.TurnID == "" {
@@ -830,8 +870,30 @@ func (p *TurnAdmissionPause) Release() {
 	p.once.Do(func() {
 		p.manager.turnsMu.Lock()
 		p.manager.paused = false
+		closing := p.manager.closing
+		hooks := append([]func(){}, p.manager.admissionResumeHooks...)
 		p.manager.turnsMu.Unlock()
+		if closing {
+			return
+		}
+		// Rust #62537 wakes subscribers of TurnAdmission::admission_updates so
+		// queued work retries admission once the temporary pause ends.
+		for _, hook := range hooks {
+			hook()
+		}
 	})
+}
+
+// RegisterAdmissionResumeHook records a callback that runs after a workspace
+// pause reopens turn admission (Rust #62537
+// TurnAdmission::admission_updates).
+func (m *ThreadManager) RegisterAdmissionResumeHook(hook func()) {
+	if m == nil || hook == nil {
+		return
+	}
+	m.turnsMu.Lock()
+	m.admissionResumeHooks = append(m.admissionResumeHooks, hook)
+	m.turnsMu.Unlock()
 }
 
 // PauseTurnAdmission prevents new turns from starting and waits up to ten

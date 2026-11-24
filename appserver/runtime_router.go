@@ -482,6 +482,13 @@ type RuntimeRouter struct {
 	// turn that clears this state.
 	agentWakeStateMu sync.Mutex
 	agentWakeStopped map[string]bool
+	// agentWakeRetryMu guards agentWakeRetry, the threads whose automatic wake
+	// turn admission refused while a workspace pause was active. Ending the
+	// pause retries them (Rust #62537 admission_updates ->
+	// maybe_start_turn_for_pending_work).
+	agentWakeRetryMu       sync.Mutex
+	agentWakeRetry         map[string]struct{}
+	agentWakeRetryHookOnce bool
 	// turnAdmissionMu makes turn admission observe the same settings snapshot
 	// that a concurrent thread/settings/update commits. Automatic starts cannot
 	// validate against one mode and then run after another settings write.

@@ -52728,12 +52728,15 @@
    "evidence": [
     "Rust #62537 has three parts: gate ordinary automatic mailbox wakes on app-server turn admission, queue plain-text agent mail injected into native child threads, and extract a remote app-server client crate.",
     "The injection half is implemented in Go: plaintext agent mail injected into a native child thread is queued for its mailbox and consumed on the next turn (appserver/agent_controller.go routesInjectedAgentMail + handleThreadInjectItemsRuntime; see appserver/agent_mail_injection_like_rust_test.go).",
-    "Gap: Go has no turn-admission permit or drain pause to gate mailbox wakes on. appserver/daemon_recovery_restore.go documents that `turn_admission.admit()` has no Go equivalent and the restore loop is bounded by sequential execution instead, so a permission-gated automatic wake and its retry-on-reopen cannot be mirrored.",
+    "Ordinary automatic mailbox wakes now take a turn admission permit and hold it through turn registration (appserver/agent_controller.go startAutomaticWakeTurn -> ThreadManager.AdmitTurnWork), so a drain or a workspace pause refuses the wake and keeps its mail queued for the next turn.",
+    "Explicit follow-ups (NEW_TASK trigger_turn mail) and native child terminal results reserve without a permit (appserver/turn_admission.go automaticWakeBypassesAdmission -> ThreadManager.ReserveTurnWithoutAdmission), so they still wake the parent during a drain, matching Rust's admission = None path.",
+    "Reopening a workspace pause notifies the router (ThreadManager.RegisterAdmissionResumeHook) and re-applies the queued-mail and recorded-history wake rules, so refused work is retried instead of stranded.",
+    "appserver/agent_mail_admission_like_rust_test.go covers the paused wake, the post-release retry, the recorded-history retry, the child-result wake during a drain and plain mailbox mail staying queued; the tests fail if the bypass or the resume hook is removed.",
     "The crate extraction has no Go carrier: Go already exposes remote app-server transport pieces in appserverdaemon/cloudbackend packages separately from the runtime, so there is no client/runtime link split to perform."
    ],
    "kind": "runtime",
    "sha": "0b248182be6ff496c7b11401e3217c4c380848ca",
-   "status": "partial",
+   "status": "complete",
    "subject": "Respect app-server turn admission for agent mailbox wakes (#62537)"
   },
   {

@@ -516,6 +516,11 @@ type Request struct {
 	// turnAdmission is the dispatch-time admission permit the transport took
 	// for this request (Rust TurnAdmission::admit). It never crosses the wire.
 	turnAdmission *TurnAdmissionPermit
+	// turnAdmissionBypass marks internal wake work Rust starts without an
+	// admission permit because an explicit follow-up or a native child result
+	// finishes work the sender already admitted (Rust #62537). It never
+	// crosses the wire.
+	turnAdmissionBypass bool
 	// deferredNotificationScope keys this request's buffered notifications so a
 	// pipelined transport cannot flush them ahead of this request's response.
 	deferredNotificationScope string

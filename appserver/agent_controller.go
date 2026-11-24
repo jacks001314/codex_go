@@ -1409,6 +1409,25 @@ func runtimeAgentMessageIsTerminalResult(item any) bool {
 	return false
 }
 
+// runtimeAgentMessageTriggersTurn reports whether queued mail is an explicit
+// follow-up: an inter-agent communication with Rust's trigger_turn flag set,
+// which Go records as a NEW_TASK envelope instead of a plain MESSAGE.
+func runtimeAgentMessageTriggersTurn(item any) bool {
+	payload, ok := configurationUpdatePayload(item)
+	if !ok || strings.TrimSpace(stringFromMap(payload, "type")) != "agent_message" {
+		return false
+	}
+	blocks, _ := payload["content"].([]any)
+	for _, block := range blocks {
+		object, ok := block.(map[string]any)
+		if !ok || strings.TrimSpace(stringFromMap(object, "type")) != "input_text" {
+			continue
+		}
+		return strings.HasPrefix(stringFromMap(object, "text"), "Message Type: NEW_TASK\n")
+	}
+	return false
+}
+
 // runtimeAgentMessageIsAgentMessage reports whether queued input is inter-agent
 // mail. Rust #62348 records every accepted AgentMessage item before an
 // interrupted turn's teardown discards pending input.
@@ -1552,6 +1571,7 @@ func (r *RuntimeRouter) maybeWakeRootForPendingAgentMessages(threadID string) {
 
 	if err := r.startAutomaticWakeTurn(threadID, record, items); err != nil {
 		r.requeueRuntimeAgentMessages(threadID, items)
+		r.recordPendingAdmissionWake(threadID, err)
 	}
 }
 
@@ -1570,7 +1590,23 @@ func (r *RuntimeRouter) startAutomaticWakeTurn(threadID string, record *session.
 		}
 		params.CoreCyberAccessProgram = strings.TrimSpace(previous.CyberAccessProgram)
 	}
-	_, err := r.handleTurnStart(requestWithInternalParams(MethodTurnStart, params))
+	request := requestWithInternalParams(MethodTurnStart, params)
+	// Rust #62537: an ordinary automatic wake takes a turn admission permit and
+	// holds it through turn registration, so a drain or pause that starts first
+	// refuses it and leaves the mail queued. Explicit follow-ups and native
+	// child results finish work the sender already admitted and reserve without
+	// a permit.
+	if automaticWakeBypassesAdmission(items) {
+		request.turnAdmissionBypass = true
+	} else if r.threads != nil {
+		permit, err := r.threads.AdmitTurnWork()
+		if err != nil {
+			return err
+		}
+		request.turnAdmission = permit
+		defer request.releaseTurnAdmission()
+	}
+	_, err := r.handleTurnStart(request)
 	return err
 }
 
@@ -1586,6 +1622,17 @@ func (r *RuntimeRouter) maybeWakeRootAfterRecordedAgentMail(threadID string, ite
 	}
 	threadID = strings.TrimSpace(threadID)
 	if threadID == "" {
+		return false
+	}
+	return r.wakeRootForRecordedAgentMail(threadID)
+}
+
+// wakeRootForRecordedAgentMail re-applies the recorded-mail wake rules for one
+// idle native multi-agent v2 root. Rust #62537 retries this decision when turn
+// admission reopens, so the wake can also run without the injected batch.
+func (r *RuntimeRouter) wakeRootForRecordedAgentMail(threadID string) bool {
+	threadID = strings.TrimSpace(threadID)
+	if r == nil || threadID == "" {
 		return false
 	}
 	r.agentWakeMu.Lock()
@@ -1609,7 +1656,70 @@ func (r *RuntimeRouter) maybeWakeRootAfterRecordedAgentMail(threadID string, ite
 	if err != nil || v2 == nil || v2.DisableNativeTools {
 		return false
 	}
-	return r.startAutomaticWakeTurn(threadID, record, nil) == nil
+	if err := r.startAutomaticWakeTurn(threadID, record, nil); err != nil {
+		r.recordPendingAdmissionWake(threadID, err)
+		return false
+	}
+	return true
+}
+
+// recordPendingAdmissionWake keeps a thread whose automatic wake a temporary
+// workspace pause refused, so reopening admission retries it (Rust #62537
+// TurnAdmission::admission_updates -> maybe_start_turn_for_pending_work). A
+// draining server never reopens, so its mail waits for the handoff instead.
+func (r *RuntimeRouter) recordPendingAdmissionWake(threadID string, err error) {
+	if r == nil || !errors.Is(err, errTurnAdmissionPaused) {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	r.ensureAdmissionResumeHook()
+	r.agentWakeRetryMu.Lock()
+	if r.agentWakeRetry == nil {
+		r.agentWakeRetry = map[string]struct{}{}
+	}
+	r.agentWakeRetry[threadID] = struct{}{}
+	r.agentWakeRetryMu.Unlock()
+}
+
+// ensureAdmissionResumeHook subscribes the router to workspace-pause releases
+// once, so a refused wake is retried instead of waiting for the next delivery.
+func (r *RuntimeRouter) ensureAdmissionResumeHook() {
+	if r == nil || r.threads == nil {
+		return
+	}
+	r.agentWakeRetryMu.Lock()
+	registered := r.agentWakeRetryHookOnce
+	r.agentWakeRetryHookOnce = true
+	r.agentWakeRetryMu.Unlock()
+	if registered {
+		return
+	}
+	r.threads.RegisterAdmissionResumeHook(r.retryPendingAdmissionWakes)
+}
+
+// retryPendingAdmissionWakes re-runs the wake rules for every thread whose
+// automatic wake the ended pause refused.
+func (r *RuntimeRouter) retryPendingAdmissionWakes() {
+	if r == nil {
+		return
+	}
+	r.agentWakeRetryMu.Lock()
+	threadIDs := make([]string, 0, len(r.agentWakeRetry))
+	for threadID := range r.agentWakeRetry {
+		threadIDs = append(threadIDs, threadID)
+	}
+	r.agentWakeRetry = map[string]struct{}{}
+	r.agentWakeRetryMu.Unlock()
+	sort.Strings(threadIDs)
+	for _, threadID := range threadIDs {
+		// Queued mailbox mail is drained by its own wake; recorded mail has no
+		// copy to redeliver, so the history wake is re-applied instead.
+		r.maybeWakeRootForPendingAgentMessages(threadID)
+		r.wakeRootForRecordedAgentMail(threadID)
+	}
 }
 
 func (r *RuntimeRouter) runtimeAgentMessageWakeEligible(threadID string, record *session.Record) bool {

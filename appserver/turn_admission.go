@@ -64,9 +64,26 @@ func (router *RuntimeRouter) reserveRuntimeThreadForRequest(request *Request, th
 	if router == nil || router.threads == nil {
 		return fmt.Errorf("%w: runtime router is nil", ErrInvalidRequest)
 	}
+	if request != nil && request.turnAdmissionBypass {
+		return router.threads.ReserveTurnWithoutAdmission(threadID)
+	}
 	var permit *TurnAdmissionPermit
 	if request != nil {
 		permit = request.turnAdmission
 	}
 	return router.threads.ReserveTurnAdmitted(threadID, permit)
+}
+
+// automaticWakeBypassesAdmission reports whether an automatic wake carries work
+// Rust starts without an admission permit because its sender already admitted
+// the turn: an explicit follow-up (trigger_turn) or a native child's terminal
+// result (Rust #62537). Other mailbox mail takes a permit and stays queued while
+// admission is closed.
+func automaticWakeBypassesAdmission(items []any) bool {
+	for _, item := range items {
+		if runtimeAgentMessageIsTerminalResult(item) || runtimeAgentMessageTriggersTurn(item) {
+			return true
+		}
+	}
+	return false
 }
