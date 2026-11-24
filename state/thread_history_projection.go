@@ -364,6 +364,11 @@ func projectThreadHistoryLine(line *rollout.Line) (threadHistoryChanges, error) 
 	if line != nil && line.Type == "realtime_item" {
 		return projectThreadHistoryRealtimeLine(line)
 	}
+	// The reader canonicalizes a persisted `response_item` line to `item`, which
+	// is also the in-memory name of a model history item.
+	if line != nil && (line.Type == "item" || line.Type == "response_item") {
+		return projectThreadHistoryResponseItemLine(line)
+	}
 	if line == nil || line.Type != "event_msg" || len(line.Payload) == 0 {
 		return changes, nil
 	}
@@ -452,6 +457,46 @@ func projectThreadHistoryRealtimeLine(line *rollout.Line) (threadHistoryChanges,
 	}
 	if err := json.Unmarshal(normalized, &tagged); err != nil {
 		return changes, fmt.Errorf("read realtime_item record %s type: %w", item.ID, err)
+	}
+	changes.Realtime = append(changes.Realtime, threadHistoryRealtimeChange{
+		ItemID:      item.ID,
+		ItemType:    tagged.Type,
+		ItemJSON:    normalized,
+		CreatedAtMS: createdAt.UnixMilli(),
+	})
+	return changes, nil
+}
+
+// projectThreadHistoryResponseItemLine projects the realtime receipt a persisted
+// model message carries (Rust #62251: RolloutItem::realtime_item also reads
+// response items). The message keeps the only copy of the text; the receipt row
+// shares the message's rollout ordinal so realtime history keeps rollout order.
+func projectThreadHistoryResponseItemLine(line *rollout.Line) (threadHistoryChanges, error) {
+	changes := threadHistoryChanges{}
+	payload := line.Item
+	if len(payload) == 0 {
+		payload = line.Payload
+	}
+	if len(payload) == 0 {
+		return changes, nil
+	}
+	item, ok := realtime.RealtimeItemFromResponseItem(payload, line.ItemMetadata)
+	if !ok {
+		return changes, nil
+	}
+	normalized, err := item.MarshalRolloutJSON()
+	if err != nil {
+		return changes, fmt.Errorf("encode projected realtime receipt %s: %w", item.ID, err)
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, line.Timestamp)
+	if err != nil {
+		return changes, fmt.Errorf("response item receipt %s has an invalid timestamp: %w", item.ID, err)
+	}
+	var tagged struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(normalized, &tagged); err != nil {
+		return changes, fmt.Errorf("read projected realtime receipt %s type: %w", item.ID, err)
 	}
 	changes.Realtime = append(changes.Realtime, threadHistoryRealtimeChange{
 		ItemID:      item.ID,

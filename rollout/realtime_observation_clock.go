@@ -37,6 +37,18 @@ func ObservationClockFloor(lines []Line) *int64 {
 				continue
 			}
 			observe(item.ObservedAtMS)
+		case "item", "response_item":
+			// Rust #62251: a persisted model message keeps its realtime
+			// observation time beside the message, so restoring the clock after a
+			// restart does not depend on a separate receipt row.
+			payload := line.Item
+			if len(payload) == 0 {
+				payload = line.Payload
+			}
+			if len(payload) == 0 {
+				continue
+			}
+			observe(realtime.RealtimeObservedAtMS(line.ItemMetadata))
 		case "compacted":
 			if len(line.Payload) == 0 {
 				continue

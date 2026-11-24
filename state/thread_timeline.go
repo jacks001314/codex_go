@@ -245,7 +245,7 @@ SELECT item_id, rollout_ordinal, item_json
 FROM thread_realtime_items
 WHERE thread_id = ? AND rollout_ordinal >= ? AND rollout_ordinal < ?
   AND rollout_ordinal <= ?
-  AND item_type NOT IN ('turn_input_accepted', 'session_end_input_saved')
+  AND item_type NOT IN ('turn_input_accepted', 'session_input_saved', 'session_end_input_saved')
   AND (rollout_ordinal, 2, item_id) < (?, ?, ?)
 ORDER BY rollout_ordinal DESC, item_id DESC
 LIMIT ?`, segment.ThreadID, start, upperInt, cursorOrdinal, cursorOrdinal, 2, cursorID, limit)
