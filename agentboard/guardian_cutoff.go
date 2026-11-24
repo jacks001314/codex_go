@@ -94,6 +94,35 @@ func (e *GuardianReviewEvidence) AttemptCutoff(revisions uint64, capture func() 
 	if revisions == e.revisions {
 		return e.initial, nil
 	}
+	return e.captureFreshLocked(capture)
+}
+
+// RequestCutoff returns the position a preparation must route through (Rust
+// actor.rs request_through). The first preparation reuses the request-time
+// position only while the root revisions still match what binding captured,
+// because authorization can advance between binding and routing; a later
+// attempt reuses the initial cutoff while authorization is unchanged and
+// otherwise captures a fresh position. A position from another root is
+// refused.
+func (e *GuardianReviewEvidence) RequestCutoff(revisions uint64, capture func() (GuardianHistoryPosition, uint64, error)) (GuardianHistoryPosition, error) {
+	if e == nil {
+		return GuardianHistoryPosition{}, errors.New("Guardian review evidence is unavailable")
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.attempts++
+	if revisions == e.revisions {
+		if e.attempts == 1 {
+			return e.current, nil
+		}
+		return e.initial, nil
+	}
+	return e.captureFreshLocked(capture)
+}
+
+// captureFreshLocked flushes and captures a new position after core sampled a
+// new authorization revision. The caller holds e.mu.
+func (e *GuardianReviewEvidence) captureFreshLocked(capture func() (GuardianHistoryPosition, uint64, error)) (GuardianHistoryPosition, error) {
 	if capture == nil {
 		return GuardianHistoryPosition{}, errors.New("Guardian review evidence requires a fresh capture")
 	}

@@ -55016,10 +55016,11 @@
    "evidence": [
     "Batch 122: partial - Rust refreshes Guardian v3 evidence before retrying an approval review. Go's Guardian retry path re-reads the review history through guardianReviewHistoryItems, but there is no v3 evidence-refresh step before the retry.",
     "Batch 270: approval reviews now carry Rust #63363's evidence-cutoff model (codex-rs/ext/guardian-v3/src/actor.rs). GuardianReviewEvidence binds the request-time GuardianHistoryPosition plus the root authorization revisions; AttemptCutoff returns that position for the first attempt, reuses it on a retry whose root revisions still match the captured snapshot, and otherwise calls a supplied capture to flush and take a fresh position for the new authorization revision, refusing a position from another root or a missing capture. Combined with Batch 258's GuardianRoutedEvidence.WaitUntilRouted, a prepared review can capture the position at binding, take a fresh one when authorization changed, and wait for routing to cover it before submitting. Tests: agentboard/guardian_review_evidence_like_rust_test.go (first attempt, unchanged-revision retry, changed-authorization capture, foreign root, capture failure). Residual: the host-side review preparation that calls AttemptCutoff and then WaitUntilRouted is still missing."
-   ],
+   ,
+   "Batch 279: the host-side review preparation now has its Go carrier, closing the residual. agentboard/guardian_cutoff.go adds GuardianReviewEvidence.RequestCutoff, which is Rust actor.rs request_through: the first preparation reuses the request-time position only while the root revisions still match what binding captured, later attempts reuse the initial cutoff while authorization is unchanged, and a changed revision flushes a fresh capture that must still belong to the same root. agentboard/guardian_review_preparation.go adds GuardianPreparedReview, which binds the evidence to the routing watermark of the same root, takes this attempt's cutoff, and waits on GuardianRoutedEvidence.WaitUntilRouted before the assessment is submitted, reporting ErrGuardianReviewCancelled for a cancelled review and ErrGuardianEvidenceUnavailable for a failed capture or a stopped watermark. Tests: agentboard/guardian_review_preparation_like_rust_test.go (routing gate before submit, fresh capture when authorization advanced, retry reuses the bound cutoff, cancellation versus stopped routing, foreign root refused)."],
    "kind": "runtime",
    "sha": "223b61a9a80241cd200853e79f112657466bc0b9",
-   "status": "partial",
+   "status": "complete",
    "subject": "Refresh Guardian v3 evidence before retrying an approval review (#63363)"
   },
   {
