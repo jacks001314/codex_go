@@ -241,6 +241,23 @@ type McpServerStatus struct {
 	Tools             []string
 	Resources         []McpResource
 	ResourceTemplates []McpResourceTemplate
+	// Disabled marks a configured server that the effective configuration
+	// disables; DisabledReason explains why when one is recorded.
+	Disabled       bool
+	DisabledReason string
+	// Command, Args and Cwd describe a stdio server (Rust #63619 /mcp output).
+	Command string
+	Args    []string
+	Cwd     string
+	// URL describes a Streamable HTTP server (Rust #63619 /mcp output).
+	URL string
+	// Env lists configured environment variable names, HTTPHeaders lists
+	// configured header names, and EnvHTTPHeaders maps a header to the
+	// environment variable that supplies it. Values are never carried here:
+	// /mcp masks them so the inventory cannot leak credentials.
+	Env            []string
+	HTTPHeaders    []string
+	EnvHTTPHeaders map[string]string
 }
 
 type McpResource struct {
@@ -302,11 +319,26 @@ func NewMCPToolsOutputFromStatuses(statuses []McpServerStatus, detail bool) McpT
 		if environment := strings.TrimSpace(status.EnvironmentID); environment != "" {
 			name += " (environment " + environment + ")"
 		}
-		lines = append(lines, "  \u2022 "+name+": "+label+" ("+strconv.Itoa(count)+" "+unit+")")
+		header := "  \u2022 " + name
 		if !detail {
+			header += ": " + label + " (" + strconv.Itoa(count) + " " + unit + ")"
+			lines = append(lines, header)
 			continue
 		}
+		if status.Disabled {
+			// Rust #63619: a disabled server reports only its reason; transport
+			// details would expose configuration that is not in effect.
+			lines = append(lines, header+" (disabled)")
+			if reason := strings.TrimSpace(status.DisabledReason); reason != "" {
+				lines = append(lines, "    \u2022 Reason: "+reason)
+			}
+			lines = append(lines, "")
+			continue
+		}
+		lines = append(lines, header)
+		lines = append(lines, "    \u2022 Status: enabled")
 		lines = append(lines, "    \u2022 Auth: "+firstNonEmptyHistory(strings.TrimSpace(status.Auth), "Unsupported"))
+		lines = append(lines, mcpServerTransportLines(status)...)
 		tools := append([]string(nil), status.Tools...)
 		sort.Strings(tools)
 		if len(tools) == 0 {
@@ -325,6 +357,79 @@ func NewMCPToolsOutputFromStatuses(statuses []McpServerStatus, detail bool) McpT
 		lines = append(lines, "  Use /mcp verbose for tools and resources.")
 	}
 	return McpToolsOutputCell{Lines: lines}
+}
+
+// mcpServerTransportLines renders the configured transport for a verbose /mcp
+// inventory (Rust #63619). Secret-bearing values are masked; env HTTP header
+// rows name the variable that supplies the value.
+func mcpServerTransportLines(status McpServerStatus) []string {
+	lines := []string{}
+	if command := strings.TrimSpace(status.Command); command != "" {
+		if len(status.Args) > 0 {
+			command += " " + strings.Join(status.Args, " ")
+		}
+		lines = append(lines, "    \u2022 Command: "+command)
+		if cwd := strings.TrimSpace(status.Cwd); cwd != "" {
+			lines = append(lines, "    \u2022 Cwd: "+cwd)
+		}
+		if env := formatMcpEnvDisplay(status.Env); env != "" {
+			lines = append(lines, "    \u2022 Env: "+env)
+		}
+	}
+	if url := strings.TrimSpace(status.URL); url != "" {
+		lines = append(lines, "    \u2022 URL: "+url)
+	}
+	if headers := formatMcpMaskedNames(status.HTTPHeaders); headers != "" {
+		lines = append(lines, "    \u2022 HTTP headers: "+headers)
+	}
+	if headers := formatMcpEnvHeaders(status.EnvHTTPHeaders); headers != "" {
+		lines = append(lines, "    \u2022 Env HTTP headers: "+headers)
+	}
+	return lines
+}
+
+// formatMcpEnvDisplay mirrors Rust format_env_display: sorted names, masked
+// values, and an empty string when nothing is configured.
+func formatMcpEnvDisplay(names []string) string {
+	return formatMcpMaskedNames(names)
+}
+
+// formatMcpMaskedNames renders sorted "NAME=*****" entries.
+func formatMcpMaskedNames(names []string) string {
+	filtered := make([]string, 0, len(names))
+	for _, name := range names {
+		if name = strings.TrimSpace(name); name != "" {
+			filtered = append(filtered, name)
+		}
+	}
+	if len(filtered) == 0 {
+		return ""
+	}
+	sort.Strings(filtered)
+	out := make([]string, 0, len(filtered))
+	for _, name := range filtered {
+		out = append(out, name+"=*****")
+	}
+	return strings.Join(out, ", ")
+}
+
+// formatMcpEnvHeaders renders sorted "HEADER=ENV_VAR" entries.
+func formatMcpEnvHeaders(headers map[string]string) string {
+	if len(headers) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(headers))
+	for name := range headers {
+		if strings.TrimSpace(name) != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		out = append(out, name+"="+strings.TrimSpace(headers[name]))
+	}
+	return strings.Join(out, ", ")
 }
 
 // mcpRuntimeStatusLabel renders the connection state label for the compact

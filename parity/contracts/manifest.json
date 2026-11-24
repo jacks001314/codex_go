@@ -1,6 +1,6 @@
 {
  "schemaVersion": 1,
- "targetRustCommit": "32119bac269b881d512b82df74af285e8c60adc2",
+ "targetRustCommit": "8b096dce07b94aa4428ca310b871e5a873c8d2a2",
  "contracts": [
   {
    "id": "features",

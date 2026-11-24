@@ -899,6 +899,9 @@ type MCPServerStatusUpdatedNotification struct {
 	// execution environment (Rust #61257).
 	EnvironmentID *string                        `json:"environmentId,omitempty"`
 	Status        string                         `json:"status"`
+	// DurationMs is the measured startup time for a ready or failed attempt;
+	// nil for starting, cancelled, and reused connections (Rust #63613).
+	DurationMs    *uint64                        `json:"durationMs"`
 	Error         *string                        `json:"error"`
 	FailureReason *MCPServerStartupFailureReason `json:"failureReason"`
 }
@@ -909,6 +912,7 @@ func (n *MCPServerStatusUpdatedNotification) MarshalJSON() ([]byte, error) {
 		Name          string                         `json:"name"`
 		EnvironmentID *string                        `json:"environmentId,omitempty"`
 		Status        string                         `json:"status"`
+		DurationMs    *uint64                        `json:"durationMs"`
 		Error         *string                        `json:"error"`
 		FailureReason *MCPServerStartupFailureReason `json:"failureReason"`
 	}{
@@ -916,6 +920,7 @@ func (n *MCPServerStatusUpdatedNotification) MarshalJSON() ([]byte, error) {
 		Name:          n.Name,
 		EnvironmentID: cloneStringPtrAppserver(n.EnvironmentID),
 		Status:        normalizeMCPServerStartupStatus(n.Status),
+		DurationMs:    cloneUint64PtrAppserver(n.DurationMs),
 		Error:         cloneStringPtrAppserver(n.Error),
 		FailureReason: cloneMCPServerStartupFailureReasonPtr(n.FailureReason),
 	})

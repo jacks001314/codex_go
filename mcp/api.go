@@ -61,7 +61,7 @@ type MCPStartupObserver func(name string, status MCPServerStartupState, failureR
 // MCPStartupStatusListener observes registration-scoped startup transitions.
 // It carries the environment so identical server names in different
 // environments stay distinguishable (Rust #61257).
-type MCPStartupStatusListener func(name string, environmentID string, status MCPServerStartupState, failureReason *string, err error)
+type MCPStartupStatusListener func(name string, environmentID string, status MCPServerStartupState, failureReason *string, err error, durationMs *uint64)
 
 type MCPAuthStatus string
 
@@ -841,6 +841,10 @@ type MCPService struct {
 	dynamicConfig   map[string]bool
 	required        map[string]bool
 	starting        map[string]int
+	// startupStartedAt records when a startup attempt began so the ready or
+	// failed transition can report its elapsed time (Rust #63613
+	// McpServerStatusUpdatedNotification durationMs).
+	startupStartedAt map[string]time.Time
 	httpClients     map[string]*cachedMCPHTTPClient
 	stdioClients    map[string]*cachedMCPStdioClient
 	// discoverLocalStdio mirrors Rust McpConfig::discover_local_stdio: it gates
@@ -2755,8 +2759,22 @@ func (s *MCPService) recordInventoryStatus(name string, status MCPServerStatus, 
 	}
 	config := s.configs[key]
 	s.mu.Unlock()
+	var durationMs *uint64
+	if status.State != previousState && (status.State == MCPServerReady || status.State == MCPServerFailed) {
+		s.mu.Lock()
+		if started, ok := s.startupStartedAt[key]; ok {
+			elapsed := time.Since(started).Milliseconds()
+			if elapsed < 0 {
+				elapsed = 0
+			}
+			value := uint64(elapsed)
+			durationMs = &value
+			delete(s.startupStartedAt, key)
+		}
+		s.mu.Unlock()
+	}
 	if status.State != previousState {
-		s.notifyStartupStatus(key, status.State, status.FailureReason, nil)
+		s.notifyStartupStatus(key, status.State, status.FailureReason, nil, durationMs)
 	}
 	if status.State == MCPServerReady {
 		oauthResolved := s.authStatusForConfig(displayMCPServerName(key), &config) == MCPAuthOAuth
@@ -2776,8 +2794,14 @@ func (s *MCPService) markServerStartupStarted(name string) {
 	}
 	s.markStartupRequestedLocked(name)
 	s.starting[name]++
+	if s.startupStartedAt == nil {
+		s.startupStartedAt = map[string]time.Time{}
+	}
+	if _, tracked := s.startupStartedAt[name]; !tracked {
+		s.startupStartedAt[name] = time.Now()
+	}
 	s.mu.Unlock()
-	s.notifyStartupStatus(name, MCPServerStarting, nil, nil)
+	s.notifyStartupStatus(name, MCPServerStarting, nil, nil, nil)
 }
 
 // AddStartupStatusListener registers a startup observer and returns a function
@@ -2803,7 +2827,7 @@ func (s *MCPService) AddStartupStatusListener(listener MCPStartupStatusListener)
 
 // notifyStartupStatus delivers one transition with the registration's
 // environment. Listeners run after the service lock is released.
-func (s *MCPService) notifyStartupStatus(name string, status MCPServerStartupState, failureReason *string, err error) {
+func (s *MCPService) notifyStartupStatus(name string, status MCPServerStartupState, failureReason *string, err error, durationMs *uint64) {
 	if s == nil {
 		return
 	}
@@ -2826,7 +2850,7 @@ func (s *MCPService) notifyStartupStatus(name string, status MCPServerStartupSta
 		environmentID = config.EffectiveEnvironmentID()
 	}
 	for _, listener := range listeners {
-		listener(displayMCPServerName(name), environmentID, status, cloneStringPtr(failureReason), err)
+		listener(displayMCPServerName(name), environmentID, status, cloneStringPtr(failureReason), err, cloneUint64PtrMCP(durationMs))
 	}
 }
 

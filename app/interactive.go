@@ -1970,7 +1970,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 			if response == nil {
 				return nil, nil
 			}
-			return interactiveHistoryMCPStatuses(response.Data), nil
+			return interactiveHistoryMCPStatuses(response.Data, mcpService), nil
 		},
 		OnStartMCPLogin: interactiveLocalMCPLoginStarter(mcpService),
 		// Rust #60319: the sidebar chooser discovers saved side chats from the
@@ -2322,7 +2322,7 @@ func interactiveMCPRuntime(root *cli.RootOptions, owner *config.EmbeddedNetworkP
 	}
 	service := mcp.NewMCPService(runtimeConfig)
 	configuredStatuses := service.ConfiguredStatuses()
-	statuses := interactiveHistoryMCPStatuses(configuredStatuses)
+	statuses := interactiveHistoryMCPStatuses(configuredStatuses, service)
 	expectedServers := make([]string, 0, len(configuredStatuses))
 	for i := range configuredStatuses {
 		if name := mcp.RuntimeServerNameFromStatus(&configuredStatuses[i]); name != "" {
@@ -2606,12 +2606,12 @@ func interactiveMCPStartupMessages(ctx context.Context, service *mcp.MCPService,
 		if finalUpdate != nil && !send(*finalUpdate) {
 			return
 		}
-		_ = send(codextea.MCPStartupInventoryMsg{Servers: interactiveHistoryMCPStatuses(response.Data)})
+		_ = send(codextea.MCPStartupInventoryMsg{Servers: interactiveHistoryMCPStatuses(response.Data, service)})
 	}()
 	return messages
 }
 
-func interactiveHistoryMCPStatuses(statuses []mcp.MCPServerStatus) []historycell.McpServerStatus {
+func interactiveHistoryMCPStatuses(statuses []mcp.MCPServerStatus, service *mcp.MCPService) []historycell.McpServerStatus {
 	out := make([]historycell.McpServerStatus, 0, len(statuses))
 	for i := range statuses {
 		status := statuses[i]
@@ -2619,7 +2619,7 @@ func interactiveHistoryMCPStatuses(statuses []mcp.MCPServerStatus) []historycell
 		if name == "" {
 			continue
 		}
-		out = append(out, historycell.McpServerStatus{
+		cell := historycell.McpServerStatus{
 			Name:              name,
 			EnvironmentID:     mcpStatusEnvironmentIDValue(status.EnvironmentID),
 			RuntimeStatus:     mcpRuntimeStatusWire(status.RuntimeStatus),
@@ -2627,7 +2627,57 @@ func interactiveHistoryMCPStatuses(statuses []mcp.MCPServerStatus) []historycell
 			Tools:             interactiveMCPToolNames(status.Tools),
 			Resources:         interactiveMCPResources(status.Resources),
 			ResourceTemplates: interactiveMCPResourceTemplates(status.ResourceTemplates),
-		})
+		}
+		// Rust #63619: the verbose /mcp inventory renders the effective
+		// transport, masking literal env and header values.
+		if service != nil {
+			if config, ok := service.ServerConfigForServer(name); ok {
+				cell.Disabled = !config.Enabled
+				cell.DisabledReason = strings.TrimSpace(config.DisabledReason)
+				cell.Command = strings.TrimSpace(config.Command)
+				cell.Args = append([]string(nil), config.Args...)
+				cell.Cwd = strings.TrimSpace(config.CWD)
+				cell.URL = strings.TrimSpace(config.URL)
+				cell.Env = mcpEnvNames(config.Env, config.EnvVars)
+				cell.HTTPHeaders = mcpHeaderNames(config.HTTPHeaders)
+				cell.EnvHTTPHeaders = mcpEnvHeaders(config.EnvHTTPHeaders)
+			}
+		}
+		out = append(out, cell)
+	}
+	return out
+}
+
+// mcpEnvNames lists configured environment variables without their values, so
+// the /mcp inventory can render "NAME=*****" entries (Rust format_env_display).
+func mcpEnvNames(env map[string]string, envVars []mcp.EnvVar) []string {
+	names := make([]string, 0, len(env)+len(envVars))
+	for name := range env {
+		names = append(names, name)
+	}
+	for _, variable := range envVars {
+		names = append(names, variable.Name)
+	}
+	return names
+}
+
+// mcpHeaderNames lists configured HTTP header names; values stay out of the
+// history cell entirely.
+func mcpHeaderNames(headers map[string]string) []string {
+	names := make([]string, 0, len(headers))
+	for name := range headers {
+		names = append(names, name)
+	}
+	return names
+}
+
+func mcpEnvHeaders(headers map[string]string) map[string]string {
+	if len(headers) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(headers))
+	for name, variable := range headers {
+		out[name] = variable
 	}
 	return out
 }

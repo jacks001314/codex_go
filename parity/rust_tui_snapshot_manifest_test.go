@@ -63,9 +63,10 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	// (1579 -> 1581).
 	// Re-anchored to upstream 8e757686c1: the provider-scoped model picker
 	// (#63553) added the alternate-provider and unscoped-remote picker
-	// goldens (1581 -> 1583).
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1583 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1583", got)
+	// goldens (1581 -> 1583). Re-anchored to 8b096dce07: #63619 removed the
+	// /mcp secret-masking history snapshot (1583 -> 1582).
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1582 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1582", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -450,8 +451,8 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// request-user-input completed/interrupted results.
 			// #48101 added the truncated multiline `/ps` command preview.
 			// #48562 removed the halfwidth sound-marks header snapshot with the
-			// boxed card.
-			Files:    95,
+			// boxed card. #63619 removed the /mcp secret-masking snapshot.
+			Files:    94,
 			Owner:    "tui/history_cell",
 			Focus:    "history cell rendering for exec, MCP, plan updates, errors, sessions, user messages, and web search",
 			Priority: []string{"history-cell", "mcp", "status"},

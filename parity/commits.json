@@ -55976,9 +55976,63 @@
    "sha": "32119bac269b881d512b82df74af285e8c60adc2",
    "status": "complete",
    "subject": "Remove the test-only plugin guidance renderer (#63605)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Rust abc92e6bd4 (#63613) adds `durationMs` to the v2 McpServerStatusUpdatedNotification: ready and failed carry the per-server startup duration in milliseconds, while starting, cancelled and reused-connection states leave it null. It also regenerates the app-server precomputed exports and protocol schema fixtures.",
+    "Batch 234: `mcp.MCPStartupStatusListener` now receives `durationMs`; MCPService records the first startup attempt per name and reports elapsed milliseconds only on a ready/failed transition, then clears the mark. `appserver.MCPServerStatusUpdatedNotification` serializes `durationMs` as a pointer and the startup listener fills it. Precomputed exports were refreshed from the Rust mirror.",
+    "Batch 234 verifier: mcp/startup_status_listener_like_rust_test.go asserts nil on starting and non-nil on ready; mcp/startup_duration_like_rust_test.go asserts the measured elapsed value, one-shot emission after a same-state refresh, the failed-transition duration, and null for an untracked transition; appserver/mcp_startup_duration_like_rust_test.go asserts the field is present as null for starting and as a value for failed."
+   ],
+   "kind": "protocol",
+   "sha": "abc92e6bd4ee43b9fd2a33f63610355a538bd320",
+   "status": "complete",
+   "subject": "Report per-server MCP startup durations (#63613)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Rust 1f43c02f3f (#63614) is test-only: the plugin manager test now sets a plugin manifest `default_tools_approval_mode` of `writes` and a user override of `prompt`, proving the user setting wins, and drops the standalone tool-call approval test while keeping the warmed-cache per-tool override regression test.",
+    "Go's runtime config merge keeps the same precedence: user `mcp_servers` entries beat plugin overlays. TestRuntimeConfigPluginOverlaysRetainAttributionAndLoseToUserConfig (mcp/config_test.go) pins that a user server replaces a plugin overlay, and Batch 234 adds TestPluginMCPServerApprovalPolicyPrecedenceLikeRust plus TestPluginPerToolApprovalOverrideAppliesAfterConfigRefreshLikeRust (mcp/plugin_approval_precedence_like_rust_test.go) for the manifest `writes` default, the user `prompt` override, and the per-tool override surviving a refreshed policy."
+   ],
+   "kind": "test",
+   "sha": "1f43c02f3f3489edd61c6426fc5d392bea236a41",
+   "status": "complete",
+   "subject": "Simplify plugin MCP approval policy tests (#63614)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Dependency-only bump: Cargo.toml, Cargo.lock and MODULE.bazel.lock move etherparse 0.21.0 -> 0.21.1 with no source change.",
+    "Go's Linux sandbox builds its own socket-family seccomp rules (sandbox/linuxsandbox) and does not depend on etherparse, so the version pin has no Go counterpart to port."
+   ],
+   "kind": "release",
+   "sha": "cd97e717de79de8b17b29ffb716bb89f993a31a5",
+   "status": "not_applicable",
+   "subject": "Bump `etherparse` to 0.21.1 in the Linux sandbox (#63618)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Rust 8b096dce07 (#63619) only deletes the TUI snapshot test for /mcp masking; the rendering contract stays. Go's /mcp inventory was missing the verbose transport section entirely (command, cwd, env, url, http headers, env http headers).",
+    "Batch 233: historycell.McpServerStatus now carries the effective transport and the app server fills it from mcp.MCPService.ServerConfigForServer. Secret-bearing values are never copied into the cell: Env and HTTPHeaders hold names only and render as NAME=*****, EnvHTTPHeaders renders HEADER=ENV_VAR, and a disabled server reports only its reason.",
+    "Batch 233 verifier: tui/history_cell/mcp_inventory_masking_like_rust_test.go (masked env/header rows, compact view without transport, disabled server reason only) and app/mcp_inventory_masking_like_rust_test.go (configured secrets never appear). Negative check: dropping the header plumbing fails the app test, and dropping the disabled short-circuit would leak transport rows."
+   ],
+   "kind": "test",
+   "sha": "8b096dce07b94aa4428ca310b871e5a873c8d2a2",
+   "status": "complete",
+   "subject": "Remove the TUI snapshot test for `/mcp` secret masking (#63619)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "32119bac269b881d512b82df74af285e8c60adc2",
+ "rustToInclusive": "8b096dce07b94aa4428ca310b871e5a873c8d2a2",
  "schemaVersion": 1
 }

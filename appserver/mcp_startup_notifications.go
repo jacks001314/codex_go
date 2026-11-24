@@ -13,10 +13,11 @@ func (r *RuntimeRouter) observeMCPStartupStatus(service *mcp.MCPService, threadI
 		return
 	}
 	thread := strings.TrimSpace(threadID)
-	service.AddStartupStatusListener(func(name, environmentID string, status mcp.MCPServerStartupState, failureReason *string, err error) {
+	service.AddStartupStatusListener(func(name, environmentID string, status mcp.MCPServerStartupState, failureReason *string, err error, durationMs *uint64) {
 		notification := MCPServerStatusUpdatedNotification{
-			Name:   strings.TrimSpace(name),
-			Status: string(status),
+			Name:       strings.TrimSpace(name),
+			Status:     string(status),
+			DurationMs: durationMs,
 		}
 		if thread != "" {
 			notification.ThreadID = &thread
