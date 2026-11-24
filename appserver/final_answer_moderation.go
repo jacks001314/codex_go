@@ -17,7 +17,32 @@ func (i *ThreadItem) moderation() any {
 	if i.Moderation != nil {
 		return i.Moderation
 	}
-	return threadItemAnyFromData(i.Data, "moderation", "finalAnswerModeration", "final_answer_moderation")
+	return restoredModeration(threadItemAnyFromData(i.Data, "moderation", "finalAnswerModeration", "final_answer_moderation"))
+}
+
+// restoredModeration re-applies the stored-verdict rules when a value comes
+// back from item data instead of the typed field (Rust #60172
+// StoredModeration -> AgentMessageModeration): an unreadable display leaves
+// the answer restricted, and the nullable display is always present on the
+// app-server contract, so a stored verdict without one reports null.
+func restoredModeration(value any) any {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return value
+	}
+	moderated, ok := object["moderated"].(bool)
+	if !ok {
+		return value
+	}
+	display, present := object["display"]
+	if !present || display == nil {
+		return map[string]any{"moderated": moderated, "display": nil}
+	}
+	normalized, valid := normalizeAgentMessageDisplay(display)
+	if !valid {
+		return map[string]any{"moderated": true, "display": nil}
+	}
+	return map[string]any{"moderated": moderated, "display": normalized}
 }
 
 // finalAnswerModerationKey names the per-turn slot that keeps the moderation

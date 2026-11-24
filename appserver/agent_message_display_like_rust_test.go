@@ -40,15 +40,16 @@ func TestAgentMessageDisplayVersionedContractLikeRust(t *testing.T) {
 		got := normalizeFinalAnswerModeration(map[string]any{
 			"final_answer_moderation": map[string]any{"moderated": false, "display": bad},
 		})
-		if !reflect.DeepEqual(got, map[string]any{"moderated": true}) {
+		if !reflect.DeepEqual(got, map[string]any{"moderated": true, "display": nil}) {
 			t.Fatalf("moderation for %#v = %#v, want restricted", bad, got)
 		}
 	}
 
-	// A verdict without a display stays as reported.
+	// A verdict without a display stays as reported, with the contract's
+	// nullable display sent as an explicit null (Rust #60172).
 	if got := normalizeFinalAnswerModeration(map[string]any{
 		"final_answer_moderation": map[string]any{"moderated": false},
-	}); !reflect.DeepEqual(got, map[string]any{"moderated": false}) {
+	}); !reflect.DeepEqual(got, map[string]any{"moderated": false, "display": nil}) {
 		t.Fatalf("display-less moderation = %#v", got)
 	}
 }

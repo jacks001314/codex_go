@@ -44879,13 +44879,13 @@
     "codex_go"
    ],
    "evidence": [
-    "缺 final-answer 审核的 display instructions 保留（与 #59842 同一族，Go 侧无该元数据下发）",
-    "Go 锚点：protocol/、appserver/",
-    "plan: update/plan_2026_11_08_misc_1.md（#60172），契约 answer-moderation-display-metadata"
+    "Complete. Rust #60172 keeps a display instruction with a recovered answer: the answer item stores AgentMessageModeration {moderated, display}, the moderation decision's item id names the migrated answer, legacy agent_message events carry that decision into the migrated item, the app-server contract keeps the nullable display (null when the decision recorded none), and reading stored moderation back treats an unreadable display as restricted.",
+    "Go: rollout/canonical_replay.go canonicalAgentMessageItem copies a legacy event's moderation (moderated plus display only when present, matching Rust's skip_serializing_if) and adopts moderation.item_id instead of a synthesized id. appserver/agent_message_display.go emits an explicit display: null for an absent or unreadable instruction, and appserver/final_answer_moderation.go restoredModeration re-applies the stored-verdict rules when a verdict comes back from item data on thread history reconstruction.",
+    "Tests: TestCanonicalizeLegacyAgentMessageModerationLikeRust and TestCanonicalizeLegacyAgentMessageModerationWithoutDisplayLikeRust (rollout), TestRestoredAgentMessageModerationKeepsNullableDisplayLikeRust (appserver; the unreadable-display case fails when restoredModeration is bypassed). Verified: go test ./rollout -count=1, go test ./appserver -run 'Moderation|AgentMessage|Display|ThreadRead|ItemsList' -count=1, go build ./..., go vet ./appserver ./rollout, go test ./parity -count=1."
    ],
    "kind": "protocol",
    "sha": "202b590e84d01fb4326c50969b8ff4d41e37d2d6",
-   "status": "partial",
+   "status": "complete",
    "subject": "Preserve display instructions in answer moderation (#60172)"
   },
   {

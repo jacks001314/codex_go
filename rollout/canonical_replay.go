@@ -1454,7 +1454,7 @@ func (w *canonicalReplayWriter) replayEvent(entry canonicalReplayLine) error {
 			return err
 		}
 		w.reasoning = nil
-		item, buildErr := canonicalAgentMessageItem(entry.payload, w.itemID())
+		item, buildErr := canonicalAgentMessageItem(entry.payload, w.itemID)
 		if buildErr != nil {
 			return buildErr
 		}
@@ -2831,11 +2831,29 @@ func canonicalContentArray(entries [][]byte) []byte {
 	return buffer.Bytes()
 }
 
-// canonicalAgentMessageItem builds TurnItem::AgentMessage.
-func canonicalAgentMessageItem(source json.RawMessage, itemID string) ([]byte, error) {
+// canonicalAgentMessageItem builds TurnItem::AgentMessage. A legacy event's
+// moderation decision keeps its stored verdict and display instruction, and
+// its item id names the migrated answer instead of a synthesized one
+// (Rust #60172).
+func canonicalAgentMessageItem(source json.RawMessage, nextItemID func() string) ([]byte, error) {
 	fields, err := canonicalRawFields(source)
 	if err != nil {
 		return nil, err
+	}
+	itemID := ""
+	moderation, hasModeration := canonicalLegacyAgentMessageModeration(fields["moderation"])
+	if hasModeration {
+		if stored, err := canonicalRawFields(fields["moderation"]); err == nil {
+			if id, ok := canonicalStrictString(stored["item_id"]); ok {
+				itemID = strings.TrimSpace(id)
+			}
+		}
+	}
+	if itemID == "" {
+		if nextItemID == nil {
+			return nil, fmt.Errorf("missing item id generator")
+		}
+		itemID = nextItemID()
 	}
 	content := newCanonicalJSONObject()
 	if err := content.field("type", "Text"); err != nil {
@@ -2854,6 +2872,11 @@ func canonicalAgentMessageItem(source json.RawMessage, itemID string) ([]byte, e
 	if err := out.field("content", []json.RawMessage{json.RawMessage(content.finish())}); err != nil {
 		return nil, err
 	}
+	if hasModeration {
+		if err := out.rawField("moderation", moderation); err != nil {
+			return nil, err
+		}
+	}
 	for _, key := range []string{"phase", "memory_citation", "delivery", "questions"} {
 		if value, ok := fields[key]; ok && !canonicalRawIsNull(value) {
 			if err := out.rawField(key, value); err != nil {
@@ -2862,6 +2885,35 @@ func canonicalAgentMessageItem(source json.RawMessage, itemID string) ([]byte, e
 		}
 	}
 	return out.finish(), nil
+}
+
+// canonicalLegacyAgentMessageModeration converts a legacy event's moderation
+// decision into the stored AgentMessageModeration: the verdict keeps the
+// moderated flag, and a display instruction is carried only when the
+// decision recorded one (Rust #60172 stores the nullable display by
+// omitting it).
+func canonicalLegacyAgentMessageModeration(raw json.RawMessage) (json.RawMessage, bool) {
+	if len(raw) == 0 || canonicalRawIsNull(raw) {
+		return nil, false
+	}
+	fields, err := canonicalRawFields(raw)
+	if err != nil {
+		return nil, false
+	}
+	moderated := json.RawMessage("false")
+	if value, ok := fields["moderated"]; ok && !canonicalRawIsNull(value) {
+		moderated = value
+	}
+	out := newCanonicalJSONObject()
+	if err := out.rawField("moderated", moderated); err != nil {
+		return nil, false
+	}
+	if value, ok := fields["display"]; ok && !canonicalRawIsNull(value) {
+		if err := out.rawField("display", value); err != nil {
+			return nil, false
+		}
+	}
+	return out.finish(), true
 }
 
 // canonicalReasoningItem builds TurnItem::Reasoning from the accumulated

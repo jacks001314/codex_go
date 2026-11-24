@@ -20,12 +20,14 @@ func normalizeFinalAnswerModeration(metadata any) any {
 	}
 	display, ok := entry["display"]
 	if !ok || display == nil {
-		return map[string]any{"moderated": moderated}
+		// The app-server contract keeps the nullable display field, so an
+		// absent instruction is an explicit null (Rust #60172).
+		return map[string]any{"moderated": moderated, "display": nil}
 	}
 	normalized, valid := normalizeAgentMessageDisplay(display)
 	if !valid {
 		// An unreadable instruction leaves the answer restricted.
-		return map[string]any{"moderated": true}
+		return map[string]any{"moderated": true, "display": nil}
 	}
 	return map[string]any{"moderated": moderated, "display": normalized}
 }
