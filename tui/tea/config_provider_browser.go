@@ -847,6 +847,9 @@ func (m *Model) writeConfigProviderDefaultCmd(browser *configProviderBrowserStat
 	}
 	browser.saving = true
 	browser.notice = "Saving model provider…"
+	// Rust #63553 write.rs holds the backend's provider_write lock for the
+	// duration of the default-provider save.
+	m.modelProviderWritePending = true
 	generation := browser.generation
 	providerID := provider.ID
 	providerName := strings.TrimSpace(provider.Name)
@@ -902,7 +905,20 @@ func (m *Model) writeConfigProviderEditorCmd(browser *configProviderBrowserState
 }
 
 func (m *Model) applyConfigPanelProviderWriteResult(msg configPanelProviderWriteResultMsg) bubbletea.Cmd {
-	if m == nil || m.modal == nil || m.modal.kind != ModalKindConfig || m.modal.configPanel == nil {
+	if m == nil {
+		return nil
+	}
+	if msg.kind == "default" {
+		// Rust #63553 write.rs releases provider_write when the RPC finishes and
+		// marks the untagged catalog unsafe after a confirmed switch or an
+		// unconfirmed transport failure.
+		m.modelProviderWritePending = false
+		if errors.Is(msg.err, ErrModelProviderDefaultUnconfirmed) ||
+			(msg.err == nil && (msg.response.Status == "" || msg.response.Status == config.WriteOK)) {
+			m.modelProviderWriteChanged = true
+		}
+	}
+	if m.modal == nil || m.modal.kind != ModalKindConfig || m.modal.configPanel == nil {
 		return nil
 	}
 	browser := m.modal.configPanel.providers

@@ -12,6 +12,13 @@ import (
 )
 
 func (m *Model) openModelPicker() bubbletea.Cmd {
+	if message := m.modelPickerUnavailable(); message != "" {
+		// Rust #63553 model_picker_unavailable: a provider save in flight or a
+		// changed default makes this list unsafe to offer.
+		m.notice = message
+		m.refreshTranscript()
+		return nil
+	}
 	options := m.modelPickerOptionsFor(m.modelListProvider())
 	if len(options) == 0 {
 		options = codextui.BundledModelPickerOptions()
@@ -36,6 +43,22 @@ func (m *Model) openModelPicker() bubbletea.Cmd {
 		m.modal.selected = picker.Selected
 	}
 	return m.fetchModelsForPicker()
+}
+
+// modelPickerUnavailable mirrors Rust #63553 ModelCatalog::provider_write and
+// model_picker_unavailable: a save in flight blocks /model until it finishes,
+// and a confirmed or possible switch leaves the untagged list out of date.
+func (m *Model) modelPickerUnavailable() string {
+	if m == nil {
+		return ""
+	}
+	if m.modelProviderWritePending {
+		return "Saving the default provider. Try /model after the save finishes."
+	}
+	if m.modelProviderWriteChanged {
+		return "The model list may be out of date. Restart the app server and TUI to refresh /model."
+	}
+	return ""
 }
 
 // fetchModelsForPicker asynchronously fetches the current model catalog from the
@@ -191,6 +214,12 @@ func (m *Model) applyModelsResult(msg ModelsResultMsg) {
 	}
 	m.pendingModelsRequestID = 0
 	if msg.Err != nil || len(msg.Options) == 0 {
+		return
+	}
+	// Rust #63553: after a confirmed or possible default-provider switch the
+	// server's untagged list may describe the old default, so it is never
+	// applied again in this session.
+	if m.modelProviderWriteChanged && strings.TrimSpace(msg.Provider) == "" {
 		return
 	}
 	// Rust #51253 (app_server_session bootstrap): the catalog the server hands

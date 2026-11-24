@@ -2694,6 +2694,13 @@ type Model struct {
 	// modelCatalogRefreshPending requests a provider-scoped catalog refresh
 	// after a thread switch to a provider without a cached list.
 	modelCatalogRefreshPending bool
+	// modelProviderWritePending is Rust #63553's held provider_write lock: a
+	// default-provider save is in flight, so the picker's catalog may not match
+	// the saved default.
+	modelProviderWritePending bool
+	// modelProviderWriteChanged marks a confirmed or possible default-provider
+	// switch; the untagged catalog is unsafe for the rest of the session.
+	modelProviderWriteChanged bool
 	serviceTierCommands           []bottompane.ServiceTierCommand
 
 	// savedServiceTier is Rust's config.service_tier: the user's persisted
@@ -13237,6 +13244,13 @@ func messagesContainVoiceCaption(messages []codextui.Message, text string) bool 
 }
 
 func (m *Model) applyModelSetting(args string) bubbletea.Cmd {
+	if message := m.modelPickerUnavailable(); message != "" {
+		// Rust #63553 resolve_model_command rejects both the picker and a
+		// named model while the provider catalog is unsafe.
+		m.notice = message
+		m.refreshTranscript()
+		return nil
+	}
 	value := strings.TrimSpace(args)
 	if value != "" {
 		// Rust #54378: `/model [model] --reasoning <level> --speed <tier>`
