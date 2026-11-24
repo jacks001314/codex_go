@@ -350,6 +350,9 @@ func (r *RuntimeRouter) stopRealtimeConversationAsync(params realtime.StopParams
 			// must leave the replacement connected and report nothing.
 			return
 		case errors.Is(err, realtime.ErrRealtimeNotRunning):
+			// Rust #62299: a call that outlived its transport can be ended from
+			// persisted history after a reload.
+			r.endPersistedRealtimeSession(params.ThreadID)
 			notification = []realtime.Notification{realtime.NewClosedNotification(params.ThreadID, "requested")}
 			err = nil
 		}
@@ -867,6 +870,86 @@ func (r *RuntimeRouter) routeRealtimeHandoffTurn(threadID string, event realtime
 		RealtimeHandoffProvenance: r.realtimeHandoffProvenance(threadID, event, realtime.RealtimeHandoffModeStart),
 	}))
 	return err
+}
+
+// endPersistedRealtimeSession closes the newest persisted call when no live
+// session can do it (Rust #62299). A call that already recorded its closing
+// marker stays untouched.
+func (r *RuntimeRouter) endPersistedRealtimeSession(threadID string) bool {
+	if r == nil || r.services.StateRuntime == nil {
+		return false
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return false
+	}
+	ctx := context.Background()
+	sessionID, found, err := r.services.StateRuntime.LatestThreadRealtimeSession(ctx, threadID)
+	if err != nil || !found {
+		return false
+	}
+	session, err := r.services.StateRuntime.LoadThreadRealtimeSession(ctx, threadID, sessionID)
+	if err != nil || session == nil {
+		return false
+	}
+	for _, entry := range session.Items {
+		var item struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(entry.ItemJSON, &item) == nil && item.Type == "realtime_session_closed" {
+			return false
+		}
+	}
+	// The rollout is authoritative and its projection can lag, so a retry must
+	// consult the recorded lines too.
+	if r.realtimeSessionClosedInRollout(threadID, sessionID) {
+		return false
+	}
+	now := runtimeRouterNow(r).UTC()
+	observedAt := now.UnixMilli()
+	closed := realtime.RealtimeItem{
+		ID:                "realtime-session-close:" + sessionID,
+		RealtimeSessionID: sessionID,
+		ObservedAtMS:      &observedAt,
+		Content: realtime.RealtimeItemContent{
+			Kind:    realtime.RealtimeItemKindSessionClosed,
+			Outcome: realtime.RealtimeSessionOutcomeEnded,
+		},
+	}
+	if err := r.persistRealtimeHistoryItems(threadID, []realtime.RealtimeItem{closed}, true); err != nil {
+		return false
+	}
+	return true
+}
+
+// realtimeSessionClosedInRollout reports a recorded closing marker for one call.
+func (r *RuntimeRouter) realtimeSessionClosedInRollout(threadID, sessionID string) bool {
+	path, err := rollout.FindThreadPath(r.codexHomeForRollout(), threadID, false)
+	if err != nil || strings.TrimSpace(path) == "" {
+		return false
+	}
+	lines, _, err := rollout.Load(path)
+	if err != nil {
+		return false
+	}
+	for index := range lines {
+		line := &lines[index]
+		if line.Type != "realtime_item" {
+			continue
+		}
+		payload := line.RealtimeItem
+		if len(payload) == 0 {
+			payload = line.Payload
+		}
+		var item struct {
+			Type              string `json:"type"`
+			RealtimeSessionID string `json:"realtime_session_id"`
+		}
+		if json.Unmarshal(payload, &item) == nil && item.Type == "realtime_session_closed" && item.RealtimeSessionID == sessionID {
+			return true
+		}
+	}
+	return false
 }
 
 // restoreRealtimeSessionEndSpeech seeds the open call with the pending speech
