@@ -491,6 +491,10 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs 4d15794336 #51209): ranked tool
 	// discovery for JavaScript code mode.
 	{Key: "code_mode_tool_search", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs 96681d86f0 #63540): omit an MCP
+	// text fallback that duplicates structuredContent when Code Mode prints
+	// the original result. Under development and off by default.
+	{Key: "code_mode_mcp_result_dedup", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs 58ae3ba611 #50687): keep third-party
 	// tools deferred in strict Code Mode Only.
 	{Key: "code_mode_only_strict_3p_tools", Stage: StageUnderDevelopment, DefaultEnabled: false},

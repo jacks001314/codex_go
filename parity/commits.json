@@ -55757,9 +55757,21 @@
    "sha": "714bc44f0dd9787632ed9d294fa0d6cb1fb844c8",
    "status": "complete",
    "subject": "Reap idle local code-mode hosts after five seconds (#63537)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 186: partial - Rust #63540 adds the disabled-by-default code_mode_mcp_result_dedup feature so text() omits content when it prints an original, successful MCP result whose only content block is a plain text fallback that parses to the same JSON as structuredContent, while the JavaScript result retains both fields, and carries the result format through gRPC so the host can distinguish MCP results from ordinary JSON. Go now registers the same feature key (features.Key code_mode_mcp_result_dedup, under development, off by default) next to code_mode_tool_search, and codemode renderSobekText already prints tool values by JSON-marshalling them. Residual: Go has no MCP result format marker across its code-mode delegate protocol and text() does no structuredContent comparison, so the flag is inert and duplicates are still printed."
+   ],
+   "kind": "runtime",
+   "sha": "96681d86f08f880ed12ba29044e855002809e0d1",
+   "status": "partial",
+   "subject": "Deduplicate MCP text fallbacks in Code Mode output (#63540)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "714bc44f0dd9787632ed9d294fa0d6cb1fb844c8",
+ "rustToInclusive": "96681d86f08f880ed12ba29044e855002809e0d1",
  "schemaVersion": 1
 }
