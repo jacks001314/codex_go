@@ -88,6 +88,12 @@ func (osKeyringStore) Save(service string, account string, secret string) error 
 	}
 	result, _, callErr := credWriteW.Call(uintptr(unsafe.Pointer(&credential)), 0)
 	if result == 0 {
+		// ERROR_NOT_ENOUGH_MEMORY and ERROR_NO_SYSTEM_RESOURCES mean the host
+		// cannot allocate the credential right now. Report the backend as
+		// unavailable so callers fall back instead of failing the save.
+		if errno, ok := callErr.(syscall.Errno); ok && (errno == 8 || errno == 1450) {
+			return fmt.Errorf("%w: CredWriteW failed: %v", ErrUnavailable, callErr)
+		}
 		return fmt.Errorf("CredWriteW failed: %w", callErr)
 	}
 	return nil

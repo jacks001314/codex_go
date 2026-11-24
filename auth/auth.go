@@ -14,6 +14,8 @@ import (
 	"sync"
 
 	"github.com/gofrs/flock"
+
+	"codex_go/keyring"
 )
 
 const (
@@ -656,6 +658,12 @@ func (s *keyringAuthStorage) Save(auth AuthDotJSON) error {
 		return err
 	}
 	if err := s.keyring.Set(authKeyringService, authStoreKey(s.codexHome), string(data)); err != nil {
+		if errors.Is(err, keyring.ErrUnavailable) {
+			// The backend exists but refused the write (for example a host out of
+			// credential-store memory): report the documented unavailable-mode
+			// guidance so callers can fall back.
+			err = fmt.Errorf("%w: %v", ErrKeyringUnavailable, err)
+		}
 		err = credentialStorageContext("failed to write OAuth tokens to keyring", err)
 		if s.mode == AuthCredentialsStoreKeyring {
 			slog.Warn(err.Error())
