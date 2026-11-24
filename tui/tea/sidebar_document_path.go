@@ -288,7 +288,7 @@ func (m *Model) sidebarDocumentReaderHints(tab *sidebarDocumentTab) []string {
 	if label := m.sidebarDocumentKeyHint("pager", "find"); label != "" {
 		hints = append(hints, label+" find")
 	}
-	if len(m.sidebarDocumentLinks(tab)) > 0 {
+	if len(m.sidebarDocumentLinkTargets(tab)) > 0 {
 		hints = append(hints, "tab link")
 	}
 	if label := m.sidebarDocumentKeyHint("global", "select_transcript"); label != "" {

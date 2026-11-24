@@ -366,6 +366,74 @@ type sidebarDocumentLinkRow struct {
 	// row carrying several destinations still hit-tests the one under the
 	// pointer (Rust resolves the pointer's column through the link spans).
 	Column int
+	// Width is the painted span width: the destination text for a local link and
+	// the label for a web link.
+	Width int
+	// Web marks a link the markdown renderer painted as an OSC-8 span; Enter
+	// opens it in the browser instead of the preview (Rust #61889).
+	Web bool
+}
+
+// sidebarDocumentLinkTarget is one activatable preview link. Local links open
+// in the pane; web links go to the host's browser action.
+type sidebarDocumentLinkTarget struct {
+	Path     string
+	Location *markdown.SidebarSourceLocation
+	Web      bool
+	Row      int
+	Column   int
+	Width    int
+}
+
+// sidebarDocumentWebLinkSpan is a web link the renderer wrapped in OSC-8.
+type sidebarDocumentWebLinkSpan struct {
+	Row    int
+	Column int
+	Width  int
+	URL    string
+}
+
+// sidebarDocumentWebLinkSpans finds the web links painted in the preview body.
+// Only http(s) destinations count; local file links keep their own resolution.
+func sidebarDocumentWebLinkSpans(lines []string) []sidebarDocumentWebLinkSpan {
+	const open = "\x1b]8;;"
+	var spans []sidebarDocumentWebLinkSpan
+	for row, line := range lines {
+		column := 0
+		rest := line
+		for {
+			index := strings.Index(rest, open)
+			if index < 0 {
+				break
+			}
+			column += codextui.DisplayWidth(ansi.Strip(rest[:index]))
+			after := rest[index+len(open):]
+			end := strings.Index(after, "\x07")
+			if end < 0 {
+				break
+			}
+			destination := after[:end]
+			body := after[end+1:]
+			closeIndex := strings.Index(body, open)
+			if closeIndex < 0 {
+				break
+			}
+			label := body[:closeIndex]
+			labelWidth := codextui.DisplayWidth(ansi.Strip(label))
+			afterClose := body[closeIndex+len(open):]
+			closeEnd := strings.Index(afterClose, "\x07")
+			if closeEnd < 0 {
+				break
+			}
+			rest = afterClose[closeEnd+1:]
+			lower := strings.ToLower(destination)
+			if labelWidth > 0 && (strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")) {
+				spans = append(spans, sidebarDocumentWebLinkSpan{Row: row, Column: column, Width: labelWidth, URL: destination})
+			}
+			column += labelWidth
+		}
+	}
+	return spans
 }
 
 // sidebarDocumentLinks lists the local file links a rendered Markdown preview
@@ -378,27 +446,25 @@ func (m *Model) sidebarDocumentLinks(tab *sidebarDocumentTab) []markdown.Sidebar
 	return markdown.SidebarFileLinks(tab.View.Text)
 }
 
-// sidebarDocumentLinkRows maps each link onto the rendered row that shows its
-// destination. The renderer paints the label and then the resolved target, so
-// the destination search runs forward and never reuses a row.
-func (m *Model) sidebarDocumentLinkRows(tab *sidebarDocumentTab) []sidebarDocumentLinkRow {
-	lines := m.sidebarDocumentLines(tab, m.sidebarDocumentBodyWidth())
-	if tab.linkRowsSet && tab.linkRowsFor == tab.renderWidth {
-		return tab.linkRows
-	}
-	links := m.sidebarDocumentLinks(tab)
-	if len(links) == 0 {
-		tab.linkRowsSet = true
-		tab.linkRowsFor = tab.renderWidth
-		tab.linkRows = nil
+// sidebarDocumentLinkTargets lists every activatable link in document order:
+// local file links first, then the web links the renderer painted as OSC-8
+// spans. The local search walks forward because the renderer paints the label
+// and then the resolved destination.
+func (m *Model) sidebarDocumentLinkTargets(tab *sidebarDocumentTab) []sidebarDocumentLinkTarget {
+	if tab == nil {
 		return nil
 	}
-	rows := make([]sidebarDocumentLinkRow, 0, len(links))
+	lines := m.sidebarDocumentLines(tab, m.sidebarDocumentBodyWidth())
+	links := m.sidebarDocumentLinks(tab)
+	spans := sidebarDocumentWebLinkSpans(lines)
+	if len(links) == 0 && len(spans) == 0 {
+		return nil
+	}
+	targets := make([]sidebarDocumentLinkTarget, 0, len(links)+len(spans))
 	searchFrom := 0
-	for index, link := range links {
-		row := -1
-		column := 0
+	for _, link := range links {
 		path := strings.TrimSpace(link.Path)
+		row, column := -1, 0
 		for candidate := searchFrom; candidate < len(lines) && path != ""; candidate++ {
 			if offset := strings.Index(ansi.Strip(lines[candidate]), path); offset >= 0 {
 				row = candidate
@@ -407,7 +473,45 @@ func (m *Model) sidebarDocumentLinkRows(tab *sidebarDocumentTab) []sidebarDocume
 				break
 			}
 		}
-		rows = append(rows, sidebarDocumentLinkRow{Index: index, Row: row, Path: path, Column: column})
+		targets = append(targets, sidebarDocumentLinkTarget{
+			Path:     path,
+			Location: link.Location,
+			Row:      row,
+			Column:   column,
+			Width:    codextui.DisplayWidth(path),
+		})
+	}
+	for _, span := range spans {
+		targets = append(targets, sidebarDocumentLinkTarget{
+			Path:   span.URL,
+			Web:    true,
+			Row:    span.Row,
+			Column: span.Column,
+			Width:  span.Width,
+		})
+	}
+	return targets
+}
+
+// sidebarDocumentLinkRows maps each link onto the rendered row that shows it.
+func (m *Model) sidebarDocumentLinkRows(tab *sidebarDocumentTab) []sidebarDocumentLinkRow {
+	if tab == nil {
+		return nil
+	}
+	if tab.linkRowsSet && tab.linkRowsFor == tab.renderWidth {
+		return tab.linkRows
+	}
+	targets := m.sidebarDocumentLinkTargets(tab)
+	var rows []sidebarDocumentLinkRow
+	for index, target := range targets {
+		rows = append(rows, sidebarDocumentLinkRow{
+			Index:  index,
+			Row:    target.Row,
+			Path:   target.Path,
+			Column: target.Column,
+			Width:  target.Width,
+			Web:    target.Web,
+		})
 	}
 	tab.linkRowsSet = true
 	tab.linkRowsFor = tab.renderWidth
@@ -428,7 +532,10 @@ func (m *Model) sidebarDocumentLinkAtRow(tab *sidebarDocumentTab, row int, colum
 		if linkRow.Row < 0 || linkRow.Row != row {
 			continue
 		}
-		width := codextui.DisplayWidth(linkRow.Path)
+		width := linkRow.Width
+		if width <= 0 {
+			width = codextui.DisplayWidth(linkRow.Path)
+		}
 		if column >= linkRow.Column && column < linkRow.Column+width {
 			return linkRow.Index
 		}
@@ -556,15 +663,20 @@ func (m *Model) followSidebarDocumentLinkIndex(tab *sidebarDocumentTab, index in
 	if tab == nil || index < 0 {
 		return nil
 	}
-	links := m.sidebarDocumentLinks(tab)
-	if index >= len(links) {
+	targets := m.sidebarDocumentLinkTargets(tab)
+	if index >= len(targets) {
 		return nil
 	}
-	link := links[index]
-	link.Path = resolveSidebarDocumentLinkPath(tab.Path, link.Path)
+	target := targets[index]
 	tab.Link = -1
 	tab.HoverLink = -1
-	return m.openSidebarDocumentAt(link.Path, -1, link.Location)
+	if target.Web {
+		if m.onAppLinkAction == nil {
+			return nil
+		}
+		return m.onAppLinkAction(AppLinkAction{Kind: AppLinkActionOpenURL, URL: target.Path})
+	}
+	return m.openSidebarDocumentAt(resolveSidebarDocumentLinkPath(tab.Path, target.Path), -1, target.Location)
 }
 
 // resolveSidebarDocumentLinkPath resolves a document link the way Rust's
