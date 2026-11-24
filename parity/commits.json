@@ -55475,11 +55475,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Batch 164: partial - Rust's remote-control websocket retries immediately when a controller is connected (`transport/remote_control/client_tracker.rs`, `websocket.rs`). Go's daemon client (`appserverdaemon/client.go`) reconnect logic has no controller-active fast path. Residual: detect an active controller and skip the backoff on reconnect."
+    "Batch 196: complete - `remotecontrol/client_tracker.go` mirrors Rust #63471: `hasController`/`isLiveController` count any live non-`backend_` client as a controller (expired and disconnected clients excluded), `beginClientActivity`/`refreshClient` clear `retriedWithController` once the last controller is gone, a sequenced `initialize` replay on a non-legacy stream refreshes activity without closing the live stream or its terminals, and closed-writer cleanup is skipped when a replacement connection reused the stream. `remotecontrol/websocket_loop.go` `nextReconnectDelay` resets the attempt count when controller activity resumes and gives an attached controller five initial jittered delays (`extraAttempts = 4`) before exponential growth. `remotecontrol/websocket_workers.go` `RunWebsocketReader` reconnects after three ping intervals of silence while a live controller is attached and keeps the 60-second pong deadline for relay-only sockets. Tests: TestClientTrackerHasControllerLikeRust, TestNextReconnectDelayLikeRust, TestClientTrackerInitializeReplayKeepsLiveControllerStreamLikeRust, TestClientTrackerIgnoresCleanupFromReplacedWriterLikeRust, TestRunWebsocketReaderIdleTimeoutWithControllerLikeRust, TestRunWebsocketReaderKeepsPongTimeoutForRelayOnlyLikeRust."
    ],
    "kind": "runtime",
    "sha": "6a33df4e0aac3a4ddcb6a7e81d94964cea8bde44",
-   "status": "partial",
+   "status": "complete",
    "subject": "Speed up remote control reconnects when a controller is active (#63471)"
   },
   {

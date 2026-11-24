@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -62,11 +63,14 @@ type ClientTracker struct {
 	legacyStreamIDs  map[ClientID]StreamID
 	serverEnvelopeTx chan<- QueuedServerEnvelope
 	transportEventTx chan<- RemoteClientTransportEvent
-	closedClients    chan envelopeStreamKey
+	closedClients    chan closedRemoteClient
 	idleTimeout      time.Duration
 	sendTimeout      time.Duration
 	now              func() time.Time
 	bufferSize       int
+	// retriedWithController records whether the reconnect loop already
+	// retried while a live controller was attached (Rust #63471).
+	retriedWithController bool
 }
 
 type trackedRemoteClient struct {
@@ -75,6 +79,14 @@ type trackedRemoteClient struct {
 	writer           chan RemoteClientOutgoingMessage
 	lastActivityAt   time.Time
 	lastInboundSeqID *uint64
+}
+
+// closedRemoteClient reports an outbound writer that stopped, keeping the
+// connection id so cleanup can skip a stream reused by a replacement
+// connection (Rust #63471).
+type closedRemoteClient struct {
+	key          envelopeStreamKey
+	connectionID RemoteClientConnectionID
 }
 
 var remoteClientConnectionCounter uint64
@@ -104,12 +116,76 @@ func NewClientTracker(serverEnvelopeTx chan<- QueuedServerEnvelope, transportEve
 		legacyStreamIDs:  map[ClientID]StreamID{},
 		serverEnvelopeTx: serverEnvelopeTx,
 		transportEventTx: transportEventTx,
-		closedClients:    make(chan envelopeStreamKey, bufferSize),
+		closedClients:    make(chan closedRemoteClient, bufferSize),
 		idleTimeout:      idleTimeout,
 		sendTimeout:      sendTimeout,
 		now:              now,
 		bufferSize:       bufferSize,
 	}
+}
+
+// hasController reports whether a live client other than the relay is
+// tracked, so a silent connection can reconnect on the shorter controller
+// timeout and give the first retries the initial backoff (Rust #63471
+// ClientTracker::has_controller).
+func (t *ClientTracker) hasController() bool {
+	if t == nil {
+		return false
+	}
+	return t.hasControllerAt(t.now())
+}
+
+func (t *ClientTracker) hasControllerAt(now time.Time) bool {
+	for key, client := range t.clients {
+		if isLiveController(key.clientID, client, now, t.idleTimeout) {
+			return true
+		}
+	}
+	return false
+}
+
+// isLiveController mirrors Rust is_live_controller: the relay initializes its
+// own client for every online host, so only other live clients count.
+func isLiveController(id ClientID, client *trackedRemoteClient, now time.Time, idleTimeout time.Duration) bool {
+	if client == nil || isRelayRemoteControlClient(id) {
+		return false
+	}
+	select {
+	case <-client.disconnect:
+		return false
+	default:
+	}
+	return now.Sub(client.lastActivityAt) < idleTimeout
+}
+
+// isRelayRemoteControlClient excludes the relay's own client, which every
+// online host initializes (Rust is_live_controller).
+func isRelayRemoteControlClient(id ClientID) bool {
+	return strings.HasPrefix(string(id), "backend_")
+}
+
+// beginClientActivity samples liveness before a client starts or refreshes,
+// clearing the retried flag once the last controller is gone so a returning
+// controller gets the initial backoff again (Rust #63471
+// ClientTracker::begin_client_activity).
+func (t *ClientTracker) beginClientActivity() time.Time {
+	now := t.now()
+	if t.retriedWithController && !t.hasControllerAt(now) {
+		t.retriedWithController = false
+	}
+	return now
+}
+
+// refreshClient samples activity first so a controller that expired while
+// awaiting space is not revived (Rust ClientTracker::refresh_client).
+func (t *ClientTracker) refreshClient(key envelopeStreamKey) *trackedRemoteClient {
+	now := t.beginClientActivity()
+	client := t.clients[key]
+	if client == nil {
+		return nil
+	}
+	client.lastActivityAt = now
+	return client
 }
 
 func (t *ClientTracker) HandleMessage(ctx context.Context, envelope *ClientEnvelope) error {
@@ -146,11 +222,16 @@ func (t *ClientTracker) NextClosedClient(ctx context.Context) (ClientID, StreamI
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	select {
-	case key := <-t.closedClients:
-		return key.clientID, key.streamID, true
-	case <-ctx.Done():
-		return "", "", false
+	for {
+		select {
+		case closed := <-t.closedClients:
+			if t.staleClosedClient(closed) {
+				continue
+			}
+			return closed.key.clientID, closed.key.streamID, true
+		case <-ctx.Done():
+			return "", "", false
+		}
 	}
 }
 
@@ -161,12 +242,22 @@ func (t *ClientTracker) DrainClosedClients() []envelopeStreamKey {
 	var keys []envelopeStreamKey
 	for {
 		select {
-		case key := <-t.closedClients:
-			keys = append(keys, key)
+		case closed := <-t.closedClients:
+			if t.staleClosedClient(closed) {
+				continue
+			}
+			keys = append(keys, closed.key)
 		default:
 			return keys
 		}
 	}
+}
+
+// staleClosedClient ignores cleanup from an old writer when a replacement
+// connection has reused the stream (Rust #63471 bookkeep_join_set).
+func (t *ClientTracker) staleClosedClient(closed closedRemoteClient) bool {
+	client := t.clients[closed.key]
+	return client != nil && client.connectionID != closed.connectionID
 }
 
 func (t *ClientTracker) Shutdown(ctx context.Context) {
@@ -223,18 +314,26 @@ func (t *ClientTracker) CloseClient(ctx context.Context, clientID ClientID, stre
 }
 
 func (t *ClientTracker) handleClientMessage(ctx context.Context, key envelopeStreamKey, envelope *ClientEnvelope, isInitialize bool, isLegacyStreamID bool) error {
-	if envelope.SeqID != nil {
-		if client := t.clients[key]; client != nil && client.lastInboundSeqID != nil && *client.lastInboundSeqID >= *envelope.SeqID && !isInitialize {
+	now := t.now()
+	existing := t.clients[key]
+	// A sequenced initialize replay on the same stream keeps the live
+	// controller's stream and terminals instead of restarting them
+	// (Rust #63471).
+	replacingLiveController := isInitialize && isLiveController(key.clientID, existing, now, t.idleTimeout)
+	if envelope.SeqID != nil && existing != nil && existing.lastInboundSeqID != nil && *existing.lastInboundSeqID >= *envelope.SeqID {
+		if !isInitialize {
+			return nil
+		}
+		if !isLegacyStreamID && replacingLiveController {
+			existing.lastActivityAt = now
 			return nil
 		}
 	}
-	if isInitialize && t.clients[key] != nil {
-		if err := t.CloseClient(ctx, key.clientID, key.streamID); err != nil {
-			return err
+	if !isInitialize {
+		client := t.refreshClient(key)
+		if client == nil {
+			return nil
 		}
-	}
-	if client := t.clients[key]; client != nil {
-		client.lastActivityAt = t.now()
 		if err := t.sendTransportEvent(ctx, RemoteClientTransportEvent{
 			Type:         RemoteClientIncomingMessage,
 			ConnectionID: client.connectionID,
@@ -247,8 +346,10 @@ func (t *ClientTracker) handleClientMessage(ctx context.Context, key envelopeStr
 		t.recordInboundMessageDelivery(key, envelope.SeqID)
 		return nil
 	}
-	if !isInitialize {
-		return nil
+	if t.clients[key] != nil {
+		if err := t.CloseClient(ctx, key.clientID, key.streamID); err != nil {
+			return err
+		}
 	}
 	connectionID := RemoteClientConnectionID(atomic.AddUint64(&remoteClientConnectionCounter, 1))
 	writer := make(chan RemoteClientOutgoingMessage, t.bufferSize)
@@ -265,16 +366,23 @@ func (t *ClientTracker) handleClientMessage(ctx context.Context, key envelopeStr
 	}); err != nil {
 		return err
 	}
+	// A legacy reinitialize replaces the connection on the same live stream;
+	// that temporary removal is not a gap in controller activity, so keep the
+	// activity sample instead of clearing the retried flag (Rust #63471).
+	lastActivityAt := t.now()
+	if !replacingLiveController {
+		lastActivityAt = t.beginClientActivity()
+	}
 	t.clients[key] = &trackedRemoteClient{
 		connectionID:   connectionID,
 		disconnect:     disconnect,
 		writer:         writer,
-		lastActivityAt: t.now(),
+		lastActivityAt: lastActivityAt,
 	}
 	if isLegacyStreamID {
 		t.legacyStreamIDs[key.clientID] = key.streamID
 	}
-	go t.runClientOutbound(key, writer, disconnect)
+	go t.runClientOutbound(connectionID, key, writer, disconnect)
 	if err := t.sendTransportEvent(ctx, RemoteClientTransportEvent{
 		Type:         RemoteClientIncomingMessage,
 		ConnectionID: connectionID,
@@ -303,8 +411,7 @@ func (t *ClientTracker) handleClientMessage(ctx context.Context, key envelopeStr
 
 func (t *ClientTracker) handlePing(ctx context.Context, key envelopeStreamKey) error {
 	status := PongStatusUnknown
-	if client := t.clients[key]; client != nil {
-		client.lastActivityAt = t.now()
+	if t.refreshClient(key) != nil {
 		status = PongStatusActive
 	}
 	return t.sendServerEnvelope(ctx, QueuedServerEnvelope{
@@ -317,10 +424,10 @@ func (t *ClientTracker) handlePing(ctx context.Context, key envelopeStreamKey) e
 	})
 }
 
-func (t *ClientTracker) runClientOutbound(key envelopeStreamKey, writer <-chan RemoteClientOutgoingMessage, disconnect <-chan struct{}) {
+func (t *ClientTracker) runClientOutbound(connectionID RemoteClientConnectionID, key envelopeStreamKey, writer <-chan RemoteClientOutgoingMessage, disconnect <-chan struct{}) {
 	defer func() {
 		select {
-		case t.closedClients <- key:
+		case t.closedClients <- closedRemoteClient{key: key, connectionID: connectionID}:
 		default:
 		}
 	}()
@@ -435,7 +542,7 @@ func (t *ClientTracker) ensure() {
 		t.legacyStreamIDs = map[ClientID]StreamID{}
 	}
 	if t.closedClients == nil {
-		t.closedClients = make(chan envelopeStreamKey, DefaultRemoteControlChannelBufferSize)
+		t.closedClients = make(chan closedRemoteClient, DefaultRemoteControlChannelBufferSize)
 	}
 	if t.idleTimeout <= 0 {
 		t.idleTimeout = RemoteControlClientIdleTimeout

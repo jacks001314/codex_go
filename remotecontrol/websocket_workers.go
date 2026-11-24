@@ -19,6 +19,9 @@ const (
 	RemoteControlConnectionShutdownTimeout   = 5 * time.Second
 	remoteControlDefaultIdleSweepInterval    = RemoteControlIdleSweepInterval
 	remoteControlDefaultWebsocketWriteTimout = 30 * time.Second
+	// remoteControlActiveIdlePingIntervals reconnects a silent connection after
+	// three heartbeats when a live controller is attached (Rust #63471).
+	remoteControlActiveIdlePingIntervals = 3
 )
 
 type RemoteControlWebsocketConnectionWorkers struct {
@@ -115,6 +118,18 @@ func (w *RemoteControlWebsocketConnectionWorkers) RunWebsocketReader(ctx context
 	}
 	ticker := time.NewTicker(idleSweep)
 	defer ticker.Stop()
+
+	pingInterval := w.PingInterval
+	if pingInterval <= 0 {
+		pingInterval = RemoteControlWebsocketPingInterval
+	}
+	pongTimeout := w.PingTimeout
+	if pongTimeout <= 0 {
+		pongTimeout = RemoteControlWebsocketPongTimeout
+	}
+	silentDeadline := time.NewTicker(pingInterval)
+	defer silentDeadline.Stop()
+	lastIncoming := time.Now()
 	readCtx, cancelRead := context.WithCancel(ctx)
 	defer cancelRead()
 	readCh := make(chan websocketReadResult, 1)
@@ -136,7 +151,19 @@ func (w *RemoteControlWebsocketConnectionWorkers) RunWebsocketReader(ctx context
 			if err := w.closeExpiredClients(ctx); err != nil {
 				return err
 			}
+		case <-silentDeadline.C:
+			// A silent socket is detected sooner while a controller is
+			// attached; the relay-only timeout stays at the pong deadline
+			// (Rust #63471).
+			silentFor := time.Since(lastIncoming)
+			if silentFor >= pongTimeout {
+				return fmt.Errorf("remote control websocket pong timeout")
+			}
+			if silentFor >= remoteControlActiveIdlePingIntervals*pingInterval && w.hasLiveController() {
+				return fmt.Errorf("remote control websocket idle timeout")
+			}
 		case result := <-readCh:
+			lastIncoming = time.Now()
 			if result.Err != nil {
 				if ctx.Err() != nil {
 					return nil
@@ -155,6 +182,18 @@ func (w *RemoteControlWebsocketConnectionWorkers) RunWebsocketReader(ctx context
 			}
 		}
 	}
+}
+
+// hasLiveController reports whether a controller besides the relay is attached.
+func (w *RemoteControlWebsocketConnectionWorkers) hasLiveController() bool {
+	if w == nil || w.ClientTracker == nil {
+		return false
+	}
+	if w.ClientTrackerMu != nil {
+		w.ClientTrackerMu.Lock()
+		defer w.ClientTrackerMu.Unlock()
+	}
+	return w.ClientTracker.hasController()
 }
 
 type websocketReadResult struct {

@@ -3,6 +3,7 @@ package remotecontrol
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"sync"
 	"time"
@@ -453,11 +454,48 @@ func (l *RemoteControlWebsocketLoop) remoteControlEnabled() bool {
 	return l.manager.StatusChanged().Status != StatusDisabled
 }
 
+// nextReconnectDelay paces a reconnect. Rust #63471 resets the attempt count
+// when controller activity resumes after a period without a live controller
+// and gives the attached controller the initial jittered delay for its first
+// five attempts before the exponential backoff grows again.
 func (l *RemoteControlWebsocketLoop) nextReconnectDelay(reconnectAttempt *uint64) time.Duration {
-	if l != nil && l.options.ReconnectDelay != nil {
-		return l.options.ReconnectDelay(reconnectAttempt)
+	if reconnectAttempt == nil {
+		var attempt uint64
+		reconnectAttempt = &attempt
 	}
-	return NextReconnectDelay(reconnectAttempt)
+	if l == nil || l.clientTracker == nil {
+		if l != nil && l.options.ReconnectDelay != nil {
+			return l.options.ReconnectDelay(reconnectAttempt)
+		}
+		return NextReconnectDelay(reconnectAttempt)
+	}
+	l.clientTrackerMu.Lock()
+	hasController := l.clientTracker.hasController()
+	if hasController && !l.clientTracker.retriedWithController {
+		*reconnectAttempt = 0
+	}
+	l.clientTracker.retriedWithController = hasController
+	l.clientTrackerMu.Unlock()
+
+	extraAttempts := uint64(0)
+	if hasController {
+		extraAttempts = 4
+	}
+	adjusted := uint64(0)
+	if *reconnectAttempt > extraAttempts {
+		adjusted = *reconnectAttempt - extraAttempts
+	}
+	pacing := adjusted
+	var delay time.Duration
+	if l.options.ReconnectDelay != nil {
+		delay = l.options.ReconnectDelay(&pacing)
+	} else {
+		delay = NextReconnectDelay(&pacing)
+	}
+	if *reconnectAttempt < math.MaxUint64 {
+		*reconnectAttempt = *reconnectAttempt + 1
+	}
+	return delay
 }
 
 func (l *RemoteControlWebsocketLoop) statusPollInterval() time.Duration {
