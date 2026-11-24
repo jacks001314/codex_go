@@ -414,7 +414,13 @@ type RuntimeRouter struct {
 	// agentOutcomeWG tracks host outcome handoffs so Close waits for them
 	// before services stop (Rust #59725).
 	agentOutcomeWG sync.WaitGroup
-	servicesMu     sync.Mutex
+	// serverReplayMu guards serverReplays, the background replay a thread resume
+	// starts (Rust #62609). One replay may be outstanding per connection and a
+	// newer resume replaces it.
+	serverReplayMu  sync.Mutex
+	serverReplayGen uint64
+	serverReplays   map[string]*serverRequestReplay
+	servicesMu      sync.Mutex
 	// turnFinishHook observes the window between a finished sampling step and
 	// closing steer admission (Rust #58877). Tests use it to submit a steer that
 	// races turn completion; production leaves it nil.
@@ -3180,6 +3186,7 @@ func (r *RuntimeRouter) BeginDraining() {
 }
 
 func (r *RuntimeRouter) close() error {
+	r.cancelServerRequestReplays()
 	// Rust #59725: graceful shutdown waits for outstanding host outcome handoffs
 	// before thread-stop hooks and service teardown run.
 	r.waitAgentTurnOutcomes()
@@ -8259,6 +8266,16 @@ func (r *RuntimeRouter) notifyRestoredTokenUsage(result any) {
 	})
 }
 
+// serverRequestReplay is one background replay a thread resume started.
+type serverRequestReplay struct {
+	gen    uint64
+	cancel context.CancelFunc
+}
+
+// replayPendingServerRequestsForThread starts the replay a thread resume
+// performs. Rust #62609 runs it in a background task after the resume response,
+// lets one replay be outstanding per connection, and replaces the previous
+// replay when a newer resume arrives.
 func (r *RuntimeRouter) replayPendingServerRequestsForThread(result any, connectionID string) {
 	if r == nil {
 		return
@@ -8271,7 +8288,56 @@ func (r *RuntimeRouter) replayPendingServerRequestsForThread(result any, connect
 	if threadID == "" {
 		return
 	}
-	r.requireServerRequests().ReplayThreadToConnection(threadID, connectionID)
+	connectionID = normalizeConnectionID(connectionID)
+	ctx, gen := r.beginServerRequestReplay(connectionID)
+	go func() {
+		defer r.finishServerRequestReplay(connectionID, gen)
+		r.requireServerRequests().ReplayThreadToConnectionContext(ctx, threadID, connectionID)
+	}()
+}
+
+// beginServerRequestReplay supersedes any replay still running for the
+// connection and returns the context that stops the new one.
+func (r *RuntimeRouter) beginServerRequestReplay(connectionID string) (context.Context, uint64) {
+	r.serverReplayMu.Lock()
+	defer r.serverReplayMu.Unlock()
+	if r.serverReplays == nil {
+		r.serverReplays = map[string]*serverRequestReplay{}
+	}
+	if previous := r.serverReplays[connectionID]; previous != nil {
+		previous.cancel()
+	}
+	r.serverReplayGen++
+	gen := r.serverReplayGen
+	ctx, cancel := context.WithCancel(context.Background())
+	r.serverReplays[connectionID] = &serverRequestReplay{gen: gen, cancel: cancel}
+	return ctx, gen
+}
+
+// finishServerRequestReplay retires the entry only when it is still the one
+// this goroutine started.
+func (r *RuntimeRouter) finishServerRequestReplay(connectionID string, gen uint64) {
+	r.serverReplayMu.Lock()
+	defer r.serverReplayMu.Unlock()
+	entry := r.serverReplays[connectionID]
+	if entry == nil || entry.gen != gen {
+		return
+	}
+	delete(r.serverReplays, connectionID)
+	entry.cancel()
+}
+
+// cancelServerRequestReplays stops every background replay so a closing
+// router leaves no goroutine writing to a retired transport.
+func (r *RuntimeRouter) cancelServerRequestReplays() {
+	r.serverReplayMu.Lock()
+	defer r.serverReplayMu.Unlock()
+	for connectionID, entry := range r.serverReplays {
+		if entry != nil {
+			entry.cancel()
+		}
+		delete(r.serverReplays, connectionID)
+	}
 }
 
 func restoredTokenUsageFromRecord(record *session.Record) *TokenUsage {

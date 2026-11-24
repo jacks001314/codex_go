@@ -646,6 +646,14 @@ func (b *ServerRequestBroker) ReplayThread(threadID string) int {
 // capable connection, and the replayed request is registered to it before it
 // is sent so its response cannot race ahead of authorization (Rust #58045).
 func (b *ServerRequestBroker) ReplayThreadToConnection(threadID string, connectionID string) int {
+	return b.ReplayThreadToConnectionContext(context.Background(), threadID, connectionID)
+}
+
+// ReplayThreadToConnectionContext is the cancellable form used by the
+// background replay a thread resume starts: a superseding resume stops the
+// older replay after the request it already handed to the transport, and no
+// request is sent once the context is done (Rust #62609).
+func (b *ServerRequestBroker) ReplayThreadToConnectionContext(ctx context.Context, threadID string, connectionID string) int {
 	threadID = strings.TrimSpace(threadID)
 	if b == nil || threadID == "" {
 		return 0
@@ -660,6 +668,9 @@ func (b *ServerRequestBroker) ReplayThreadToConnection(threadID string, connecti
 	targeted, targetsOneConnection := sink.(TargetedServerRequestSink)
 	sent := 0
 	for _, request := range requests {
+		if ctx != nil && ctx.Err() != nil {
+			break
+		}
 		// The snapshot can outlive a resolution, so re-check each request before
 		// replaying it (Rust #62609).
 		if !b.stillPending(request.ID) {

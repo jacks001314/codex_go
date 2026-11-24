@@ -53121,11 +53121,11 @@
    "evidence": [
     "Rust #62609 replays pending server requests in a background task after the thread/resume response, allows one outstanding replay write per connection and waits for its write receipt, lets a new resume replace the previous replay, and re-checks that each request is still pending (plus human approval eligibility) before sending it.",
     "Implemented in Go: ServerRequestBroker.ReplayThreadToConnection now re-checks every entry with stillPending before sending, so a request resolved between the replay snapshot and its send is skipped, and the existing managed-humanCommand eligibility check still applies (Rust #58045). Covered by appserver/server_request_replay_like_rust_test.go.",
-    "Gap: replay still runs inline in handleThreadResume before the response is returned (runtime_router.go replayPendingServerRequestsForThread), so a slow client can delay the resume response and there is no per-connection replay task a newer resume could replace. Go has no bounded outbound queue with write receipts to wait on: the app-server transport writes each message synchronously from the handler, which gives sequential-write backpressure but no receipt-based replay throttle."
+    "Batch 193 closes the gap: replayPendingServerRequestsForThread now starts the replay in a background goroutine, so the resume response returns first. The router keeps one replay per normalized connection (serverReplays with a generation), beginServerRequestReplay cancels the previous replay when a newer resume arrives, finishServerRequestReplay retires only its own generation, Close cancels every replay, and ReplayThreadToConnectionContext stops between writes once its context is done. The transport still writes each replay request synchronously under its write mutex, so the replay is one sequential write at a time and each SendServerRequest returns only after the write completes - the receipt the Rust task waits on. Tests: TestThreadResumeReplayRunsAfterTheResponseLikeRust (the resume call returns while the transport is blocked on the first write) and TestNewerResumeReplacesRunningReplayLikeRust (the superseded replay stops after the request it already handed over; fails with the replacement removed)."
    ],
    "kind": "runtime",
    "sha": "6633c6e09ab64bb1cb15c16ce8ad1da927406c06",
-   "status": "partial",
+   "status": "complete",
    "subject": "Apply backpressure to app-server request replay on thread resume (#62609)"
   },
   {
