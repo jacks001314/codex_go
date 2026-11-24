@@ -14,12 +14,14 @@ import (
 	"codex_go/auth"
 	"codex_go/codexapi"
 	"codex_go/config"
+	"codex_go/features"
 	"codex_go/model"
 	"codex_go/prompt"
 	"codex_go/realtime"
 	"codex_go/rollout"
 	"codex_go/runtimeauth"
 	"codex_go/session"
+	"codex_go/state"
 	"codex_go/turn"
 )
 
@@ -1011,12 +1013,59 @@ func (r *RuntimeRouter) persistRealtimeHistoryItems(threadID string, items []rea
 }
 
 // realtimeFramesEnabled enrolls state-backed threads in canonical realtime
-// frames (Rust #61473 LocalThreadStore::realtime_frames_enabled).
-func (r *RuntimeRouter) realtimeFramesEnabled(string) bool {
-	if r == nil || r.services.StateRuntime == nil {
+// frames (Rust #61473 LocalThreadStore::realtime_frames_enabled). Rust #62271
+// restricts enrollment to paginated local threads while
+// `features.realtime_frames_local` is enabled.
+func (r *RuntimeRouter) realtimeFramesEnabled(threadID string) bool {
+	threadID = strings.TrimSpace(threadID)
+	if r == nil || !realtimeFramesBackingReady(r.services.StateRuntime, r.hasRuntimeThreadStore()) {
 		return false
 	}
-	return r.hasRuntimeThreadStore()
+	cfg := r.effectiveMCPConfigForThread(threadID)
+	mode, defaultMode := "", ThreadHistoryLegacy
+	if record, err := r.threadRecord(session.ThreadID(threadID), true, false); err == nil && record != nil {
+		mode = record.Metadata.HistoryMode
+	}
+	if r.services.ThreadRouter != nil {
+		defaultMode = r.services.ThreadRouter.defaultHistoryMode
+	}
+	return realtimeFramesEligible(cfg, mode, defaultMode)
+}
+
+// realtimeFramesBackingReady reports whether the runtime has the state database
+// and thread store canonical realtime frames persist into (Rust #62271 keeps
+// local frames on paginated storage backed by a state database).
+func realtimeFramesBackingReady(stateRuntime *state.StateRuntime, threadStore bool) bool {
+	return stateRuntime != nil && threadStore
+}
+
+// realtimeFramesEligible combines Rust #62271's two gates: the off-by-default
+// `features.realtime_frames_local` flag and paginated durable history.
+func realtimeFramesEligible(cfg *config.Config, mode string, defaultMode ThreadHistoryMode) bool {
+	return realtimeFramesFlagEnabled(cfg) && paginatedHistoryMode(mode, defaultMode)
+}
+
+// realtimeFramesFlagEnabled reports `features.realtime_frames_local`, the
+// off-by-default gate Rust #62271 adds for paginated local threads.
+func realtimeFramesFlagEnabled(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	return features.Enabled(cfg.FeatureSettings(), "realtime_frames_local")
+}
+
+// paginatedHistoryMode reports whether a thread's durable history is paginated.
+// An explicit paginated mode qualifies; a record without one follows the
+// store's default mode, and a legacy record never enrolls (Rust #62271).
+func paginatedHistoryMode(mode string, defaultMode ThreadHistoryMode) bool {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case string(ThreadHistoryPaginated):
+		return true
+	case "", "default":
+		return strings.EqualFold(string(defaultMode), string(ThreadHistoryPaginated))
+	default:
+		return false
+	}
 }
 
 // realtimeObservationClockFloor restores the non-decreasing observation clock
