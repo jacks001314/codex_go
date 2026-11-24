@@ -240,6 +240,31 @@ type remoteRelayValidationResult struct {
 type pendingRemoteRelayHandshake struct {
 	validationID uint64
 	handshake    *pendingRemoteNoiseHandshake
+	// release returns the handshake budget permit once registry authorization
+	// finishes (Rust HandshakeBudget keeps its permit through ERS validation).
+	release func()
+}
+
+// releaseBudget returns the admission permit; repeated calls are harmless
+// because the budget wraps it in sync.Once.
+func (p *pendingRemoteRelayHandshake) releaseBudget() {
+	if p == nil || p.release == nil {
+		return
+	}
+	p.release()
+	p.release = nil
+}
+
+// destroy drops the pending handshake and its admission permit.
+func (p *pendingRemoteRelayHandshake) destroy() {
+	if p == nil {
+		return
+	}
+	if p.handshake != nil {
+		p.handshake.Destroy()
+		p.handshake = nil
+	}
+	p.releaseBudget()
 }
 
 type remoteRelayClosedStream struct {
@@ -253,6 +278,21 @@ func (s *Server) serveNoiseRelayConnection(
 	cfg RemoteEnvironmentConfig,
 	registration *remoteRegistrationResponse,
 	identity *remoteNoiseIdentity,
+) error {
+	return s.serveNoiseRelayConnectionWithAdmission(ctx, conn, cfg, registration, identity, nil)
+}
+
+// serveNoiseRelayConnectionWithAdmission serves the multiplexed Noise protocol
+// over one WebSocket. admission is set for inbound listeners, where the first
+// authorized stream signals the listener and every handshake charges the
+// listener-wide budget (Rust InboundAdmission).
+func (s *Server) serveNoiseRelayConnectionWithAdmission(
+	ctx context.Context,
+	conn *websocket.Conn,
+	cfg RemoteEnvironmentConfig,
+	registration *remoteRegistrationResponse,
+	identity *remoteNoiseIdentity,
+	admission *noiseInboundAdmission,
 ) error {
 	if conn == nil || registration == nil || identity == nil {
 		return errors.New("Noise relay connection is incomplete")
@@ -280,7 +320,7 @@ func (s *Server) serveNoiseRelayConnection(
 			stream.Close()
 		}
 		for _, item := range pending {
-			item.handshake.Destroy()
+			item.destroy()
 		}
 	}()
 
@@ -313,19 +353,20 @@ func (s *Server) serveNoiseRelayConnection(
 			}
 			delete(pending, result.streamID)
 			if result.err != nil {
-				item.handshake.Destroy()
+				item.destroy()
 				diagnostics.record(result.streamID, result.reason, result.registryStatus)
 				queueRelayReset(outgoing, result.streamID)
 				recordFailedHandshake(&failedHandshakes, &handshakeCooldownUntil)
 				continue
 			}
 			if len(streams) >= maxActiveNoiseRelayStreams {
-				item.handshake.Destroy()
+				item.destroy()
 				diagnostics.record(result.streamID, "active_stream_limit", nil)
 				queueRelayReset(outgoing, result.streamID)
 				continue
 			}
 			transport, response, err := item.handshake.Complete()
+			item.releaseBudget()
 			if err != nil {
 				diagnostics.record(result.streamID, "handshake_completion", nil)
 				queueRelayReset(outgoing, result.streamID)
@@ -346,6 +387,9 @@ func (s *Server) serveNoiseRelayConnection(
 				outgoing,
 				closedStreams,
 			)
+			// The peer is authorized: the inbound listener stops counting this
+			// socket against its first-authorization deadline.
+			admission.markAuthorized()
 		case event := <-incoming:
 			if event.err != nil {
 				if ctx.Err() != nil || websocket.CloseStatus(event.err) != -1 {
@@ -377,7 +421,7 @@ func (s *Server) serveNoiseRelayConnection(
 				}
 				if previous, exists := pending[frame.StreamID]; exists {
 					delete(pending, frame.StreamID)
-					previous.handshake.Destroy()
+					previous.destroy()
 					diagnostics.record(frame.StreamID, "duplicate_pending_stream", nil)
 					queueRelayReset(outgoing, frame.StreamID)
 					recordFailedHandshake(&failedHandshakes, &handshakeCooldownUntil)
@@ -393,9 +437,20 @@ func (s *Server) serveNoiseRelayConnection(
 					queueRelayReset(outgoing, frame.StreamID)
 					continue
 				}
+				releaseBudget := func() {}
+				if admission != nil {
+					release, admitted := admission.budget.tryAdmit()
+					if !admitted {
+						diagnostics.record(frame.StreamID, "handshake_budget", nil)
+						queueRelayReset(outgoing, frame.StreamID)
+						continue
+					}
+					releaseBudget = release
+				}
 				prologue := noiseChannelPrologue(registration.EnvironmentID, registration.ExecutorRegistrationID, frame.StreamID)
 				handshake, authorization, err := readRemoteNoiseHandshake(identity, prologue, frame.HandshakeBytes)
 				if err != nil {
+					releaseBudget()
 					if handshake != nil {
 						handshake.Destroy()
 					}
@@ -405,12 +460,14 @@ func (s *Server) serveNoiseRelayConnection(
 					continue
 				}
 				if len(authorization) > maxHarnessKeyAuthorizationBytes {
+					releaseBudget()
 					handshake.Destroy()
 					diagnostics.record(frame.StreamID, "authorization_too_long", nil)
 					queueRelayReset(outgoing, frame.StreamID)
 					continue
 				}
 				if !utf8.ValidString(authorization) {
+					releaseBudget()
 					handshake.Destroy()
 					diagnostics.record(frame.StreamID, "authorization_not_utf8", nil)
 					queueRelayReset(outgoing, frame.StreamID)
@@ -418,7 +475,7 @@ func (s *Server) serveNoiseRelayConnection(
 				}
 				validationID := nextValidationID
 				nextValidationID++
-				pending[frame.StreamID] = pendingRemoteRelayHandshake{validationID: validationID, handshake: handshake}
+				pending[frame.StreamID] = pendingRemoteRelayHandshake{validationID: validationID, handshake: handshake, release: releaseBudget}
 				go func(streamID string, publicKey RemotePublicKey, authorization string, validationID uint64) {
 					validationCtx, validationCancel := context.WithTimeout(connectionCtx, harnessKeyValidationTimeout)
 					defer validationCancel()
@@ -441,7 +498,7 @@ func (s *Server) serveNoiseRelayConnection(
 				if stream == nil {
 					if item, exists := pending[frame.StreamID]; exists {
 						delete(pending, frame.StreamID)
-						item.handshake.Destroy()
+						item.destroy()
 						diagnostics.record(frame.StreamID, "data_before_handshake", nil)
 						recordFailedHandshake(&failedHandshakes, &handshakeCooldownUntil)
 					}
@@ -456,7 +513,7 @@ func (s *Server) serveNoiseRelayConnection(
 			case relayFrameReset:
 				if item, exists := pending[frame.StreamID]; exists {
 					delete(pending, frame.StreamID)
-					item.handshake.Destroy()
+					item.destroy()
 					// A reset may come from the harness or the relay; its reason is
 					// untrusted, so only the correlated stream id is reported.
 					diagnostics.record(frame.StreamID, "reset_pending_validation", nil)
