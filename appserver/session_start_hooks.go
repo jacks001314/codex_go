@@ -130,7 +130,18 @@ func (r *RuntimeRouter) runPendingSessionStartHook(ctx context.Context, params *
 		return fmt.Errorf("%w: SessionStart hook blocked execution: %s", ErrInvalidHook, strings.TrimSpace(result.BlockReason))
 	}
 	mergeSessionStartAdditionalContext(params, result)
+	mergeSessionStartEncryptedContext(params, result)
 	return nil
+}
+
+// mergeSessionStartEncryptedContext hands the ciphertext a synchronous MCP
+// SessionStart hook returned to the turn, which sends it to the model as
+// standalone encrypted function_call_output items (Rust #63474).
+func mergeSessionStartEncryptedContext(params *turn.TurnStartParams, result *HookRunResult) {
+	if params == nil || result == nil || len(result.EncryptedContexts) == 0 {
+		return
+	}
+	params.HookEncryptedContexts = append(params.HookEncryptedContexts, result.EncryptedContexts...)
 }
 
 func (r *RuntimeRouter) sessionStartTranscriptPath(record *session.Record) *string {

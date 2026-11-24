@@ -20,6 +20,7 @@ import (
 	"codex_go/mcp"
 	"codex_go/runtimeutil"
 	"codex_go/telemetry"
+	"codex_go/turn"
 )
 
 type HookRunner struct {
@@ -66,6 +67,9 @@ type HookMcpCall struct {
 type HookMcpOutput struct {
 	Text              string
 	StructuredContent any
+	// EncryptedContent carries text blocks the MCP result marked
+	// `codex/encryptedContent`; they never join Text (Rust #63474).
+	EncryptedContent []string
 }
 
 // McpToolHookExecutor mirrors Rust HookMcpExecutor.
@@ -118,6 +122,10 @@ type HookRunResult struct {
 	// resolve_permission_request_decision. Matched handlers that cannot apply
 	// control effects never contribute a verdict.
 	PermissionRequestDecision *HookPermissionRequestDecision
+	// EncryptedContexts is ciphertext a synchronous MCP SessionStart hook
+	// returned; it reaches the model as encrypted function_call_output items
+	// and is never rendered as text (Rust #63474).
+	EncryptedContexts []turn.HookEncryptedContext
 }
 
 type hookCommandRunResult struct {
@@ -131,6 +139,9 @@ type hookCommandRunResult struct {
 	// StructuredContent is the MCP handler's structuredContent. Command hooks
 	// have none (Rust HandlerRunResult, #61580).
 	StructuredContent any
+	// EncryptedContexts is the ciphertext a synchronous MCP SessionStart hook
+	// returned for the model (Rust #63474).
+	EncryptedContexts []turn.HookEncryptedContext
 }
 
 func NewHookRunner() *HookRunner {
@@ -505,7 +516,49 @@ func (r *HookRunner) runMcpToolHook(ctx context.Context, metadata HookMetadata, 
 	result.ExitCode = &code
 	result.Stdout = output.Text
 	result.StructuredContent = output.StructuredContent
+	if len(output.EncryptedContent) > 0 {
+		contexts, err := hookEncryptedSessionStartContexts(request.EventName, metadata, output)
+		if err != nil {
+			result.Error = stringPointer(err.Error())
+			return result
+		}
+		result.EncryptedContexts = contexts
+	}
 	return result
+}
+
+// maxHookEncryptedContextBytes mirrors Rust's MAX_ENCRYPTED_CONTEXT_BYTES: the
+// runner can only bound the ciphertext, so one SessionStart run may carry at
+// most 40,000 serialized bytes of encrypted tool output (Rust #63474).
+const maxHookEncryptedContextBytes = 40_000
+
+// hookEncryptedSessionStartContexts validates the encrypted blocks an MCP hook
+// returned and attributes them to the hook's tool. Only synchronous SessionStart
+// hooks may carry them; an empty block or one that pushes the serialized size
+// past the cap fails the handler (Rust #63474).
+func hookEncryptedSessionStartContexts(event HookEventName, metadata HookMetadata, output HookMcpOutput) ([]turn.HookEncryptedContext, error) {
+	if event != HookEventSessionStart {
+		return nil, nil
+	}
+	// Metadata built outside discovery defaults to the synchronous mode, the
+	// same way hookFailureBlockReason reads it.
+	if metadata.ExecutionMode != "" && metadata.ExecutionMode != HookExecutionSync {
+		return nil, fmt.Errorf("encrypted SessionStart context requires a synchronous MCP hook")
+	}
+	tool := strings.TrimSpace(ptrStringValue(metadata.Tool))
+	contexts := make([]turn.HookEncryptedContext, 0, len(output.EncryptedContent))
+	total := 0
+	for _, content := range output.EncryptedContent {
+		if content == "" || len(content) > maxHookEncryptedContextBytes {
+			return nil, fmt.Errorf("invalid encrypted SessionStart context size")
+		}
+		total += len(content) + len(`{"type":"encrypted_content","encrypted_content":""}`)
+		if total > maxHookEncryptedContextBytes {
+			return nil, fmt.Errorf("encrypted SessionStart context exceeds 40,000 bytes")
+		}
+		contexts = append(contexts, turn.HookEncryptedContext{Name: tool, Content: content})
+	}
+	return contexts, nil
 }
 
 // hookRunSucceeded mirrors Rust's parse_completed status check: a handler is
@@ -1198,6 +1251,8 @@ type hookRunEffectResult struct {
 	PermissionRequestAllow bool
 	// PermissionRequestDeny records a deny verdict with its message.
 	PermissionRequestDeny *HookPermissionRequestDecision
+	// EncryptedContexts carries the encrypted SessionStart context of one run.
+	EncryptedContexts []turn.HookEncryptedContext
 }
 
 func hookRunEffect(event HookEventName, runResult *hookCommandRunResult) *hookRunEffectResult {
@@ -1222,6 +1277,7 @@ func hookRunEffect(event HookEventName, runResult *hookCommandRunResult) *hookRu
 		}
 		return effect
 	}
+	effect.EncryptedContexts = append(effect.EncryptedContexts, runResult.EncryptedContexts...)
 	if strings.TrimSpace(runResult.Stdout) == "" {
 		return effect
 	}
@@ -1423,6 +1479,7 @@ func mergeHookRunEffect(result *HookRunResult, effect *hookRunEffectResult) {
 	if effect.UpdatedInput != nil {
 		result.UpdatedInput = effect.UpdatedInput
 	}
+	result.EncryptedContexts = append(result.EncryptedContexts, effect.EncryptedContexts...)
 	result.AdditionalContexts = append(result.AdditionalContexts, effect.AdditionalContexts...)
 	result.FeedbackMessage = joinHookMessages(result.FeedbackMessage, effect.FeedbackMessages...)
 }

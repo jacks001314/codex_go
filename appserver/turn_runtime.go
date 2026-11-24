@@ -9532,6 +9532,9 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 		clockNoticeSessionItems = append(clockNoticeSessionItems, sessions...)
 	}
 	inputItems = append(inputItems, additionalInputItems...)
+	// Rust #63474: encrypted SessionStart context follows the developer context
+	// as standalone tool-output items.
+	inputItems = append(inputItems, hookEncryptedContextInputItems(params.HookEncryptedContexts)...)
 	permissionsSessionItems := []session.Item{}
 	if items, err := r.permissionsWorldStateInputItems(threadID, params, modelInfo, cfg); err != nil {
 		return nil, err

@@ -183,6 +183,35 @@ func (r *RuntimeRouter) mergeAdditionalContext(threadID string, values map[strin
 	return developer, items, persisted
 }
 
+// hookEncryptedContextInputItems renders the ciphertext a synchronous MCP
+// SessionStart hook returned as standalone function_call_output items carrying
+// the originating tool name and namespace (Rust #63474). The payload stays in
+// the encrypted_content content item so it never becomes model-visible text.
+func hookEncryptedContextInputItems(contexts []turn.HookEncryptedContext) []any {
+	if len(contexts) == 0 {
+		return nil
+	}
+	items := make([]any, 0, len(contexts))
+	for _, context := range contexts {
+		if strings.TrimSpace(context.Content) == "" {
+			continue
+		}
+		item := map[string]any{
+			"type": "function_call_output",
+			"name": strings.TrimSpace(context.Name),
+			"output": []map[string]any{{
+				"type":              "encrypted_content",
+				"encrypted_content": context.Content,
+			}},
+		}
+		if namespace := strings.TrimSpace(context.Namespace); namespace != "" {
+			item["namespace"] = namespace
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
 func additionalContextToolOutputModelItem(name string, value string) map[string]any {
 	return map[string]any{
 		"type":      "function_call_output",

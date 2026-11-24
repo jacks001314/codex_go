@@ -332,8 +332,13 @@ type TurnStartParams struct {
 	// UserInputExtensionData is host-only data delivered with this input's
 	// completion callback (Rust #59455). It never enters model input, the
 	// app-server wire, or persisted history.
-	UserInputExtensionData map[string]any    `json:"-"`
-	ResponsesAPIMetadata   map[string]string `json:"responsesapiClientMetadata,omitempty"`
+	UserInputExtensionData map[string]any `json:"-"`
+	// HookEncryptedContexts carries ciphertext a synchronous MCP SessionStart
+	// hook returned. Host-only: it reaches the model as standalone encrypted
+	// function_call_output items and never crosses the app-server wire
+	// (Rust #63474).
+	HookEncryptedContexts []HookEncryptedContext `json:"-"`
+	ResponsesAPIMetadata  map[string]string      `json:"responsesapiClientMetadata,omitempty"`
 	// ResponsesAPIMetadataPatch adds or overwrites individual client
 	// metadata entries without replacing the map. It is applied after
 	// ResponsesAPIMetadata when both are supplied (Rust #54053).
@@ -872,6 +877,18 @@ const (
 	AdditionalContextUntrusted   AdditionalContextKind = "untrusted"
 	AdditionalContextApplication AdditionalContextKind = "application"
 )
+
+// HookEncryptedContext is ciphertext a synchronous MCP SessionStart hook
+// returned as an encrypted tool output (Rust #63474). It is host-only: it never
+// crosses the app-server wire and is never rendered as text.
+type HookEncryptedContext struct {
+	// Name is the MCP tool that produced the ciphertext.
+	Name string
+	// Namespace is the tool's callable namespace, when known.
+	Namespace string
+	// Content is the opaque encrypted payload.
+	Content string
+}
 
 type AdditionalContextEntry struct {
 	Value string                `json:"value"`

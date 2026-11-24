@@ -82,13 +82,13 @@ func (r *RuntimeRouter) Execute(ctx context.Context, call HookMcpCall) (HookMcpO
 	if err != nil {
 		return HookMcpOutput{}, err
 	}
-	text := mcpHookResponseText(response)
+	text, encrypted := mcpHookResponseContentBlocks(response)
 	if response != nil && response.IsError != nil && *response.IsError {
 		// Rust CoreHookMcpExecutor: an MCP error result fails the handler, so
 		// its structured content is never billed.
 		return HookMcpOutput{}, fmt.Errorf("MCP tool returned an error: %s", text)
 	}
-	return HookMcpOutput{Text: text, StructuredContent: response.StructuredContent}, nil
+	return HookMcpOutput{Text: text, StructuredContent: response.StructuredContent, EncryptedContent: encrypted}, nil
 }
 
 // validateBundledAppHookTarget enforces the identity a built-in bundled App
@@ -167,11 +167,27 @@ func validateHookMcpEnvironment(server string, config mcp.ServerConfig, environm
 }
 
 func mcpHookResponseText(response *mcp.MCPToolCallResponse) string {
+	text, _ := mcpHookResponseContentBlocks(response)
+	return text
+}
+
+// mcpHookResponseContentBlocks splits an MCP result into the plaintext hook
+// output and the text blocks marked `codex/encryptedContent` (Rust #63474).
+// Ciphertext never joins the plaintext, so hook previews and plaintext spill
+// files cannot carry it.
+func mcpHookResponseContentBlocks(response *mcp.MCPToolCallResponse) (string, []string) {
 	if response == nil {
-		return ""
+		return "", nil
 	}
 	parts := make([]string, 0, len(response.Content))
+	var encrypted []string
 	for _, content := range response.Content {
+		if mcpContentBlockIsEncrypted(content) {
+			if content.Text != "" {
+				encrypted = append(encrypted, content.Text)
+			}
+			continue
+		}
 		if strings.TrimSpace(content.Text) != "" {
 			parts = append(parts, strings.TrimSpace(content.Text))
 			continue
@@ -182,5 +198,19 @@ func mcpHookResponseText(response *mcp.MCPToolCallResponse) string {
 			}
 		}
 	}
-	return strings.Join(parts, "\n")
+	return strings.Join(parts, "\n"), encrypted
+}
+
+// mcpContentBlockIsEncrypted reports a text block whose `_meta` marks it as
+// encrypted content (Rust FunctionCallOutputContentItem::from_mcp_content_block).
+func mcpContentBlockIsEncrypted(content mcp.MCPToolCallContent) bool {
+	if strings.TrimSpace(content.Type) != "text" {
+		return false
+	}
+	meta, ok := content.Raw["_meta"].(map[string]any)
+	if !ok {
+		return false
+	}
+	marked, ok := meta["codex/encryptedContent"].(bool)
+	return ok && marked
 }
