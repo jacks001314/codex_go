@@ -13,6 +13,7 @@ import (
 	"codex_go/mcp"
 	"codex_go/plugin"
 	"codex_go/skillprovider"
+	"codex_go/telemetry"
 )
 
 const (
@@ -80,6 +81,30 @@ func (s *cloudCatalogRefreshStore) dropThread(threadID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.byThread, key)
+}
+
+// cloudCatalogRefreshAcquireLockSpanName mirrors Rust's
+// `cloud_catalog.refresh.acquire_lock` span (#63475), which keeps the refresh
+// mutex wait separate from catalog preparation and refresh work.
+const cloudCatalogRefreshAcquireLockSpanName = "cloud_catalog.refresh.acquire_lock"
+
+// lockCloudCatalogRefresh waits for the per-thread refresh mutex and records the
+// wait in the acquire_lock span, nesting under the caller's span when one is
+// carried by ctx, and marks `acquired` once the lock is held.
+func (r *RuntimeRouter) lockCloudCatalogRefresh(ctx context.Context, state *cloudCatalogRefreshState) {
+	var span *telemetry.Span
+	if parent := telemetry.SpanFromContext(ctx); parent != nil {
+		span = parent.StartChildSpan(cloudCatalogRefreshAcquireLockSpanName, nil)
+	} else if r != nil {
+		if tracer := r.requestTracer(); tracer != nil {
+			span = tracer.StartSpan(cloudCatalogRefreshAcquireLockSpanName, nil)
+		}
+	}
+	state.refreshMu.Lock()
+	if span != nil {
+		span.SetAttribute("acquired", "true")
+		span.End()
+	}
 }
 
 // cloudCatalogRefreshState tracks one thread's catalog cooldowns and the
@@ -246,7 +271,7 @@ func (r *RuntimeRouter) refreshCloudPluginCatalogForStep(ctx context.Context, cf
 	if state.pluginBackoffPending(scope) {
 		return
 	}
-	state.refreshMu.Lock()
+	r.lockCloudCatalogRefresh(ctx, state)
 	defer state.refreshMu.Unlock()
 	if state.pluginCatalogComplete(scope) || state.pluginBackoffPending(scope) {
 		return

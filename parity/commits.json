@@ -55516,11 +55516,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Batch 164: partial - Rust adds lock-acquisition spans around the cloud plugin catalog refresh (`core/src/session/cloud_plugins.rs`). Go's plugin cache refresh (`plugin/cache_refresh.go`) serializes refreshes but records no lock wait/acquire span. Residual: emit the lock span in the refresh worker."
+    "Batch 166: complete - Rust #63475 wraps the cloud catalog refresh mutex wait in a `cloud_catalog.refresh.acquire_lock` span and records `acquired = true` once the lock is held, so the wait is separate from catalog preparation and refresh work. Go now does the same: `RuntimeRouter.lockCloudCatalogRefresh` opens the span (nested under the caller's telemetry span when ctx carries one, otherwise from the request tracer), waits for the per-thread `refreshMu`, records `acquired=true` and ends the span before discovery runs; `refreshCloudPluginCatalogForStep` uses it instead of taking the mutex directly. Tests: TestCloudCatalogRefreshLockSpanLikeRust (OTLP export contains the span with acquired=true; fails when the helper is replaced by a bare Lock). Verified: go test ./appserver -run 'CloudCatalog' -count=1, go build ./... and go vet ./appserver."
    ],
    "kind": "runtime",
    "sha": "f103339a795b9d7e43218bc16073421686f4edf2",
-   "status": "partial",
+   "status": "complete",
    "subject": "Trace lock acquisition during cloud catalog refresh (#63475)"
   },
   {
