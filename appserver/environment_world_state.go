@@ -594,8 +594,21 @@ func (r *RuntimeRouter) recordEnvironmentWorldState(record *session.Record, curr
 		return transition, err
 	}
 	if save && r != nil {
-		if err := r.runtimeSaveThreadRecord(record); err != nil {
+		// Ephemeral threads live only in memory under a single writer, so their
+		// whole record can be saved without racing a history replacement.
+		if r.saveEphemeralThreadRecord(record) {
+			return transition, nil
+		}
+		// Persist only the snapshot. A history replacement (rewind, rollback,
+		// or a compaction install) can land while the host roster read is
+		// outstanding, and saving this record's stale item list would restore
+		// the replaced history (Rust #59531).
+		updated, err := r.runtimeUpdateThreadMetadata(record.ID, &session.MetadataPatch{WorldState: record.Metadata.WorldState}, true)
+		if err != nil {
 			return transition, err
+		}
+		if updated != nil {
+			record.Metadata.WorldState = updated.Metadata.WorldState
 		}
 	}
 	return transition, nil

@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"codex_go/config"
-	"codex_go/keyring"
 )
 
 // newGatewayOAuthRouter builds a router whose effective provider configures
@@ -63,23 +62,18 @@ func newGatewayOAuthRouter(t *testing.T) (*RuntimeRouter, string, *httptest.Serv
 }
 
 // gatewayOAuthCredentialsStoreLine selects the grant store the way Rust's
-// OAuthCredentialsStore does. Keyring is the default, but this build only links
-// an OS keyring on Windows; hosts without one must configure the file store or
-// every sign-in would fail to persist (Rust requires a working keyring in the
-// default mode).
+// OAuthCredentialsStore does. Rust's app-server tests inject a mock keyring;
+// the Go provider builds its manager from config, and hosts without a linked
+// keyring or with a store that refuses writes (service sessions return
+// ERROR_PROCESS_ABORTED/ERROR_NOT_ENOUGH_MEMORY from CredWriteW) cannot persist
+// the grant, so the tests use the file-backed store.
 func gatewayOAuthCredentialsStoreLine() string {
-	if keyring.Available() {
-		return ""
-	}
 	return `credentials_store = "file"`
 }
 
-// gatewayOAuthCredentialPath is the file the grant store writes: the encrypted
-// keyring namespace, or the JSON store when file credentials are selected.
+// gatewayOAuthCredentialPath is the JSON file the file-backed grant store
+// writes.
 func gatewayOAuthCredentialPath(home string) string {
-	if keyring.Available() {
-		return filepath.Join(home, "secrets", "gateway_oauth.age")
-	}
 	return filepath.Join(home, "secrets", "gateway_oauth.json")
 }
 

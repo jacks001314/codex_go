@@ -3503,18 +3503,7 @@ func backgroundServerMode(settingsPath string) string {
 func networkCheck(codexHome string, opts *Options) *DoctorCheck {
 	env := currentEnvMap()
 	cfg, _ := loadEffectiveConfigForDoctor(codexHome, opts)
-	presentProxyVars := []string{}
-	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"} {
-		if value, ok := env[key]; ok && strings.TrimSpace(value) != "" {
-			presentProxyVars = append(presentProxyVars, key)
-		}
-	}
-	details := []string{}
-	if len(presentProxyVars) == 0 {
-		details = append(details, "proxy env vars: none")
-	} else {
-		details = append(details, "proxy env vars present: "+strings.Join(presentProxyVars, ", "))
-	}
+	details := []string{proxyEnvSummary(env)}
 	if cfg != nil {
 		// Rust network::check reports the effective proxy policy even when no
 		// proxy env var is set, so users can see why a configured proxy is or
@@ -3863,18 +3852,41 @@ func websocketHeaderPresent(headers http.Header, names ...string) bool {
 	return false
 }
 
-func pushProxyEnvSummary(details *[]string, env map[string]string) {
+// proxyEnvNames mirrors Rust doctor's PROXY_ENV_VARS display order.
+var proxyEnvNames = []string{
+	"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+	"http_proxy", "https_proxy", "all_proxy", "no_proxy",
+}
+
+// proxyEnvSummary renders Rust doctor's proxy env var detail line. Windows
+// environment variable names are case-insensitive, so os.Environ can surface a
+// variable set as NO_PROXY under its stored lowercase spelling; fold names to
+// uppercase there so one variable yields one entry.
+func proxyEnvSummary(env map[string]string) string {
+	if runtime.GOOS == "windows" {
+		folded := make(map[string]string, len(env))
+		for key, value := range env {
+			name := strings.ToUpper(key)
+			if current, ok := folded[name]; !ok || strings.TrimSpace(current) == "" {
+				folded[name] = value
+			}
+		}
+		env = folded
+	}
 	present := []string{}
-	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "WS_PROXY", "WSS_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy", "ws_proxy", "wss_proxy"} {
+	for _, key := range proxyEnvNames {
 		if strings.TrimSpace(env[key]) != "" {
 			present = append(present, key)
 		}
 	}
 	if len(present) == 0 {
-		*details = append(*details, "proxy env vars: none")
-		return
+		return "proxy env vars: none"
 	}
-	*details = append(*details, "proxy env vars present: "+strings.Join(present, ", "))
+	return "proxy env vars present: " + strings.Join(present, ", ")
+}
+
+func pushProxyEnvSummary(details *[]string, env map[string]string) {
+	*details = append(*details, proxyEnvSummary(env))
 }
 
 func terminalCheck(env map[string]string, opts *Options) *DoctorCheck {

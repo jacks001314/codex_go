@@ -162,12 +162,17 @@ func TestTurnCompletionStartsOneCostQueryLikeRust(t *testing.T) {
 	queryCalls := make(chan []string, 2)
 	router.turnCostQuery = func(_ context.Context, threadID string, turnIDs []string) ([]chatgptapi.ChatgptThreadTurnCosts, error) {
 		queryCalls <- append([]string(nil), turnIDs...)
-		micros := int64(42)
+		// Rust's visible_total_usd_micros (backend-client/src/client/
+		// chatgpt_turn_cost.rs) requires both components; the estimate alone is
+		// treated as a hidden amount.
+		converted := int64(42)
+		native := int64(0)
 		return []chatgptapi.ChatgptThreadTurnCosts{{
 			ThreadID: threadID,
 			Turns: []chatgptapi.ChatgptTurnCost{{
 				TurnID:                  "turn-1",
-				EstimatedUsageUSDMicros: &micros,
+				EstimatedUsageUSDMicros: &converted,
+				NativeUsageUSDMicros:    &native,
 				SettledResponseIDs:      []string{"resp-1"},
 			}},
 		}}, nil
