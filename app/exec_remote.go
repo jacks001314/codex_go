@@ -60,6 +60,10 @@ func runRemoteExec(ctx context.Context, parsed *cli.Parsed, stdin io.Reader, std
 	if err := validateRemoteExecOptions(parsed); err != nil {
 		return err
 	}
+	model, effort, err := resolveRemoteExecOverrides(parsed)
+	if err != nil {
+		return err
+	}
 	sessionID, promptText, err := resolveRemoteExecTurn(parsed, stdin, stderr)
 	if err != nil {
 		return err
@@ -92,6 +96,7 @@ func runRemoteExec(ctx context.Context, parsed *cli.Parsed, stdin io.Reader, std
 		var started appserver.ThreadStartResponse
 		if err := remoteSessionRequest(ctx, client, appserver.MethodThreadStart, appserver.ThreadStartParams{
 			ApprovalPolicy: "never",
+			Model:          model,
 		}, &started); err != nil {
 			return err
 		}
@@ -112,6 +117,8 @@ func runRemoteExec(ctx context.Context, parsed *cli.Parsed, stdin io.Reader, std
 		ThreadID:       thread.ID,
 		TurnTrigger:    "exec",
 		ApprovalPolicy: "never",
+		Model:          model,
+		Effort:         effort,
 		Input: []turn.TurnUserInput{{
 			Type: "text",
 			Text: promptText,
@@ -156,18 +163,17 @@ func runRemoteExec(ctx context.Context, parsed *cli.Parsed, stdin io.Reader, std
 	return nil
 }
 
-// validateRemoteExecOptions mirrors Rust remote::run's ensure!: the server owns
-// the agent configuration, so client overrides are rejected up front.
+// validateRemoteExecOptions mirrors Rust remote::run's ensure!: model, reasoning
+// effort, and output options are client-settable; every other agent setting is
+// rejected up front because the server owns it.
 func validateRemoteExecOptions(parsed *cli.Parsed) error {
 	exec := parsed.Exec
 	shared := exec.Shared
 	rootShared := parsed.Root.Shared
-	rootOverrides := parsed.Root.ConfigOverrides
 	unsupported := exec.Trust || exec.IgnoreUserConfig || exec.IgnoreRules || exec.StrictConfig || exec.Ephemeral ||
 		strings.TrimSpace(exec.ThreadSource) != "" || strings.TrimSpace(exec.CyberAccessProgram) != "" ||
-		strings.TrimSpace(exec.OutputSchema) != "" || len(exec.ConfigOverrides) > 0 || len(rootOverrides) > 0 ||
+		strings.TrimSpace(exec.OutputSchema) != "" ||
 		len(shared.Images) > 0 || len(rootShared.Images) > 0 ||
-		strings.TrimSpace(shared.Model) != "" || strings.TrimSpace(rootShared.Model) != "" ||
 		shared.OSS || rootShared.OSS ||
 		strings.TrimSpace(shared.OSSProvider) != "" || strings.TrimSpace(rootShared.OSSProvider) != "" ||
 		strings.TrimSpace(shared.Profile) != "" || strings.TrimSpace(rootShared.Profile) != "" ||
@@ -179,9 +185,52 @@ func validateRemoteExecOptions(parsed *cli.Parsed) error {
 		shared.Worktree || rootShared.Worktree ||
 		len(shared.AddDirs) > 0 || len(rootShared.AddDirs) > 0
 	if unsupported {
-		return errors.New("--remote currently supports only prompt, resume by UUID, and output options; configure the agent on the server")
+		return errors.New("--remote supports prompt, resume by UUID, model, reasoning effort, and output options; configure other agent settings on the server")
 	}
 	return nil
+}
+
+// resolveRemoteExecOverrides mirrors Rust #63462 remote::run: `--remote`
+// accepts `--model`, `-c model=...`, and `-c model_reasoning_effort=...`, and
+// `--model` takes precedence over `-c model=...`.
+func resolveRemoteExecOverrides(parsed *cli.Parsed) (string, *string, error) {
+	if parsed == nil {
+		return "", nil, nil
+	}
+	raw := append(append([]string(nil), parsed.Root.ConfigOverrides...), parsed.Exec.ConfigOverrides...)
+	overrides, err := config.ParseOverrides(raw)
+	if err != nil {
+		return "", nil, err
+	}
+	var model string
+	var effort *string
+	for _, override := range overrides {
+		switch override.Path {
+		case "model":
+			value, ok := override.Value.(string)
+			if !ok {
+				return "", nil, errors.New("invalid model override: expected a string")
+			}
+			model = value
+		case "model_reasoning_effort":
+			value, ok := override.Value.(string)
+			if !ok || strings.TrimSpace(value) == "" {
+				return "", nil, errors.New("invalid model_reasoning_effort override")
+			}
+			effortValue := value
+			effort = &effortValue
+		default:
+			return "", nil, fmt.Errorf("--remote does not support config override `%s`; configure it on the server", override.Path)
+		}
+	}
+	if cliModel := firstNonEmptyLocal(strings.TrimSpace(parsed.Exec.Shared.Model), strings.TrimSpace(parsed.Root.Shared.Model)); cliModel != "" {
+		model = cliModel
+	}
+	if cliEffort := firstNonEmptyLocal(strings.TrimSpace(parsed.Exec.Shared.ModelReasoningEffort), strings.TrimSpace(parsed.Root.Shared.ModelReasoningEffort)); cliEffort != "" {
+		effortValue := cliEffort
+		effort = &effortValue
+	}
+	return model, effort, nil
 }
 
 // resolveRemoteExecTurn mirrors Rust's session/prompt selection for remote

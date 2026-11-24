@@ -257,7 +257,7 @@ func TestRemoteExecResumesThreadLikeRust(t *testing.T) {
 }
 
 func TestRemoteExecRejectsUnsupportedOptionsLikeRust(t *testing.T) {
-	parsed, err := cli.Parse([]string{"exec", "--remote", "ws://127.0.0.1:4500", "-c", "model=gpt-5", "hello"})
+	parsed, err := cli.Parse([]string{"exec", "--remote", "ws://127.0.0.1:4500", "-c", "sandbox_mode=read-only", "hello"})
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
@@ -265,8 +265,19 @@ func TestRemoteExecRejectsUnsupportedOptionsLikeRust(t *testing.T) {
 	if !handled || err == nil {
 		t.Fatalf("runRemoteExecRequest() = handled %v, error %v", handled, err)
 	}
-	if want := "--remote currently supports only prompt, resume by UUID, and output options; configure the agent on the server"; err.Error() != want {
+	if want := "--remote does not support config override `sandbox_mode`; configure it on the server"; err.Error() != want {
 		t.Fatalf("error = %q, want %q", err.Error(), want)
+	}
+	parsed, err = cli.Parse([]string{"exec", "--remote", "ws://127.0.0.1:4500", "--image", "shot.png", "hello"})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	handled, err = runRemoteExecRequest(context.Background(), parsed, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if !handled || err == nil {
+		t.Fatalf("runRemoteExecRequest(image) = handled %v, error %v", handled, err)
+	}
+	if want := "--remote supports prompt, resume by UUID, model, reasoning effort, and output options; configure other agent settings on the server"; err.Error() != want {
+		t.Fatalf("image error = %q, want %q", err.Error(), want)
 	}
 }
 

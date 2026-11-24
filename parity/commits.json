@@ -55451,11 +55451,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Batch 164: partial - Rust lets `codex exec --remote` carry `--model` and `-c model_reasoning_effort` overrides into the remote run (`exec/src/remote.rs`). Go's exec path has no remote-run client that forwards per-run model/reasoning overrides; its `execModelOverride`/spawn-override handling belongs to the agent controller, not a remote exec session. Residual: thread the overrides through the remote exec request."
+    "Batch 197: complete - `app/exec_remote.go` mirrors Rust #63462 remote::run: `codex exec --remote` accepts `--model`, `-c model=...`, and `-c model_reasoning_effort=...` (plus Go's `--model-reasoning-effort`/`--reasoning-effort` flag), validates them before connecting, and forwards the resolved model to `thread/start` for a new thread and model plus effort to `turn/start` for both fresh and resumed threads. `--model` wins over `-c model=...`; a non-string model, an empty or non-string effort, and every other `-c` key keep Rust's diagnostics (`invalid model override: expected a string`, `invalid model_reasoning_effort override`, `--remote does not support config override `KEY`; configure it on the server`). The remaining unsupported-option guard now names model/reasoning effort as supported, and the exec help pages document the new overrides. Tests: TestRemoteExecForwardsModelAndEffortOverridesLikeRust, TestRemoteExecResumeForwardsOverridesOnTurnLikeRust, TestRemoteExecRejectsInvalidOverridesLikeRust, TestRemoteExecRejectsUnsupportedOptionsLikeRust."
    ],
    "kind": "runtime",
    "sha": "56bb44c05c9b2056642ed356cf847f004519cc95",
-   "status": "partial",
+   "status": "complete",
    "subject": "Support model and reasoning effort overrides in remote exec (#63462)"
   },
   {
