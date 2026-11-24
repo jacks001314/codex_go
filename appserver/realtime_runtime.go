@@ -800,9 +800,11 @@ func (r *RuntimeRouter) handleRealtimeEvent(threadID string, event realtime.Even
 	if event.Type != "handoff.requested" {
 		return
 	}
+	handoffID := strings.TrimSpace(firstNonEmpty(event.HandoffID, event.ItemID))
 	// Rust #43581: a misalignment failure retires the session's queued
 	// handoffs; one that was already parsed must not start a new turn.
 	if r.voiceHandoffsRetired(threadID) {
+		r.releaseRealtimeHandoff(threadID, handoffID)
 		return
 	}
 	// Rust #58221 removed the active-transcript byte budget; V3 handoffs carry
@@ -810,22 +812,58 @@ func (r *RuntimeRouter) handleRealtimeEvent(threadID string, event realtime.Even
 	transcriptDelta := formatRealtimeTranscript(event.ActiveTranscript)
 	delegation := wrapRealtimeDelegation(event.InputTranscript, transcriptDelta)
 	if delegation == "" {
+		// Rust #62288: a definite rejection releases the claim so the same
+		// speech is still available for the next input.
+		r.releaseRealtimeHandoff(threadID, handoffID)
 		return
 	}
+	// Rust #62288: overlapping handoffs must not consume one transcript twice.
+	// The receiving turn's session binding consumes the claim.
+	if !r.reserveRealtimeHandoff(threadID, handoffID) {
+		return
+	}
+	if err := r.routeRealtimeHandoffTurn(threadID, event, delegation); err != nil {
+		r.releaseRealtimeHandoff(threadID, handoffID)
+	}
+}
+
+// reserveRealtimeHandoff claims the live transcript for one handoff. Threads
+// without a live realtime timeline keep the legacy routing without a claim.
+func (r *RuntimeRouter) reserveRealtimeHandoff(threadID, handoffID string) bool {
+	if r == nil || r.services.Realtime == nil || !r.realtimeTimelineActive(threadID) {
+		return true
+	}
+	if strings.TrimSpace(handoffID) == "" {
+		return true
+	}
+	return r.requireRealtime().ReserveRealtimeHandoff(threadID, handoffID)
+}
+
+// releaseRealtimeHandoff frees a claim after a definite rejection.
+func (r *RuntimeRouter) releaseRealtimeHandoff(threadID, handoffID string) {
+	if r == nil || r.services.Realtime == nil || strings.TrimSpace(handoffID) == "" {
+		return
+	}
+	r.requireRealtime().ReleaseRealtimeHandoff(threadID, handoffID)
+}
+
+// routeRealtimeHandoffTurn starts or steers the turn that receives a handoff.
+func (r *RuntimeRouter) routeRealtimeHandoffTurn(threadID string, event realtime.Event, delegation string) error {
 	if active := r.activeRuntimeTurnSnapshot(threadID); active != nil {
-		_, _ = r.handleTurnSteer(requestWithInternalParams(MethodTurnSteer, turn.TurnSteerParams{
+		_, err := r.handleTurnSteer(requestWithInternalParams(MethodTurnSteer, turn.TurnSteerParams{
 			ThreadID:                  threadID,
 			ExpectedTurnID:            active.ID,
 			Prompt:                    delegation,
 			RealtimeHandoffProvenance: r.realtimeHandoffProvenance(threadID, event, realtime.RealtimeHandoffModeSteer),
 		}))
-		return
+		return err
 	}
-	_, _ = r.handleTurnStart(requestWithInternalParams(MethodTurnStart, turn.TurnStartParams{
+	_, err := r.handleTurnStart(requestWithInternalParams(MethodTurnStart, turn.TurnStartParams{
 		ThreadID:                  threadID,
 		Prompt:                    delegation,
 		RealtimeHandoffProvenance: r.realtimeHandoffProvenance(threadID, event, realtime.RealtimeHandoffModeStart),
 	}))
+	return err
 }
 
 // realtimeTranscriptTailKind tags the history item recorded from a realtime

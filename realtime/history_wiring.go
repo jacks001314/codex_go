@@ -222,6 +222,24 @@ func (m *Manager) observeTimelineEvent(threadID string, event Event) []Notificat
 	}
 }
 
+// ReserveRealtimeHandoff claims the thread's live transcript for one handoff so
+// an overlapping handoff cannot consume the same speech twice (Rust #62288).
+func (m *Manager) ReserveRealtimeHandoff(threadID, id string) bool {
+	if m == nil {
+		return false
+	}
+	return m.historyFor(threadID).ReserveHandoff(id)
+}
+
+// ReleaseRealtimeHandoff frees a claim after a definite rejection so the speech
+// stays available for the next input.
+func (m *Manager) ReleaseRealtimeHandoff(threadID, id string) bool {
+	if m == nil {
+		return false
+	}
+	return m.historyFor(threadID).ReleaseHandoff(id)
+}
+
 // BindTurnSession records which realtime session produced a turn. The app-server
 // calls it when the backing turn starts.
 func (m *Manager) BindTurnSession(threadID, turnID string) {

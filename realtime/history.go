@@ -1057,8 +1057,12 @@ type RealtimeHistoryState struct {
 	sessionByTurn   map[string]string
 	promotedKeys    map[string]bool
 	pendingHandoffs []string
-	failed          bool
-	newID           func() string
+	// reservedHandoffs maps a reserved handoff id to the session whose speech it
+	// claimed. Overlapping handoffs must not consume the same transcript twice,
+	// and a definite rejection releases the claim (Rust #62288 reserve_handoff).
+	reservedHandoffs map[string]string
+	failed           bool
+	newID            func() string
 }
 
 // SetIDGenerator overrides item identifier generation, primarily for tests.
@@ -1159,6 +1163,11 @@ func (s *RealtimeHistoryState) BindTurnSession(turnID string) {
 	if sessionID == "" {
 		return
 	}
+	for id, reserved := range s.reservedHandoffs {
+		if reserved == sessionID {
+			delete(s.reservedHandoffs, id)
+		}
+	}
 	turns := s.sessionByTurnLocked()
 	if _, exists := turns[turnID]; !exists {
 		turns[turnID] = sessionID
@@ -1198,6 +1207,57 @@ func (s *RealtimeHistoryState) NoteHandoffRequested() {
 		return
 	}
 	s.pendingHandoffs = append(s.pendingHandoffs, s.activeSessionID)
+}
+
+// ReserveHandoff claims the active session's transcript for one handoff so an
+// overlapping request cannot consume the same speech twice. It reports false
+// when this id is already reserved or another handoff still holds the claim.
+func (s *RealtimeHistoryState) ReserveHandoff(id string) bool {
+	if s == nil || strings.TrimSpace(id) == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activeSessionID == "" {
+		return false
+	}
+	if s.reservedHandoffs == nil {
+		s.reservedHandoffs = map[string]string{}
+	}
+	if _, held := s.reservedHandoffs[id]; held {
+		return false
+	}
+	if len(s.reservedHandoffs) > 0 {
+		return false
+	}
+	s.reservedHandoffs[id] = s.activeSessionID
+	return true
+}
+
+// ReleaseHandoff drops a reservation after a definite rejection so the speech
+// stays available for the next input. It reports whether this id held a claim.
+func (s *RealtimeHistoryState) ReleaseHandoff(id string) bool {
+	if s == nil || strings.TrimSpace(id) == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, held := s.reservedHandoffs[id]; !held {
+		return false
+	}
+	delete(s.reservedHandoffs, id)
+	return true
+}
+
+// HandoffReserved reports whether a handoff id still holds a claim.
+func (s *RealtimeHistoryState) HandoffReserved(id string) bool {
+	if s == nil || strings.TrimSpace(id) == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, held := s.reservedHandoffs[id]
+	return held
 }
 
 // MarkFailed records that the session produced an error, which decides the
