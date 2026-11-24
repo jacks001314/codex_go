@@ -1093,6 +1093,52 @@ func NewMCPService(runtime *RuntimeConfig) *MCPService {
 	return service
 }
 
+// MCPDisabledByRequestAuthTransport marks a provider-backed server that a
+// runtime refresh could not keep: its transport changed, and in-process
+// credentials must not be retargeted to a new endpoint (Rust #63532).
+const MCPDisabledByRequestAuthTransport = "request auth provider cannot follow a changed transport"
+
+// mcpRuntimeCarryingRequestAuth applies Rust #63532's materialized-registration
+// rule at the runtime-config boundary. A server whose previous configuration
+// carried an in-process request auth provider keeps it while the transport is
+// unchanged and is disabled when the transport changed, unless the new
+// registration supplies its own provider.
+func mcpRuntimeCarryingRequestAuth(previous map[string]ServerConfig, runtime *RuntimeConfig) *RuntimeConfig {
+	if runtime == nil || len(previous) == 0 || len(runtime.Servers) == 0 {
+		return runtime
+	}
+	servers := make(map[string]ServerRegistration, len(runtime.Servers))
+	changed := false
+	for key, registration := range runtime.Servers {
+		prev, ok := previous[key]
+		if !ok || prev.RequestAuthProvider == nil || registration.Config.RequestAuthProvider != nil {
+			servers[key] = registration
+			continue
+		}
+		config := registration.Config
+		if mcpServerTransportEqual(prev, config) {
+			config.RequestAuthProvider = prev.RequestAuthProvider
+			if config.RequestAuthSession == nil {
+				config.RequestAuthSession = prev.RequestAuthSession
+			}
+		} else {
+			config.Enabled = false
+			config.DisabledReason = MCPDisabledByRequestAuthTransport
+			config.RequestAuthProvider = nil
+			config.RequestAuthSession = nil
+		}
+		registration.Config = config
+		servers[key] = registration
+		changed = true
+	}
+	if !changed {
+		return runtime
+	}
+	clone := *runtime
+	clone.Servers = servers
+	return &clone
+}
+
 // mcpServerEnvironmentAvailable mirrors Rust #39335: attachment-scoped MCP
 // servers (those bound to a non-local environment) stay disabled while their
 // environment configuration is pending, failed, or unselected. The controller-
@@ -1127,8 +1173,9 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 	if s == nil {
 		return
 	}
-	refreshed := NewMCPService(runtime)
 	s.mu.Lock()
+	runtime = mcpRuntimeCarryingRequestAuth(s.configs, runtime)
+	refreshed := NewMCPService(runtime)
 	nextHTTPClients := map[string]*cachedMCPHTTPClient{}
 	nextStdioClients := map[string]*cachedMCPStdioClient{}
 	var oldHTTPClients []*httpClient

@@ -95,3 +95,48 @@ func TestMcpRequestAuthDroppedAfterTransportChangeLikeRust(t *testing.T) {
 		t.Fatalf("plain server after materialization = %#v, want enabled", plain)
 	}
 }
+
+// TestApplyRuntimeConfigCarriesRequestAuthLikeRust mirrors Rust #63532 at the
+// runtime-config boundary: a refresh keeps the provider while the transport is
+// unchanged and disables the server when the transport changed.
+func TestApplyRuntimeConfigCarriesRequestAuthLikeRust(t *testing.T) {
+	provider := NewMcpRequestAuthProvider(&rotatingAuth{owner: "owner-1", token: "one"})
+	config, err := SetMcpRequestAuthProvider(&ServerConfig{URL: "https://example.com/mcp", Enabled: true}, provider)
+	if err != nil {
+		t.Fatalf("SetMcpRequestAuthProvider() error = %v", err)
+	}
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"srv": {Config: *config},
+	}})
+	if got := service.configs["srv"].RequestAuthProvider; got != provider {
+		t.Fatalf("initial provider = %v, want %v", got, provider)
+	}
+
+	service.ApplyRuntimeConfig(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"srv": {Config: ServerConfig{URL: "https://example.com/mcp", Enabled: true}},
+	}})
+	carried := service.configs["srv"]
+	if carried.RequestAuthProvider != provider || carried.RequestAuthSession == nil {
+		t.Fatalf("same-transport refresh dropped the provider: %#v", carried)
+	}
+	if !carried.Enabled {
+		t.Fatal("same-transport refresh disabled the provider-backed server")
+	}
+
+	service.ApplyRuntimeConfig(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"srv": {Config: ServerConfig{URL: "https://other.example/mcp", Enabled: true}},
+	}})
+	if _, ok := service.configs["srv"]; ok {
+		t.Fatal("transport change kept the provider-backed server enabled")
+	}
+	disabled, ok := service.serverConfigIncludingDisabled("srv")
+	if !ok {
+		t.Fatal("transport change dropped the disabled registration")
+	}
+	if disabled.Enabled || disabled.DisabledReason != MCPDisabledByRequestAuthTransport {
+		t.Fatalf("disabled config = %#v", disabled)
+	}
+	if disabled.RequestAuthProvider != nil || disabled.RequestAuthSession != nil {
+		t.Fatal("transport change kept in-process credentials attached")
+	}
+}
