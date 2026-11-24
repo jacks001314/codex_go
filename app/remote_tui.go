@@ -578,8 +578,11 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		renameThreadHandler = interactiveCloudRenameThreadHandler(ctx, endpoint, cloudNameGate)
 		renameAgentsOverviewHandler = interactiveCloudAgentsOverviewRename(ctx, endpoint, cloudNameGate)
 	}
+	// Rust #63184: the model's `open_in_codex` tool queues a sidebar preview in
+	// this running TUI.
+	sidebarOpens := &sidebarOpenDispatcher{}
 	taskToolsHost := remoteTUITaskToolsHostForSession(paramsMode, endpoint, root, state, func() *taskToolsMCPHost {
-		return &taskToolsMCPHost{}
+		return &taskToolsMCPHost{openInCodex: sidebarOpens.open}
 	})
 	defer taskToolsHost.close()
 	// The TUI owns the voice helper and relays its handshake through the
@@ -654,6 +657,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		onSidebarDocument = newRemoteSidebarDocumentHost(ctx, endpoint).open
 	}
 	options := codextea.Options{
+		OnProgramReady:               sidebarOpens.onProgramReady,
 		Profile:                      interactiveStringFromSharedProfile(root),
 		NoAltScreen:                  interactiveNoAltScreen(root, settings, terminalAppOverSSH),
 		AlternateScreenMode:          settings.AlternateScreenMode,

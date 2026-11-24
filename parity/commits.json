@@ -54441,7 +54441,7 @@
     "codex_go"
    ],
    "evidence": [
-    "Round 1269: partial - Rust adds an `open_in_codex` MCP tool that takes a file path and optional one-based line, queues the request until the calling conversation is visible, and loads a sandboxed snapshot into the terminal sidebar without stealing keyboard focus. Go has the transcript side only: tui/markdown/sidebar_file_links.go inventories the local files a transcript mentions (with :line[:col] locations) for the sidebar, but no `open_in_codex` tool exists anywhere in the tree, so a model cannot ask the sidebar to open a file."
+    "Batch 174: partial - Rust adds an open_in_codex MCP tool that takes a file path and an optional one-based line, queues the request until the calling conversation is visible, then loads a sandboxed snapshot into the terminal sidebar without stealing keyboard focus. Go now hosts the same tool on the TUI MCP server (openInCodexToolSpec, kept out of the task-tool namespace specs), validates path (non-empty, <=4096 bytes) and line, and forwards it through DynamicToolOptions.OpenInCodex to a sidebarOpenDispatcher that sends SidebarOpenRequestMsg once Options.OnProgramReady hands over the Bubble Tea channel. The model opens the preview as a sidebar tab without taking chat focus, reuses a loaded tab for the same path and queues requests whose calling thread is not visible yet, draining them after AgentSwitchResultMsg. Residual: no sandbox permission re-check on the read, no confirmation prompt when the session has no sidebar, and no Enter-to-live-watch."
    ],
    "kind": "runtime",
    "sha": "5824b38693412e0787d45bbd0167be495b69660f",

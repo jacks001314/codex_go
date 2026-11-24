@@ -45,6 +45,8 @@ type taskToolsMCPConnection struct {
 	client   *remoteAppServerTUIClient
 	template appserver.ThreadStartParams
 	register func(threadID string, taskToolsAvailable bool) error
+	// openInCodex shows a workspace file in the TUI sidebar (Rust #63184).
+	openInCodex func(ctx context.Context, threadID string, path string, line int) error
 }
 
 // taskToolsMCPServer ports Rust DynamicToolMcpServer.
@@ -288,7 +290,12 @@ func (h *taskToolsMCPHandler) dispatch(ctx context.Context, method string, param
 // the namespace, with a read-only annotation for the query tools, plus the
 // managed-worktree tools when this session hosts them.
 func (s *taskToolsMCPServer) toolList() []map[string]any {
-	tools := make([]map[string]any, 0, 9)
+	tools := make([]map[string]any, 0, 10)
+	if s != nil && s.taskTools {
+		// Rust #63184: the TUI-hosted server lists the sidebar tool itself; it
+		// is not part of the task-tool namespace specs.
+		tools = append(tools, openInCodexToolSpec())
+	}
 	if s == nil || s.taskTools {
 		for _, spec := range DynamicToolSpecs() {
 			if spec.Namespace == nil {
@@ -319,6 +326,27 @@ func (s *taskToolsMCPServer) toolList() []map[string]any {
 		}
 	}
 	return tools
+}
+
+// openInCodexToolSpec is the MCP tool the terminal TUI hosts so the model can
+// show a workspace file beside the conversation (Rust #63184).
+func openInCodexToolSpec() map[string]any {
+	return map[string]any{
+		"name": "open_in_codex",
+		"description": "Open a workspace file in the terminal sidebar so the user can inspect it " +
+			"next to the conversation. The path is relative to the calling workspace; an optional " +
+			"one-based line reveals that line.",
+		"inputSchema": map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"path": map[string]any{"type": "string", "minLength": 1, "maxLength": 4096},
+				"line": map[string]any{"type": "integer", "minimum": 1},
+			},
+			"required": []string{"path"},
+		},
+		"annotations": map[string]any{"readOnlyHint": true},
+	}
 }
 
 func (h *taskToolsMCPHandler) callTool(ctx context.Context, params json.RawMessage) (any, *taskToolsMCPError) {
@@ -387,6 +415,7 @@ func (h *taskToolsMCPHandler) callTool(ctx context.Context, params json.RawMessa
 	}, DynamicToolOptions{
 		ThreadStartParams:        connection.template,
 		RegisterBackgroundThread: connection.register,
+		OpenInCodex:              connection.openInCodex,
 	})
 	content := make([]map[string]any, 0, len(response.ContentItems))
 	for _, item := range response.ContentItems {
@@ -496,6 +525,9 @@ func taskToolsMCPConfigName() string {
 type taskToolsMCPHost struct {
 	mu     sync.Mutex
 	server *taskToolsMCPServer
+	// openInCodex shows a workspace file in the TUI sidebar; the host sets it
+	// once the TUI program can receive messages (Rust #63184).
+	openInCodex func(ctx context.Context, threadID string, path string, line int) error
 	// worktrees is set for trusted local sessions that may expose the
 	// managed-worktree tools (Rust ToolServices.worktrees).
 	worktrees *managedWorktreeTools
@@ -548,10 +580,14 @@ func (h *taskToolsMCPHost) attach(client *remoteAppServerTUIClient, template app
 			template.Config[key] = value
 		}
 	}
+	h.mu.Lock()
+	openInCodex := h.openInCodex
+	h.mu.Unlock()
 	server.reconnect(&taskToolsMCPConnection{
-		client:   client,
-		template: template,
-		register: register,
+		client:      client,
+		template:    template,
+		register:    register,
+		openInCodex: openInCodex,
 	})
 }
 

@@ -1326,6 +1326,10 @@ type Options struct {
 	// sessions this model can select (Rust #54681). A zero value binds the
 	// model to this process's embedded/daemon backend.
 	BackendID codextui.BackendID
+	// OnProgramReady receives the program's message channel once it exists, so
+	// hosts outside the model can deliver messages (Rust #63184's
+	// `open_in_codex` queued previews).
+	OnProgramReady func(send func(bubbletea.Msg))
 	// ServerOwnedSettings marks a conversation whose execution settings live on
 	// the app server (Rust ThreadParamsMode::Cloud). A speed selected here is
 	// scoped to the next new turn and must not be written to user config.
@@ -3259,6 +3263,9 @@ type Model struct {
 	sidebarFilesCwd               string
 	sidebarFilePreviewUnavailable string
 	sidebarFilesRequest           uint64
+	// pendingSidebarOpens queues `open_in_codex` previews whose calling thread
+	// is not visible yet (Rust #63184).
+	pendingSidebarOpens map[string][]sidebarOpenRequest
 	// sidebarDocuments keeps the file previews opened from the chooser, in tab
 	// order per parent conversation (Rust SidebarPane::documents + tabs).
 	// sidebarDocumentActive is the preview the pane shows, or empty when the
@@ -4239,6 +4246,9 @@ func newProgramWithModel(ctx context.Context, state *codextui.State, options Opt
 	// scrolls the transcript instead of the terminal scrollback; inline mode
 	// leaves both gestures to the terminal.
 	program = bubbletea.NewProgram(model, programOptions...)
+	if options.OnProgramReady != nil {
+		options.OnProgramReady(program.Send)
+	}
 	// Rust parity: FrameRequester notifies the TUI event loop. Bubble Tea's
 	// Program.Send is that notification channel, so animation frames are drawn
 	// only while a surface asks for them.
@@ -5225,7 +5235,11 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, nil
 	case AgentSwitchResultMsg:
 		m.applyAgentSwitchResult(msg)
-		return m, m.refreshStatusControlsCmd()
+		// Rust #63184: returning to the calling conversation shows the file the
+		// model asked for while another thread was visible.
+		return m, batchSideCommands(m.refreshStatusControlsCmd(), m.drainPendingSidebarOpens())
+	case SidebarOpenRequestMsg:
+		return m, m.applySidebarOpenRequest(msg)
 	case SideChatsLoadedMsg:
 		return m, m.applySideChatsLoaded(msg)
 	case SideChatPromptsLoadedMsg:

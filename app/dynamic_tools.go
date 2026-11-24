@@ -31,6 +31,10 @@ type DynamicToolOptions struct {
 	// lifecycle response, allowing the dashboard to show it before a metadata
 	// refresh completes (Rust #46946).
 	RegisterBackgroundThreadMetadata func(thread *appserver.Thread, taskToolsAvailable bool) error
+	// OpenInCodex shows one workspace file in the terminal sidebar for the
+	// calling thread (Rust #63184). Nil means this transport cannot host the
+	// tool, and a call reports that instead of pretending to open the file.
+	OpenInCodex func(ctx context.Context, threadID string, path string, line int) error
 	// Now/Sleep allow tests to control the wait loop.
 	Now   func() time.Time
 	Sleep func(time.Duration)
@@ -164,9 +168,51 @@ func (e *dynamicToolExecutor) execute(params appserver.DynamicToolCallParams) (m
 		return e.setThreadArchivedTool(params)
 	case "wait_threads":
 		return e.waitThreadsTool(params)
+	case "open_in_codex":
+		return e.openInCodexTool(params)
 	default:
 		return nil, fmt.Errorf("Unsupported TUI dynamic tool: %s", params.Tool)
 	}
+}
+
+type dynamicOpenInCodexArguments struct {
+	Path string `json:"path"`
+	Line *int   `json:"line"`
+}
+
+// openInCodexTool shows a workspace file in the terminal sidebar. The request
+// queues inside the TUI until the calling conversation is visible, so the tool
+// returns as soon as the TUI accepted it (Rust #63184).
+func (e *dynamicToolExecutor) openInCodexTool(params appserver.DynamicToolCallParams) (map[string]any, error) {
+	arguments, err := parseDynamicToolArguments[dynamicOpenInCodexArguments](params.Arguments)
+	if err != nil {
+		return nil, err
+	}
+	path := strings.TrimSpace(arguments.Path)
+	if path == "" {
+		return nil, errors.New("path is required")
+	}
+	if len(path) > 4096 {
+		return nil, errors.New("path must be at most 4096 bytes")
+	}
+	line := 0
+	if arguments.Line != nil {
+		if *arguments.Line < 1 {
+			return nil, errors.New("line must be at least 1")
+		}
+		line = *arguments.Line
+	}
+	if e.options.OpenInCodex == nil {
+		return nil, errors.New("opening files in the sidebar is unavailable in this session")
+	}
+	threadID := strings.TrimSpace(params.ThreadID)
+	if threadID == "" {
+		return nil, errors.New("missing task metadata")
+	}
+	if err := e.options.OpenInCodex(e.ctx, threadID, path, line); err != nil {
+		return nil, err
+	}
+	return map[string]any{"status": "queued", "path": path}, nil
 }
 
 func (e *dynamicToolExecutor) listThreads(params appserver.DynamicToolCallParams) (map[string]any, error) {
