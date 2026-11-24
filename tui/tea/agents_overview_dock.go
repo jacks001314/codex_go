@@ -7,6 +7,7 @@ import (
 
 	codextui "codex_go/tui"
 	"codex_go/tui/keymsg"
+	mousemsg "codex_go/tui/mousemsg"
 )
 
 // Rust parity: codex-rs/tui/src/app/conversation_workspace.rs (#62986). With
@@ -105,7 +106,11 @@ func (m *Model) agentsOverviewDockWidths() (centerWidth int, conversationWidth i
 	if width < agentsOverviewDockMinSplit {
 		return 0, 0, false
 	}
-	centerWidth = min(agentsOverviewDockCenterWidth, width-agentsOverviewDockMinChat-agentsOverviewDockGutter)
+	centerWidth = agentsOverviewDockCenterWidth
+	if m.agentsOverviewDockWidth > 0 {
+		centerWidth = m.agentsOverviewDockWidth
+	}
+	centerWidth = min(centerWidth, width-agentsOverviewDockMinChat-agentsOverviewDockGutter)
 	centerWidth = max(centerWidth, 24)
 	conversationWidth = width - centerWidth - agentsOverviewDockGutter
 	if conversationWidth < 1 {
@@ -133,6 +138,9 @@ func (m *Model) renderAgentsOverviewDock() string {
 	m.agentsOverviewDockRendering = true
 	conversation := m.renderFocusedPane(conversationWidth, height)
 	m.agentsOverviewDockRendering = false
+	// The conversation column sits right of the dock, so its pointer regions
+	// move into frame coordinates like the side workspace does.
+	m.offsetFocusedPanePointer(centerWidth+agentsOverviewDockGutter, 0)
 	divider := codextui.TruncateToWidth("\x1b[2m│\x1b[0m ", agentsOverviewDockGutter)
 	rows := make([]string, 0, height)
 	for index := 0; index < height; index++ {
@@ -148,4 +156,66 @@ func (m *Model) renderAgentsOverviewDock() string {
 		rows = append(rows, left+divider+right)
 	}
 	return strings.Join(rows, "\n") + m.agentsOverviewCursorStyleSequence()
+}
+
+// handleAgentsOverviewDockMouse routes presses in the docked workspace. A
+// press over the dock focuses it and keeps the dashboard's row handling; a
+// press on the divider starts a resize; presses on the conversation column
+// fall through to the transcript after handing it focus (Rust #62986).
+func (m *Model) handleAgentsOverviewDockMouse(msg mousemsg.MouseMsg) (bubbletea.Cmd, bool) {
+	if m == nil || m.agentsOverview == nil || !m.agentsOverviewDockOpen() {
+		return nil, false
+	}
+	centerWidth, _, ok := m.agentsOverviewDockWidths()
+	if !ok {
+		return nil, false
+	}
+	if msg.Action == mousemsg.MouseActionPress && msg.Button == mousemsg.MouseButtonLeft && msg.X == centerWidth {
+		m.agentsOverviewDockDragging = true
+		return nil, true
+	}
+	if m.agentsOverviewDockDragging {
+		switch msg.Action {
+		case mousemsg.MouseActionMotion, mousemsg.MouseActionRelease:
+			m.resizeAgentsOverviewDock(msg.X)
+			if msg.Action == mousemsg.MouseActionRelease {
+				m.agentsOverviewDockDragging = false
+			}
+			return nil, true
+		}
+	}
+	if msg.X < centerWidth {
+		if msg.Action == mousemsg.MouseActionPress && msg.Button == mousemsg.MouseButtonLeft {
+			m.agentsOverviewDockFocus = agentsOverviewDockCenter
+			if cmd, handled := m.updateAgentsOverviewMouse(msg); handled {
+				return cmd, true
+			}
+			m.refreshTranscript()
+		}
+		return nil, true
+	}
+	if msg.X < centerWidth+agentsOverviewDockGutter {
+		return nil, true
+	}
+	if msg.Action == mousemsg.MouseActionPress && msg.Button == mousemsg.MouseButtonLeft {
+		if !m.agentsOverviewDockConversationFocused() {
+			m.focusAgentsOverviewDockConversation()
+		}
+	}
+	return nil, false
+}
+
+// resizeAgentsOverviewDock clamps a dragged divider column the way Rust's
+// workspace mouse handler does: at least 24 dock columns and a 48-column
+// conversation plus the gutter.
+func (m *Model) resizeAgentsOverviewDock(column int) {
+	if m == nil {
+		return
+	}
+	maxWidth := firstPositive(m.width, defaultWidth) - agentsOverviewDockMinChat - agentsOverviewDockGutter
+	if maxWidth < 24 {
+		maxWidth = 24
+	}
+	m.agentsOverviewDockWidth = clampModalInt(column, 24, maxWidth)
+	m.refreshTranscript()
 }

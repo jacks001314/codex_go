@@ -2255,6 +2255,11 @@ type Model struct {
 	// agentsOverviewDockRendering guards the conversation column render so it
 	// does not paint the Command Center again.
 	agentsOverviewDockRendering bool
+	// agentsOverviewDockWidth is the dragged dock width, or zero for the
+	// default 36 columns (Rust workspace.width).
+	agentsOverviewDockWidth int
+	// agentsOverviewDockDragging marks a live divider drag.
+	agentsOverviewDockDragging bool
 	// agentsOverviewOpening is the task whose resume request is in flight while
 	// the command center keeps its frame visible (Rust #63146).
 	agentsOverviewOpening string
@@ -6048,6 +6053,11 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 	case mousemsg.MouseMsg:
 		if m.agentsOverview != nil {
+			// Rust #62986: the dock owns presses over its own pane and the
+			// divider; the conversation column keeps its usual handling.
+			if cmd, handled := m.handleAgentsOverviewDockMouse(msg); handled {
+				return m, cmd
+			}
 			// Rust #62990: a click selects and opens the painted task row.
 			if cmd, handled := m.updateAgentsOverviewMouse(msg); handled {
 				return m, cmd

@@ -9,6 +9,7 @@ import (
 
 	codextui "codex_go/tui"
 	"codex_go/tui/keymsg"
+	mousemsg "codex_go/tui/mousemsg"
 )
 
 func newAgentsOverviewDockModel(t *testing.T, width int) *Model {
@@ -143,3 +144,40 @@ func TestAgentsOverviewDockStaysAfterOpeningTaskLikeRust(t *testing.T) {
 }
 
 var _ = keymsg.KeyMsg{}
+
+// Rust #62986 workspace mouse: a press chooses the focused pane, and dragging
+// the divider resizes the dock while the conversation keeps 48 columns.
+func TestAgentsOverviewDockMouseFocusAndResizeLikeRust(t *testing.T) {
+	model := newAgentsOverviewDockModel(t, 120)
+	_ = model.viewString()
+	centerWidth, _, ok := model.agentsOverviewDockWidths()
+	if !ok || centerWidth != agentsOverviewDockCenterWidth {
+		t.Fatalf("dock width = %d ok=%t, want the default %d", centerWidth, ok, agentsOverviewDockCenterWidth)
+	}
+
+	model.Update(mousemsg.MouseMsg{
+		Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft,
+		X: centerWidth + agentsOverviewDockGutter + 4, Y: 3,
+	})
+	if !model.agentsOverviewDockConversationFocused() {
+		t.Fatal("a press on the conversation column kept the dock focused")
+	}
+
+	model.Update(mousemsg.MouseMsg{
+		Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft, X: 2, Y: 3,
+	})
+	if model.agentsOverviewDockFocus != agentsOverviewDockCenter {
+		t.Fatalf("a press on the dock left focus at %q", model.agentsOverviewDockFocus)
+	}
+
+	model.Update(mousemsg.MouseMsg{Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft, X: centerWidth, Y: 2})
+	model.Update(mousemsg.MouseMsg{Action: mousemsg.MouseActionMotion, Button: mousemsg.MouseButtonLeft, X: 50, Y: 2})
+	model.Update(mousemsg.MouseMsg{Action: mousemsg.MouseActionRelease, Button: mousemsg.MouseButtonLeft, X: 50, Y: 2})
+	if got, conversation, ok := model.agentsOverviewDockWidths(); !ok || got != 50 || conversation != 120-50-agentsOverviewDockGutter {
+		t.Fatalf("dragged dock = center %d conversation %d ok %t", got, conversation, ok)
+	}
+	painted := ansi.Strip(model.viewString())
+	if !strings.Contains(painted, "hello from the main chat") {
+		t.Fatalf("resized dock lost the conversation:\n%s", painted)
+	}
+}
