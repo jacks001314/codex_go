@@ -81,6 +81,32 @@ type ThreadProjectUpdatedNotification struct {
 	ProjectID *string `json:"projectId"`
 }
 
+// ThreadHasProject reports whether a thread is assigned to a project. The
+// staged project is used only until the thread has a row in SQLite, so a
+// composer turn on a brand-new thread still sees the assignment the client
+// staged (Rust StateRuntime::thread_has_project, #63545).
+func (r *StateRuntime) ThreadHasProject(ctx context.Context, threadID string, stagedProjectID *string) (bool, error) {
+	if r == nil || r.stateDB == nil {
+		return false, errors.New("state runtime is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var staged any
+	if stagedProjectID != nil && strings.TrimSpace(*stagedProjectID) != "" {
+		staged = *stagedProjectID
+	}
+	var assigned bool
+	err := r.stateDB.QueryRowContext(ctx, `SELECT COALESCE(
+		(SELECT project_id IS NOT NULL FROM threads WHERE id = ?),
+		EXISTS (SELECT 1 FROM projects WHERE id = ?)
+	)`, threadID, staged).Scan(&assigned)
+	if err != nil {
+		return false, err
+	}
+	return assigned, nil
+}
+
 // SetThreadProject assigns (or clears) a thread's project assignment. It
 // returns (previous, true) when the thread exists, (nil, false) when the
 // thread is unknown, and an error when the project does not exist (Rust

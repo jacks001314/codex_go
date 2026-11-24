@@ -9756,6 +9756,12 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 	// this turn attributes its child even after the parent moves on.
 	r.recordTurnClientMetadata(turnID, clientMetadata)
 	extraMetadata := turn.MergeClientMetadata(cfg.ResponsesAPIClientMetadata(), clientMetadata)
+	// Rust #63545: a TUI composer prompt without workspace_kind reports the
+	// thread's project assignment instead. The inferred value stays out of the
+	// client metadata that tools and child agents inherit.
+	if inferred := r.inferredWorkspaceKind(connectionID, params); inferred != "" && strings.TrimSpace(extraMetadata["workspace_kind"]) == "" {
+		extraMetadata = turn.MergeClientMetadata(extraMetadata, map[string]string{"workspace_kind": inferred})
+	}
 	serviceTier := r.appServiceTierForTurn(cfg, params, modelProviderConfig.Model)
 	// Rust #41308: every subagent turn follows the root thread's service tier,
 	// not just the spawn turn. Fast mode still gates ordinary tiers, and #46230
