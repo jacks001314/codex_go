@@ -57,6 +57,7 @@ func (r *RuntimeRouter) imageGenerationOptionsForTurn(cfg *config.Config, params
 		InputItems:        r.imageGenerationInputItemsForTurn(threadID, params),
 		RequestIDObserver: r.recordImageGenerationRequestID,
 		GIFEnabled:        features.Enabled(cfg.FeatureSettings(), "image_generation_animation"),
+		DeferExposure:     imageGenerationDeferExposure(cfg),
 	}, nil
 }
 
@@ -251,4 +252,20 @@ func appAuthSnapshotUsesCodexBackend(snapshot *auth.AuthDotJSON) bool {
 	default:
 		return false
 	}
+}
+
+// imageGenerationDeferExposure mirrors Rust #63594: with
+// features.defer_image_generation the tool is left out of the initial model
+// request and discovered through Code Mode's ALL_TOOLS, unless the user
+// excluded the image_gen namespace from Code Mode altogether.
+func imageGenerationDeferExposure(cfg *config.Config) bool {
+	if cfg == nil || !features.Enabled(cfg.FeatureSettings(), "defer_image_generation") {
+		return false
+	}
+	for _, namespace := range cfg.CodeModeExcludedToolNamespaces() {
+		if namespace == turn.ImageGenerationNamespace {
+			return false
+		}
+	}
+	return true
 }

@@ -63,6 +63,10 @@ type ImageGenerationOptions struct {
 	// GIFEnabled exposes the `gif` argument and animated output (Rust #59073
 	// `features.image_generation_animation`, disabled by default).
 	GIFEnabled bool
+	// DeferExposure keeps the tool out of the initial model request while Code
+	// Mode can still discover it through ALL_TOOLS (Rust #63594
+	// features.defer_image_generation).
+	DeferExposure bool
 }
 
 type ImageGenerationHandler struct {
@@ -159,12 +163,16 @@ func NewImageGenerationHandler(options *ImageGenerationOptions) *ImageGeneration
 }
 
 func (h *ImageGenerationHandler) Spec() tool.Spec {
+	exposure := tool.ExposureModelVisible
+	if h.options.DeferExposure {
+		exposure = tool.ExposureDiscoverable
+	}
 	return tool.Spec{
 		Name:                 tool.NamespacedName(ImageGenerationNamespace, ImageGenerationToolName),
 		Description:          imageGenerationDescriptionForGIF(h.options.GIFEnabled),
 		InputSchema:          imageGenerationSchema(h.options.GIFEnabled),
 		CodeModeOutputSchema: imageGenerationOutputSchema(),
-		Exposure:             tool.ExposureModelVisible,
+		Exposure:             exposure,
 		Parallel:             false,
 		NamespaceDescription: "Tools in the image_gen namespace.",
 	}

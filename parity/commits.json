@@ -55908,11 +55908,12 @@
     "codex_go"
    ],
    "evidence": [
-    "Partial: Go registers the under-development, off-by-default features.defer_image_generation key (TestDeferImageGenerationRegisteredLikeRust), but code mode does not yet expose image_gen through ALL_TOOLS while omitting its definition from the initial model request."
+    "Partial: Go registers the under-development, off-by-default features.defer_image_generation key (TestDeferImageGenerationRegisteredLikeRust), but code mode does not yet expose image_gen through ALL_TOOLS while omitting its definition from the initial model request.",
+    "Batch 227: deferred image generation landed - turn.ImageGenerationOptions gains DeferExposure, and the handler's spec is ExposureDiscoverable instead of ExposureModelVisible, so the tool is absent from ModelVisibleSpecs (the initial model request) while Code Mode's ALL_TOOLS still lists image_gen.imagegen with its GIF-aware schema. imageGenerationDeferExposure enables it only with features.defer_image_generation and keeps direct exposure when the user excluded the image_gen namespace from Code Mode, matching Rust #63594. Tests: TestImageGenerationDeferredExposureLikeRust checks the exposure change, the initial-request omission and Code Mode discovery, and TestImageGenerationDeferExposureLikeRust covers the flag and exclusion gating; reverting the exposure or ignoring the flag fails them."
    ],
    "kind": "runtime",
    "sha": "37aeac06b3f49ab4b96dea01c974971d9391c2ef",
-   "status": "partial",
+   "status": "complete",
    "subject": "Add opt-in deferred image generation in code mode (#63594)"
   },
   {
