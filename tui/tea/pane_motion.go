@@ -43,7 +43,13 @@ func (m *Model) sideWorkspaceOpen() bool {
 // sidebar width, and a live frame requester keeps requesting frames until the
 // slide settles.
 func (m *Model) advancePaneMotion(open bool, animate bool) float64 {
-	if m == nil {
+	return m.advancePaneMotionState(&m.paneMotion, open, animate)
+}
+
+// advancePaneMotionState runs PaneMotion::advance over one pane's state, so the
+// sidebar and the docked Command Center slide independently.
+func (m *Model) advancePaneMotionState(state *paneMotionState, open bool, animate bool) float64 {
+	if m == nil || state == nil {
 		return 0
 	}
 	target := 0.0
@@ -51,7 +57,6 @@ func (m *Model) advancePaneMotion(open bool, animate bool) float64 {
 		target = 1
 	}
 	now := m.currentTime()
-	state := &m.paneMotion
 	if state.target != target {
 		state.target = target
 		state.from = state.fraction

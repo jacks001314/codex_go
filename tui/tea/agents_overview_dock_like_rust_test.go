@@ -159,6 +159,22 @@ func TestAgentsOverviewDockFocusMovesLikeRust(t *testing.T) {
 	}
 }
 
+// Rust handle_workspace_key starts transcript selection from the workspace
+// when the dashboard does not own nested input; Go's carrier for that
+// shortcut is the transcript overlay selection.
+func TestAgentsOverviewDockSelectTranscriptLikeRust(t *testing.T) {
+	model := newAgentsOverviewDockModel(t, 120)
+	_ = model.viewString()
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlX})
+	model.Update(runes("["))
+	if model.overlay == nil || !model.overlay.SelectionActive() {
+		t.Fatal("leader [ inside the dock did not start transcript selection")
+	}
+	if model.agentsOverview == nil {
+		t.Fatal("transcript selection closed the dock")
+	}
+}
+
 // Rust #62986: opening a task returns focus to the conversation and keeps the
 // dock open instead of replacing the workspace with the dashboard.
 func TestAgentsOverviewDockStaysAfterOpeningTaskLikeRust(t *testing.T) {

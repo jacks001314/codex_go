@@ -2260,6 +2260,16 @@ type Model struct {
 	agentsOverviewDockWidth int
 	// agentsOverviewDockDragging marks a live divider drag.
 	agentsOverviewDockDragging bool
+	// agentsOverviewDockMotion slides the docked Command Center between
+	// zero and its settled width (Rust workspace.motion).
+	agentsOverviewDockMotion paneMotionState
+	// agentsOverviewDockFraction is the slide fraction used by the last
+	// painted frame, so pointer hit tests follow the dock while it moves.
+	agentsOverviewDockFraction float64
+	// agentsOverviewClosingLines retains the settled dock column so a closing
+	// slide can keep shrinking what was painted after the view is gone.
+	agentsOverviewClosingLines []string
+	agentsOverviewClosingWidth int
 	// agentsOverviewOpening is the task whose resume request is in flight while
 	// the command center keeps its frame visible (Rust #63146).
 	agentsOverviewOpening string
@@ -6280,6 +6290,11 @@ func (m *Model) viewString() string {
 	if m.analyticsDashboard != nil && m.analyticsDashboard.active {
 		m.hideTranscriptImages()
 		return m.analyticsDashboard.render(m, m.width, m.height)
+	}
+	if len(m.agentsOverviewClosingLines) > 0 && !m.agentsOverviewDockRendering {
+		if closing := m.renderClosingAgentsOverviewDock(); closing != "" {
+			return closing
+		}
 	}
 	if m.agentsOverview != nil && !m.agentsOverviewDockRendering {
 		if docked := m.renderAgentsOverviewDock(); docked != "" {

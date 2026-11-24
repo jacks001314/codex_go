@@ -1,6 +1,7 @@
 package tea
 
 import (
+	"math"
 	"strings"
 
 	bubbletea "charm.land/bubbletea/v2"
@@ -169,16 +170,69 @@ func (m *Model) renderAgentsOverviewDock() string {
 	if m == nil || m.agentsOverview == nil || !m.agentsOverviewDockOpen() {
 		return ""
 	}
-	centerWidth, conversationWidth, ok := m.agentsOverviewDockWidths()
+	centerWidth, _, ok := m.agentsOverviewDockWidths()
 	if !ok {
+		return ""
+	}
+	// Rust workspace.motion slides the dock from its last painted width on
+	// every frame. A detached requester (tests, embedders) or animations off
+	// snaps to the settled width.
+	fraction := m.advanceAgentsOverviewDockMotion(true, m.animationsEnabled && m.frames.attached())
+	paintWidth := int(math.Round(float64(centerWidth) * fraction))
+	conversationWidth := firstPositive(m.width, defaultWidth) - paintWidth - agentsOverviewDockGutter
+	if conversationWidth < 1 {
 		return ""
 	}
 	height := max(m.height, 1)
 	m.syncAgentsOverviewRenderState()
-	center := m.agentsOverview.RenderStyled(centerWidth, height)
-	if len(center) == 0 {
+	var center []string
+	if paintWidth > 0 {
+		// Rust paints the view into the fraction-width area, which is empty on
+		// the first opening frame.
+		center = m.agentsOverview.RenderStyled(paintWidth, height)
+	}
+	m.agentsOverviewDockFraction = fraction
+	return m.zipAgentsOverviewDock(center, paintWidth, conversationWidth, height) +
+		m.agentsOverviewCursorStyleSequence()
+}
+
+// renderClosingAgentsOverviewDock paints the shrinking dock after it closed.
+// Rust keeps workspace.view alive and paints it while workspace.fraction
+// decays, so the conversation grows back into the columns it releases.
+func (m *Model) renderClosingAgentsOverviewDock() string {
+	if m == nil || len(m.agentsOverviewClosingLines) == 0 || m.agentsOverview != nil {
+		m.agentsOverviewClosingLines = nil
 		return ""
 	}
+	if !m.animationsEnabled || !m.frames.attached() ||
+		firstPositive(m.width, defaultWidth) < agentsOverviewDockMinSplit {
+		m.agentsOverviewClosingLines = nil
+		m.agentsOverviewClosingWidth = 0
+		return ""
+	}
+	fraction := m.advanceAgentsOverviewDockMotion(false, true)
+	if fraction <= 0 {
+		m.agentsOverviewClosingLines = nil
+		m.agentsOverviewClosingWidth = 0
+		m.agentsOverviewDockFraction = 0
+		return ""
+	}
+	settled := m.agentsOverviewClosingWidth
+	if settled <= 0 {
+		settled = agentsOverviewDockCenterWidth
+	}
+	paintWidth := int(math.Round(float64(settled) * fraction))
+	conversationWidth := firstPositive(m.width, defaultWidth) - paintWidth - agentsOverviewDockGutter
+	if conversationWidth < 1 {
+		return ""
+	}
+	m.agentsOverviewDockFraction = fraction
+	return m.zipAgentsOverviewDock(m.agentsOverviewClosingLines, paintWidth, conversationWidth, max(m.height, 1))
+}
+
+// zipAgentsOverviewDock pads the dock column, paints the live conversation at
+// the remaining width and joins them around the dim divider.
+func (m *Model) zipAgentsOverviewDock(center []string, centerWidth int, conversationWidth int, height int) string {
 	m.agentsOverviewDockRendering = true
 	conversation := m.renderFocusedPane(conversationWidth, height)
 	m.agentsOverviewDockRendering = false
@@ -199,7 +253,43 @@ func (m *Model) renderAgentsOverviewDock() string {
 		}
 		rows = append(rows, left+divider+right)
 	}
-	return strings.Join(rows, "\n") + m.agentsOverviewCursorStyleSequence()
+	return strings.Join(rows, "\n")
+}
+
+// snapshotClosingAgentsOverviewDock retains the settled dock column before the
+// view closes so the closing slide can keep shrinking what was last painted.
+func (m *Model) snapshotClosingAgentsOverviewDock() {
+	if m == nil || m.agentsOverview == nil || !m.agentsOverviewDockOpen() {
+		return
+	}
+	if !m.animationsEnabled || !m.frames.attached() {
+		return
+	}
+	centerWidth, _, ok := m.agentsOverviewDockWidths()
+	if !ok || centerWidth <= 0 {
+		return
+	}
+	height := max(m.height, 1)
+	m.syncAgentsOverviewRenderState()
+	lines := m.agentsOverview.RenderStyled(centerWidth, height)
+	if len(lines) == 0 {
+		return
+	}
+	rows := make([]string, len(lines))
+	for index := range lines {
+		rows[index] = padSidePaneLine(codextui.TruncateToWidth(lines[index], centerWidth), centerWidth)
+	}
+	m.agentsOverviewClosingLines = rows
+	m.agentsOverviewClosingWidth = centerWidth
+}
+
+// advanceAgentsOverviewDockMotion mirrors PaneMotion::advance for the docked
+// Command Center.
+func (m *Model) advanceAgentsOverviewDockMotion(open bool, animate bool) float64 {
+	if m == nil {
+		return 0
+	}
+	return m.advancePaneMotionState(&m.agentsOverviewDockMotion, open, animate)
 }
 
 // handleAgentsOverviewDockMouse routes presses in the docked workspace. A
@@ -213,6 +303,11 @@ func (m *Model) handleAgentsOverviewDockMouse(msg mousemsg.MouseMsg) (bubbletea.
 	centerWidth, _, ok := m.agentsOverviewDockWidths()
 	if !ok {
 		return nil, false
+	}
+	// Rust hit tests the layout it last painted, so a mid-slide frame uses the
+	// animated dock width rather than the settled one.
+	if fraction := m.agentsOverviewDockFraction; fraction > 0 && fraction < 1 {
+		centerWidth = max(int(math.Round(float64(centerWidth)*fraction)), 1)
 	}
 	if msg.Action == mousemsg.MouseActionPress && msg.Button == mousemsg.MouseButtonLeft && msg.X == centerWidth {
 		m.agentsOverviewDockDragging = true

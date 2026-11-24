@@ -1693,6 +1693,9 @@ func (m *Model) closeAgentsOverview() {
 	m.resetAgentsOverviewCursorStyle()
 	if m.agentsOverview != nil {
 		m.agentsOverviewHidden = m.agentsOverview.HiddenThreads()
+		// Rust keeps workspace.view alive while workspace.fraction decays,
+		// so retain the painted dock column for the closing slide.
+		m.snapshotClosingAgentsOverviewDock()
 	}
 	m.agentsOverview = nil
 	m.agentsOverviewDockFocus = ""
