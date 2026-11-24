@@ -53,6 +53,40 @@ func (m *Model) beginCloudConversationResync(threadID string) bubbletea.Cmd {
 // or keeps the conversation paused when the history cannot be verified
 // (Rust #63211: "Check that paginated history is complete ... If history
 // cannot be verified, keep sending paused and show an error.").
+// cloudHistoryIncludesTranscript reports whether the refetched history still
+// contains every reply the view already showed, the Rust #63211 check that the
+// paginated history covers the conversation on screen before it is installed.
+func cloudHistoryIncludesTranscript(shown []codextui.Message, fetched []codextui.Message) bool {
+	if len(shown) == 0 {
+		return true
+	}
+	byItemID := make(map[string]bool, len(fetched))
+	byText := make(map[string]bool, len(fetched))
+	for _, message := range fetched {
+		if itemID := strings.TrimSpace(message.ItemID); itemID != "" {
+			byItemID[itemID] = true
+		}
+		if text := strings.TrimSpace(message.Text); text != "" {
+			byText[text] = true
+		}
+	}
+	for _, message := range shown {
+		text := strings.TrimSpace(message.Text)
+		itemID := strings.TrimSpace(message.ItemID)
+		if text == "" && itemID == "" {
+			continue
+		}
+		if itemID != "" && byItemID[itemID] {
+			continue
+		}
+		if text != "" && byText[text] {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 func (m *Model) applyCloudConversationResync(msg CloudConversationResyncMsg) bubbletea.Cmd {
 	if m == nil || m.State == nil {
 		return nil
@@ -61,7 +95,8 @@ func (m *Model) applyCloudConversationResync(msg CloudConversationResyncMsg) bub
 	if threadID == "" || threadID != m.cloudStreamDisconnectedThreadID {
 		return nil
 	}
-	if msg.Err != nil || msg.Response.ReadOnly || msg.Response.HasOlderHistory {
+	if msg.Err != nil || msg.Response.ReadOnly || msg.Response.HasOlderHistory ||
+		!cloudHistoryIncludesTranscript(m.State.Messages, msg.Response.Messages) {
 		// The conversation stays held: queued prompts and the draft are kept
 		// for a later successful reattach.
 		m.notice = cloudHistoryUnavailableNotice

@@ -115,3 +115,26 @@ func TestCloudStreamReconnectKeepsHoldOnHistoryErrorLikeRust(t *testing.T) {
 		t.Fatalf("failed history fetch lost the queued prompt: queued=%#v", model.queued)
 	}
 }
+
+// TestCloudResyncRequiresShownConversationLikeRust mirrors Rust #63211: the
+// refetched history must still contain the conversation already on screen.
+func TestCloudResyncRequiresShownConversationLikeRust(t *testing.T) {
+	resume := func(codextui.SessionSelection) (SessionResumeResponse, error) {
+		return SessionResumeResponse{Messages: []codextui.Message{{Role: "assistant", Text: "unrelated page"}}}, nil
+	}
+	model, submitted := cloudResyncModel(t, resume)
+	model.State.Messages = []codextui.Message{{Role: codextui.RoleAssistant, Text: "already shown", ItemID: "shown-item"}}
+	cmd := model.applyCloudStreamReconnected(CloudStreamReconnectedMsg{ThreadID: "cloud-thread"})
+	if cmd == nil {
+		t.Fatal("reconnect did not start a background reattach")
+	}
+	if out := model.applyCloudConversationResync(cmd().(CloudConversationResyncMsg)); out != nil {
+		t.Fatal("history without the shown conversation resumed sending")
+	}
+	if model.cloudStreamDisconnectedThreadID != "cloud-thread" || model.notice != cloudHistoryUnavailableNotice {
+		t.Fatalf("hold=%q notice=%q, want the paused state", model.cloudStreamDisconnectedThreadID, model.notice)
+	}
+	if len(*submitted) != 0 {
+		t.Fatalf("held prompt was submitted: %#v", *submitted)
+	}
+}
