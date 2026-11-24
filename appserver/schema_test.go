@@ -204,7 +204,11 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		// (#62831) and the earlier window's protocol changes, and were copied
 		// byte-for-byte from app-server-protocol/schema/precomputed/ in the
 		// anchor checkout; the pins below are recomputed from those exact bytes.
-		{"stable", stablePrecomputedExports, "5c9aff41ddf8946cc7e991b86bd42538369d7d61528f1f0852b12d9f20b19bc1"},
+		// The late-window sync (#63376-#63388) re-vendored the stable export
+		// without refreshing this pin, so it fell out of date; the value below is
+		// recomputed from the vendored bytes, which are byte-identical to the
+		// anchor checkout (parity keeps that comparison).
+		{"stable", stablePrecomputedExports, "902b490a61ec645c929cdc6662c08bc36a9a752fbf22d286f4b9ca66aa4ffbdc"},
 		{"experimental", experimentalPrecomputedExports, "674286fd8fcbb84d5b71cb221ae00015af725cf7036f6c9df741760748ee111f"},
 	}
 	for _, test := range tests {

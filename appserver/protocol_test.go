@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -398,8 +399,13 @@ func TestRustCoreProtocolParamsDecodeParity(t *testing.T) {
 				if err := request.DecodeParams(&params); err != nil {
 					t.Fatalf("DecodeParams turn/start error = %v", err)
 				}
-				if err := params.Validate(); err != nil {
-					t.Fatalf("Validate turn/start error = %v", err)
+				// The fixture carries Rust's POSIX absolute path /repo, which
+				// the Windows workspace-root validation rejects; decode parity
+				// is what this case pins, so validation stays POSIX-only.
+				if runtime.GOOS != "windows" {
+					if err := params.Validate(); err != nil {
+						t.Fatalf("Validate turn/start error = %v", err)
+					}
 				}
 				if params.ThreadID != "thread-1" || params.Permissions == nil || *params.Permissions != "workspace-write" || params.ResponsesAPIMetadata["source"] != "parity" {
 					t.Fatalf("turn/start params = %+v", params)

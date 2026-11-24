@@ -121,6 +121,11 @@ func TestResponsesAgentRunnerRunPrefersWebSocketLikeRust(t *testing.T) {
 		if got.Get(codexapi.ClientCodexExcludeHeader) != "tools,usage.attribution" {
 			t.Fatalf("exclude header = %q", got.Get(codexapi.ClientCodexExcludeHeader))
 		}
+		// Rust #63461/#63479: the WebSocket handshake carries the same
+		// stream-field exclusions as the HTTP request.
+		if got.Get(codexapi.ClientCodexExcludeStreamFieldsHeader) != "delta.sequence_number,reasoning.added.encrypted_content" {
+			t.Fatalf("stream-field exclusions = %q", got.Get(codexapi.ClientCodexExcludeStreamFieldsHeader))
+		}
 	default:
 		t.Fatal("websocket handshake headers were not observed")
 	}

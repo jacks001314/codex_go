@@ -3117,6 +3117,7 @@ func (r *ResponsesAgentRunner) newResponsesHTTPRequestWithToolResults(ctx contex
 	addCompatibilityMetadataHeaders(httpRequest.Header, apiRequest.ClientMetadata)
 	addMemoryGenerationHeader(httpRequest.Header, apiRequest.ClientMetadata)
 	addHeaders(httpRequest.Header, r.providerHeaders())
+	addDefaultStreamFieldExclusions(httpRequest.Header)
 	if residency := strings.TrimSpace(r.Residency); residency != "" {
 		// Managed enforce_residency is authoritative over any provider
 		// http_headers value (Rust #39645).
@@ -3343,6 +3344,27 @@ func addResponsesLiteHeader(headers http.Header, useResponsesLite bool) {
 		return
 	}
 	headers.Set(responsesLiteHeader, "true")
+}
+
+// responsesDefaultStreamFieldExclusions mirrors Rust's default
+// `x-codex-exclude-stream-fields` value (#63461/#63479): reasoning replay only
+// needs the ciphertext on the finished item, and the client never reads delta
+// sequence numbers. An explicit provider header still wins, and an empty value
+// opts out.
+const responsesDefaultStreamFieldExclusions = "delta.sequence_number,reasoning.added.encrypted_content"
+
+// addDefaultStreamFieldExclusions applies the Responses stream defaults after
+// the provider headers are merged, so an explicit provider value (including an
+// empty opt-out) is kept (Rust with_default_stream_exclusions).
+func addDefaultStreamFieldExclusions(headers http.Header) {
+	if headers == nil {
+		return
+	}
+	key := http.CanonicalHeaderKey(codexapi.ClientCodexExcludeStreamFieldsHeader)
+	if _, ok := headers[key]; ok {
+		return
+	}
+	headers.Set(codexapi.ClientCodexExcludeStreamFieldsHeader, responsesDefaultStreamFieldExclusions)
 }
 
 func addIncludeTimingMetricsHeader(headers http.Header, includeTimingMetrics bool) {

@@ -7,15 +7,18 @@ import (
 )
 
 const (
-	ClientOpenAIBetaHeader                       = "OpenAI-Beta"
-	ClientCodexInstallationIDHeader              = "x-codex-installation-id"
-	ClientCodexRoutingHintHeader                 = "x-codex-routing-hint"
-	ClientCodexTurnStateHeader                   = "x-codex-turn-state"
-	ClientCodexTurnMetadataHeader                = "x-codex-turn-metadata"
-	ClientCodexParentThreadIDHeader              = "x-codex-parent-thread-id"
-	ClientCodexWindowIDHeader                    = "x-codex-window-id"
-	ClientCodexBetaFeaturesHeader                = "x-codex-beta-features"
-	ClientCodexExcludeHeader                     = "x-codex-exclude"
+	ClientOpenAIBetaHeader          = "OpenAI-Beta"
+	ClientCodexInstallationIDHeader = "x-codex-installation-id"
+	ClientCodexRoutingHintHeader    = "x-codex-routing-hint"
+	ClientCodexTurnStateHeader      = "x-codex-turn-state"
+	ClientCodexTurnMetadataHeader   = "x-codex-turn-metadata"
+	ClientCodexParentThreadIDHeader = "x-codex-parent-thread-id"
+	ClientCodexWindowIDHeader       = "x-codex-window-id"
+	ClientCodexBetaFeaturesHeader   = "x-codex-beta-features"
+	ClientCodexExcludeHeader        = "x-codex-exclude"
+	// ClientCodexExcludeStreamFieldsHeader negotiates which Responses stream
+	// fields the server may omit (Rust #63461/#63479).
+	ClientCodexExcludeStreamFieldsHeader         = "x-codex-exclude-stream-fields"
 	ClientOpenAIMemgenRequestHeader              = "x-openai-memgen-request"
 	ClientOpenAISubagentHeader                   = "x-openai-subagent"
 	ClientResponsesAPIIncludeTimingMetricsHeader = "x-responsesapi-include-timing-metrics"

@@ -55444,11 +55444,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Batch 164: partial - Rust defaults `x-codex-exclude-stream-fields` to `reasoning.added.encrypted_content` on Responses HTTP streams and WebSocket handshakes, after resolving provider headers so an explicit value wins. Go's Responses client never sets that header: `model/responses_agent.go` only writes `x-codex-exclude` (tools/usage attribution), so Go still receives the preliminary ciphertext. Residual: add the stream-field exclusion default on both transports and keep provider overrides."
+    "Batch 165: complete - Rust defaults `x-codex-exclude-stream-fields` to `reasoning.added.encrypted_content` on Responses HTTP streams and WebSocket handshakes, applied after provider headers resolve so an explicit value wins and an empty value opts out. Go now does the same: `model.addDefaultStreamFieldExclusions` runs in `newResponsesHTTPRequest` after `addHeaders` merges the provider map, which covers the HTTP request, the turn WebSocket handshake and the startup-prewarm handshake because both dials derive their headers from that request; an existing canonical header key (including an empty provider value) suppresses the default. Tests: TestResponsesStreamFieldExclusionsLikeRust (default, provider override, empty opt-out) and the WebSocket handshake assertion in TestResponsesAgentRunnerRunPrefersWebSocketLikeRust; both fail without the helper call."
    ],
    "kind": "runtime",
    "sha": "a4ee1058d9b0da402eaecb222c7684bc2dadb3dc",
-   "status": "partial",
+   "status": "complete",
    "subject": "Request omission of preliminary reasoning ciphertext (#63461)"
   },
   {
@@ -55540,11 +55540,11 @@
     "codex_go"
    ],
    "evidence": [
-    "Batch 164: partial - Rust adds `delta.sequence_number` to the default `x-codex-exclude-stream-fields` header on Responses HTTP and WebSocket requests because Codex does not use them. Go sets no stream-field exclusions at all and never reads sequence numbers, so the request still ships them. Residual: send the same default header once the stream-field negotiation is shared with #63461."
+    "Batch 165: complete - Rust adds `delta.sequence_number` to the default `x-codex-exclude-stream-fields` header on Responses HTTP and WebSocket requests because Codex does not use delta sequence numbers. Go's default for the same header now reads `delta.sequence_number,reasoning.added.encrypted_content`, and Go never reads sequence numbers from the stream, so excluding them changes only the payload. Tests: TestResponsesStreamFieldExclusionsLikeRust and the WebSocket handshake assertion in TestResponsesAgentRunnerRunPrefersWebSocketLikeRust; go test ./model -count=1."
    ],
    "kind": "runtime",
    "sha": "98f8a3311ba7cac785e570713127e9127af4043a",
-   "status": "partial",
+   "status": "complete",
    "subject": "Exclude sequence numbers from Responses stream deltas by default (#63479)"
   },
   {
