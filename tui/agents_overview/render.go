@@ -70,7 +70,9 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 	// Rust #63146: initial discovery reports progress in the footer while the
 	// already-published tasks stay visible. The shorter label fits narrow
 	// layouts where the full label would wrap.
-	if label := v.discoveryProgressLabel(footerWidth); label != "" {
+	if v.openingThread != "" && !v.State.Help && strings.TrimSpace(v.Notice) == "" && len(v.KeyChordHints) == 0 {
+		footerRows = [][]span{{{text: " ", style: spanPlain}, {text: "Opening task…", style: spanDim}}}
+	} else if label := v.discoveryProgressLabel(footerWidth); label != "" {
 		footerRows = [][]span{{{text: " ", style: spanPlain}, {text: label, style: spanDim}}}
 	}
 	// header + summary + divider + editor + footer rows
@@ -150,6 +152,15 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 		}
 	}
 	return lines
+}
+
+// statusLabelForRow reports the row status, substituting Rust #63146's
+// "Opening…" while that task's resume request is in flight.
+func (v *View) statusLabelForRow(row *Row) string {
+	if v != nil && row != nil && v.openingThread != "" && row.ThreadID == v.openingThread {
+		return "Opening…"
+	}
+	return row.Group.StatusLabelForRow(row)
 }
 
 // discoveryProgressLabel reports the footer progress label while initial
@@ -690,7 +701,7 @@ func (v *View) renderRowSpans(index int, projectGrouping bool, width int) []span
 	// alert icon, so an unread status moves into the title.
 	statusInTitle := width < 56 && row.Unread && !idle
 	if statusInTitle {
-		prefix += row.Group.StatusLabelForRow(row) + ": "
+		prefix += v.statusLabelForRow(row) + ": "
 	}
 	spans := []span{
 		marker,
@@ -738,7 +749,7 @@ func (v *View) renderRowSpans(index int, projectGrouping bool, width int) []span
 				spans = append(spans, span{text: strings.Repeat(" ", titleWidth-used), style: spanPlain})
 			}
 		}
-		status := truncateToWidth(row.Group.StatusLabelForRow(row), statusWidth)
+		status := truncateToWidth(v.statusLabelForRow(row), statusWidth)
 		spans = append(spans,
 			span{text: status, style: spanDim},
 			span{text: strings.Repeat(" ", max(statusWidth-runewidth.StringWidth(status), 1)), style: spanPlain},
@@ -766,7 +777,7 @@ func (v *View) renderRowSpans(index int, projectGrouping bool, width int) []span
 		spans = append(spans, span{text: "  voice", style: voiceStyle})
 	}
 	if projectGrouping && !statusInTitle {
-		spans = append(spans, span{text: "  " + row.Group.StatusLabelForRow(row), style: spanDim})
+		spans = append(spans, span{text: "  " + v.statusLabelForRow(row), style: spanDim})
 	}
 	return spans
 }
@@ -835,7 +846,7 @@ func (v *View) renderDetails(width, height int, styled bool) []string {
 	lines = append(lines, []span{
 		{text: row.Group.Dot(), style: groupDotStyle(row.Group)},
 		{text: " ", style: spanPlain},
-		{text: row.Group.StatusLabelForRow(row), style: spanPlain},
+		{text: v.statusLabelForRow(row), style: spanPlain},
 	})
 	activity := v.AgentsOverviewActivityFor(row.ThreadID)
 	// Rust #42455: an attention request leads the details and explains what the

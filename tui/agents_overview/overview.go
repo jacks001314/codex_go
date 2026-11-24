@@ -505,6 +505,10 @@ type View struct {
 	// Loading reports the initial task refresh. An empty task list renders
 	// "Loading tasks…" instead of "No tasks yet".
 	Loading bool
+	// openingThread is the task whose resume request is in flight. Its row
+	// reports "Opening…" and the footer "Opening task…" until the destination
+	// is ready (Rust #63146).
+	openingThread string
 	// FilterHint is the resolved tab/shift+tab hint shown at the right edge of
 	// the status tab row when the terminal is wide enough (Rust #46839).
 	FilterHint string
@@ -757,6 +761,32 @@ func (v *View) SetRowModel(threadID string, model string) bool {
 // SetRowStatus patches a listed task's status in place (Rust #62858: a Cloud
 // stream thread/status/changed notification updates the overview without
 // waiting for the next list refresh). It reports whether a row changed.
+// MarkOpening records the task whose resume request is in flight, so its row
+// and the footer report progress while the destination loads (Rust #63146).
+func (v *View) MarkOpening(threadID string) {
+	if v == nil {
+		return
+	}
+	v.openingThread = threadID
+}
+
+// ClearOpening ends the opening progress once the destination is ready or the
+// resume failed.
+func (v *View) ClearOpening() {
+	if v == nil {
+		return
+	}
+	v.openingThread = ""
+}
+
+// OpeningThread reports the task whose resume request is in flight.
+func (v *View) OpeningThread() string {
+	if v == nil {
+		return ""
+	}
+	return v.openingThread
+}
+
 func (v *View) SetRowStatus(threadID string, statusType string, active bool, waitingOnApproval bool, waitingOnUserInput bool) bool {
 	if v == nil {
 		return false
