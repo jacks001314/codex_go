@@ -61,7 +61,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// fixtures plus their support modules.
 			// Re-anchored to upstream 68b67f0ff4: `codex doctor --network-only`
 			// added the human success and config-failure snapshots (#57606).
-			Files: 52,
+			// Re-anchored to upstream 188940258d: the remote-exec suite and its
+			// shared helper joined cli/tests (#63462).
+			Files: 54,
 			Owner: "cli, app",
 			Focus: "CLI help, hidden commands, feature flags, MCP/plugin/login flows",
 			Required: []string{
@@ -173,7 +175,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// suites and snapshots.
 			// Re-anchored to upstream 59ac39addb: five fixtures joined
 			// core/tests/suite across the Guardian and subagent windows.
-			Files: 505,
+			// Re-anchored to upstream 188940258d: the encrypted-hook and
+			// remote-exec suites joined core/tests/suite.
+			Files: 507,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{

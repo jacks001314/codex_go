@@ -55378,9 +55378,237 @@
    "sha": "9c5ebee9dfdbb07591ec22679a3650f15d1eb49c",
    "status": "not_applicable",
    "subject": "Avoid unnecessary clones in local thread conversions (#63446)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 164: not_applicable - Rust adds a Statsig bootstrap call to `backend-client` (`client/statsig.rs`) so the Codex backend client reports experiment data. Go has no Statsig bootstrap in its backend client: `chatgptapi` issues the task-usage and account endpoints directly and the only `statsig` references are config schema/telemetry tables, so there is no client-side bootstrap to port."
+   ],
+   "kind": "runtime",
+   "sha": "c7ef448428acd3d50cf90198c7ccca42f10aa427",
+   "status": "not_applicable",
+   "subject": "Add Statsig bootstrap to the Codex backend client (#63448)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 164: not_applicable - the change only makes a Rust integration test tolerate TCP resets in `code-mode-host/tests/grpc/session_recovery_tests.rs`. Go has no code-mode gRPC host test, so there is no behavior to port."
+   ],
+   "kind": "runtime",
+   "sha": "c028016428b58d5b2062debdafc60255f7efa7d6",
+   "status": "not_applicable",
+   "subject": "Handle TCP resets in the code mode session recovery test (#63454)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 164: partial - Rust defers paginated thread-history writes on NFS inside `thread-store`/`state` (`local/thread_history.rs`, `live_thread.rs`, `local/live_writer.rs`) so a paginated update does not stall the reader on a network filesystem. Go's session store writes rollout history directly (`exec/session_store_physical_history_like_rust_test.go` covers the physical layout) and has no NFS-aware deferral hook for paginated history updates. Residual: add a deferred/queued history update path for network filesystems."
+   ],
+   "kind": "runtime",
+   "sha": "45bdafbda0ef6b047bc94a9ca9875ddd19b9e0a4",
+   "status": "partial",
+   "subject": "Defer paginated thread history updates on NFS (#63456)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 164: not_applicable - Rust moves the realtime payload into `RealtimeConversationRealtimeEvent` instead of cloning it. Go's realtime event fan-out is goroutine based and copies nothing implicitly, so the change has no Go carrier."
+   ],
+   "kind": "runtime",
+   "sha": "c0a9009b7be4b5b8bfe9c1f9f703637faeafb7bc",
+   "status": "not_applicable",
+   "subject": "Avoid cloning realtime conversation events before sending them (#63458)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 164: not_applicable - Rust borrows the added/updated file contents as `&[u8]` instead of cloning a `Vec<u8>` before writing in `apply-patch`. Go's patch writer already passes byte slices and lets the runtime copy only when the filesystem call requires it, so there is no observable behavior or allocation contract to port."
+   ],
+   "kind": "runtime",
+   "sha": "93752dd4d556b3899618a893933ce379c57fc89d",
+   "status": "not_applicable",
+   "subject": "Avoid redundant buffer copies when applying patches (#63460)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 164: partial - Rust defaults `x-codex-exclude-stream-fields` to `reasoning.added.encrypted_content` on Responses HTTP streams and WebSocket handshakes, after resolving provider headers so an explicit value wins. Go's Responses client never sets that header: `model/responses_agent.go` only writes `x-codex-exclude` (tools/usage attribution), so Go still receives the preliminary ciphertext. Residual: add the stream-field exclusion default on both transports and keep provider overrides."
+   ],
+   "kind": "runtime",
+   "sha": "a4ee1058d9b0da402eaecb222c7684bc2dadb3dc",
+   "status": "partial",
+   "subject": "Request omission of preliminary reasoning ciphertext (#63461)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 164: partial - Rust lets `codex exec --remote` carry `--model` and `-c model_reasoning_effort` overrides into the remote run (`exec/src/remote.rs`). Go's exec path has no remote-run client that forwards per-run model/reasoning overrides; its `execModelOverride`/spawn-override handling belongs to the agent controller, not a remote exec session. Residual: thread the overrides through the remote exec request."
+   ],
+   "kind": "runtime",
+   "sha": "56bb44c05c9b2056642ed356cf847f004519cc95",
+   "status": "partial",
+   "subject": "Support model and reasoning effort overrides in remote exec (#63462)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 164: complete - Rust applies a per-plugin `enabled` before falling back to `plugins._default.enabled`, and `codex plugin list` applies that policy to remote plugins. Go now matches: `plugin.PluginsConfigToml.AllowsPlugin` checks the explicit per-plugin setting first and only then `_default` (defaulting to true when neither exists), the remote marketplace detail already runs through `policy.AllowsPlugin` in `plugin/marketplace_config.go`, and `applyPluginActivationPolicy` still only clears enablement so an installed plugin keeps its installation. Tests: `TestExplicitPluginDisablementWithoutDefaultLikeRust`, updated `TestPluginsConfigTomlAllowsPluginLikeRust` and `TestPluginConfigRemoteMetadataLikeRust`; verified with go test ./plugin -count=1."
+   ],
+   "kind": "runtime",
+   "sha": "d4af2452f7b5e39aadd7abd75b6e141059a4cc5d",
+   "status": "complete",
+   "subject": "Honor explicit plugin disablement without a global default (#63468)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 164: partial - Rust's remote-control websocket retries immediately when a controller is connected (`transport/remote_control/client_tracker.rs`, `websocket.rs`). Go's daemon client (`appserverdaemon/client.go`) reconnect logic has no controller-active fast path. Residual: detect an active controller and skip the backoff on reconnect."
+   ],
+   "kind": "runtime",
+   "sha": "6a33df4e0aac3a4ddcb6a7e81d94964cea8bde44",
+   "status": "partial",
+   "subject": "Speed up remote control reconnects when a controller is active (#63471)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 164: partial - Rust reuses a single config-server discovery result across managed-policy loading (`cloud-config/src/discovery.rs`, `config_server.rs`, CLI entry points). Go's `config/config_server.go` resolves trusted enrollment and managed policy per load without sharing a discovery cache. Residual: share the discovery result between startup config, login and managed-policy loading."
+   ],
+   "kind": "runtime",
+   "sha": "83077214a422dc0f3f6b23bf8ed4a402a6ac7b09",
+   "status": "partial",
+   "subject": "Reuse config server discovery when loading managed policy (#63473)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 164: partial - Rust lets an MCP session-start hook return encrypted additional context and threads it through `hooks/src/engine/mcp_runner.rs` and `core/src/hook_runtime.rs`. Go's hook runner (`appserver/hooks_runner.go`) has no encrypted-context branch for MCP session-start hooks. Residual: accept and decrypt MCP-provided session-start context before it reaches the turn."
+   ],
+   "kind": "runtime",
+   "sha": "5b10c107ba06a0f0401da727819d813d267b3b01",
+   "status": "partial",
+   "subject": "Support encrypted context from MCP session-start hooks (#63474)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 164: partial - Rust adds lock-acquisition spans around the cloud plugin catalog refresh (`core/src/session/cloud_plugins.rs`). Go's plugin cache refresh (`plugin/cache_refresh.go`) serializes refreshes but records no lock wait/acquire span. Residual: emit the lock span in the refresh worker."
+   ],
+   "kind": "runtime",
+   "sha": "f103339a795b9d7e43218bc16073421686f4edf2",
+   "status": "partial",
+   "subject": "Trace lock acquisition during cloud catalog refresh (#63475)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 164: partial - Rust adds a gateway-enrollment requirement layer (`config/src/requirements_layers/gateway.rs`) that local managed requirements can carry into model-provider resolution. Go has trusted enrollment settings in `config/config_server.go` but no requirements layer that forwards gateway enrollment into provider selection. Residual: add the gateway layer to the managed requirements stack."
+   ],
+   "kind": "runtime",
+   "sha": "8bb8ed6bab55d9f2b299e0abb1b9df6c3c383e66",
+   "status": "partial",
+   "subject": "Add gateway enrollment to local managed requirements (#63476)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 164: partial - Rust adds `delta.sequence_number` to the default `x-codex-exclude-stream-fields` header on Responses HTTP and WebSocket requests because Codex does not use them. Go sets no stream-field exclusions at all and never reads sequence numbers, so the request still ships them. Residual: send the same default header once the stream-field negotiation is shared with #63461."
+   ],
+   "kind": "runtime",
+   "sha": "98f8a3311ba7cac785e570713127e9127af4043a",
+   "status": "partial",
+   "subject": "Exclude sequence numbers from Responses stream deltas by default (#63479)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 164: not_applicable - the commit only scaffolds the `plugin-archive-verification` Cargo workspace member (Cargo.toml, BUILD.bazel, empty lib.rs). No runtime behavior exists to port; the verification feature itself is tracked by #63487/#63489."
+   ],
+   "kind": "runtime",
+   "sha": "9bcb9614d36aa8dcb205416573b09811778eb851",
+   "status": "not_applicable",
+   "subject": "Scaffold the plugin archive verification crate (#63484)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 164: partial - Rust adds digest and signature verification for Plugin Service archives (`plugin-archive-verification/src/archive_verification.rs`, signing-key manifest fixtures). Go downloads and stages plugin releases (`plugin/cache_refresh.go`) and packs/unpacks bundles (`plugin/bundle_archive.go`) without verifying a release digest or signature. Residual: implement archive verification and reject mismatched archives before staging."
+   ],
+   "kind": "runtime",
+   "sha": "05d375287dd258f91a78965af1db32c40d7bd0d7",
+   "status": "partial",
+   "subject": "Add signature verification for Plugin Service archives (#63487)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 164: partial - Rust verifies remote plugin archives before extraction for installs, updates, shared checkouts and measurement references, fetching signing keys over the authenticated plugin-service transport and still accepting releases without signing metadata. Go's remote plugin refresh stages the downloaded tree with no verification step, so a tampered archive would be extracted. Residual: verify before extraction and keep unsigned releases working."
+   ],
+   "kind": "runtime",
+   "sha": "e173e7b9b29a63f4a5b5171c1b9a610179bc38a2",
+   "status": "partial",
+   "subject": "Verify signed remote plugin archives before extraction (#63489)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 164: blocked_precondition - Rust caches Plugin Service signing keys so archive verification does not refetch them per bundle. Go has no archive verifier or signing-key transport yet (#63487/#63489 are partial), so a key cache has nothing to hold. Unblock once the verifier lands."
+   ],
+   "kind": "runtime",
+   "sha": "9340f3c232344af7f734538e5c712588dbd43383",
+   "status": "blocked_precondition",
+   "subject": "Cache Plugin Service signing keys for archive verification (#63490)"
+  },
+  {
+   "domains": [
+    "codex_go"
+   ],
+   "evidence": [
+    "Batch 164: blocked_precondition - Rust coalesces concurrent signing-key fetches inside `plugin-archive-verification` so parallel verifications share one request. Go has no verifier or key fetch to coalesce until #63489/#63490 land."
+   ],
+   "kind": "runtime",
+   "sha": "188940258d413b4f0b3b160136ab097dac031a22",
+   "status": "blocked_precondition",
+   "subject": "Coalesce concurrent plugin signing key fetches (#63491)"
   }
  ],
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "9c5ebee9dfdbb07591ec22679a3650f15d1eb49c",
+ "rustToInclusive": "188940258d413b4f0b3b160136ab097dac031a22",
  "schemaVersion": 1
 }

@@ -8,10 +8,9 @@ import (
 
 // Mirrors Rust config/src/types_tests.rs
 // (plugin_activation_inherits_defaults_without_explicit_enablement, #52220 and
-// #54424):
-// without `_default` every plugin keeps legacy source and account enablement;
-// otherwise an explicit setting overrides the configured default and every
-// other plugin inherits it, including plugins absent from the table.
+// #54424) plus #63468: an explicit setting always wins, a plugin without one
+// inherits `_default`, and without `_default` it keeps legacy source and
+// account enablement.
 func TestPluginsConfigTomlAllowsPluginLikeRust(t *testing.T) {
 	explicit := func(value bool) *bool { return &value }
 	pluginIDs := []string{
@@ -48,7 +47,8 @@ func TestPluginsConfigTomlAllowsPluginLikeRust(t *testing.T) {
 		deflt *PluginsDefaultConfig
 		want  []bool
 	}{
-		{"omitted default", nil, []bool{true, true, true, true, true, true, true}},
+		// #63468: explicit disablement applies without a global default.
+		{"omitted default", nil, []bool{true, true, true, true, true, false, true}},
 		{"default disabled", &PluginsDefaultConfig{Enabled: false}, []bool{false, false, false, false, true, false, false}},
 		{"default enabled", &PluginsDefaultConfig{Enabled: true}, []bool{true, true, true, true, true, false, true}},
 	} {

@@ -46,8 +46,10 @@ auto_provision = true
 		wantHas bool
 	}{
 		{
+			// Rust #63468: an explicit `enabled = false` narrows the plugin
+			// even when the table declares no `_default`.
 			name:    "omitted default",
-			want:    []bool{true, true, true, true, true, true, true},
+			want:    []bool{true, true, true, true, true, false, true},
 			wantHas: false,
 		},
 		{

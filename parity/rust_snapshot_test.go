@@ -307,6 +307,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"uds",
 		"codex-experimental-api-macros",
 		"plugin",
+		"plugin-archive-verification",
 		"model-provider",
 	}
 }
@@ -368,7 +369,10 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// digest of the new anchor checkout.
 		// Re-anchored to upstream 59ac39addb: Cargo.toml gained the
 		// user-input workspace member (#61949).
-		{Path: "Cargo.toml", SHA256: "fd60155350207fe3e6bbcc928b33c0e8f733adc90b13bddf589320455fa41453"},
+		// Re-anchored to upstream 188940258d (#63484): Cargo.toml gained the
+		// plugin-archive-verification member, and exec/src/lib.rs and
+		// core/src/client.rs advanced in the same window.
+		{Path: "Cargo.toml", SHA256: "8c7c9e5cb226c97f756f99ec408fe1025c79d22d29b175c5db8ef65b08e03487"},
 		{Path: "cli/src/lib.rs", SHA256: "4b67417ded45ae654415e1b46c18c2716810f5fc58be141766da64427e1522ed"},
 		// Re-pinned to upstream 8ae55c863d (#47411): the shared network policy
 		// runs through embedded Codex startup.
@@ -378,7 +382,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// thread/list exclusion field; Go side already landed as sync551).
 		// Re-anchored to upstream 59ac39addb: exec input preparation moved
 		// behind the shared user-input helpers (#61949/#61962).
-		{Path: "exec/src/lib.rs", SHA256: "f6ce16288cb6883a1b7c08960a4b4481bd0482445ea3f1675e56fbae888123b6"},
+		{Path: "exec/src/lib.rs", SHA256: "ca04d7f95134316b59e8e04c3da3884a759149d110a3386a5b3829e673e4f4c8"},
 		// Re-pinned to upstream 7498521d (#46319): exec JSON web-search items
 		// now carry the structured results array.
 		{Path: "exec/src/exec_events.rs", SHA256: "dafa872d7e86a099e56e28a329dcb9c03db90ed768c3b88cca8c91d46dc1d0e5"},
@@ -401,7 +405,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// runtime authentication through ProviderAuthContext (#57607).
 		// Re-anchored to upstream 59ac39addb: the client gained the
 		// user-input snapshot path for tool outputs (#61962).
-		{Path: "core/src/client.rs", SHA256: "76325186e056ad8c53858462d38353c7869c829c89f8dcd34adc934072c4c142"},
+		{Path: "core/src/client.rs", SHA256: "b61f0d4c19e202a5a5a613595d3b73b0b44a1c92abc75af694b277380c8f6935"},
 		// Re-pinned to upstream 8ae55c863d (#47207/#47248/#47377/#47648): the
 		// gateway OAuth, MCP resource-target, realtime reasoning-status and
 		// executor bearer-token requests.

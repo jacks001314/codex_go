@@ -205,6 +205,7 @@ func rustTopLevelDirectoriesSnapshot() []string {
 		"otel",
 		"otel-trace-websocket",
 		"plugin",
+		"plugin-archive-verification",
 		"plugin-host",
 		"process-hardening",
 		"prompts",

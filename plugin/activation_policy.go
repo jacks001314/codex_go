@@ -9,9 +9,9 @@ import "strings"
 // `<plugin>@<marketplace>` id with an optional explicit `enabled` override.
 //
 // The rule the Go side must reproduce is `PluginsConfigToml::allows_plugin`
-// (types.rs:1059-1072): no `_default` preserves legacy source and account
-// enablement, otherwise an explicit per-plugin setting overrides the configured
-// default. The loader combines it with source enablement as
+// (types.rs): an explicit per-plugin setting always wins, plugins without one
+// inherit `_default`, and with neither the legacy source and account
+// enablement stands (#63468 moved explicit disablement ahead of the default). The loader combines it with source enablement as
 // `enabled.unwrap_or(true) && plugin_policy.allows_plugin(plugin_id)`
 // (core-plugins/src/loader.rs:184-187), so configuration can narrow an
 // installation but never activate one disabled at its source.
@@ -61,14 +61,16 @@ type PluginsConfigToml struct {
 // iteration in marketplace_policy.rs:238-243.
 const PluginsDefaultConfigKey = "_default"
 
-// AllowsPlugin mirrors Rust `PluginsConfigToml::allows_plugin`
-// (types.rs:1059-1072).
+// AllowsPlugin mirrors Rust `PluginsConfigToml::allows_plugin` (types.rs,
+// #63468): only plugins without an explicit `enabled` setting inherit
+// `_default`, so an explicit `enabled = false` disables a plugin even when the
+// table has no global default.
 func (c PluginsConfigToml) AllowsPlugin(pluginID string) bool {
-	if c.Default == nil {
-		return true
-	}
 	if plugin, ok := c.Plugins[pluginID]; ok && plugin.Enabled != nil {
 		return *plugin.Enabled
+	}
+	if c.Default == nil {
+		return true
 	}
 	return c.Default.Enabled
 }
