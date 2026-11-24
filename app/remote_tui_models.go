@@ -9,6 +9,7 @@ import (
 	"codex_go/appserverdaemon"
 	"codex_go/model"
 	codextui "codex_go/tui"
+	codextea "codex_go/tui/tea"
 )
 
 // interactiveRemoteListModels mirrors Rust #63553's provider-scoped model
@@ -16,10 +17,21 @@ import (
 // the server's default catalog; a non-Cloud server that cannot scope model/list
 // to the requested provider falls back to its default list.
 func interactiveRemoteListModels(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) func(cwd string, provider string, includeHidden bool) ([]codextui.ModelPickerOption, error) {
-	return func(_ string, provider string, includeHidden bool) ([]codextui.ModelPickerOption, error) {
+	scoped := interactiveRemoteListModelsScoped(ctx, endpoint)
+	return func(cwd string, provider string, includeHidden bool) ([]codextui.ModelPickerOption, error) {
+		options, _, err := scoped(cwd, provider, includeHidden)
+		return options, err
+	}
+}
+
+// interactiveRemoteListModelsScoped also reports whether the server honored
+// the provider scope, so the TUI can keep an unscoped non-Cloud catalog's
+// model choices on the current session (Rust #63553).
+func interactiveRemoteListModelsScoped(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.ModelListScopedFunc {
+	return func(_ string, provider string, includeHidden bool) ([]codextui.ModelPickerOption, bool, error) {
 		client, err := openRemoteSessionClient(ctx, endpoint)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		defer client.close()
 		if threadParamsModeForEndpoint(endpoint).SettingsOwner() == ThreadSettingsOwnerServer {
@@ -27,14 +39,16 @@ func interactiveRemoteListModels(ctx context.Context, endpoint *appserverdaemon.
 		}
 		params := model.ModelListParams{ModelProvider: strings.TrimSpace(provider)}
 		presets, err := remoteModelList(ctx, client, params)
+		scoped := true
 		if err != nil && params.ModelProvider != "" && remoteModelListScopeUnsupported(err) {
 			params.ModelProvider = ""
 			presets, err = remoteModelList(ctx, client, params)
+			scoped = false
 		}
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		return modelPickerOptionsFromRemoteModels(presets, includeHidden), nil
+		return modelPickerOptionsFromRemoteModels(presets, includeHidden), scoped, nil
 	}
 }
 

@@ -68,3 +68,75 @@ func TestSessionOnlyFooterDropsTheSecondaryHintLikeRust(t *testing.T) {
 		t.Fatalf("default provider hint = %q", defaultHint)
 	}
 }
+
+// TestUnscopedCatalogForcesSessionOnlyLikeRust mirrors Rust #63553: a
+// non-Cloud server that cannot scope the catalog still allows model changes,
+// but they stay on the current session.
+func TestUnscopedCatalogForcesSessionOnlyLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-a")
+	state.Provider = "openai"
+	m := NewModel(state, Options{DefaultModelProvider: "openai"})
+	m.pendingModelsRequestID = 1
+	m.applyModelsResult(ModelsResultMsg{
+		RequestID:   1,
+		Provider:    "openai",
+		Options:     []codextui.ModelPickerOption{{ID: "gpt-a"}},
+		Scoped:      false,
+		ScopedKnown: true,
+	})
+	if !m.modelSelectionIsSessionOnly() {
+		t.Fatal("an unscoped non-Cloud catalog was not session-only")
+	}
+
+	m.pendingModelsRequestID = 2
+	m.applyModelsResult(ModelsResultMsg{
+		RequestID:   2,
+		Provider:    "openai",
+		Options:     []codextui.ModelPickerOption{{ID: "gpt-a"}},
+		Scoped:      true,
+		ScopedKnown: true,
+	})
+	if m.modelSelectionIsSessionOnly() {
+		t.Fatal("a scoped default catalog stayed session-only")
+	}
+
+	m.serverOwnedSettings = true
+	m.pendingModelsRequestID = 3
+	m.applyModelsResult(ModelsResultMsg{
+		RequestID:   3,
+		Provider:    "openai",
+		Options:     []codextui.ModelPickerOption{{ID: "gpt-a"}},
+		Scoped:      false,
+		ScopedKnown: true,
+	})
+	if m.modelSelectionIsSessionOnly() {
+		t.Fatal("Cloud was marked session-only by an unscoped catalog")
+	}
+}
+
+// TestAccountChangeRefetchesNonCloudCatalogLikeRust mirrors Rust #63553
+// settings.rs: an account change on a non-Cloud server whose catalogs were
+// just cleared refreshes them without waiting for /model.
+func TestAccountChangeRefetchesNonCloudCatalogLikeRust(t *testing.T) {
+	loader := func(cwd string, provider string, includeHidden bool) ([]codextui.ModelPickerOption, error) {
+		return []codextui.ModelPickerOption{{ID: "gpt-a"}}, nil
+	}
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-a")
+	state.AccountDisplay = "old@example.com"
+	m := NewModel(state, Options{OnListModels: loader})
+	_ = m.applyAccountStatusUpdated(AccountStatusUpdatedMsg{Display: "new@example.com"})
+	if m.pendingModelsRequestID == 0 {
+		t.Fatal("non-Cloud account change did not refetch the catalog")
+	}
+
+	cloudState := codextui.NewState(nil)
+	cloudState.SetThreadID("thread-b")
+	cloudState.AccountDisplay = "old@example.com"
+	cloud := NewModel(cloudState, Options{OnListModels: loader, ServerOwnedSettings: true})
+	_ = cloud.applyAccountStatusUpdated(AccountStatusUpdatedMsg{Display: "new@example.com"})
+	if cloud.pendingModelsRequestID != 0 {
+		t.Fatal("Cloud account change refetched a provider catalog")
+	}
+}

@@ -103,3 +103,75 @@ func TestRemoteModelPickerScopesByProviderLikeRust(t *testing.T) {
 		})
 	}
 }
+
+// TestRemoteModelPickerReportsScopeSupportLikeRust mirrors Rust #63553: the
+// TUI learns whether the server honored the provider, so an unscoped
+// non-Cloud catalog can keep model choices on the current session.
+func TestRemoteModelPickerReportsScopeSupportLikeRust(t *testing.T) {
+	cases := []struct {
+		name           string
+		provider       string
+		rejectProvider bool
+		wantScoped     bool
+	}{
+		{name: "scoped", provider: "acme", wantScoped: true},
+		{name: "unscoped fallback", provider: "acme", rejectProvider: true, wantScoped: false},
+		{name: "no provider", provider: "", wantScoped: true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := websocket.Accept(w, r, nil)
+				if err != nil {
+					return
+				}
+				defer conn.Close(websocket.StatusNormalClosure, "")
+				for {
+					req, err := remoteTUITestReadRequest(ctx, conn)
+					if err != nil {
+						return
+					}
+					switch req.Method {
+					case string(appserver.MethodInitialize):
+						remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+					case string(appserver.MethodModelList):
+						var body struct {
+							ModelProvider string `json:"modelProvider"`
+						}
+						_ = json.Unmarshal(req.Params, &body)
+						provider := strings.TrimSpace(body.ModelProvider)
+						if testCase.rejectProvider && provider != "" {
+							remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": map[string]any{"code": -32602, "message": "unsupported provider"}})
+							continue
+						}
+						modelName := "default-model"
+						if provider != "" {
+							modelName = "acme-model"
+						}
+						remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{
+							"data": []any{map[string]any{"model": modelName, "isDefault": true}},
+						}})
+					default:
+						return
+					}
+				}
+			}))
+			defer server.Close()
+
+			endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+			loader := interactiveRemoteListModelsScoped(ctx, endpoint)
+			options, scoped, err := loader("", testCase.provider, true)
+			if err != nil {
+				t.Fatalf("list models: %v", err)
+			}
+			if len(options) == 0 {
+				t.Fatalf("no options returned")
+			}
+			if scoped != testCase.wantScoped {
+				t.Fatalf("scoped = %v, want %v", scoped, testCase.wantScoped)
+			}
+		})
+	}
+}

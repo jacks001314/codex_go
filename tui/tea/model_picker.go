@@ -17,6 +17,7 @@ type modelPickerCatalogSnapshot struct {
 	applied        []codextui.ModelPickerOption
 	provider       string
 	byProvider     map[string][]codextui.ModelPickerOption
+	unscoped       map[string]bool
 	refreshPending bool
 }
 
@@ -27,6 +28,17 @@ func cloneModelPickerProviderCatalogs(catalogs map[string][]codextui.ModelPicker
 	cloned := make(map[string][]codextui.ModelPickerOption, len(catalogs))
 	for provider, options := range catalogs {
 		cloned[provider] = append([]codextui.ModelPickerOption(nil), options...)
+	}
+	return cloned
+}
+
+func cloneModelPickerUnscoped(unscoped map[string]bool) map[string]bool {
+	if unscoped == nil {
+		return nil
+	}
+	cloned := make(map[string]bool, len(unscoped))
+	for provider, value := range unscoped {
+		cloned[provider] = value
 	}
 	return cloned
 }
@@ -52,18 +64,21 @@ func (m *Model) syncModelPickerCatalogBackend() {
 		applied:        append([]codextui.ModelPickerOption(nil), m.modelPickerOpts...),
 		provider:       m.modelPickerProvider,
 		byProvider:     cloneModelPickerProviderCatalogs(m.modelPickerOptsByProvider),
+		unscoped:       cloneModelPickerUnscoped(m.modelPickerUnscoped),
 		refreshPending: m.modelCatalogRefreshPending,
 	}
 	if snapshot, ok := m.modelPickerCatalogsStash[m.backendID]; ok {
 		m.modelPickerOpts = append([]codextui.ModelPickerOption(nil), snapshot.applied...)
 		m.modelPickerProvider = snapshot.provider
 		m.modelPickerOptsByProvider = cloneModelPickerProviderCatalogs(snapshot.byProvider)
+		m.modelPickerUnscoped = cloneModelPickerUnscoped(snapshot.unscoped)
 		m.modelCatalogRefreshPending = snapshot.refreshPending
 		delete(m.modelPickerCatalogsStash, m.backendID)
 	} else {
 		m.modelPickerOpts = nil
 		m.modelPickerProvider = ""
 		m.modelPickerOptsByProvider = nil
+		m.modelPickerUnscoped = nil
 		m.modelCatalogRefreshPending = false
 	}
 	m.modelPickerCatalogBackend = m.backendID
@@ -179,6 +194,13 @@ func (m *Model) fetchModelsForPicker() bubbletea.Cmd {
 	m.pendingModelsRequestBackend = m.backendID
 	cwd := m.modelListCWD()
 	provider := m.modelListProvider()
+	if m.onListModelsScoped != nil {
+		scopedLoader := m.onListModelsScoped
+		return func() bubbletea.Msg {
+			options, scoped, err := scopedLoader(cwd, provider, true)
+			return ModelsResultMsg{RequestID: requestID, Provider: provider, Options: options, Err: err, Scoped: scoped, ScopedKnown: true}
+		}
+	}
 	return func() bubbletea.Msg {
 		options, err := m.onListModels(cwd, provider, true)
 		return ModelsResultMsg{RequestID: requestID, Provider: provider, Options: options, Err: err}
@@ -210,6 +232,23 @@ func (m *Model) clearModelPickerCatalogs() {
 	}
 	m.syncModelPickerCatalogBackend()
 	m.modelPickerOptsByProvider = nil
+}
+
+// rememberModelPickerScope records whether a provider's catalog honored the
+// provider scope (Rust #63553 model_catalog.provider).
+func (m *Model) rememberModelPickerScope(provider string, scoped bool) {
+	if m == nil {
+		return
+	}
+	provider = strings.TrimSpace(provider)
+	if scoped {
+		delete(m.modelPickerUnscoped, provider)
+		return
+	}
+	if m.modelPickerUnscoped == nil {
+		m.modelPickerUnscoped = map[string]bool{}
+	}
+	m.modelPickerUnscoped[provider] = true
 }
 
 // rememberModelPickerOptions caches one provider catalog (Rust #63553
@@ -396,6 +435,11 @@ func (m *Model) applyModelsResult(msg ModelsResultMsg) {
 	// a server that allows the independent Ultra Fast policy) both hold here.
 	options := codextui.ConstrainServerServiceTierOptions(append([]codextui.ModelPickerOption(nil), msg.Options...), m.serviceTierRequirements)
 	m.rememberModelPickerOptions(msg.Provider, options)
+	if msg.ScopedKnown {
+		// Rust #63553 records whether the catalog could be scoped; an unscoped
+		// non-Cloud catalog keeps model choices on the current session.
+		m.rememberModelPickerScope(msg.Provider, msg.Scoped)
+	}
 	// A response for another provider stays cached without replacing the
 	// catalog the current thread reads (Rust #63553 keeps one catalog per
 	// provider).

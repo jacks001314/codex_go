@@ -882,6 +882,10 @@ type MCPLoginCompletedMsg struct {
 	Error    string
 }
 
+// ModelListScopedFunc loads a model catalog and reports whether the server
+// honored the requested provider (Rust #63553 startup list fallback).
+type ModelListScopedFunc func(cwd string, provider string, includeHidden bool) ([]codextui.ModelPickerOption, bool, error)
+
 // ModelsResultMsg is delivered when an async model-list refresh completes.
 type ModelsResultMsg struct {
 	RequestID uint64
@@ -890,6 +894,10 @@ type ModelsResultMsg struct {
 	Provider string
 	Options  []codextui.ModelPickerOption
 	Err      error
+	// Scoped reports whether the server honored Provider; ScopedKnown is false
+	// for hosts that cannot tell.
+	Scoped      bool
+	ScopedKnown bool
 }
 
 type MCPStartupFinishAfterLagMsg struct{}
@@ -1905,6 +1913,9 @@ type Options struct {
 	OnReadMCPInventory             func(detail bool) ([]historycell.McpServerStatus, error)
 	OnStartMCPLogin                func(name, environmentID, threadID string) (MCPLoginStart, error)
 	OnListModels                   func(cwd string, provider string, includeHidden bool) ([]codextui.ModelPickerOption, error)
+	// OnListModelsScoped is OnListModels plus whether the server could scope the
+	// list to the provider (Rust #63553's unscoped fallback).
+	OnListModelsScoped ModelListScopedFunc
 	// DefaultModelProvider names the configured provider a new thread uses. A
 	// model picked on another provider applies to the current session only
 	// (Rust #63553). Empty disables that distinction.
@@ -2702,6 +2713,9 @@ type Model struct {
 	// confirmed or possibly switched; its untagged catalog is unsafe for the
 	// rest of the session (Rust provider_writes is per backend).
 	modelProviderWriteChanged map[codextui.BackendID]bool
+	// modelPickerUnscoped marks providers whose catalog the server could not
+	// scope; Rust #63553 keeps their choices on the current session.
+	modelPickerUnscoped map[string]bool
 	// modelPickerCatalogBackend names the backend whose picker catalog the
 	// fields above hold (Rust #63553 ModelCatalog::for_backend).
 	modelPickerCatalogBackend codextui.BackendID
@@ -2755,6 +2769,7 @@ type Model struct {
 	mcpLoginResultsByThread          map[string][]MCPLoginCompletedMsg
 	nextMCPLoginRequestID            uint64
 	onListModels                     func(cwd string, provider string, includeHidden bool) ([]codextui.ModelPickerOption, error)
+	onListModelsScoped               ModelListScopedFunc
 	// defaultModelProvider is the configured provider new threads use.
 	defaultModelProvider string
 	nextModelsRequestID              uint64
@@ -3914,6 +3929,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		activeMCPLoginIDs:                map[string]string{},
 		mcpLoginResultsByThread:          map[string][]MCPLoginCompletedMsg{},
 		onListModels:                     options.OnListModels,
+		onListModelsScoped:               options.OnListModelsScoped,
 		defaultModelProvider:             strings.TrimSpace(options.DefaultModelProvider),
 		pendingMCPInventoryMessageIndex:  -1,
 		mcpStartup:                       chatwidget.NewMcpStartupRoundState(),

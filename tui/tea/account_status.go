@@ -28,6 +28,7 @@ func (m *Model) applyAccountStatusUpdated(message AccountStatusUpdatedMsg) bubbl
 		m.State.HasChatGPTAccount = message.HasChatGPTAccount
 	}
 	m.hasChatGPTAccount = message.HasChatGPTAccount
+	var refetchCmd bubbletea.Cmd
 	if accountIdentityChanged(previousDisplay, m.State.AccountDisplay, previousChatGPT, message.HasChatGPTAccount) {
 		// Rust update_account_state clears the usage notice state when the
 		// account changes; quota and warning thresholds belong to the old
@@ -39,13 +40,18 @@ func (m *Model) applyAccountStatusUpdated(message AccountStatusUpdatedMsg) bubbl
 		// Rust #63553 clears the cached model catalogs on an account change;
 		// each provider list belongs to the account the server authenticated.
 		m.clearModelPickerCatalogs()
+		// Rust #63553 settings.rs: a non-Cloud server with no models left
+		// refetches the account-scoped catalog instead of waiting for /model.
+		if !m.serverOwnedSettings && m.onListModels != nil && !m.modelProviderWriteChanged[m.backendID] {
+			refetchCmd = m.fetchModelsForPicker()
+		}
 	}
 	// Rust update_account_state always rebinds the account plan and drops the
 	// quota plan, which spoke for the previous account (#61978).
 	planCmd := m.setAccountPlan(message.PlanType)
 	m.accountEmailRequestID = strings.TrimSpace(message.EmailRequestID)
 	m.refreshTranscript()
-	return planCmd
+	return bubbletea.Batch(planCmd, refetchCmd)
 }
 
 func accountIdentityChanged(previousDisplay, currentDisplay string, previousChatGPT, currentChatGPT bool) bool {

@@ -116,6 +116,11 @@ func (m *Model) modelSelectionIsSessionOnly() bool {
 		return false
 	}
 	provider := strings.TrimSpace(m.State.Provider)
+	// Rust #63553: a non-Cloud catalog the server could not scope still lets
+	// the user switch models, but the choice stays on this session.
+	if !m.serverOwnedSettings && m.modelPickerUnscoped[m.modelPickerProvider] {
+		return true
+	}
 	configured := strings.TrimSpace(m.defaultModelProvider)
 	if provider == "" || configured == "" {
 		return false
