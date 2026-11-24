@@ -1722,6 +1722,10 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		locked = false
 		return r.runHTTP(ctx, request)
 	}
+	handler := combinedResponsesStreamHandler(r.StreamHandler, request.StreamHandler)
+	// The reader runs while the request is uploaded, so a reply the peer sent
+	// during a failed upload is already buffered for recovery (Rust #62749).
+	messages := startResponsesWebsocketReader(session)
 	writeErr := writeResponsesWebsocketMessage(ctx, conn, websocket.MessageText, message)
 	r.recordWebsocketRequest(writeErr, time.Since(requestStartedAt))
 	r.recordWebsocketRequestRecord(ctx, writeErr, time.Since(requestStartedAt), connectionReused)
@@ -1729,7 +1733,30 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		session.requestSent = true
 	}
 	if writeErr != nil {
+		recovered := recoverResponsesWebsocketUploadReply(messages)
 		closeResponsesWebsocketSession(session, "response write failed")
+		if recovered.oversized {
+			// Rust #62749 surfaces the peer's size rejection instead of
+			// retrying an upload it already refused.
+			recordWebsocketEvent(r.Metrics, "message_too_large", false, 0)
+			r.disableWebsockets()
+			return r.runHTTP(ctx, request)
+		}
+		if recovered.event != nil {
+			// The server already answered this request; adopt that outcome so
+			// the write error does not hide it.
+			if apiErr := websocketTerminalProviderError(recovered.event); apiErr != nil {
+				return nil, apiErr
+			}
+			if usageLimit, ok := websocketUsageLimitError(recovered.event); ok {
+				emitUsageLimitErrorHeaderEvents(handler, websocketEventHTTPHeaders(recovered.event), usageLimit)
+				return nil, usageLimit
+			}
+			if apiErr := websocketErrorEventAPIError(recovered.event); apiErr != nil {
+				return nil, apiErr
+			}
+			return nil, fmt.Errorf("responses websocket request failed: %s", websocketEventError(recovered.event))
+		}
 		if !transportRetried {
 			session.mu.Unlock()
 			locked = false
@@ -1738,7 +1765,6 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		r.disableWebsockets()
 		return r.runHTTP(ctx, request)
 	}
-	handler := combinedResponsesStreamHandler(r.StreamHandler, request.StreamHandler)
 	activeHandler := handler
 	accumulator := newResponsesStreamAccumulator(request)
 	accumulator.routingAffinity = session.capturedAffinity
@@ -1762,7 +1788,6 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	ctxDone := ctx.Done()
 	canceled := false
 	var cancelDeadline <-chan time.Time
-	messages := startResponsesWebsocketReader(session)
 	for {
 		messageStartedAt := time.Now()
 		var read responsesWebsocketReadResult
@@ -1982,6 +2007,57 @@ func websocketOversizedClose(err error) bool {
 		return closeErr.Code == websocket.StatusMessageTooBig
 	}
 	return false
+}
+
+// responsesWebsocketUploadReadAheadBytes bounds the replies a failed upload may
+// recover (Rust #62749 UPLOAD_READ_AHEAD_BYTES).
+const responsesWebsocketUploadReadAheadBytes = 1024 * 1024
+
+// responsesWebsocketRecoveredReply is the peer reply a failed upload surfaced.
+// The peer can reject an oversized request after reading only the first frame
+// header, so its error frame or close is already on the wire when the upload
+// dies with a broken pipe.
+type responsesWebsocketRecoveredReply struct {
+	event     map[string]any
+	oversized bool
+}
+
+// recoverResponsesWebsocketUploadReply drains the replies the peer already sent
+// for a request whose upload failed, mirroring Rust #62749's upload read-ahead:
+// immediate frames only, within a bounded byte budget. A server error frame is
+// returned as the request outcome, and a 1009 close reports the size rejection
+// the write error hid.
+func recoverResponsesWebsocketUploadReply(messages <-chan responsesWebsocketReadResult) responsesWebsocketRecoveredReply {
+	var recovered responsesWebsocketRecoveredReply
+	if messages == nil {
+		return recovered
+	}
+	budget := responsesWebsocketUploadReadAheadBytes
+	for budget > 0 {
+		select {
+		case read, ok := <-messages:
+			if !ok {
+				return recovered
+			}
+			if read.err != nil {
+				recovered.oversized = websocketOversizedClose(read.err)
+				return recovered
+			}
+			budget -= len(read.data)
+			var event map[string]any
+			if err := json.Unmarshal(read.data, &event); err != nil {
+				continue
+			}
+			if strings.TrimSpace(responseToolString(event["type"])) != "error" {
+				continue
+			}
+			recovered.event = event
+			return recovered
+		default:
+			return recovered
+		}
+	}
+	return recovered
 }
 
 func writeResponsesWebsocketMessage(ctx context.Context, conn *websocket.Conn, typ websocket.MessageType, payload []byte) error {

@@ -53525,11 +53525,14 @@
    "evidence": [
     "Rust #62749 lets the Responses WebSocket pump recover a server reply that already arrived for a request whose write failed, instead of treating the request as lost.",
     "Go reads and writes on independent paths: startResponsesWebsocketReader runs a dedicated goroutine over conn.Read, so a reply that arrives is buffered (channel capacity 64) even while the write is failing.",
-    "Gap: runWebSocket still treats the write error as a lost request. It closes the session and retries once on a fresh connection, then falls back to HTTP (model/responses_agent.go:1710-1719), so a reply that arrived for the failed write is not adopted as the request outcome, unlike Rust #62749."
+    "appserver-side gap closed in model/responses_agent.go: the reader now starts before the upload, and a failed write drains the already buffered replies with recoverResponsesWebsocketUploadReply (non-blocking, bounded by responsesWebsocketUploadReadAheadBytes = 1 MiB, Rust's UPLOAD_READ_AHEAD_BYTES). A server error event becomes the request outcome through the same terminal/provider/usage-limit mapping the stream loop uses, and a 1009 close reports the size rejection (message_too_large metric) and falls back to HTTP, matching Rust's WebsocketMessageTooLarge path.",
+    "The socket is still retired after a failed send (closeResponsesWebsocketSession) before the retry-once/HTTP fallback runs, so a close that arrives before any reply is charged to the idle connection through that retry instead of terminating the request.",
+    "Tests: TestResponsesWebsocketFailedUploadAdoptsServerErrorLikeRust drives a real server that answers an 8 MiB upload with an error frame before closing 1009 and asserts the server message is adopted; four unit tests cover error-event adoption, oversized close, the empty-readable case and the read-ahead budget. Removing the recovery call makes the end-to-end test fall back to HTTP (426) and fail.",
+    "Carrier difference: Go's pump is a reader goroutine plus channel, so 'immediately readable' means frames already delivered to the channel rather than a direct socket poll; the dot clock and framing behavior are otherwise unchanged."
    ],
    "kind": "runtime",
    "sha": "9f2b87495bf979f6c1953cf00c98143981664914",
-   "status": "partial",
+   "status": "complete",
    "subject": "Recover server replies after Responses WebSocket write failures (#62749)"
   },
   {
