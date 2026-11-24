@@ -229,7 +229,14 @@ func (s *ProxySpec) WithNetworkRules(rules []ProxyNetworkRule) (*ProxySpec, erro
 	// malformed batch arrives in the same file.
 	next.config.Network.ApplySavedDomainRules(allowed, denied)
 	if err := ValidateProxyPolicyAgainstConstraints(next.config, next.constraints); err != nil {
-		return nil, fmt.Errorf("network proxy constraints are invalid: %w", err)
+		// Rust #60046: a stale grant cannot invalidate saved denials. Fixed deny
+		// lists retain their configured set, so drop the saved grants and keep
+		// only the denials before failing.
+		next.config = cloneProxyConfig(s.config)
+		next.config.Network.ApplySavedDomainRules(nil, denied)
+		if retryErr := ValidateProxyPolicyAgainstConstraints(next.config, next.constraints); retryErr != nil {
+			return nil, fmt.Errorf("network proxy constraints are invalid: %w", retryErr)
+		}
 	}
 	return &next, nil
 }

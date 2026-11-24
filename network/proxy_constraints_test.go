@@ -60,8 +60,15 @@ func TestProxySpecManagedOnlyHardDeniesAndRejectsExecpolicyExpansionLikeRust(t *
 	if !spec.HardDenyAllowlistMisses() || !reflect.DeepEqual(config.Network.AllowedDomains(), []string{"managed.example.com"}) {
 		t.Fatalf("spec = %#v", spec)
 	}
-	if _, err := spec.WithNetworkRules([]ProxyNetworkRule{{Host: "other.example.com", Permission: ProxyDomainAllow}}); err == nil {
-		t.Fatal("WithNetworkRules() accepted an out-of-policy allow rule")
+	// Rust #60046: an out-of-policy saved grant is dropped instead of failing
+	// the whole update, so its saved denials can still take effect.
+	next, err := spec.WithNetworkRules([]ProxyNetworkRule{{Host: "other.example.com", Permission: ProxyDomainAllow}})
+	if err != nil {
+		t.Fatalf("WithNetworkRules() error = %v, want the grant dropped", err)
+	}
+	nextNetwork := next.Config().Network
+	if got := nextNetwork.AllowedDomains(); !reflect.DeepEqual(got, []string{"managed.example.com"}) {
+		t.Fatalf("allowed domains = %v, want the managed allow-list only", got)
 	}
 }
 
