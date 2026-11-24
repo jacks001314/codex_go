@@ -24,7 +24,7 @@ var execServerArgSpecs = map[string]execServerArgSpec{
 	"tcp-upstream-proxy":             {Token: "--tcp-upstream-proxy <HOST:PORT>", TakesValue: true},
 	"proxy-private-ips-via-upstream": {Token: "--proxy-private-ips-via-upstream"},
 	"concurrent-requests":            {Token: "--concurrent-requests <COUNT>", TakesValue: true},
-	"listen":                         {Token: "--listen <URL>", TakesValue: true, Conflicts: []string{"remote"}},
+	"listen":                         {Token: "--listen <URL>", TakesValue: true},
 	"remote":                         {Token: "--remote <URL>", TakesValue: true, Requires: []string{"environment-id"}},
 	"remote-transport": {
 		Token:           "--remote-transport <REMOTE_TRANSPORT>",

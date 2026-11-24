@@ -4185,6 +4185,14 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 		return fmt.Errorf("invalid --remote-transport value %q; expected noise or direct", execServer.RemoteTransport)
 	}
 	execServer.RemoteTransport = transport
+	// Rust #62325 removed clap's --listen/--remote conflict: a Noise remote
+	// executor may listen for inbound connections. Every other combination is
+	// still rejected with the runtime message Rust uses.
+	if execServer.ListenSet && strings.TrimSpace(execServer.Listen) != "" && strings.TrimSpace(execServer.Remote) != "" {
+		if transport != "noise" || execServer.ForwardBound || !validInboundNoiseListen(execServer.Listen) {
+			return errors.New("remote --listen requires ws://IP:PORT, Noise transport, and no forward")
+		}
+	}
 	if strings.TrimSpace(execServer.AWSService) == "" {
 		execServer.AWSService = "execute-api"
 	}
@@ -4200,6 +4208,20 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 		return errors.New("direct exec-server transport does not support forwarding")
 	}
 	return execServer.ValidateWebsocketAuthFlags()
+}
+
+// validInboundNoiseListen reports whether value is a numeric `ws://IP:PORT`
+// endpoint, the only form Rust accepts for a remote Noise listener.
+func validInboundNoiseListen(value string) bool {
+	address, ok := strings.CutPrefix(strings.TrimSpace(value), "ws://")
+	if !ok {
+		return false
+	}
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || net.ParseIP(host) == nil || port == "" {
+		return false
+	}
+	return true
 }
 
 // ValidateWebsocketAuthFlags validates the shared `--ws-*` family for the

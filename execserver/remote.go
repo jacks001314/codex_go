@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -79,6 +80,15 @@ type RemoteEnvironmentConfig struct {
 	// ExecServerRuntimeOptions::tcp_upstream_proxy: the trusted mandatory HTTP
 	// CONNECT next hop for opaque SOCKS TCP.
 	TcpUpstreamProxy *network.TcpUpstreamProxy
+	// InboundListen, when set to `ws://IP:PORT` (or the bare `IP:PORT` a host
+	// already parsed), makes a Noise executor accept inbound harness connections
+	// on that endpoint instead of dialing the rendezvous relay (Rust #62325
+	// RemoteEnvironmentTransport::NoiseInbound).
+	InboundListen string
+	// InboundListener is an already bound listener for inbound Noise
+	// connections; it takes precedence over InboundListen so a host can bind,
+	// publish the endpoint and then register (Rust binds before registering).
+	InboundListener net.Listener
 	// EnvironmentConfigReader serves `environmentConfig/read` for the tunneled
 	// session; nil advertises the capability as false.
 	EnvironmentConfigReader EnvironmentConfigReader
@@ -289,6 +299,28 @@ func RunRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig) erro
 	server.SetEnvironmentConfigReader(cfg.EnvironmentConfigReader)
 	server.SetAllowedSymlinkedCodexHome(cfg.AllowedSymlinkedCodexHome)
 	defer server.shutdownSessions()
+	if cfg.InboundListener != nil || strings.TrimSpace(cfg.InboundListen) != "" {
+		// Rust #62325: a Noise executor with --listen accepts inbound harness
+		// connections instead of registering a rendezvous endpoint.
+		if cfg.Transport == RemoteTransportDirect {
+			return errors.New("direct exec-server transport cannot listen for Noise connections")
+		}
+		if strings.TrimSpace(cfg.ForwardURL) != "" {
+			return errors.New("inbound Noise exec-server does not support forwarding")
+		}
+		listener := cfg.InboundListener
+		if listener == nil {
+			address, err := resolveInboundNoiseListen(cfg.InboundListen)
+			if err != nil {
+				return err
+			}
+			listener, err = net.Listen("tcp", address)
+			if err != nil {
+				return err
+			}
+		}
+		return serveInboundNoiseEnvironmentOn(ctx, server, cfg, listener, nil)
+	}
 	if forwardURL := strings.TrimSpace(cfg.ForwardURL); forwardURL != "" {
 		if cfg.Transport == RemoteTransportDirect {
 			// Rust's run_remote_environment_forward_until_shutdown rejects the

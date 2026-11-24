@@ -1673,8 +1673,16 @@ func TestParseExecServer(t *testing.T) {
 		t.Fatalf("exec-server missing environment error = %v", err)
 	}
 	_, err = Parse([]string{"exec-server", "--listen", "stdio", "--remote", "ws://127.0.0.1:7777", "--environment-id", "env-1"})
-	if err == nil || err.Error() != "the argument '--listen <URL>' cannot be used with '--remote <URL>'" {
+	if err == nil || err.Error() != "remote --listen requires ws://IP:PORT, Noise transport, and no forward" {
 		t.Fatalf("exec-server listen conflict error = %v", err)
+	}
+	// Rust #62325: a Noise --remote accepts an inbound listener endpoint.
+	inbound, err := Parse([]string{"exec-server", "--listen", "ws://127.0.0.1:8080", "--remote", "ws://127.0.0.1:7777", "--environment-id", "env-1"})
+	if err != nil {
+		t.Fatalf("Parse exec-server inbound listen returned error: %v", err)
+	}
+	if !inbound.ExecServer.ListenSet || inbound.ExecServer.Listen != "ws://127.0.0.1:8080" || inbound.ExecServer.Remote != "ws://127.0.0.1:7777" {
+		t.Fatalf("exec-server inbound listen = %#v", inbound.ExecServer)
 	}
 	_, err = Parse([]string{"exec-server", "--use-agent-identity-auth"})
 	if err == nil || err.Error() != "the following required arguments were not provided:\n  --environment-id <ID>\n  --remote <URL>" {

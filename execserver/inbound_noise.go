@@ -395,6 +395,25 @@ func ParseInboundNoiseListenURL(listenURL string) (string, error) {
 	return net.JoinHostPort(ip.String(), strconv.Itoa(port)), nil
 }
 
+// resolveInboundNoiseListen accepts the `ws://IP:PORT` endpoint Rust requires
+// and the bare `IP:PORT` form a host that already parsed the URL passes.
+func resolveInboundNoiseListen(value string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if strings.HasPrefix(trimmed, "ws://") {
+		return ParseInboundNoiseListenURL(trimmed)
+	}
+	host, portText, err := net.SplitHostPort(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("remote --listen requires ws://IP:PORT, got %q", value)
+	}
+	ip := net.ParseIP(host)
+	port, err := strconv.Atoi(portText)
+	if ip == nil || err != nil || port < 0 || port > 65535 {
+		return "", fmt.Errorf("remote --listen requires ws://IP:PORT, got %q", value)
+	}
+	return net.JoinHostPort(ip.String(), strconv.Itoa(port)), nil
+}
+
 // RunInboundNoiseEnvironment registers this executor's Noise identity and then
 // accepts inbound harness connections on address (Rust
 // run_inbound_noise_environment). The listener stops when ctx ends or control
@@ -446,6 +465,15 @@ func RunInboundNoiseEnvironmentListener(ctx context.Context, listener net.Listen
 	server.SetTcpUpstreamProxy(cfg.TcpUpstreamProxy)
 	server.SetEnvironmentConfigReader(cfg.EnvironmentConfigReader)
 	server.SetAllowedSymlinkedCodexHome(cfg.AllowedSymlinkedCodexHome)
+	return serveInboundNoiseEnvironmentOn(ctx, server, cfg, listener, control)
+}
+
+// serveInboundNoiseEnvironmentOn registers a fresh Noise identity from cfg and
+// serves inbound harness connections on listener with server.
+func serveInboundNoiseEnvironmentOn(ctx context.Context, server *Server, cfg RemoteEnvironmentConfig, listener net.Listener, control *InboundNoiseListenerControl) error {
+	if server == nil {
+		return errors.New("inbound Noise environment requires a server")
+	}
 	identity, err := generateRemoteNoiseIdentity()
 	if err != nil {
 		return fmt.Errorf("failed to generate Noise listener identity: %w", err)

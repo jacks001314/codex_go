@@ -22,8 +22,8 @@ var execServerForwardScopeDiagnostics = []struct {
 	{args: []string{"--remote-transport", "noise"}, want: "error: the following required arguments were not provided:\n  --environment-id <ID>\n  --remote <URL>\n\nUsage: codex exec-server --environment-id <ID> --remote <URL> --remote-transport <REMOTE_TRANSPORT>\n\nFor more information, try '--help'."},
 	{args: []string{"--listen", "stdio", "--remote", "https://example.openai.com", "--environment-id", "env-1", "forward", "--connect", "ws://127.0.0.1:9"}, want: "error: the following required arguments were not provided:\n  --remote <URL>\n  --environment-id <ID>\n\nUsage: codex exec-server forward --remote <URL> --environment-id <ID> --connect <URL>\n\nFor more information, try '--help'."},
 	{args: []string{"--remote", "https://example.openai.com"}, want: "error: the following required arguments were not provided:\n  --environment-id <ID>\n\nUsage: codex exec-server --environment-id <ID> --remote <URL>\n\nFor more information, try '--help'."},
-	{args: []string{"--remote", "https://example.openai.com", "--listen", "stdio"}, want: "error: the argument '--remote <URL>' cannot be used with '--listen <URL>'\n\nUsage: codex exec-server --environment-id <ID> --remote <URL>\n\nFor more information, try '--help'."},
-	{args: []string{"--listen", "stdio", "--remote", "https://example.openai.com"}, want: "error: the argument '--listen <URL>' cannot be used with '--remote <URL>'\n\nUsage: codex exec-server --listen <URL>\n\nFor more information, try '--help'."},
+	{args: []string{"--remote", "https://example.openai.com", "--listen", "stdio"}, want: "error: the following required arguments were not provided:\n  --environment-id <ID>\n\nUsage: codex exec-server --environment-id <ID> --remote <URL> --listen <URL>\n\nFor more information, try '--help'."},
+	{args: []string{"--listen", "stdio", "--remote", "https://example.openai.com"}, want: "error: the following required arguments were not provided:\n  --environment-id <ID>\n\nUsage: codex exec-server --environment-id <ID> --listen <URL> --remote <URL>\n\nFor more information, try '--help'."},
 	{args: []string{"forward"}, want: "error: the following required arguments were not provided:\n  --remote <URL>\n  --environment-id <ID>\n  --connect <URL>\n\nUsage: codex exec-server forward --remote <URL> --environment-id <ID> --connect <URL>\n\nFor more information, try '--help'."},
 	{args: []string{"forward", "--listen", "stdio", "--connect", "ws://127.0.0.1:9"}, want: "error: unexpected argument '--listen' found\n\nUsage: codex exec-server forward [OPTIONS] --remote <URL> --environment-id <ID> --connect <URL>\n\nFor more information, try '--help'."},
 	{args: []string{"--use-agent-identity-auth"}, want: "error: the following required arguments were not provided:\n  --environment-id <ID>\n  --remote <URL>\n\nUsage: codex exec-server --environment-id <ID> --remote <URL> --use-agent-identity-auth\n\nFor more information, try '--help'."},
@@ -52,7 +52,6 @@ var execServerForwardScopeDiagnostics = []struct {
 var execServerForwardScopeAccepted = [][]string{
 	{"forward", "--remote", "https://example.openai.com", "--environment-id", "env-1", "--connect", "ws://127.0.0.1:9"},
 	{"forward", "--exit-on-stdin-close", "--remote", "https://example.openai.com", "--environment-id", "env-1", "--connect", "ws://127.0.0.1:9"},
-	{"--listen", "stdio", "forward", "--remote", "https://example.openai.com", "--environment-id", "env-1", "--connect", "ws://127.0.0.1:9"},
 	{"--strict-config", "forward", "--remote", "https://example.openai.com", "--environment-id", "env-1", "--connect", "ws://127.0.0.1:9"},
 	{"forward", "--strict-config", "--remote", "https://example.openai.com", "--environment-id", "env-1", "--connect", "ws://127.0.0.1:9"},
 	{"--remote", "https://example.openai.com", "--environment-id", "env-1", "--remote-transport", "noise"},
@@ -79,5 +78,19 @@ func TestExecServerForwardScopeAcceptedLikeRust(t *testing.T) {
 		if _, err := Parse(argv); err != nil {
 			t.Fatalf("Parse(%v) error = %v, want a clean parse", argv, err)
 		}
+	}
+}
+
+// Rust #62325 rejects --listen with a forward subcommand: an inbound Noise
+// executor cannot forward.
+func TestExecServerForwardScopeRejectsInboundListenLikeRust(t *testing.T) {
+	_, err := Parse([]string{
+		"exec-server", "--listen", "stdio", "forward",
+		"--remote", "https://example.openai.com",
+		"--environment-id", "env-1",
+		"--connect", "ws://127.0.0.1:9",
+	})
+	if err == nil || err.Error() != "remote --listen requires ws://IP:PORT, Noise transport, and no forward" {
+		t.Fatalf("forward inbound listen error = %v", err)
 	}
 }

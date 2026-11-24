@@ -493,3 +493,138 @@ func TestParseInboundNoiseListenURLMatchesRust(t *testing.T) {
 		}
 	}
 }
+
+// Rust #62325: a Noise executor started with --listen serves inbound
+// connections through the ordinary remote-environment entry point.
+func TestRunRemoteEnvironmentServesInboundNoiseWhenConfiguredLikeRust(t *testing.T) {
+	executorKeys := make(chan RemotePublicKey, 1)
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/register"):
+			var body remoteRegistrationRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode register request: %v", err)
+			}
+			executorKeys <- body.ExecutorPublicKey
+			_ = json.NewEncoder(w).Encode(remoteRegistrationResponse{
+				EnvironmentID:          "env-listen",
+				SecurityProfile:        RemoteSecurityProfile,
+				ExecutorRegistrationID: "reg-listen",
+				URL:                    "ws://127.0.0.1:1/relay",
+			})
+		case strings.HasSuffix(r.URL.Path, "/validate"):
+			_ = json.NewEncoder(w).Encode(remoteHarnessValidationResponse{Valid: true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer registry.Close()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- RunRemoteEnvironment(ctx, RemoteEnvironmentConfig{
+			BaseURL:         registry.URL,
+			EnvironmentID:   "env-listen",
+			HTTPClient:      registry.Client(),
+			InboundListener: listener,
+		})
+	}()
+	defer func() {
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("inbound environment stopped with %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Errorf("inbound environment did not stop")
+		}
+	}()
+	var executorKey RemotePublicKey
+	select {
+	case executorKey = <-executorKeys:
+	case <-time.After(5 * time.Second):
+		t.Fatal("inbound environment did not register with the registry")
+	}
+	harnessIdentity, err := generateRemoteNoiseIdentity()
+	if err != nil {
+		t.Fatalf("generate harness identity: %v", err)
+	}
+	defer harnessIdentity.Destroy()
+	dialCtx, dialCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer dialCancel()
+	conn, _, err := websocket.Dial(dialCtx, "ws://"+listener.Addr().String(), nil)
+	if err != nil {
+		t.Fatalf("dial inbound environment: %v", err)
+	}
+	defer conn.CloseNow()
+	handshakeCtx, handshakeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer handshakeCancel()
+	transport, err := completeInboundHarnessHandshake(
+		handshakeCtx,
+		conn,
+		harnessIdentity,
+		executorKey,
+		noiseChannelPrologue("env-listen", "reg-listen", "stream-1"),
+	)
+	if err != nil {
+		t.Fatalf("inbound harness handshake: %v", err)
+	}
+	defer transport.Destroy()
+	request := []byte(`{"id":1,"method":"initialize","params":{"clientName":"listen-test"}}`)
+	framed := make([]byte, 4, len(request)+4)
+	binary.BigEndian.PutUint32(framed, uint32(len(request)))
+	framed = append(framed, request...)
+	ciphertext := make([]byte, len(framed)+clatter.TagLen)
+	ciphertextLen, err := transport.Send(framed, ciphertext)
+	if err != nil {
+		t.Fatalf("encrypt request: %v", err)
+	}
+	encoded, err := encodeRelayMessageFrame(newRelayDataFrame("stream-1", 0, ciphertext[:ciphertextLen]))
+	if err != nil {
+		t.Fatalf("encode request frame: %v", err)
+	}
+	if err := conn.Write(handshakeCtx, websocket.MessageBinary, encoded); err != nil {
+		t.Fatalf("write request frame: %v", err)
+	}
+	response, err := readRemoteTestJSONRPC(handshakeCtx, conn, transport)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if !strings.Contains(string(response), `"sessionId"`) {
+		t.Fatalf("response = %s, want the initialize result", response)
+	}
+}
+
+// Rust #62325 rejects forwarding and the direct transport for an inbound
+// Noise executor.
+func TestRunRemoteEnvironmentRejectsInboundCombinationsLikeRust(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+	err = RunRemoteEnvironment(context.Background(), RemoteEnvironmentConfig{
+		BaseURL:         "http://127.0.0.1:1",
+		EnvironmentID:   "env-listen",
+		InboundListener: listener,
+		ForwardURL:      "ws://127.0.0.1:2",
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not support forwarding") {
+		t.Fatalf("forwarding inbound error = %v", err)
+	}
+	err = RunRemoteEnvironment(context.Background(), RemoteEnvironmentConfig{
+		BaseURL:         "http://127.0.0.1:1",
+		EnvironmentID:   "env-listen",
+		Transport:       RemoteTransportDirect,
+		InboundListener: listener,
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot listen for Noise connections") {
+		t.Fatalf("direct inbound error = %v", err)
+	}
+}

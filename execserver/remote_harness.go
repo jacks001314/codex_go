@@ -70,6 +70,10 @@ func ProvisionedEnvironmentConnectTimeout() time.Duration {
 const CodexExecServerNoiseAuthTokenEnvVar = envutil.CodexExecServerNoiseAuthTokenEnvVar
 
 type NoiseRendezvousConnectBundle struct {
+	// HTTPHeaders carries optional admission headers a provider attaches to
+	// the WebSocket handshake (Rust #62325). They may only be used with a
+	// wss:// endpoint and never override the WebSocket handshake itself.
+	HTTPHeaders             http.Header
 	WebSocketURL            string
 	EnvironmentID           string
 	ExecutorRegistrationID  string
@@ -567,7 +571,11 @@ func dialNoiseHarnessConnection(
 	if index := strings.IndexAny(diagnosticURL, "?#"); index >= 0 {
 		diagnosticURL = diagnosticURL[:index]
 	}
-	conn, response, err := websocket.Dial(ctx, bundle.WebSocketURL, &websocket.DialOptions{HTTPClient: httpClient})
+	admissionHeaders, err := noiseAdmissionHeaders(bundle.WebSocketURL, bundle.HTTPHeaders)
+	if err != nil {
+		return nil, err
+	}
+	conn, response, err := websocket.Dial(ctx, bundle.WebSocketURL, &websocket.DialOptions{HTTPClient: httpClient, HTTPHeader: admissionHeaders})
 	if err != nil {
 		statusCode := 0
 		if response != nil {
@@ -876,3 +884,28 @@ func (c *noiseHarnessClientConnection) CloseNow() error {
 }
 
 var _ clientConnection = (*noiseHarnessClientConnection)(nil)
+
+// noiseAdmissionHeaders validates the optional admission headers a Noise
+// connect bundle supplies (Rust #62325): a plaintext endpoint must never
+// receive them, and a caller may not replace the WebSocket handshake headers.
+func noiseAdmissionHeaders(websocketURL string, headers http.Header) (http.Header, error) {
+	if len(headers) == 0 {
+		return nil, nil
+	}
+	parsed, err := url.Parse(strings.TrimSpace(websocketURL))
+	if err != nil || parsed.Scheme != "wss" {
+		return nil, errors.New("Noise WebSocket admission headers require wss://")
+	}
+	out := make(http.Header, len(headers))
+	for name, values := range headers {
+		lower := strings.ToLower(strings.TrimSpace(name))
+		switch {
+		case lower == "host", lower == "connection", lower == "upgrade",
+			lower == "content-length", lower == "transfer-encoding",
+			strings.HasPrefix(lower, "sec-websocket-"):
+			return nil, errors.New("invalid Noise WebSocket admission header")
+		}
+		out[name] = append([]string(nil), values...)
+	}
+	return out, nil
+}

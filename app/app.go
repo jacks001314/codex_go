@@ -1104,6 +1104,23 @@ func runExecServer(ctx context.Context, opts *cli.ExecServerOptions, root *cli.R
 	return server.ServeTransport(ctx, listenURL, stdin, stdout)
 }
 
+// execServerInboundNoiseListen resolves Rust #62325's `--listen ws://IP:PORT`
+// with a Noise `--remote`: the executor accepts inbound harness connections
+// instead of dialing a rendezvous relay. Without --remote the listener stays
+// the plaintext exec-server transport.
+func execServerInboundNoiseListen(opts *cli.ExecServerOptions) (string, error) {
+	if opts == nil || !opts.ListenSet || strings.TrimSpace(opts.Listen) == "" {
+		return "", nil
+	}
+	if strings.EqualFold(strings.TrimSpace(opts.RemoteTransport), "direct") {
+		return "", errors.New("remote --listen requires Noise transport")
+	}
+	if opts.ForwardBound {
+		return "", errors.New("remote --listen cannot be used with forward")
+	}
+	return execserver.ParseInboundNoiseListenURL(opts.Listen)
+}
+
 // execServerForwardURL reports the `exec-server forward --connect` destination.
 // Rust's forward mode requires --remote, so the destination rides on the remote
 // environment config: every accepted Noise relay stream is bridged to that
@@ -1127,6 +1144,10 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 	environmentID := strings.TrimSpace(opts.EnvironmentID)
 	if environmentID == "" {
 		return errors.New("environment id is required for remote exec-server registration")
+	}
+	inboundListen, err := execServerInboundNoiseListen(opts)
+	if err != nil {
+		return err
 	}
 	var registrationBearerHeaders http.Header
 	if opts.RegistrationBearerStdin {
@@ -1242,6 +1263,7 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 			TcpUpstreamProxy:           opts.TcpUpstreamProxy,
 			EnvironmentConfigReader:    environmentConfigReader,
 			AllowedSymlinkedCodexHome:  loadedConfig.AllowedSymlinkedCodexHome(),
+			InboundListen:              inboundListen,
 		}).WithRegistryBearerRedaction()
 		runErr := execserver.RunRemoteEnvironment(configContext, cfg)
 		if execServerStdinClosed(stdinClosed) {
@@ -1268,6 +1290,7 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 			TcpUpstreamProxy:           opts.TcpUpstreamProxy,
 			EnvironmentConfigReader:    environmentConfigReader,
 			AllowedSymlinkedCodexHome:  loadedConfig.AllowedSymlinkedCodexHome(),
+			InboundListen:              inboundListen,
 		}).WithExecutorCredentialAuth()
 		if err != nil {
 			return err
@@ -1288,7 +1311,7 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		// Rust #54434: the scoped credential pipe replaces account
 		// authentication and workload identity, and it owns the parent
 		// lifetime, so this branch returns before the account store is read.
-		return runExecServerRemoteWithExecutorCredential(ctx, opts, loadedConfig, baseURL, environmentID, preferMXC, environmentConfigReader, stdin)
+		return runExecServerRemoteWithExecutorCredential(ctx, opts, loadedConfig, baseURL, environmentID, preferMXC, environmentConfigReader, inboundListen, stdin)
 	}
 	if opts.UseAgentIdentityAuth {
 		accessToken := strings.TrimSpace(os.Getenv(auth.CodexAccessTokenEnv))
@@ -1311,6 +1334,7 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 			TcpUpstreamProxy:           opts.TcpUpstreamProxy,
 			EnvironmentConfigReader:    environmentConfigReader,
 			AllowedSymlinkedCodexHome:  loadedConfig.AllowedSymlinkedCodexHome(),
+			InboundListen:              inboundListen,
 		})
 	}
 	storeOptions := authStoreOptionsFromLoadedConfig(loadedConfig)
@@ -1372,6 +1396,7 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		TcpUpstreamProxy:           opts.TcpUpstreamProxy,
 		EnvironmentConfigReader:    environmentConfigReader,
 		AllowedSymlinkedCodexHome:  loadedConfig.AllowedSymlinkedCodexHome(),
+		InboundListen:              inboundListen,
 	})
 }
 
@@ -1473,6 +1498,7 @@ func runExecServerRemoteWithExecutorCredential(
 	environmentID string,
 	preferMXC *bool,
 	environmentConfigReader execserver.EnvironmentConfigReader,
+	inboundListen string,
 	stdin io.Reader,
 ) error {
 	pipe := execserver.NewExecutorCredentialPipe(environmentID, stdin)
@@ -1498,6 +1524,7 @@ func runExecServerRemoteWithExecutorCredential(
 		TcpUpstreamProxy:           opts.TcpUpstreamProxy,
 		EnvironmentConfigReader:    environmentConfigReader,
 		AllowedSymlinkedCodexHome:  loadedConfig.AllowedSymlinkedCodexHome(),
+		InboundListen:              inboundListen,
 	}
 	scoped, err := cfg.WithExecutorCredentialAuth()
 	if err != nil {
