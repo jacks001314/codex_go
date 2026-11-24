@@ -55007,7 +55007,8 @@
     "codex_go"
    ],
    "evidence": [
-    "Batch 122: partial - Rust refreshes Guardian v3 evidence before retrying an approval review. Go's Guardian retry path re-reads the review history through guardianReviewHistoryItems, but there is no v3 evidence-refresh step before the retry."
+    "Batch 122: partial - Rust refreshes Guardian v3 evidence before retrying an approval review. Go's Guardian retry path re-reads the review history through guardianReviewHistoryItems, but there is no v3 evidence-refresh step before the retry.",
+    "Batch 270: approval reviews now carry Rust #63363's evidence-cutoff model (codex-rs/ext/guardian-v3/src/actor.rs). GuardianReviewEvidence binds the request-time GuardianHistoryPosition plus the root authorization revisions; AttemptCutoff returns that position for the first attempt, reuses it on a retry whose root revisions still match the captured snapshot, and otherwise calls a supplied capture to flush and take a fresh position for the new authorization revision, refusing a position from another root or a missing capture. Combined with Batch 258's GuardianRoutedEvidence.WaitUntilRouted, a prepared review can capture the position at binding, take a fresh one when authorization changed, and wait for routing to cover it before submitting. Tests: agentboard/guardian_review_evidence_like_rust_test.go (first attempt, unchanged-revision retry, changed-authorization capture, foreign root, capture failure). Residual: the host-side review preparation that calls AttemptCutoff and then WaitUntilRouted is still missing."
    ],
    "kind": "runtime",
    "sha": "223b61a9a80241cd200853e79f112657466bc0b9",

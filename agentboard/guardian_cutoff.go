@@ -34,6 +34,82 @@ func (p GuardianHistoryPosition) Covers(cutoff GuardianHistoryPosition) (bool, e
 	return true, nil
 }
 
+// GuardianReviewEvidence is the evidence cutoff captured for one approval
+// review (Rust #63363 codex-rs/ext/guardian-v3/src/actor.rs). The first attempt
+// uses the position captured when the action was bound; a retry captures a
+// fresh position after core sampled a new authorization revision, and reuses
+// the initial cutoff while the root revisions are unchanged.
+type GuardianReviewEvidence struct {
+	mu        sync.Mutex
+	initial   GuardianHistoryPosition
+	revisions uint64
+	current   GuardianHistoryPosition
+	attempts  int
+}
+
+// NewGuardianReviewEvidence binds the request-time history position and the
+// root authorization revisions it was captured with.
+func NewGuardianReviewEvidence(position GuardianHistoryPosition, revisions uint64) *GuardianReviewEvidence {
+	position.ThreadID = strings.TrimSpace(position.ThreadID)
+	return &GuardianReviewEvidence{initial: position, revisions: revisions, current: position}
+}
+
+// Position copies the cutoff for the next attempt.
+func (e *GuardianReviewEvidence) Position() GuardianHistoryPosition {
+	if e == nil {
+		return GuardianHistoryPosition{}
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.current
+}
+
+// Attempts is the number of attempt cutoffs handed out so far.
+func (e *GuardianReviewEvidence) Attempts() int {
+	if e == nil {
+		return 0
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.attempts
+}
+
+// AttemptCutoff returns the cutoff for the next review attempt. The first call
+// returns the request-time position without capturing. Later calls reuse that
+// position while the root revisions still match the captured snapshot, and
+// otherwise flush and capture a fresh position (Rust #63363: "Every later
+// attempt flushes and captures again after core has sampled its new
+// authorization revision"). A position from another root is refused.
+func (e *GuardianReviewEvidence) AttemptCutoff(revisions uint64, capture func() (GuardianHistoryPosition, uint64, error)) (GuardianHistoryPosition, error) {
+	if e == nil {
+		return GuardianHistoryPosition{}, errors.New("Guardian review evidence is unavailable")
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.attempts == 0 {
+		e.attempts = 1
+		return e.current, nil
+	}
+	e.attempts++
+	if revisions == e.revisions {
+		return e.initial, nil
+	}
+	if capture == nil {
+		return GuardianHistoryPosition{}, errors.New("Guardian review evidence requires a fresh capture")
+	}
+	fresh, freshRevisions, err := capture()
+	if err != nil {
+		return GuardianHistoryPosition{}, err
+	}
+	fresh.ThreadID = strings.TrimSpace(fresh.ThreadID)
+	if fresh.ThreadID != e.initial.ThreadID {
+		return GuardianHistoryPosition{}, errors.New("Guardian cutoff belongs to another root")
+	}
+	e.revisions = freshRevisions
+	e.current = fresh
+	return fresh, nil
+}
+
 // GuardianRoutedEvidence is the root's routing watermark: the housekeeper
 // advances it after publishing (Rust LiveDelivery::routed / Capture::routed_through),
 // and a catch-up request waits on it instead of polling the board.
