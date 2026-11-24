@@ -392,6 +392,19 @@ func (i *GuardianActorInbox) Deliver(ctx context.Context, actor string, board Ag
 	return nil
 }
 
+// DeliverPending drains every original queued when the reviewer became idle
+// (Rust #62136: drain each actor's inbox when its reviewer becomes idle and
+// before reserving the conversation for a verdict). The queue length is
+// observed once, so evidence that arrives while the callback runs waits for
+// the next drain, and the caller's cursor advances only after each admitted
+// batch was recorded.
+func (i *GuardianActorInbox) DeliverPending(ctx context.Context, actor string, board AgentMessageBoard, delivered *int, policy utils.TruncationPolicy, admit func(context.Context, GuardianEvidenceItem) error) error {
+	if i == nil {
+		return errors.New("Guardian inbox is unavailable")
+	}
+	return i.Deliver(ctx, actor, board, delivered, i.Len(), policy, admit)
+}
+
 func (i *GuardianActorInbox) rangePosts(start int, end int) []GuardianQueuedEvidence {
 	i.mu.Lock()
 	defer i.mu.Unlock()
