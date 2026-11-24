@@ -197,6 +197,23 @@ func launchApprovalsReviewer(overrides []config.Override) *string {
 	return nil
 }
 
+// applyInitialApproveForMePreset mirrors Rust #63589's resume approval preset
+// for the launch path: `--approve-for-me` selects on-request approvals,
+// workspace-write and the auto reviewer for the first conversation only. Later
+// sessions keep the regular launch configuration.
+func applyInitialApproveForMePreset(root *cli.RootOptions, state *codextui.State, params *appserver.ThreadStartParams) {
+	if root == nil || state == nil || params == nil {
+		return
+	}
+	if !root.Shared.ApproveForMe || !state.StartupThreadPending {
+		return
+	}
+	params.ApprovalPolicy = string(sandbox.ApprovalOnRequest)
+	reviewer := string(chatwidget.ApprovalsReviewerAutoReview)
+	params.ApprovalsReviewer = &reviewer
+	params.Sandbox = string(sandbox.SandboxWorkspaceWrite)
+}
+
 // startupApprovalPolicyAllowed reports whether a projectless implicit approval
 // policy may be selected under the managed requirements (Rust
 // apply_projectless_approval_policy's allow-list check).

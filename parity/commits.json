@@ -55899,7 +55899,7 @@
     "codex_go"
    ],
    "evidence": [
-    "Partial: Go parses --approve-for-me and applies it to the launch configuration, but it does not resolve the preset against the selected conversations workspace and managed requirements or read back an already-loaded conversations settings before the initial prompt, so a resumed conversation can miss or retain the override."
+    "Partial: the launch's `--approve-for-me` preset is now scoped to the initial conversation. app/startup_launch_permissions.go applyInitialApproveForMePreset sets thread/start to approval on-request, reviewer auto_review and sandbox workspace-write only while tui.State.StartupThreadPending is true, and the preset no longer enters interactivePermissionLoadOptions, so /cd and sidebar previews resolve the destination's own permissions again. Residual: the resume path still does not send the preset with thread/resume, does not resolve it against the selected conversation's workspace and managed requirements (Rust resume_permissions.rs), and does not read back the loaded thread's approval and sandbox settings before the initial prompt."
    ],
    "kind": "runtime",
    "sha": "7ce4437488c69950fe87f1d8ab4b00bdb4bbd193",

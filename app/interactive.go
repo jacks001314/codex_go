@@ -408,11 +408,6 @@ func interactivePermissionLoadOptions(root *cli.RootOptions, cwd string) *config
 		if value := strings.TrimSpace(root.Shared.ApprovalPolicy); value != "" {
 			effective.RawOverrides = append(effective.RawOverrides, "approval_policy="+strconv.Quote(value))
 		}
-		if root.Shared.ApproveForMe {
-			effective.RawOverrides = append(effective.RawOverrides,
-				"approval_policy="+strconv.Quote(string(sandbox.ApprovalOnRequest)),
-				"sandbox_mode="+strconv.Quote(string(sandbox.SandboxWorkspaceWrite)))
-		}
 		if root.Shared.DangerouslyBypassApprovalsAndSandbox {
 			effective.RawOverrides = append(effective.RawOverrides,
 				"approval_policy="+strconv.Quote(string(sandbox.ApprovalNever)),
@@ -2163,6 +2158,10 @@ func interactiveLocalThreadStartParams(root *cli.RootOptions, state *codextui.St
 		enabled := true
 		threadStart.DaybreakEnabled = &enabled
 	}
+	// Rust #63589: `--approve-for-me` is a preset for the initial conversation
+	// only, so it is applied after the launch selection instead of entering the
+	// launch configuration that later sessions reuse.
+	applyInitialApproveForMePreset(root, state, &threadStart)
 	return threadStart
 }
 
