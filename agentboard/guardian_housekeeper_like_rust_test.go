@@ -2,6 +2,7 @@ package agentboard
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -260,6 +261,103 @@ func TestGuardianHousekeeperBatchTimeoutLikeRust(t *testing.T) {
 	}
 	if _, err := housekeeper.RouteNext(ctx, sources); err == nil {
 		t.Fatal("a timed-out housekeeper accepted another batch")
+	}
+}
+
+// TestGuardianHousekeeperRoutesBatchPrefixLikeRust covers Rust #62372's batch
+// sizing at the routing pass: with a byte budget the decider sees only the
+// prefix of originals that fits, and the pass routes exactly those.
+func TestGuardianHousekeeperRoutesBatchPrefixLikeRust(t *testing.T) {
+	ctx, board, delivery, root, _ := guardianHousekeeperFixture(t)
+	if err := board.UpsertChannel(ctx, root, UpsertChannelRequest{ChannelName: "known"}); err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+	sources := []GuardianRoutingSource{
+		{ID: GuardianEvidenceID{Ordinal: 1}, Text: guardianEvidenceText(1, "one")},
+		{ID: GuardianEvidenceID{Ordinal: 2}, Text: guardianEvidenceText(2, strings.Repeat("y", 400))},
+		{ID: GuardianEvidenceID{Ordinal: 3}, Text: guardianEvidenceText(3, "tiny")},
+	}
+	catalog := map[string]*string{"known": nil}
+	empty, err := json.Marshal(guardianRoutingInput{Catalog: catalog, Sources: []GuardianRoutingSource{}})
+	if err != nil {
+		t.Fatalf("marshal empty input: %v", err)
+	}
+	first, err := json.Marshal(sources[0])
+	if err != nil {
+		t.Fatalf("marshal first source: %v", err)
+	}
+	third, err := json.Marshal(sources[2])
+	if err != nil {
+		t.Fatalf("marshal third source: %v", err)
+	}
+
+	var seen int
+	decider := func(_ context.Context, batch GuardianRoutingBatch) (GuardianRoutingDecision, error) {
+		seen = len(batch.Sources)
+		routes := make([][]string, len(batch.Sources))
+		for index := range routes {
+			routes[index] = []string{"known"}
+		}
+		return GuardianRoutingDecision{Routes: routes}, nil
+	}
+	housekeeper, err := NewGuardianHousekeeperWithOptions(board, root, delivery, decider, GuardianHousekeeperOptions{
+		// Room for the first and the tiny third, yet not for the large second:
+		// the pass routes the leading original only.
+		MaxInputBytes: len(empty) + len(first) + len(third) + 1,
+	})
+	if err != nil {
+		t.Fatalf("NewGuardianHousekeeperWithOptions() error = %v", err)
+	}
+	count, err := housekeeper.RouteNext(ctx, sources)
+	if err != nil {
+		t.Fatalf("RouteNext() error = %v", err)
+	}
+	if count != 1 || seen != 1 {
+		t.Fatalf("routed = %d, decider saw %d; want the single-original prefix", count, seen)
+	}
+	checks := []struct {
+		text string
+		want int
+	}{
+		{"one", 1},
+		{strings.Repeat("y", 400), 0},
+		{"tiny", 0},
+	}
+	for _, check := range checks {
+		posts, err := board.SearchPosts(ctx, root, PostQuery{Query: guardianHousekeeperText(check.text), Page: PageRequest{Limit: 10}})
+		if err != nil {
+			t.Fatalf("SearchPosts(%q) error = %v", check.text, err)
+		}
+		if len(posts.Results) != check.want {
+			t.Fatalf("posts for %q = %d, want %d", check.text, len(posts.Results), check.want)
+		}
+	}
+}
+
+// TestGuardianHousekeeperRejectsUnroutableBatchLikeRust stops the pass when the
+// catalog alone exceeds the budget, like Rust's ensure! on an empty texts list.
+func TestGuardianHousekeeperRejectsUnroutableBatchLikeRust(t *testing.T) {
+	ctx, board, delivery, root, _ := guardianHousekeeperFixture(t)
+	if err := board.UpsertChannel(ctx, root, UpsertChannelRequest{ChannelName: "known"}); err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+	calls := 0
+	housekeeper, err := NewGuardianHousekeeperWithOptions(board, root, delivery, func(context.Context, GuardianRoutingBatch) (GuardianRoutingDecision, error) {
+		calls++
+		return GuardianRoutingDecision{Routes: [][]string{{"known"}}}, nil
+	}, GuardianHousekeeperOptions{MaxInputBytes: 1})
+	if err != nil {
+		t.Fatalf("NewGuardianHousekeeperWithOptions() error = %v", err)
+	}
+	sources := []GuardianRoutingSource{{ID: GuardianEvidenceID{Ordinal: 1}, Text: guardianEvidenceText(1, "one")}}
+	if _, err := housekeeper.RouteNext(ctx, sources); err == nil || !strings.Contains(err.Error(), "exceed the model's tool-output budget") {
+		t.Fatalf("RouteNext() error = %v, want the budget error", err)
+	}
+	if calls != 0 {
+		t.Fatalf("decider calls = %d, want the pass to stop before sampling", calls)
+	}
+	if queued := delivery.Inbox(root).Len(); queued != 0 {
+		t.Fatalf("over-budget pass queued %d posts", queued)
 	}
 }
 

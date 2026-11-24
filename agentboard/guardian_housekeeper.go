@@ -99,7 +99,9 @@ type GuardianHousekeeper struct {
 	decide   GuardianRoutingDecider
 	// batchTimeout bounds one routing decision; zero means no deadline.
 	batchTimeout time.Duration
-	stopped      bool
+	// maxInputBytes caps one serialized routing request; zero means no cap.
+	maxInputBytes int
+	stopped       bool
 }
 
 // NewGuardianHousekeeper binds one routing pass to a Guardian board, its root
@@ -114,6 +116,10 @@ type GuardianHousekeeperOptions struct {
 	// BatchTimeout bounds one routing decision. Zero keeps the caller's
 	// context as the only deadline.
 	BatchTimeout time.Duration
+	// MaxInputBytes caps one serialized routing request (the channel catalog
+	// plus the originals). Zero keeps the whole batch. Rust scales this from
+	// the model's tool-output budget (#62372).
+	MaxInputBytes int
 }
 
 // NewGuardianHousekeeperWithOptions binds a routing pass with a batch budget.
@@ -131,11 +137,12 @@ func NewGuardianHousekeeperWithOptions(board AgentMessageBoard, owner string, de
 		return nil, errors.New("housekeeper root mismatch")
 	}
 	return &GuardianHousekeeper{
-		board:        board,
-		owner:        owner,
-		delivery:     delivery,
-		decide:       decide,
-		batchTimeout: options.BatchTimeout,
+		board:         board,
+		owner:         owner,
+		delivery:      delivery,
+		decide:        decide,
+		batchTimeout:  options.BatchTimeout,
+		maxInputBytes: options.MaxInputBytes,
 	}, nil
 }
 
@@ -172,6 +179,15 @@ func (h *GuardianHousekeeper) routeNext(ctx context.Context, sources []GuardianR
 	catalog, err := h.catalog(ctx)
 	if err != nil {
 		return 0, err
+	}
+	if h.maxInputBytes > 0 {
+		// Rust sizes a batch by the model's tool-output budget and stops before
+		// the first original that does not fit, leaving it for the next pass.
+		prefix, err := GuardianRoutingBatchPrefix(catalog, sources, h.maxInputBytes)
+		if err != nil {
+			return 0, err
+		}
+		sources = sources[:prefix]
 	}
 	decisionCtx := ctx
 	if h.batchTimeout > 0 {
