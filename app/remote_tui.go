@@ -563,7 +563,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	backendID := codextui.NewBackendID()
 	brokers := newRemoteTUIBrokers()
 	interrupts := newRemoteTUIInterruptController(ctx, endpoint)
-	paramsMode := threadParamsModeForLaunch(root)
+	paramsMode := threadParamsModeForEndpoint(endpoint)
 	// Rust #61600: only a Cloud session generates and saves automatic titles
 	// through the Cloud account, and only there does a manual rename report an
 	// in-flight automatic write instead of waiting for it.
@@ -797,7 +797,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnAgentsOverviewDelete:        interactiveRemoteAgentsOverviewDelete(ctx, endpoint),
 		OnAgentsOverviewRename:        renameAgentsOverviewHandler,
 		OnWriteSettings: interactiveRemoteSettingsWriteHandler(ctx, endpoint, func() string {
-			return remoteSettingsReadCWD(threadParamsModeForLaunch(root), root, state)
+			return remoteSettingsReadCWD(paramsMode, root, state)
 		}),
 		OnUpdateCollaborationMode:        interactiveRemoteCollaborationModeUpdateHandler(ctx, endpoint),
 		OnWriteMemorySettings:            interactiveRemoteMemorySettingsWriteHandler(ctx, endpoint),
@@ -1603,7 +1603,7 @@ func interactiveRemoteStartSide(ctx context.Context, root *cli.RootOptions, endp
 		storage = codextea.SideChatStorageTemporary
 	}
 	forkAndInject := func(storage codextea.SideChatStorage) (*appserver.ThreadForkResponse, error) {
-		forkParams, err := remoteSideThreadForkParamsForMode(threadParamsModeForLaunch(root), root, state, parentThreadID, params.RuntimeWorkspaceRoots, storage)
+		forkParams, err := remoteSideThreadForkParamsForMode(threadParamsModeForEndpoint(endpoint), root, state, parentThreadID, params.RuntimeWorkspaceRoots, storage)
 		if err != nil {
 			return nil, err
 		}
@@ -2105,7 +2105,7 @@ func interactiveRemoteSessionActionHandler(ctx context.Context, endpoint *appser
 		// Rust #57267: a native hosted conversation refuses forks in the TUI
 		// (app_server_session.rs:1195).
 		if selection.Kind == codextui.SessionSelectionFork {
-			if err := cloudThreadForkError(threadParamsModeForLaunch(root)); err != nil {
+			if err := cloudThreadForkError(threadParamsModeForEndpoint(endpoint)); err != nil {
 				return nil, err
 			}
 		}
@@ -3822,15 +3822,7 @@ func interactiveRemoteEnsureThreadCommand(ctx context.Context, root *cli.RootOpt
 		messages := make(chan bubbletea.Msg, 64)
 		go func() {
 			defer close(messages)
-			client := &remoteAppServerTUIClient{
-				endpoint:         endpoint,
-				root:             root,
-				state:            state,
-				threadParamsMode: threadParamsModeForLaunch(root),
-				messages:         messages,
-				brokers:          brokers,
-				dial:             websocket.Dial,
-			}
+			client := newRemoteTUIPerTurnClient(root, endpoint, state, messages, brokers)
 			if taskTools != nil {
 				client.taskTools = taskTools
 			}
@@ -4015,20 +4007,28 @@ func waitRemoteTurnStopped(ctx context.Context, client *remoteAppServerTUIClient
 	}
 }
 
+// newRemoteTUIPerTurnClient builds one connection for a turn or a lazily
+// started thread. Rust #57267 decides thread settings ownership from the opened
+// transport, so a local daemon keeps Embedded (client-owned) settings even when
+// it was reached through an explicit --remote address.
+func newRemoteTUIPerTurnClient(root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, state *codextui.State, messages chan<- bubbletea.Msg, brokers remoteTUIBrokers) *remoteAppServerTUIClient {
+	return &remoteAppServerTUIClient{
+		endpoint:         endpoint,
+		root:             root,
+		state:            state,
+		threadParamsMode: threadParamsModeForEndpoint(endpoint),
+		messages:         messages,
+		brokers:          brokers,
+		dial:             websocket.Dial,
+	}
+}
+
 func runInteractiveRemoteTurn(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, state *codextui.State, request codextea.SubmitRequest, messages chan<- bubbletea.Msg, brokers remoteTUIBrokers, interrupts *remoteTUIInterruptController, hosts ...*taskToolsMCPHost) {
 	defer close(messages)
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	client := &remoteAppServerTUIClient{
-		endpoint:         endpoint,
-		root:             root,
-		state:            state,
-		threadParamsMode: threadParamsModeForLaunch(root),
-		messages:         messages,
-		brokers:          brokers,
-		dial:             websocket.Dial,
-	}
+	client := newRemoteTUIPerTurnClient(root, endpoint, state, messages, brokers)
 	if len(hosts) > 0 {
 		client.taskTools = hosts[0]
 	}

@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	bubbletea "charm.land/bubbletea/v2"
-	"github.com/coder/websocket"
 
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
@@ -56,14 +55,7 @@ func runRemoteThreadApprovalReconnect(ctx context.Context, root *cli.RootOptions
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	client := &remoteAppServerTUIClient{
-		endpoint:         endpoint,
-		root:             root,
-		threadParamsMode: threadParamsModeForLaunch(root),
-		messages:         messages,
-		brokers:          brokers,
-		dial:             websocket.Dial,
-	}
+	client := newRemoteTUIPerTurnClient(root, endpoint, nil, messages, brokers)
 	if err := client.connect(ctx); err != nil {
 		return
 	}
