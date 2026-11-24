@@ -1234,16 +1234,20 @@ func (r *RuntimeRouter) persistRealtimeHistoryItems(threadID string, items []rea
 	if threadID == "" {
 		return nil
 	}
+	if r.realtimeHistoryRecoveryRequired(threadID) {
+		return errRealtimeHistoryRecoveryRequired
+	}
 	payloads := make([]json.RawMessage, 0, len(items))
 	for _, item := range items {
 		encoded, err := item.MarshalRolloutJSON()
 		if err != nil {
+			r.reportRealtimeHistoryRecoveryRequired(threadID)
 			return err
 		}
 		payloads = append(payloads, encoded)
 	}
 	now := runtimeRouterNow(r).UTC()
-	return r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
+	err := r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
 		if err := rollout.AppendRealtimeItems(recorder, payloads, now); err != nil {
 			return err
 		}
@@ -1252,6 +1256,89 @@ func (r *RuntimeRouter) persistRealtimeHistoryItems(threadID string, items []rea
 		}
 		return nil
 	})
+	if err != nil {
+		// Rust #62299: an unconfirmed history write leaves the conversation in a
+		// state that only recovery can repair, so later writes fail closed and
+		// the host is told that recovery is required.
+		r.reportRealtimeHistoryRecoveryRequired(threadID)
+		return err
+	}
+	return nil
+}
+
+// realtimeHistoryRecoveryReason is the closed-notification reason Rust uses
+// when the transport ended without a confirmed durable close marker.
+const realtimeHistoryRecoveryReason = "history_recovery_required"
+
+// errRealtimeHistoryRecoveryRequired reports that a previous realtime history
+// write could not be confirmed for this thread (Rust HISTORY_RECOVERY_MESSAGE).
+var errRealtimeHistoryRecoveryRequired = errors.New("realtime history recovery required; reload the thread before continuing")
+
+// reportRealtimeHistoryRecoveryRequired marks the thread and tells the host
+// that the thread must be reloaded, mirroring Rust
+// report_history_recovery_required: an error event followed by a closed
+// notification carrying the recovery reason.
+func (r *RuntimeRouter) reportRealtimeHistoryRecoveryRequired(threadID string) {
+	r.markRealtimeHistoryRecoveryRequired(threadID)
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	r.notifyRealtime([]realtime.Notification{
+		{
+			Method: realtime.NotificationError,
+			Params: realtime.ErrorNotification{ThreadID: threadID, Message: errRealtimeHistoryRecoveryRequired.Error()},
+		},
+		realtime.NewClosedNotification(threadID, realtimeHistoryRecoveryReason),
+	})
+}
+
+// markRealtimeHistoryRecoveryRequired records that a realtime history write for
+// the thread could not be confirmed (Rust Conversation::mark_history_recovery_required).
+func (r *RuntimeRouter) markRealtimeHistoryRecoveryRequired(threadID string) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.realtimeHistoryRecovery == nil {
+		r.realtimeHistoryRecovery = map[string]bool{}
+	}
+	r.realtimeHistoryRecovery[threadID] = true
+}
+
+// realtimeHistoryRecoveryRequired reports whether the thread must recover its
+// realtime history before new frames may be written.
+func (r *RuntimeRouter) realtimeHistoryRecoveryRequired(threadID string) bool {
+	if r == nil {
+		return false
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.realtimeHistoryRecovery[threadID]
+}
+
+// ClearRealtimeHistoryRecovery drops the recovery requirement after a reload
+// verified the thread's history.
+func (r *RuntimeRouter) ClearRealtimeHistoryRecovery(threadID string) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.realtimeHistoryRecovery, threadID)
 }
 
 // sealRealtimeInput commits an accepted model input to durable history after

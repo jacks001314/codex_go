@@ -463,6 +463,10 @@ type RuntimeRouter struct {
 	// same startedAtMs (Rust #57172 turn timing state).
 	itemStartedTimesMu sync.Mutex
 	itemStartedTimes   map[string]int64
+	// realtimeHistoryRecovery marks threads whose last realtime history write
+	// could not be confirmed (Rust #62299); further frame writes fail closed
+	// until the thread is reloaded and verified.
+	realtimeHistoryRecovery map[string]bool
 	// completedCommandItems remembers command items that already reported a
 	// terminal status. A turn transition can complete an approval-opened item
 	// before the tool result arrives, and the later result must not publish a
