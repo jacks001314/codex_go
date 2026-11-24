@@ -7,6 +7,7 @@ import (
 	"github.com/mattn/go-runewidth"
 
 	codextui "codex_go/tui"
+	"codex_go/utils"
 )
 
 // Rust #62390: the fullscreen TUI recolours the link painted under the pointer
@@ -168,10 +169,154 @@ func (m *Model) applyLinkHover(frame string) string {
 	if m.hoverPointerY < 0 || m.hoverPointerY >= len(rows) {
 		return frame
 	}
-	span, ok := paintedLinkSpanAt(rows[m.hoverPointerY], m.hoverPointerX)
+	row := rows[m.hoverPointerY]
+	span, ok := paintedLinkSpanAt(row, m.hoverPointerX)
+	if !ok && m.transcriptDisclosureControlsEnabled() {
+		// Rust #62390 recolours transcript disclosure controls through their
+		// hover area; the painted row carries the same label the click hits.
+		span, ok = paintedDisclosureControlSpan(row, m.hoverPointerX)
+	}
+	if !ok {
+		span, ok = paintedWarningNoticeSpan(row, m.hoverPointerX)
+	}
 	if !ok {
 		return frame
 	}
-	rows[m.hoverPointerY] = restylePaintedLink(rows[m.hoverPointerY], span, m.linkHoverSGR())
+	rows[m.hoverPointerY] = restylePaintedLink(row, span, m.linkHoverSGR())
 	return strings.Join(rows, "\n")
+}
+
+// rawIndexAtDisplayColumn returns the raw byte index where display column col
+// begins, skipping escape sequences. The second result reports whether the row
+// reaches that column.
+func rawIndexAtDisplayColumn(row string, col int) (int, bool) {
+	if col < 0 {
+		return 0, false
+	}
+	column := 0
+	for i := 0; i < len(row); {
+		if row[i] == 0x1b {
+			end := csiEnd(row, i)
+			if end < 0 {
+				return 0, false
+			}
+			i = end
+			continue
+		}
+		if column >= col {
+			return i, true
+		}
+		r, size := utf8.DecodeRuneInString(row[i:])
+		width := runewidth.RuneWidth(r)
+		if width < 0 {
+			width = 0
+		}
+		column += width
+		i += size
+	}
+	if column >= col {
+		return len(row), true
+	}
+	return 0, false
+}
+
+// activeSGRAt returns the last SGR sequence that starts before index, so a
+// restyled span ends back in the style the row had reached.
+func activeSGRAt(row string, index int) string {
+	last := ""
+	for i := 0; i < len(row) && i < index; {
+		if row[i] == 0x1b && strings.HasPrefix(row[i:], "\x1b[") {
+			end := csiEnd(row, i)
+			if end < 0 {
+				return last
+			}
+			if row[end-1] == 'm' {
+				last = row[i:end]
+			}
+			i = end
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(row[i:])
+		if size == 0 {
+			break
+		}
+		i += size
+	}
+	return last
+}
+
+// trimTrailingSGRReset returns the index just past the row's last visible
+// character, so a trailing reset stays outside a restyled span.
+func trimTrailingSGRReset(row string) int {
+	end := len(row)
+	for {
+		start := strings.LastIndex(row[:end], "\x1b[")
+		sequenceEnd := csiEnd(row, start)
+		if start < 0 || sequenceEnd != end {
+			return end
+		}
+		seq := row[start:end]
+		if seq != "\x1b[0m" && seq != "\x1b[m" {
+			return end
+		}
+		end = start
+	}
+}
+
+// paintedDisclosureControlSpan reports the painted disclosure label under the
+// pointer. Rust #62390 highlights the control area the pointer sits in; Go's
+// paint keeps the label on one dim row, so the visible label bounds are the
+// hover area.
+func paintedDisclosureControlSpan(row string, col int) (paintedLinkSpan, bool) {
+	if col < 0 || !isTranscriptDisclosureControlLine(row) {
+		return paintedLinkSpan{}, false
+	}
+	visible := utils.StripANSI(row)
+	trimmed := strings.TrimSpace(visible)
+	if trimmed == "" {
+		return paintedLinkSpan{}, false
+	}
+	indent := codextui.DisplayWidth(visible[:strings.Index(visible, trimmed)])
+	start := indent
+	end := indent + codextui.DisplayWidth(trimmed)
+	if col < start || col >= end {
+		return paintedLinkSpan{}, false
+	}
+	bodyStart, ok := rawIndexAtDisplayColumn(row, start)
+	if !ok {
+		return paintedLinkSpan{}, false
+	}
+	bodyEnd := trimTrailingSGRReset(row)
+	if bodyEnd <= bodyStart {
+		return paintedLinkSpan{}, false
+	}
+	return paintedLinkSpan{bodyStart: bodyStart, bodyEnd: bodyEnd, restore: activeSGRAt(row, bodyStart)}, true
+}
+
+// paintedWarningNoticeSpan reports the passive warning notice under the
+// pointer. The notice is right-aligned on its row and starts at the warning
+// glyph (Rust #62390 warning-notice hover area).
+func paintedWarningNoticeSpan(row string, col int) (paintedLinkSpan, bool) {
+	if col < 0 {
+		return paintedLinkSpan{}, false
+	}
+	visible := utils.StripANSI(row)
+	glyph := strings.Index(visible, "\u26a0")
+	if glyph < 0 {
+		return paintedLinkSpan{}, false
+	}
+	start := codextui.DisplayWidth(visible[:glyph])
+	end := codextui.DisplayWidth(visible)
+	if col < start || col >= end {
+		return paintedLinkSpan{}, false
+	}
+	bodyStart, ok := rawIndexAtDisplayColumn(row, start)
+	if !ok {
+		return paintedLinkSpan{}, false
+	}
+	bodyEnd := trimTrailingSGRReset(row)
+	if bodyEnd <= bodyStart {
+		return paintedLinkSpan{}, false
+	}
+	return paintedLinkSpan{bodyStart: bodyStart, bodyEnd: bodyEnd, restore: activeSGRAt(row, bodyStart)}, true
 }
