@@ -68,9 +68,15 @@ func TestSubagentSpawnServiceTierLikeRust(t *testing.T) {
 		t.Fatalf("SpawnAgent() error = %v", err)
 	}
 	// The spawned child keeps the store directory open, which makes TempDir
-	// cleanup fail on Windows; shut it down before the test returns.
+	// cleanup fail on Windows; shut it down and wait for its turn worker to
+	// stop writing before the test returns.
 	t.Cleanup(func() {
 		_, _ = controller.CloseAgent(context.Background(), &agent.CloseAgentArgs{Target: child.AgentID})
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := router.threads.WaitForTurnWorkers(ctx); err != nil {
+			t.Errorf("wait for the child turn workers: %v", err)
+		}
 	})
 	childRecord, err := store.Read(session.ThreadID(child.AgentID), false, true)
 	if err != nil {
