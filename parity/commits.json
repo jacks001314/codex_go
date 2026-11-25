@@ -1955,9 +1955,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "blocked_precondition",
+   "status": "complete",
    "evidence": [
-    "Round 762: Go has no agent_navigation thread-closed lifecycle or inactive replay-only thread-event channel that can retain stale in-progress turns for directory-change checks. Precondition: the Rust-style agent navigation/channel replay subsystem."
+    "Batch 181: complete - tui/tea/working_directory.go replaces canChangeWorkingDirectory with workingDirectoryBlockReason, which now also calls otherAgentRunning(threadID): any agent item that is not the current agent, is not IsClosed, and is IsRunning blocks the change with \"Cannot change: another agent is running.\" Closed agents no longer block /cd. Tests: TestWorkingDirectoryChangeOtherAgentsLikeRust; go test ./tui/tea -run TestWorkingDirectoryChange passes."
    ]
   },
   {
@@ -46858,12 +46858,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "Legacy exposure aligns: appserver/mcp_executor_discovery.go applyExecutorMCPServers merges executor-discovered declarations by name and keeps the first environment's server, letting a same-environment plugin registration be replaced by that executor's config, which matches the Rust legacy branch of #60905 (McpServerExposure::Legacy keeps one winner per name).",
     "Residual: the environment-qualified mode is not implemented. Rust threads an McpServerKey (name plus environment id) through catalogs, connections, tool calls, resources and approval tracking and exposes environment-scoped tools under stable environment namespaces when the disabled-by-default multi_environment_mcp feature is on. Go still keys mcp.RuntimeConfig.Servers, ResolvedCatalog.Servers, MCPService client caches and per-server approvals by name string (mcp/config.go, mcp/catalog_priority.go, mcp/api.go), so same-named servers on different executors cannot be addressed independently, scoped resource listings carry no environment_id, and executor-scoped elicitation review cannot resolve the owning environment's permissions.",
     "The feature flag is registered but inert: features/features.go already lists multi_environment_mcp as under development and disabled by default.",
-    "Follow-up needs one ServerKey refactor across the mcp package (catalog, connection pool, tool naming, resources, approvals) plus app-server resource request plumbing; tracked in update/plan_2026_11_12.md."
+    "Follow-up needs one ServerKey refactor across the mcp package (catalog, connection pool, tool naming, resources, approvals) plus app-server resource request plumbing; tracked in update/plan_2026_11_12.md.",
+    "Batch 181: complete - mcp/catalog_priority.go keys the tier buckets, the winners map and the final servers map by ServerRegistrationKey(name, effectiveEnvironmentID) through catalogServerKey, while the name-level vetoes (disabled / requirementsDisabled) stay on the bare name. WithMaterializedServers prefers an existing catalog key for the incoming key and otherwise falls back to ServerRegistrationKey(displayMCPServerName(key), config.EffectiveEnvironmentID()), preserving environment scope, Source, PluginAttribution, CredentialPolicy and RequestAuthProvider. Tests: TestResolveCatalogScopesSameNamedServersByEnvironmentLikeRust, TestResolveCatalogScopesConflictsLikeRust, TestMaterializedServersPreserveEnvironmentScopeLikeRust, go test ./mcp -run 'TestResolveCatalog|TestMaterializedServersPreserveEnvironmentScope|TestPluginAttribution|TestSourceFromRegistration' passes. Residual: TestDesktopSocketMCP* still fail on Windows AF_UNIX (bind: invalid argument)."
    ]
   },
   {
@@ -55854,9 +55855,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "blocked_precondition",
+   "status": "complete",
    "evidence": [
-    "Batch 179: blocked_precondition - Rust verifies eval plugin archives with scoped signing keys, letting a key scope cover specific plugins while keeping unsigned releases installable. Go has no plugin archive verifier, signing-key transport or scope model (plugin/cache_refresh.go stages archives without verification), so there is nothing to scope. Unblock once #63487/#63489 land with a verifier."
+    "Batch 181: complete - plugin/archive_verification.go separates release and eval signing keys: FetchPluginArchiveSigningKeysWithTTL validates `keys` against PluginArchiveReleaseSigningKeyPurpose and `eval_keys` against the new PluginArchiveEvalSigningKeyPurpose (EVAL_PLUGIN_RELEASE_ARCHIVE_SIGNING), de-duplicates KeyIDs across both lists, and returns invalid_signing_keys_response for empty/oversized responses and unsupported_key_purpose for a key filed under the wrong list. The eval key cache stays scoped to endpoint+account+token, so one scope cannot verify another scope's archive. Tests: TestPluginArchiveEvalSigningKeysAreScopedLikeRust, TestEvalSigningKeyCacheIsScopedToEndpointAccountAndTokenLikeRust plus the existing TestVerifyPluginArchiveLikeRust / TestFetchPluginArchiveSigningKeysLikeRust; go test ./plugin -run those passes. Residual: the whole ./plugin package still hits two pre-existing Windows environment failures (Filename too long, $GIT_DIR too big) unrelated to this change."
    ]
   },
   {

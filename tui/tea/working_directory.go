@@ -16,29 +16,53 @@ import (
 // local session's working directory while preserving conversation history,
 // and /pwd (alias /cwd) displays the current working directory.
 
-// canChangeWorkingDirectory mirrors Rust ChatWidget::can_change_working_directory:
+// canChangeWorkingDirectory mirrors Rust's change_working_directory guard:
 // the active primary local session must be idle with no queued input, no side
-// conversation, no running background terminals, and no pending steers.
+// conversation, no running background terminals, no pending steers, and no
+// other open agent still running. Closed agents are ignored (#40625).
 func (m *Model) canChangeWorkingDirectory(threadID string) bool {
+	return m.workingDirectoryBlockReason(threadID) == ""
+}
+
+func (m *Model) workingDirectoryBlockReason(threadID string) string {
+	const idle = "Changing directories requires an idle primary session without queued input."
 	if m == nil || m.State == nil || m.onWorkingDirectoryChange == nil {
-		return false
+		return idle
 	}
 	if strings.TrimSpace(m.State.ThreadID) == "" || m.State.ThreadID != threadID {
-		return false
+		return idle
 	}
 	if m.inSideConversation() {
-		return false
+		return idle
 	}
 	if len(m.backgroundProcesses) > 0 {
-		return false
+		return idle
 	}
 	if m.isUserTurnPendingOrRunning() || len(m.queued) > 0 || len(m.pendingSteers) > 0 {
-		return false
+		return idle
 	}
 	if m.reviewState.IsReviewMode {
+		return idle
+	}
+	if m.otherAgentRunning(threadID) {
+		return "Cannot change: another agent is running."
+	}
+	return ""
+}
+
+func (m *Model) otherAgentRunning(threadID string) bool {
+	if m == nil {
 		return false
 	}
-	return true
+	for _, agent := range m.agentItems {
+		if agent.ThreadID == threadID || agent.IsClosed {
+			continue
+		}
+		if agent.IsRunning {
+			return true
+		}
+	}
+	return false
 }
 
 // applyWorkingDirectoryDisplayCommand mirrors Rust SlashCommand::Pwd: show the
@@ -93,8 +117,8 @@ func (m *Model) applyWorkingDirectoryChangeCommand(args string) bubbletea.Cmd {
 		m.refreshTranscript()
 		return nil
 	}
-	if !m.canChangeWorkingDirectory(threadID) {
-		m.addErrorHistoryMessage("Changing directories requires an idle primary session without queued input.")
+	if reason := m.workingDirectoryBlockReason(threadID); reason != "" {
+		m.addErrorHistoryMessage(reason)
 		m.refreshTranscript()
 		return nil
 	}
@@ -219,7 +243,7 @@ type WorkingDirectoryChangeResultMsg struct {
 	// session_lifecycle copies local_settings into the replacement chat
 	// widget). It is nil when the reload failed or no hook is installed.
 	Settings *LocalSettings
-	Error     string
+	Error    string
 }
 
 func resolveWorkingDirectory(path string, base string) (string, error) {

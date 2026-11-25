@@ -29,6 +29,9 @@ const (
 	PluginArchiveSigningAlgorithm = "RSA_PKCS1_SHA256"
 	// PluginArchiveSigningKeyPurpose marks a key that may sign release archives.
 	PluginArchiveSigningKeyPurpose = "PLUGIN_RELEASE_ARCHIVE_SIGNING"
+	// PluginArchiveEvalSigningKeyPurpose marks a scoped key that may sign eval
+	// plugin archives. It is only accepted from the eval_keys response list.
+	PluginArchiveEvalSigningKeyPurpose = "EVAL_PLUGIN_RELEASE_ARCHIVE_SIGNING"
 	// PluginArchiveMalformedMetadataCode is the failure category for signing
 	// metadata that cannot be read.
 	PluginArchiveMalformedMetadataCode = "malformed_metadata"
@@ -218,19 +221,32 @@ func FetchPluginArchiveSigningKeysWithTTL(ctx context.Context, client HTTPDoer, 
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		return nil, 0, errPluginArchiveKeysInvalid
 	}
-	keys := append(append([]PluginArchiveSigningKey(nil), decoded.Keys...), decoded.EvalKeys...)
+	keys := make([]PluginArchiveSigningKey, 0, len(decoded.Keys)+len(decoded.EvalKeys))
+	seen := map[string]bool{}
+	// Rust #63528: keys is the marketplace/release list and eval_keys is the
+	// eval-only scoped list. Legacy servers may still publish eval keys in
+	// keys, but only with the marketplace purpose; an eval-purpose key there
+	// is rejected instead of being silently accepted for every caller.
+	for _, list := range []struct {
+		keys    []PluginArchiveSigningKey
+		purpose string
+	}{
+		{decoded.Keys, PluginArchiveSigningKeyPurpose},
+		{decoded.EvalKeys, PluginArchiveEvalSigningKeyPurpose},
+	} {
+		for _, key := range list.keys {
+			if strings.TrimSpace(key.KeyID) == "" || len(key.PublicKeySPKIDERBase64) > maxPluginArchivePublicKeyBase64Bytes || seen[key.KeyID] {
+				return nil, 0, errPluginArchiveKeysInvalid
+			}
+			seen[key.KeyID] = true
+			if key.Purpose != list.purpose {
+				return nil, 0, errPluginArchiveKeyPurpose
+			}
+			keys = append(keys, key)
+		}
+	}
 	if len(keys) == 0 || len(keys) > maxPluginArchiveSigningKeys {
 		return nil, 0, errPluginArchiveKeysInvalid
-	}
-	seen := map[string]bool{}
-	for _, key := range keys {
-		if strings.TrimSpace(key.KeyID) == "" || len(key.PublicKeySPKIDERBase64) > maxPluginArchivePublicKeyBase64Bytes || seen[key.KeyID] {
-			return nil, 0, errPluginArchiveKeysInvalid
-		}
-		seen[key.KeyID] = true
-		if key.Purpose != PluginArchiveSigningKeyPurpose {
-			return nil, 0, errPluginArchiveKeyPurpose
-		}
 	}
 	ttl := uint64(0)
 	if decoded.CacheTTLSeconds != nil {

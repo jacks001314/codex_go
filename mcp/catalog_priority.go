@@ -99,6 +99,10 @@ type ResolvedCatalog struct {
 	RequirementsDisabledServerNames map[string]string
 }
 
+func catalogServerKey(action CatalogAction) string {
+	return ServerRegistrationKey(action.Name, action.Config.EffectiveEnvironmentID())
+}
+
 // ResolveCatalog resolves MCP server registrations from multiple sources into
 // a single winning set, following Rust's priority tiers:
 //
@@ -144,20 +148,21 @@ func ResolveCatalogWithState(initialDisabled map[string]bool, initialRequirement
 
 	// Track conflicts: same name, same tier
 	type tierKey struct {
-		name string
-		tier int
+		serverKey string
+		tier      int
 	}
 	byTier := map[tierKey][]CatalogAction{}
 	for _, action := range actions {
-		key := tierKey{name: action.Name, tier: CatalogSourcePriority(action.Source)}
+		key := tierKey{serverKey: catalogServerKey(action), tier: CatalogSourcePriority(action.Source)}
 		byTier[key] = append(byTier[key], action)
 	}
 
-	// Build winners per name across all tiers. Since actions are sorted ascending,
-	// each subsequent action overwrites the previous winner for the same name.
+	// Build winners per registration key across all tiers. Local servers keep
+	// their bare name; same-named servers contributed by different environments
+	// have distinct keys and can coexist (Rust #60905).
 	winners := map[string]CatalogAction{}
 	for _, action := range actions {
-		winners[action.Name] = action
+		winners[catalogServerKey(action)] = action
 	}
 
 	// Collect conflicts (same name, same tier, more than one action).
@@ -166,7 +171,7 @@ func ResolveCatalogWithState(initialDisabled map[string]bool, initialRequirement
 		if len(tierActions) < 2 {
 			continue
 		}
-		outcome, exists := winners[tierActions[0].Name]
+		outcome, exists := winners[catalogServerKey(tierActions[0])]
 		if !exists {
 			continue
 		}
@@ -179,10 +184,11 @@ func ResolveCatalogWithState(initialDisabled map[string]bool, initialRequirement
 
 	// Build final server map, applying removal actions and disabled vetos.
 	servers := make(map[string]ResolvedServer, len(winners))
-	for name, action := range winners {
+	for serverKey, action := range winners {
 		if action.Remove {
 			continue
 		}
+		name := action.Name
 		config := action.Config
 		persistDisabled := DisabledRegistrationIsNameVeto(action.Source)
 		if !config.Enabled && persistDisabled {
@@ -206,7 +212,7 @@ func ResolveCatalogWithState(initialDisabled map[string]bool, initialRequirement
 				disableServerConfigByRequirements(&config)
 			}
 		}
-		servers[name] = ResolvedServer{
+		servers[serverKey] = ResolvedServer{
 			Source:              action.Source,
 			PluginAttribution:   action.PluginAttribution,
 			Config:              config,
@@ -237,17 +243,28 @@ func (c *ResolvedCatalog) WithMaterializedServers(servers map[string]ServerConfi
 	if c == nil {
 		return nil
 	}
-	names := make([]string, 0, len(servers))
-	for name := range servers {
-		if _, ok := c.Servers[name]; ok {
-			names = append(names, name)
+	keys := make([]string, 0, len(servers))
+	inputKeys := make(map[string]string, len(servers))
+	for key, config := range servers {
+		previousKey := key
+		if _, ok := c.Servers[previousKey]; !ok {
+			previousKey = ServerRegistrationKey(displayMCPServerName(key), config.EffectiveEnvironmentID())
 		}
+		if _, ok := c.Servers[previousKey]; !ok {
+			continue
+		}
+		keys = append(keys, previousKey)
+		inputKeys[previousKey] = key
 	}
-	sort.Strings(names)
-	actions := make([]CatalogAction, 0, len(names))
-	for i, name := range names {
-		previous := c.Servers[name]
-		config := servers[name]
+	sort.Strings(keys)
+	actions := make([]CatalogAction, 0, len(keys))
+	for i, previousKey := range keys {
+		previous := c.Servers[previousKey]
+		config := servers[inputKeys[previousKey]]
+		name, environmentID := SplitServerRegistrationKey(previousKey)
+		if strings.TrimSpace(config.EnvironmentID) == "" && environmentID != DefaultMCPServerEnvironmentID {
+			config.EnvironmentID = environmentID
+		}
 		if previous.RequestAuthProvider != nil {
 			if mcpServerTransportEqual(previous.Config, config) {
 				config.RequestAuthProvider = previous.RequestAuthProvider
