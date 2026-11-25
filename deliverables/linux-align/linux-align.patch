@@ -1,0 +1,597 @@
+--- a/go.sum
++++ b/go.sum
+@@ -4,7 +4,7 @@
+ charm.land/bubbles/v2 v2.2.1/go.mod h1:wdMgn+sje1KNXdwFizIWjbf328fIUBxqEmJ/vYPo8yc=
+ charm.land/bubbletea/v2 v2.1.1 h1:S1S9l37pCZGrj1JexBcr9x4Nr3MVeM42InqCYM/tDpU=
+ charm.land/bubbletea/v2 v2.1.1/go.mod h1:xWHeyxIX9/wiFU2kgPW04ojOZyTzrWf+8lGjUCaftiU=
+-charm.land/glamour/v2 v2.0.1 h1:Vx2F81a4SBR5/IqAkDyeZ3mfuT7u+9AYxeXQ+J1n2Wc=
++charm.land/glamour/v2 v2.0.1 h1:xl+r00A4aJWU0z8fgwKd9fQQ4rsphqGUzuEiXZP5n+c=
+ charm.land/glamour/v2 v2.0.1/go.mod h1:jo9z8XqVKPeEFMVdvCRLGk++RyJ3CdUwgNr7EvXLw3k=
+ charm.land/lipgloss/v2 v2.0.6 h1:EaGKeuA8FvF+v2BT5VmZd2LoYLaMZJXA5n34th8nCIQ=
+ charm.land/lipgloss/v2 v2.0.6/go.mod h1:ipDDJNSGa1hlwDtSfW1s2/xR8Vdhbut4PXh2zEKZd0Q=
+--- a/tui/tea/model.go
++++ b/tui/tea/model.go
+@@ -4399,6 +4399,7 @@
+ 	// (TranscriptMode::resolve). An owned screen captures the mouse so the wheel
+ 	// scrolls the transcript instead of the terminal scrollback; inline mode
+ 	// leaves both gestures to the terminal.
++	programOptions = append(programOptions, bubbletea.WithFilter(jobControlFilter(ctx, func() jobControlTerminal { return program })))
+ 	program = bubbletea.NewProgram(model, programOptions...)
+ 	if options.OnProgramReady != nil {
+ 		options.OnProgramReady(program.Send)
+@@ -4700,6 +4701,9 @@
+ func (m *Model) update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
+ 	if m == nil {
+ 		return m, nil
++	}
++	if handled, cmd := m.handleJobControl(message); handled {
++		return m, cmd
+ 	}
+ 	m.syncPatchApprovalFollow()
+ 	// Rust's keypress inspector asks for raw key capture: it must see every
+--- /dev/null
++++ b/tui/tea/job_control.go
+@@ -0,0 +1,110 @@
++package tea
++
++import (
++	"context"
++	"fmt"
++	"time"
++
++	bubbletea "charm.land/bubbletea/v2"
++
++	"codex_go/tui/keymsg"
++	tuiterm "codex_go/tui/tui"
++)
++
++type jobControlErrorMsg struct{ err error }
++
++func (m *Model) handleJobControl(message bubbletea.Msg) (bool, bubbletea.Cmd) {
++	switch msg := message.(type) {
++	case keymsg.KeyMsg:
++		if msg.String() == tuiterm.SuspendKey {
++			return true, bubbletea.Suspend
++		}
++	case jobControlErrorMsg:
++		m.notice = "Cannot suspend: " + msg.err.Error()
++		return true, nil
++	case bubbletea.ResumeMsg:
++		m.configureAlternateScrollForSurface()
++		return true, nil
++	}
++	return false, nil
++}
++
++type jobControlTerminal interface {
++	ReleaseTerminal() error
++	RestoreTerminal() error
++}
++
++type jobControlSession interface {
++	foreground() (bool, error)
++	suspend(context.Context) error
++	close()
++}
++
++// Bubble Tea v2.1.1 restores raw mode before delivering ResumeMsg. Intercept
++// SuspendMsg before its built-in handler so even a background SIGCONT leaves
++// input and rendering released until the shell gives this process the tty.
++func jobControlFilter(ctx context.Context, terminal func() jobControlTerminal) func(bubbletea.Model, bubbletea.Msg) bubbletea.Msg {
++	if ctx == nil {
++		ctx = context.Background()
++	}
++	return func(_ bubbletea.Model, msg bubbletea.Msg) bubbletea.Msg {
++		if _, ok := msg.(bubbletea.SuspendMsg); !ok {
++			return msg
++		}
++		return suspendWithJobControl(ctx, terminal(), openJobControlSession)
++	}
++}
++
++func suspendWithJobControl(ctx context.Context, terminal jobControlTerminal, open func() (jobControlSession, error)) bubbletea.Msg {
++	session, err := open()
++	if err != nil {
++		return jobControlErrorMsg{err}
++	}
++	defer session.close()
++	foreground, err := session.foreground()
++	if err != nil {
++		return jobControlErrorMsg{err}
++	}
++	if !foreground {
++		return jobControlErrorMsg{fmt.Errorf("process does not own the foreground terminal")}
++	}
++	if err := terminal.ReleaseTerminal(); err != nil {
++		// Release may have only partly succeeded. Stop rather than re-entering
++		// raw mode or delivering a frame on an uncertain terminal.
++		return bubbletea.InterruptMsg{}
++	}
++	suspendErr := session.suspend(ctx)
++	if err := waitForJobControlForeground(ctx, session.foreground, 10*time.Millisecond); err != nil {
++		// In particular, never call RestoreTerminal after tty loss or cancel.
++		return bubbletea.InterruptMsg{}
++	}
++	if err := terminal.RestoreTerminal(); err != nil {
++		return bubbletea.InterruptMsg{}
++	}
++	if suspendErr != nil {
++		return jobControlErrorMsg{suspendErr}
++	}
++	return bubbletea.ResumeMsg{}
++}
++
++func waitForJobControlForeground(ctx context.Context, foreground func() (bool, error), interval time.Duration) error {
++	ticker := time.NewTicker(interval)
++	defer ticker.Stop()
++	for {
++		if err := ctx.Err(); err != nil {
++			return err
++		}
++		owned, err := foreground()
++		if err != nil {
++			return err
++		}
++		if owned {
++			return nil
++		}
++		select {
++		case <-ctx.Done():
++			return ctx.Err()
++		case <-ticker.C:
++		}
++	}
++}
+--- /dev/null
++++ b/tui/tea/job_control_unix.go
+@@ -0,0 +1,75 @@
++//go:build linux || darwin || freebsd || netbsd || openbsd || dragonfly
++
++package tea
++
++import (
++	"context"
++	"fmt"
++	"os"
++	"os/signal"
++	"syscall"
++	"time"
++
++	"golang.org/x/sys/unix"
++)
++
++type unixJobControlSession struct {
++	tty  *os.File
++	pgid int
++}
++
++func openJobControlSession() (jobControlSession, error) {
++	// /dev/tty requires a controlling terminal, unlike an arbitrary terminal
++	// descriptor on stdin. Keep it open through suspend/resume.
++	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
++	if err != nil {
++		return nil, fmt.Errorf("no controlling terminal: %w", err)
++	}
++	pgid := unix.Getpgrp()
++	if pgid <= 0 {
++		tty.Close()
++		return nil, fmt.Errorf("invalid process group %d", pgid)
++	}
++	return &unixJobControlSession{tty: tty, pgid: pgid}, nil
++}
++
++func (s *unixJobControlSession) foreground() (bool, error) {
++	pgid, err := unix.IoctlGetInt(int(s.tty.Fd()), unix.TIOCGPGRP)
++	if err != nil {
++		return false, fmt.Errorf("query foreground terminal owner: %w", err)
++	}
++	if pgid <= 0 {
++		return false, fmt.Errorf("terminal has no foreground process group")
++	}
++	return pgid == s.pgid, nil
++}
++
++func (s *unixJobControlSession) suspend(ctx context.Context) error {
++	continued := make(chan os.Signal, 1)
++	signal.Notify(continued, syscall.SIGCONT)
++	defer signal.Stop(continued)
++	if err := ctx.Err(); err != nil {
++		return err
++	}
++	if err := unix.Kill(-s.pgid, unix.SIGTSTP); err != nil {
++		return fmt.Errorf("send suspend signal: %w", err)
++	}
++	// Count scheduled ticks instead of using a wall deadline: a Go timer can
++	// expire while the entire process group is stopped. A ticker coalesces
++	// those missed ticks, leaving time for SIGCONT delivery after a long stop.
++	ticker := time.NewTicker(10 * time.Millisecond)
++	defer ticker.Stop()
++	for ticks := 0; ticks < 100; {
++		select {
++		case <-continued:
++			return nil
++		case <-ctx.Done():
++			return ctx.Err()
++		case <-ticker.C:
++			ticks++
++		}
++	}
++	return fmt.Errorf("timed out waiting for SIGCONT")
++}
++
++func (s *unixJobControlSession) close() { s.tty.Close() }
+--- /dev/null
++++ b/tui/tea/job_control_other.go
+@@ -0,0 +1,9 @@
++//go:build !linux && !darwin && !freebsd && !netbsd && !openbsd && !dragonfly
++
++package tea
++
++import "fmt"
++
++func openJobControlSession() (jobControlSession, error) {
++	return nil, fmt.Errorf("job control is unavailable on this platform")
++}
+--- /dev/null
++++ b/tui/tea/job_control_like_rust_test.go
+@@ -0,0 +1,170 @@
++package tea
++
++import (
++	"context"
++	"errors"
++	"reflect"
++	"testing"
++	"time"
++
++	bubbletea "charm.land/bubbletea/v2"
++	"codex_go/tui/keymsg"
++)
++
++func TestCtrlZSendsSuspendMsgLikeRust(t *testing.T) {
++	model := newSelectionModel(t, Options{Width: 60, Height: 12})
++	model.setComposerPrompt("keep this draft")
++	_, cmd := model.Update(key(keymsg.KeyCtrlZ))
++	if cmd == nil {
++		t.Fatal("Ctrl-Z did not send a suspend command")
++	}
++	if msg := cmd(); reflect.TypeOf(msg) != reflect.TypeOf(bubbletea.SuspendMsg{}) {
++		t.Fatalf("Ctrl-Z message = %T, want SuspendMsg", msg)
++	}
++	if model.composerText() != "keep this draft" {
++		t.Fatal("suspend changed the draft")
++	}
++}
++
++type fakeJobControlTerminal struct {
++	events     *[]string
++	releaseErr error
++	restoreErr error
++}
++
++func (f fakeJobControlTerminal) ReleaseTerminal() error {
++	*f.events = append(*f.events, "release")
++	return f.releaseErr
++}
++func (f fakeJobControlTerminal) RestoreTerminal() error {
++	*f.events = append(*f.events, "restore")
++	return f.restoreErr
++}
++
++type fakeJobControlSession struct {
++	events     *[]string
++	owners     []bool
++	checks     int
++	checkErr   error
++	suspendErr error
++	onSuspend  func()
++}
++
++func (s *fakeJobControlSession) foreground() (bool, error) {
++	*s.events = append(*s.events, "owner")
++	s.checks++
++	if s.checkErr != nil && s.checks > 1 {
++		return false, s.checkErr
++	}
++	index := s.checks - 1
++	if index >= len(s.owners) {
++		index = len(s.owners) - 1
++	}
++	return s.owners[index], nil
++}
++func (s *fakeJobControlSession) suspend(context.Context) error {
++	*s.events = append(*s.events, "suspend")
++	if s.onSuspend != nil {
++		s.onSuspend()
++	}
++	return s.suspendErr
++}
++func (s *fakeJobControlSession) close() { *s.events = append(*s.events, "close") }
++
++func TestJobControlWaitsForForegroundBeforeRestoreLikeRust(t *testing.T) {
++	var events []string
++	session := &fakeJobControlSession{events: &events, owners: []bool{true, false, false, true}}
++	msg := suspendWithJobControl(context.Background(), fakeJobControlTerminal{events: &events},
++		func() (jobControlSession, error) { return session, nil })
++	if _, ok := msg.(bubbletea.ResumeMsg); !ok {
++		t.Fatalf("resume = %T", msg)
++	}
++	want := []string{"owner", "release", "suspend", "owner", "owner", "owner", "restore", "close"}
++	if !reflect.DeepEqual(events, want) {
++		t.Fatalf("events = %v, want %v", events, want)
++	}
++}
++
++func TestJobControlNoControllingTerminalFailsSafelyLikeRust(t *testing.T) {
++	var events []string
++	msg := suspendWithJobControl(context.Background(), fakeJobControlTerminal{events: &events},
++		func() (jobControlSession, error) { return nil, errors.New("no controlling terminal") })
++	if _, ok := msg.(jobControlErrorMsg); !ok {
++		t.Fatalf("failure = %T", msg)
++	}
++	if len(events) != 0 {
++		t.Fatalf("terminal touched without control: %v", events)
++	}
++}
++
++func TestJobControlUnownedTerminalNeverSendsSignalLikeRust(t *testing.T) {
++	var events []string
++	session := &fakeJobControlSession{events: &events, owners: []bool{false}}
++	msg := suspendWithJobControl(context.Background(), fakeJobControlTerminal{events: &events},
++		func() (jobControlSession, error) { return session, nil })
++	if _, ok := msg.(jobControlErrorMsg); !ok {
++		t.Fatalf("failure = %T", msg)
++	}
++	if !reflect.DeepEqual(events, []string{"owner", "close"}) {
++		t.Fatalf("events = %v", events)
++	}
++}
++
++func TestJobControlTerminalLossNeverRestoresLikeRust(t *testing.T) {
++	var events []string
++	session := &fakeJobControlSession{events: &events, owners: []bool{true}, checkErr: errors.New("tty revoked")}
++	msg := suspendWithJobControl(context.Background(), fakeJobControlTerminal{events: &events},
++		func() (jobControlSession, error) { return session, nil })
++	if _, ok := msg.(bubbletea.InterruptMsg); !ok {
++		t.Fatalf("failure = %T", msg)
++	}
++	if !reflect.DeepEqual(events, []string{"owner", "release", "suspend", "owner", "close"}) {
++		t.Fatalf("events = %v", events)
++	}
++}
++
++func TestJobControlCancellationNeverRestoresLikeRust(t *testing.T) {
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	var events []string
++	session := &fakeJobControlSession{events: &events, owners: []bool{true}, onSuspend: cancel}
++	msg := suspendWithJobControl(ctx, fakeJobControlTerminal{events: &events},
++		func() (jobControlSession, error) { return session, nil })
++	if _, ok := msg.(bubbletea.InterruptMsg); !ok {
++		t.Fatalf("failure = %T", msg)
++	}
++	if !reflect.DeepEqual(events, []string{"owner", "release", "suspend", "close"}) {
++		t.Fatalf("events = %v", events)
++	}
++}
++
++func TestJobControlReleaseFailureNeverSendsSignalLikeRust(t *testing.T) {
++	var events []string
++	session := &fakeJobControlSession{events: &events, owners: []bool{true}}
++	msg := suspendWithJobControl(context.Background(),
++		fakeJobControlTerminal{events: &events, releaseErr: errors.New("release failed")},
++		func() (jobControlSession, error) { return session, nil })
++	if _, ok := msg.(bubbletea.InterruptMsg); !ok {
++		t.Fatalf("failure = %T", msg)
++	}
++	if !reflect.DeepEqual(events, []string{"owner", "release", "close"}) {
++		t.Fatalf("events = %v", events)
++	}
++}
++
++func TestJobControlForegroundPollCanCancelLikeRust(t *testing.T) {
++	ctx, cancel := context.WithCancel(context.Background())
++	calls := 0
++	err := waitForJobControlForeground(ctx, func() (bool, error) { calls++; cancel(); return false, nil }, time.Hour)
++	if !errors.Is(err, context.Canceled) || calls != 1 {
++		t.Fatalf("poll = %v, calls %d", err, calls)
++	}
++}
++
++func TestJobControlFilterLeavesOtherMessagesAloneLikeRust(t *testing.T) {
++	filter := jobControlFilter(nil, func() jobControlTerminal { t.Fatal("unexpected terminal access"); return nil })
++	msg := bubbletea.WindowSizeMsg{Width: 80, Height: 24}
++	if got := filter(nil, msg); got != msg {
++		t.Fatalf("filtered = %#v", got)
++	}
++}
+--- /dev/null
++++ b/tui/tea/job_control_linux_test.go
+@@ -0,0 +1,187 @@
++//go:build linux
++
++package tea
++
++import (
++	"context"
++	"fmt"
++	"os"
++	"os/exec"
++	"strings"
++	"testing"
++	"time"
++
++	codextui "codex_go/tui"
++	"golang.org/x/sys/unix"
++)
++
++// Exercise the production Program, key decoder, SIGTSTP/SIGCONT, raw-mode
++// restoration and TIOCGPGRP against a real controlling PTY and a shell-like
++// supervisor in a separate session. The supervisor keeps the job non-orphaned.
++func TestJobControlPTYBackgroundContinueLikeRust(t *testing.T) {
++	if os.Getenv("CODEX_JOB_CONTROL_PTY_HELPER") == "1" {
++		runJobControlPTYHelper(t)
++		return
++	}
++	python, err := exec.LookPath("python3")
++	if err != nil {
++		t.Skip("python3 is required for the native PTY supervisor")
++	}
++	for _, mode := range []string{"inline", "alternate"} {
++		t.Run(mode, func(t *testing.T) {
++			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
++			defer cancel()
++			cmd := exec.CommandContext(ctx, python, "-c", jobControlPTYSupervisor, os.Args[0])
++			cmd.Env = append(os.Environ(), "CODEX_JOB_CONTROL_PTY_MODE="+mode)
++			output, err := cmd.CombinedOutput()
++			if err != nil {
++				t.Fatalf("native PTY job control: %v\n%s", err, output)
++			}
++			t.Log(strings.TrimSpace(string(output)))
++		})
++	}
++}
++
++func runJobControlPTYHelper(t *testing.T) {
++	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++	defer cancel()
++	program, model := newProgramWithModel(ctx, codextui.NewState(nil), Options{Width: 60, Height: 12, NoAltScreen: os.Getenv("CODEX_JOB_CONTROL_PTY_MODE") == "inline"}, os.Stdin, os.Stdin)
++	model.setComposerPrompt("draft survives suspend")
++	go func() {
++		// Wait for the program to enter raw mode before typing Ctrl-Z.
++		for ctx.Err() == nil {
++			state, err := unix.IoctlGetTermios(0, unix.TCGETS)
++			if err == nil && state.Lflag&unix.ICANON == 0 {
++				break
++			}
++			time.Sleep(time.Millisecond)
++		}
++		fmt.Println("ready")
++		// Wait for release followed by restoration; Quit is sent only after
++		// the public RestoreTerminal has returned input to raw mode.
++		released := false
++		for ctx.Err() == nil {
++			state, err := unix.IoctlGetTermios(0, unix.TCGETS)
++			if err == nil {
++				if state.Lflag&unix.ICANON != 0 {
++					released = true
++				}
++				if released && state.Lflag&unix.ICANON == 0 {
++					program.Quit()
++					return
++				}
++			}
++			time.Sleep(time.Millisecond)
++		}
++	}()
++	if _, err := program.Run(); err != nil {
++		t.Fatalf("PTY program: %v", err)
++	}
++	if model.composerText() != "draft survives suspend" {
++		t.Fatal("draft changed across suspend")
++	}
++	if model.notice != "" {
++		t.Fatalf("suspend notice: %s", model.notice)
++	}
++	fmt.Println("resumed")
++}
++
++const jobControlPTYSupervisor = `
++import fcntl, os, select, signal, struct, subprocess, sys, termios, time
++master, slave = os.openpty()
++os.setsid()
++fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
++signal.signal(signal.SIGTTOU, signal.SIG_IGN)
++signal.signal(signal.SIGHUP, signal.SIG_IGN)
++env = dict(os.environ, CODEX_JOB_CONTROL_PTY_HELPER="1", TERM="xterm-256color")
++child = subprocess.Popen([sys.argv[1], "-test.run=^TestJobControlPTYBackgroundContinueLikeRust$", "-test.count=1"],
++                         stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
++                         env=env, process_group=0)
++def foreground(pgid):
++    fcntl.ioctl(slave, termios.TIOCSPGRP, struct.pack("i", pgid))
++def wait_until(predicate, description):
++    deadline = time.monotonic() + 5
++    while time.monotonic() < deadline:
++        if predicate(): return
++        time.sleep(.005)
++    raise AssertionError("timeout: " + description)
++try:
++    foreground(child.pid)
++    assert select.select([child.stdout], [], [], 5)[0], "no ready marker"
++    line = child.stdout.readline()
++    assert line.strip() == b"ready", line
++    os.write(master, b"\x1a")
++    stopped = [False]
++    def is_stopped():
++        pid, status = os.waitpid(child.pid, os.WNOHANG | os.WUNTRACED)
++        if pid:
++            assert os.WIFSTOPPED(status), ("job exited instead of suspending", status)
++            assert os.WSTOPSIG(status) == signal.SIGTSTP, status
++            stopped[0] = True
++        return stopped[0]
++    wait_until(is_stopped, "SIGTSTP")
++    foreground(os.getpgrp())
++    time.sleep(1.2)
++    os.killpg(child.pid, signal.SIGCONT)
++    time.sleep(.15)
++    assert termios.tcgetattr(slave)[3] & termios.ICANON, "background SIGCONT restored raw mode"
++    assert child.poll() is None, "job exited while in background"
++    foreground(child.pid)
++    output = child.communicate(timeout=5)[0]
++    assert child.returncode == 0, output.decode(errors="replace")
++    assert b"resumed" in output, output
++    print("native PTY: Ctrl-Z -> SIGTSTP; background SIGCONT kept canonical mode; foreground restored raw mode; draft preserved")
++finally:
++    try: os.killpg(child.pid, signal.SIGKILL)
++    except ProcessLookupError: pass
++    child.wait()
++    os.close(master)
++    os.close(slave)
++`
++
++func TestJobControlNoTTYNativeLikeRust(t *testing.T) {
++	if os.Getenv("CODEX_JOB_CONTROL_NO_TTY_HELPER") == "1" {
++		session, err := openJobControlSession()
++		if session != nil {
++			session.close()
++			t.Fatal("opened a controlling terminal in a detached session")
++		}
++		if err == nil {
++			t.Fatal("missing controlling terminal was accepted")
++		}
++		fmt.Println(err)
++		return
++	}
++	cmd := exec.Command(os.Args[0], "-test.run=^TestJobControlNoTTYNativeLikeRust$", "-test.count=1")
++	cmd.Env = append(os.Environ(), "CODEX_JOB_CONTROL_NO_TTY_HELPER=1")
++	cmd.SysProcAttr = &unix.SysProcAttr{Setsid: true}
++	output, err := cmd.CombinedOutput()
++	if err != nil {
++		t.Fatalf("detached session: %v\n%s", err, output)
++	}
++	t.Log(strings.TrimSpace(string(output)))
++}
++
++func TestSuspendIgnoredSignalFailsSafelyLikeRust(t *testing.T) {
++	if os.Getenv("CODEX_JOB_CONTROL_ORPHAN_HELPER") == "1" {
++		// A session leader's process group is orphaned; the kernel discards
++		// job-control stop signals. This must return instead of hanging.
++		session := &unixJobControlSession{pgid: unix.Getpgrp()}
++		if err := session.suspend(context.Background()); err == nil {
++			t.Fatal("ignored suspend signal reported success")
++		} else {
++			fmt.Println(err)
++		}
++		return
++	}
++	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++	defer cancel()
++	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestSuspendIgnoredSignalFailsSafelyLikeRust$", "-test.count=1")
++	cmd.Env = append(os.Environ(), "CODEX_JOB_CONTROL_ORPHAN_HELPER=1")
++	cmd.SysProcAttr = &unix.SysProcAttr{Setsid: true}
++	output, err := cmd.CombinedOutput()
++	if err != nil {
++		t.Fatalf("ignored suspend signal: %v\n%s", err, output)
++	}
++	t.Log(strings.TrimSpace(string(output)))
++}

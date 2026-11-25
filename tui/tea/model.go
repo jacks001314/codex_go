@@ -4399,6 +4399,7 @@ func newProgramWithModel(ctx context.Context, state *codextui.State, options Opt
 	// (TranscriptMode::resolve). An owned screen captures the mouse so the wheel
 	// scrolls the transcript instead of the terminal scrollback; inline mode
 	// leaves both gestures to the terminal.
+	programOptions = append(programOptions, bubbletea.WithFilter(jobControlFilter(ctx, func() jobControlTerminal { return program })))
 	program = bubbletea.NewProgram(model, programOptions...)
 	if options.OnProgramReady != nil {
 		options.OnProgramReady(program.Send)
@@ -4700,6 +4701,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 func (m *Model) update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	if m == nil {
 		return m, nil
+	}
+	if handled, cmd := m.handleJobControl(message); handled {
+		return m, cmd
 	}
 	m.syncPatchApprovalFollow()
 	// Rust's keypress inspector asks for raw key capture: it must see every

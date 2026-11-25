@@ -226,3 +226,41 @@ go test ./parity -count=1
 原生节点协同：`linux-align`（Linux 节点）在实现 #63520 Ctrl-Z suspend（SIGTSTP/SIGCONT、controlling terminal 守卫、恢复后光标重探、事件流暂停）与 #61900 proc-mount preflight fallback；`darwin-align`（macOS 节点）在补 darwin+cgo 的 provider 选择断言（具体 backend 类型、无硬件探测）并真机取证 LAContext readiness。两者交付后由 lead 合并进本仓库并统一复跑。
 
 仍未动、且 Go 侧缺底层抽象的项：#61896 rollout trace 写出器（Go 只有配置与 reducer）、#61385 Code Mode typed session/tool-call stream（Go host 只有请求/响应帧）、#61909/#61916 subagent item-boundary interrupt、#61945 host fork 的 `InheritedSessionId`、#61946 Guardian nested approval 的 enclosing tool context、#60075 host service-tier provider。这些需要先补抽象再谈对齐，不适合与平台验证并行仓促合并。
+
+## 第二轮追加（macOS 节点交付 + 认证检查修正）
+
+macOS 节点（darwin-align，macOS 12.4 / darwin-amd64 / Go 1.27.1 / CGO=1）的交付已合并，证据保存在 `deliverables/darwin-align/`：
+
+| 结论 | 事实 |
+| --- | --- |
+| provider 选择 | 平台工厂、nil-service fallback、默认 runtime router 三个入口都实际选中 `*darwinUserVerificationProvider` + `cgoDarwinUserVerificationBackend`；`CGO_ENABLED=0` 时选中 `UnsupportedUserVerificationProvider` |
+| 原生测试 | `go test ./appserver -run UserVerification` 通过（2.022s）；`appserver`/`doctor` 的 UserVerification/Desktop/Platform 通过（3.154s / 1.041s）；`go build ./cmd/codex`（darwin/amd64）产出 x86_64 Mach-O |
+| SQLite | Go 内嵌 3.54.1 实测通过；系统 `sqlite3` 为 3.37.0 |
+| Secure Enclave 真机 | 未验证成功：非交互探测 `DeviceSupported=false`，`com.apple.LocalAuthentication` 返回 -6 `Biometry is not available.`，readiness 测试真实 SKIP；现有 P-256/SEC1 导出测试只证明软件路径 |
+| 遗留 | 端到端签名需要 Touch ID 硬件 + 已登记生物识别 + 可用的本地认证会话；arm64 未测；该机把 Go 13.0 目标对象链接到 12.0 |
+
+据此修掉两处**过时的 Go 断言**（`sandbox/run_test.go`）：两个 run-plan 测试原本只特判 Linux/Windows，把 macOS 落到「不支持」分支，而 macOS 实际返回 Seatbelt 计划。现在 darwin 分支断言 `SandboxTypeMacosSeatbelt`、`/usr/bin/sandbox-exec` 启动器以及空的 unsupported reason。该改动同时需要 macOS 节点复核（已发出验证请求）。
+
+另外修掉两处会让认证门假失败/假通过的问题：
+
+- `appserver/rust_protocol_surface_test.go` 的 Go 常量白名单漏了 `MethodAccountVoiceSettingsRead/Write`（协议常量、handler 与 like-rust 测试都已存在），导致 `account/voiceSettings/read|write` 被误报为缺口。
+- `appserver/schema_test.go` 的两个 precomputed export 期望值仍指向旧锚点 `a0d5b0a661`；Go 内嵌的两个 `.zst` 与 Rust `3f65e9f1` 工作树中 `app-server-protocol/schema/precomputed/` 的文件 SHA-256 完全一致，因此把 pin 改到当前候选（`761cbc57…`、`d1d275e3…`）。
+
+`go test ./appserver -run 'TestPrecomputedExportArtifactsMatchTargetRustCommit|TestRustProtocolMethodSurfaceAgainstGoConstants'` 通过。
+
+macOS 节点仍报告的另外三处 sandbox 失败（`TestNativeSeatbeltEnforcesWorkspaceAndMetadata` exit 21、两个 symlink 测试在非 canonical TMPDIR 下失败）正在请该节点判定是产品缺口还是测试自身的路径规范化问题，未擅自改 sandbox 生产代码。
+
+## Linux 节点交付（#63520 Ctrl-Z suspend 已合并）
+
+linux-align（Linux 节点，go1.26.3 linux/amd64）实现了 #63520，代码已合并：
+
+- `tui/tea/job_control.go`：用公开的 `bubbletea.WithFilter` 在 SuspendMsg 进入内置处理前接管。Bubble Tea v2.1.1 的内置 ResumeMsg 在 RestoreTerminal 之前就恢复 raw mode，所以这里自己做 release → 挂起 → 等到真正拿到前台 → restore 的顺序，并在拿到前台后才发 ResumeMsg。
+- `tui/tea/job_control_unix.go`：打开 `/dev/tty`（而不是任意 stdin fd）做 controlling terminal 预检；`TIOCGPGRP` 查前台进程组；向整个进程组发 SIGTSTP；用「计 tick 而不是墙钟 deadline」的方式等 SIGCONT，因为整个进程组被停住时 Go 的 timer 可能已经不走了；tty 丢失或 ctx 取消时不重新进 raw mode。
+- `tui/tea/job_control_other.go`：非 unix 平台保持可编译。
+- `tui/tea/model.go`：在 `bubbletea.NewProgram` 前安装 filter，并在 `update` 最前面分发 job-control 消息。
+
+节点上的真实 PTY 验证覆盖：inline 与 alternate 屏、暂停超过 1 秒、后台 SIGCONT 必须保持 canonical、只有 fg 没有第二次 SIGCONT 时必须恢复 raw mode 且草稿保留；另外覆盖无 tty 的 detached 进程与忽略 SIGTSTP 的进程组。命令结果：`go test ./state ./sandbox ./network`（7.800s / 0.168s / 8.713s）、`./appserver ./tui/...` 的 UserVerification|JobControl|Suspend|WorkingDirectory 全部通过、`go test -race ./tui/tea -run 'JobControl|Suspend|CtrlZ'`（9.610s）通过、SQLite 3.54.1 校验通过。
+
+这里**没有采纳**该补丁里的 `go.sum` 改动。节点把 `charm.land/glamour/v2 v2.0.1` 的 h1 改成了 `xl+r00A4…`（sum.golang.org 上的记录），但本机与 proxy.golang.org / goproxy.cn 实际取到的模块字节计算出的 h1 都是 `Vx2F81a4…`。也就是说这个模块版本的公开发布记录与镜像当前提供的内容不一致，直接改成 sumdb 值会让所有依赖验证失败（`checksum mismatch`）。仓库保留原值，并把这条上游 provenance 不一致记为风险待上游确认。
+
+#61898 / #61900 该节点已核对 3f65e9f1 的真实 diff 并给出结论与分阶段方案（见 `deliverables/linux-align/REPORT.md`）：Go 的 `sandbox/linuxsandbox/linux.go` 目前是进程内直接 `unix.Exec`，既没有 proc-mount 预检/自动 fallback，也没有 Rust 那套 proxy supervisor → mount cleanup supervisor → bwrap 的交接结构；普通 goroutine 无法照搬 Rust 的 `CLONE_FILES` 私有线程 FD 表，需要 re-exec 进程隔离。这两项仍未实现。

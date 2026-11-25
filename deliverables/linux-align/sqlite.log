@@ -1,0 +1,44 @@
+=== RUN   TestClassifiesSQLiteErrors
+--- PASS: TestClassifiesSQLiteErrors (0.00s)
+=== RUN   TestSQLiteRecoveryLockClassificationLikeRust
+--- PASS: TestSQLiteRecoveryLockClassificationLikeRust (0.00s)
+=== RUN   TestWritableSQLitePragmasApplyToEveryPoolConnection
+--- PASS: TestWritableSQLitePragmasApplyToEveryPoolConnection (0.00s)
+=== RUN   TestMemorySessionModelIDStoreMatchesSQLiteSemantics
+--- PASS: TestMemorySessionModelIDStoreMatchesSQLiteSemantics (0.00s)
+=== RUN   TestRetryOnSQLiteBusySucceedsAfterCompetingWriterReleasesLockLikeRust
+--- PASS: TestRetryOnSQLiteBusySucceedsAfterCompetingWriterReleasesLockLikeRust (0.10s)
+=== RUN   TestIsSQLiteBusyErrorMatchesRustBusyCodes
+--- PASS: TestIsSQLiteBusyErrorMatchesRustBusyCodes (0.20s)
+=== RUN   TestIsSQLiteBusyErrorRecognisesBusySnapshotLikeRust
+    sqlite_busy_retry_test.go:329: stale snapshot write reported code 517 (database is locked (517))
+--- PASS: TestIsSQLiteBusyErrorRecognisesBusySnapshotLikeRust (0.00s)
+=== RUN   TestBundledSQLiteMeetsRustMinimum
+--- PASS: TestBundledSQLiteMeetsRustMinimum (0.00s)
+=== RUN   TestBundledSQLiteDriverVersionMatchesRuntime
+--- PASS: TestBundledSQLiteDriverVersionMatchesRuntime (0.00s)
+=== RUN   TestNativeSQLiteArtifactPlatform
+    sqlite_test.go:95: native artifact linux/amd64 embeds SQLite 3.54.1
+--- PASS: TestNativeSQLiteArtifactPlatform (0.00s)
+=== RUN   TestSQLiteVersionAtLeast
+=== RUN   TestSQLiteVersionAtLeast/equal
+=== RUN   TestSQLiteVersionAtLeast/newer_patch
+=== RUN   TestSQLiteVersionAtLeast/newer_minor
+=== RUN   TestSQLiteVersionAtLeast/older_patch
+=== RUN   TestSQLiteVersionAtLeast/older_minor
+=== RUN   TestSQLiteVersionAtLeast/trimmed
+=== RUN   TestSQLiteVersionAtLeast/missing_patch
+=== RUN   TestSQLiteVersionAtLeast/invalid
+--- PASS: TestSQLiteVersionAtLeast (0.00s)
+    --- PASS: TestSQLiteVersionAtLeast/equal (0.00s)
+    --- PASS: TestSQLiteVersionAtLeast/newer_patch (0.00s)
+    --- PASS: TestSQLiteVersionAtLeast/newer_minor (0.00s)
+    --- PASS: TestSQLiteVersionAtLeast/older_patch (0.00s)
+    --- PASS: TestSQLiteVersionAtLeast/older_minor (0.00s)
+    --- PASS: TestSQLiteVersionAtLeast/trimmed (0.00s)
+    --- PASS: TestSQLiteVersionAtLeast/missing_patch (0.00s)
+    --- PASS: TestSQLiteVersionAtLeast/invalid (0.00s)
+=== RUN   TestSQLiteRecoversCommittedWALAfterAbruptExit
+--- PASS: TestSQLiteRecoversCommittedWALAfterAbruptExit (0.04s)
+PASS
+ok  	codex_go/state	0.387s
