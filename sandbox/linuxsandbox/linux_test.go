@@ -4,6 +4,7 @@ package linuxsandbox
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"codex_go/processhardening"
 
 	json "github.com/goccy/go-json"
 	"golang.org/x/sys/unix"
@@ -332,10 +335,11 @@ func TestManagedProxyRoutesRequireLoopbackPortGrantLikeRust(t *testing.T) {
 
 func TestManagedProxyEmptyGrantProducesNoBridgeSpecLikeRust(t *testing.T) {
 	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:8765")
-	spec, err := prepareHostProxyRouteSpec(&linuxManagedNetworkContext{})
+	spec, bridges, err := prepareHostProxyRouteSpec(context.Background(), &linuxManagedNetworkContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer bridges.close()
 	var decoded proxyRouteSpec
 	if err := json.Unmarshal([]byte(spec), &decoded); err != nil {
 		t.Fatal(err)
@@ -472,6 +476,9 @@ const (
 // in probe mode, which must not be mistaken for the helper.
 func TestMain(m *testing.M) {
 	if os.Getenv(linuxSandboxE2EHelperEnv) != "" && sandboxHelperInvocation(os.Args[1:]) {
+		if os.Getenv("CODEX_PROXY_HARDENED_HELPER") != "" {
+			processhardening.ApplyPreMain()
+		}
 		os.Exit(RunHelper(os.Args[1:], os.Stdout, os.Stderr))
 	}
 	os.Exit(m.Run())

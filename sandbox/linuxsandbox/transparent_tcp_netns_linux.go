@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"unsafe"
 
@@ -49,14 +50,6 @@ type transparentTCPIn6Ifreq struct {
 	IfIndex   int32
 }
 
-type transparentTCPChildExitError struct {
-	code int
-}
-
-func (e *transparentTCPChildExitError) Error() string {
-	return fmt.Sprintf("sandboxed command exited with status %d", e.code)
-}
-
 func transparentTCPDupFD(fd int) (int, error) {
 	dup, err := unix.FcntlInt(uintptr(fd), unix.F_DUPFD_CLOEXEC, 3)
 	if err != nil {
@@ -78,7 +71,8 @@ func unixFcntlClearCloexec(fd int) error {
 // process creates a private user and network namespace, prepares the TUN and
 // resolver descriptors, then execs stock bubblewrap without unsharing the
 // network namespace again.
-func execTransparentTCPBubblewrap(program string, args []string, resolver *os.File) error {
+func execTransparentTCPBubblewrap(program string, args []string, resolver *os.File, dataFiles []*os.File) error {
+	defer resolver.Close()
 	executable, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to resolve current executable path: %w", err)
@@ -100,15 +94,20 @@ func execTransparentTCPBubblewrap(program string, args []string, resolver *os.Fi
 	command.Stdin = os.Stdin
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
-	command.ExtraFiles = []*os.File{payloadReader, resolver}
+	command.ExtraFiles = append([]*os.File{payloadReader, resolver}, dataFiles...)
 	uid, gid := os.Getuid(), os.Getgid()
 	command.SysProcAttr = &syscall.SysProcAttr{
+		Pdeathsig: syscall.SIGKILL,
+		// A nonzero mapped UID loses effective capabilities at re-exec.
+		// Keep TUN/routes and DNS binding privileges only in this namespace;
+		// drop them before launching bwrap.
+		AmbientCaps:                []uintptr{unix.CAP_NET_ADMIN, unix.CAP_NET_BIND_SERVICE},
 		Cloneflags:                 unix.CLONE_NEWUSER | unix.CLONE_NEWNET,
 		UidMappings:                []syscall.SysProcIDMap{{ContainerID: uid, HostID: uid, Size: 1}},
 		GidMappings:                []syscall.SysProcIDMap{{ContainerID: gid, HostID: gid, Size: 1}},
 		GidMappingsEnableSetgroups: false,
 	}
-	if err := command.Start(); err != nil {
+	if err := startTransparentTCPNamespace(command); err != nil {
 		payloadWriter.Close()
 		return fmt.Errorf("failed to create private TCP namespace: %w", err)
 	}
@@ -123,35 +122,41 @@ func execTransparentTCPBubblewrap(program string, args []string, resolver *os.Fi
 	signals := make(chan os.Signal, 4)
 	signal.Notify(signals, syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM)
 	defer signal.Stop(signals)
-	go func() {
-		for sig := range signals {
-			if command.Process != nil {
-				_ = command.Process.Signal(sig)
-			}
-		}
-	}()
+	// fd 4 belongs to the outer supervisor's readiness pipe in this worker.
+	// The namespace child has its own fd 4 (the resolver), never this pipe.
+	_ = unix.Close(4)
 
-	err = command.Wait()
+	waited := make(chan error, 1)
+	go func() { waited <- command.Wait() }()
+	for {
+		select {
+		case sig := <-signals:
+			_ = command.Process.Signal(sig)
+		case err = <-waited:
+			return transparentTCPWaitResult(err)
+		}
+	}
+}
+
+func transparentTCPWaitResult(err error) error {
 	if err == nil {
-		return &transparentTCPChildExitError{}
+		return &linuxSandboxChildExit{}
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
-		code := exitErr.ExitCode()
-		if code < 0 {
-			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok && status.Signaled() {
-				code = 128 + int(status.Signal())
-			}
-		}
-		return &transparentTCPChildExitError{code: code}
+		return &linuxSandboxChildExit{status: exitErr.Sys().(syscall.WaitStatus)}
 	}
-	return fmt.Errorf("failed to wait for private TCP namespace: %w", err)
+	return fmt.Errorf("failed to wait for sandbox process: %w", err)
 }
 
 // runTransparentTCPNamespaceSetup runs inside the fresh user and network
 // namespaces. It configures the TUN, resolver, and routes, then replaces itself
 // with the prepared bubblewrap command.
 func runTransparentTCPNamespaceSetup(payloadFD int) error {
+	// Capability changes and exec must run on the same thread. Other runtime
+	// threads disappear at exec; none of their ambient capabilities survive.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	payloadFile := os.NewFile(uintptr(payloadFD), "codex-transparent-tcp-payload")
 	if payloadFile == nil {
 		return errors.New("missing transparent TCP namespace payload")
@@ -165,6 +170,7 @@ func runTransparentTCPNamespaceSetup(payloadFD int) error {
 	if err := json.Unmarshal(encoded, &payload); err != nil {
 		return fmt.Errorf("invalid transparent TCP namespace payload: %w", err)
 	}
+	_ = payloadFile.Close()
 	handles, err := createTransparentTCPNamespace()
 	if err != nil {
 		return err
@@ -453,4 +459,61 @@ func createTransparentTCPResolver() (*os.File, error) {
 		return nil, fmt.Errorf("rewind transparent TCP resolver: %w", err)
 	}
 	return file, nil
+}
+
+// preserveTransparentTCPDataFiles reserves child fds 3/4 for the setup payload
+// and resolver. Remap before inserting the resolver's --ro-bind-data 4 argument,
+// since an original file mask can itself be numbered 4 in the parent.
+func preserveTransparentTCPDataFiles(args []string, fds []int) ([]string, []*os.File, error) {
+	var files []*os.File
+	remap := make(map[string]string)
+	for _, fd := range fds {
+		dup, err := transparentTCPDupFD(fd)
+		if err != nil {
+			for _, file := range files {
+				_ = file.Close()
+			}
+			return nil, nil, fmt.Errorf("preserve bubblewrap data descriptor: %w", err)
+		}
+		remap[fmt.Sprint(fd)] = fmt.Sprint(5 + len(files))
+		files = append(files, os.NewFile(uintptr(dup), "codex-bwrap-data"))
+	}
+	result := append([]string(nil), args...)
+	for i := 0; i+1 < len(result) && result[i] != "--"; i++ {
+		if result[i] == "--ro-bind-data" {
+			if fd, ok := remap[result[i+1]]; ok {
+				result[i+1] = fd
+			}
+		}
+	}
+	return result, files, nil
+}
+
+// startTransparentTCPNamespace temporarily restores normal dumpability in the
+// isolated re-exec worker. Pre-main hardening sets it to zero, which otherwise
+// prevents the unprivileged parent from writing its child's userns ID maps.
+// The outer proxy supervisor keeps its hardening throughout this operation.
+func startTransparentTCPNamespace(command *exec.Cmd) error {
+	dumpable, err := unix.PrctlRetInt(unix.PR_GET_DUMPABLE, 0, 0, 0, 0)
+	if err != nil {
+		return fmt.Errorf("read namespace setup dumpability: %w", err)
+	}
+	if dumpable == 1 {
+		return command.Start()
+	}
+	if dumpable != 0 {
+		return errors.New("unexpected namespace setup dumpability")
+	}
+	if err := unix.Prctl(unix.PR_SET_DUMPABLE, 1, 0, 0, 0); err != nil {
+		return fmt.Errorf("prepare namespace ID mapping: %w", err)
+	}
+	startErr := command.Start()
+	if err := unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0); err != nil {
+		if command.Process != nil {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+		}
+		return fmt.Errorf("restore namespace setup hardening: %w", err)
+	}
+	return startErr
 }

@@ -4,6 +4,7 @@ package linuxsandbox
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -113,6 +114,7 @@ type linuxSandboxCommand struct {
 	// omits `--unshare-pid` and `--as-pid-1`.
 	InheritPIDNamespace bool
 	Command             []string
+	callerPID           int
 }
 
 // managedNetworkEnabled reports whether the helper runs in managed-proxy mode.
@@ -126,6 +128,7 @@ func (cmd *linuxSandboxCommand) managedNetworkEnabled() bool {
 }
 
 func RunHelper(args []string, stdout, stderr io.Writer) int {
+	callerPID := os.Getppid()
 	_ = stdout
 	if len(args) > 0 {
 		switch args[0] {
@@ -137,9 +140,14 @@ func RunHelper(args []string, stdout, stderr io.Writer) int {
 				return 1
 			}
 			return 0
-		case "--proxy-host-bridge":
-			if err := runProxyHostBridgeHelper(args[1:], os.Stdout); err != nil {
-				fmt.Fprintln(stderr, "codex-linux-sandbox proxy host bridge:", err)
+		case proxyBwrapExecArg:
+			err := runProxyBwrapExec()
+			var childExit *linuxSandboxChildExit
+			if errors.As(err, &childExit) {
+				return linuxSandboxExitCode(childExit.status)
+			}
+			if err != nil {
+				fmt.Fprintln(stderr, "codex-linux-sandbox supervised bubblewrap:", err)
 				return 1
 			}
 			return 0
@@ -153,7 +161,12 @@ func RunHelper(args []string, stdout, stderr io.Writer) int {
 	}
 	cmd, err := parseLinuxSandboxCommand(args, stderr)
 	if err == nil {
+		cmd.callerPID = callerPID
 		err = runLinuxSandboxCommand(cmd)
+	}
+	var childExit *linuxSandboxChildExit
+	if errors.As(err, &childExit) {
+		return linuxSandboxExitCode(childExit.status)
 	}
 	if err != nil {
 		fmt.Fprintln(stderr, "codex-linux-sandbox:", err)
@@ -242,6 +255,9 @@ func validateLinuxSandboxCommand(cmd *linuxSandboxCommand) error {
 }
 
 func runLinuxSandboxCommand(cmd *linuxSandboxCommand) error {
+	if cmd.managedNetworkEnabled() && cmd.ManagedNetwork == nil {
+		cmd.ManagedNetwork = &linuxManagedNetworkContext{}
+	}
 	if err := validateLinuxSandboxCommand(cmd); err != nil {
 		return err
 	}
@@ -284,11 +300,7 @@ func runLinuxSandboxCommand(cmd *linuxSandboxCommand) error {
 			if cmd.TransparentTCP && len(cmd.ManagedNetwork.LoopbackPorts) == 0 {
 				return errors.New("transparent TCP proxy endpoint is outside the managed sandbox context")
 			}
-			spec, err := prepareHostProxyRouteSpec(cmd.ManagedNetwork)
-			if err != nil {
-				return fmt.Errorf("failed to prepare host proxy routing bridge: %w", err)
-			}
-			cmd.ProxyRouteSpec = spec
+			return runManagedProxySandbox(context.Background(), cmd)
 		}
 		inner, err := buildInnerLinuxSandboxCommand(cmd)
 		if err != nil {
@@ -982,19 +994,29 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 	if err != nil {
 		return err
 	}
-	makeFilesInheritable(plan.dataFDs)
 	if cmd.TransparentTCP {
 		resolver, target, err := prepareTransparentTCPResolverMount(cmd)
 		if err != nil {
 			return err
 		}
+		args, dataFiles, err := preserveTransparentTCPDataFiles(args, plan.dataFDs)
+		if err != nil {
+			_ = resolver.Close()
+			return err
+		}
+		defer func() {
+			for _, file := range dataFiles {
+				_ = file.Close()
+			}
+		}()
 		args, err = insertTransparentTCPResolverArgs(args, target)
 		if err != nil {
 			_ = resolver.Close()
 			return err
 		}
-		return execTransparentTCPBubblewrap(launcher.Program, args, resolver)
+		return execTransparentTCPBubblewrap(launcher.Program, args, resolver, dataFiles)
 	}
+	makeFilesInheritable(plan.dataFDs)
 	if launcher.Bundled {
 		return execBundledBwrap(launcher.Program, args, os.Environ())
 	}
@@ -1249,7 +1271,7 @@ func appendUnreadableRootBwrapArgs(args *[]string, path string) (int, error) {
 	} else if err != nil {
 		return -1, err
 	}
-	fd, err := unix.MemfdCreate("codex-deny-read-empty", 0)
+	fd, err := unix.MemfdCreate("codex-deny-read-empty", unix.MFD_CLOEXEC)
 	if err != nil {
 		return -1, fmt.Errorf("create deny-read empty file descriptor: %w", err)
 	}
@@ -1304,55 +1326,6 @@ type proxyRouteEntry struct {
 type plannedProxyRoute struct {
 	EnvKey   string
 	Endpoint string
-}
-
-func prepareHostProxyRouteSpec(context *linuxManagedNetworkContext) (string, error) {
-	routes, hasProxyConfig, err := planProxyRoutesFromEnv(context.LoopbackPorts)
-	if err != nil {
-		return "", err
-	}
-	if len(routes) == 0 {
-		if len(context.LoopbackPorts) == 0 {
-			data, err := json.Marshal(&proxyRouteSpec{})
-			if err != nil {
-				return "", err
-			}
-			return string(data), nil
-		}
-		if hasProxyConfig {
-			return "", errors.New("managed proxy mode requires a proxy endpoint on an allowed loopback port")
-		}
-		return "", errors.New("managed proxy mode requires proxy environment variables")
-	}
-	socketDir, err := createProxySocketDir()
-	if err != nil {
-		return "", err
-	}
-	endpointToUDS := map[string]string{}
-	nextIndex := 0
-	for _, route := range routes {
-		if _, ok := endpointToUDS[route.Endpoint]; ok {
-			continue
-		}
-		udsPath := filepath.Join(socketDir, fmt.Sprintf("proxy-route-%d.sock", nextIndex))
-		nextIndex++
-		if err := spawnProxyBridgeProcess("--proxy-host-bridge", route.Endpoint, udsPath); err != nil {
-			return "", err
-		}
-		endpointToUDS[route.Endpoint] = udsPath
-	}
-	spec := proxyRouteSpec{}
-	for _, route := range routes {
-		spec.Routes = append(spec.Routes, proxyRouteEntry{
-			EnvKey:  route.EnvKey,
-			UDSPath: endpointToUDS[route.Endpoint],
-		})
-	}
-	data, err := json.Marshal(&spec)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
 }
 
 func activateProxyRoutesInNetns(serializedSpec string, context *linuxManagedNetworkContext) (*net.TCPAddr, error) {
@@ -1549,29 +1522,6 @@ func proxySocketParentDir() string {
 	return "/tmp"
 }
 
-func spawnProxyBridgeProcess(mode string, firstArg string, secondArg string) error {
-	bridgePath := os.Args[0]
-	cmd := exec.Command(bridgePath, mode, firstArg, secondArg)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	reader := bufio.NewReader(stdout)
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		_ = cmd.Process.Kill()
-		return err
-	}
-	if strings.TrimSpace(line) != "ready" {
-		_ = cmd.Process.Kill()
-		return fmt.Errorf("proxy bridge did not acknowledge readiness")
-	}
-	return nil
-}
-
 func spawnProxyLocalBridge(udsPath string) (uint16, error) {
 	bridgePath := os.Args[0]
 	cmd := exec.Command(bridgePath, "--proxy-local-bridge", udsPath)
@@ -1613,40 +1563,6 @@ func watchBridgeParent() {
 			}
 		}
 	}()
-}
-
-func runProxyHostBridgeHelper(args []string, stdout io.Writer) error {
-	if len(args) != 2 {
-		return errors.New("host bridge requires ENDPOINT and UDS_PATH")
-	}
-	watchBridgeParent()
-	endpoint := args[0]
-	udsPath := args[1]
-	_ = os.Remove(udsPath)
-	listener, err := net.Listen("unix", udsPath)
-	if err != nil {
-		return err
-	}
-	defer listener.Close()
-	if _, err := fmt.Fprintln(stdout, "ready"); err != nil {
-		return err
-	}
-	for {
-		unixConn, err := listener.Accept()
-		if err != nil {
-			return err
-		}
-		go func() {
-			defer unixConn.Close()
-			tcpConn, err := net.Dial("tcp", endpoint)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "codex-linux-sandbox host proxy bridge: dial %s: %v\n", endpoint, err)
-				return
-			}
-			defer tcpConn.Close()
-			proxyBidirectional(tcpConn, unixConn)
-		}()
-	}
 }
 
 func runProxyLocalBridgeHelper(args []string, stdout io.Writer) error {

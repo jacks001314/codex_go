@@ -62,28 +62,17 @@ func runTransparentTCPCommand(cmd *linuxSandboxCommand, relay *transparentTCPRel
 	signals := make(chan os.Signal, 4)
 	signal.Notify(signals, syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM)
 	defer signal.Stop(signals)
-	go func() {
-		for sig := range signals {
-			if child.Process != nil {
-				_ = child.Process.Signal(sig)
-			}
+
+	waited := make(chan error, 1)
+	go func() { waited <- waitForTransparentTCPCommand(cmd, child, relay) }()
+	for {
+		select {
+		case sig := <-signals:
+			_ = child.Process.Signal(sig)
+		case err := <-waited:
+			return transparentTCPWaitResult(err)
 		}
-	}()
-	err := waitForTransparentTCPCommand(cmd, child, relay)
-	if err == nil {
-		return &transparentTCPChildExitError{}
 	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		code := exitErr.ExitCode()
-		if code < 0 {
-			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok && status.Signaled() {
-				code = 128 + int(status.Signal())
-			}
-		}
-		return &transparentTCPChildExitError{code: code}
-	}
-	return fmt.Errorf("failed to wait for sandboxed command: %w", err)
 }
 
 // waitForTransparentTCPCommand waits for the workload. With an inherited PID
