@@ -34,15 +34,7 @@ $env:CODEX_RUST_ROOT = 'D:\qax\reagent\dev\git\codex\codex-rs'
 go test ./parity -count=1
 ```
 
-结果：所有语义断言通过；5 个测试失败，全部是同一环境权限问题：
-
-- `TestContractVerifierAuditMatchesTree`
-- `TestCrossPlatformBuildsCompile`
-- `TestGoVetIsClean`
-- `TestRustErrorCodeSurfaceAgainstGo`
-- `TestContractVerifiersExistInGoTestFiles`
-
-失败原因都是扫描 `third_party/bwrap/work/bubblewrap-0.13.0` 时 `Access is denied`，不是断言不一致。
+结果：本轮最终状态下 **`go test ./parity -count=1` 整包通过（38.4s，EXIT=0）**。此前记录的 5 个失败（`TestContractVerifierAuditMatchesTree`、`TestCrossPlatformBuildsCompile`、`TestGoVetIsClean`、`TestRustErrorCodeSurfaceAgainstGo`、`TestContractVerifiersExistInGoTestFiles`）单独复跑时也全部通过：当时失败于扫描 `third_party/bwrap/work/bubblewrap-0.13.0` 的 `Access is denied`，属于工作树状态问题，不是断言不一致。`go vet ./...` 在本轮结束时同样干净通过（VET=0）。
 
 注意：`CODEX_RUST_ROOT` 必须指向 `...\codex\codex-rs`。如果只指向 `...\codex`，测试会回退到旧的 `codex-anchor-e54a5713`，从而把 Go 已对齐新 Rust 的行为报成漂移。本次误用旧锚点运行时出现了 20 多个假失败，包括 `untrusted_as_tool_output`、`code_mode_host_grpc`、feature registry 等。
 
