@@ -207,9 +207,10 @@ var Registry = []Spec{
 	// Rust #62552: local stdio discovery is stable and on by default, so eligible
 	// local helpers are probed with `server/discover` before the legacy handshake.
 	{Key: "mcp_connection_sharing", Stage: StageStable, DefaultEnabled: true},
-	// Rust (codex-rs/features/src/lib.rs #61444): use the app server's
-	// process-local launch directories for shared REPL stdio servers.
-	{Key: "mcp_shared_repl_cwd", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs #61444, #63821): use the app server's
+	// process-local launch directories for shared REPL stdio servers. Stable and
+	// enabled by default.
+	{Key: "mcp_shared_repl_cwd", Stage: StageStable, DefaultEnabled: true},
 	// Rust (codex-rs/features/src/lib.rs #60039): defer optional stdio server
 	// startup in regular chats when a warm tool catalog already covers them.
 	{Key: "mcp_lazy_stdio_startup", Stage: StageStable, DefaultEnabled: true},

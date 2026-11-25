@@ -1,6 +1,6 @@
 # Codex Go
 
-The current alignment candidate is Rust `main` at `87de5e932dd03bb9efece4a6dd3eab4c5de45701`; see [the
+The current alignment candidate is Rust `main` at `3f65e9f13165d85d1b1fbe20ce06c55758f927b9`; see [the
 2026-11-25 sync record](./update/plan_2026_11_25.md). Per-commit certification for the candidate window is still in progress, so `parity/commits.json` records every upstream commit with its audit status.
 [parity.json](./parity.json) records the current SDK and implementation evidence. Candidate baseline, commit, domain, and contract state live under [parity/](./parity/); only `parity/baseline.json` with `certificationReady: true` denotes a fully certified release.
 

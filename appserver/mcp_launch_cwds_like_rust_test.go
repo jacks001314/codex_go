@@ -16,11 +16,13 @@ func TestMCPSharedReplCwdsRequiresBothFeaturesLikeRust(t *testing.T) {
 		want   bool
 	}{
 		{name: "both", values: map[string]any{"features": map[string]any{"mcp_shared_repl_cwd": true, "mcp_connection_sharing": true}}, want: true},
+		// Rust #63821 made the launch-directory feature stable and on by default.
+		{name: "both default", values: map[string]any{}, want: true},
 		// Rust #62552 made connection sharing stable and on by default, so an
 		// absent sharing key now satisfies the second half of the gate.
 		{name: "default sharing", values: map[string]any{"features": map[string]any{"mcp_shared_repl_cwd": true}}, want: true},
 		{name: "sharing disabled", values: map[string]any{"features": map[string]any{"mcp_shared_repl_cwd": true, "mcp_connection_sharing": false}}, want: false},
-		{name: "missing repl cwd", values: map[string]any{"features": map[string]any{"mcp_connection_sharing": true}}, want: false},
+		{name: "default repl cwd", values: map[string]any{"features": map[string]any{"mcp_connection_sharing": true}}, want: true},
 		{name: "explicit false", values: map[string]any{"features": map[string]any{"mcp_shared_repl_cwd": false, "mcp_connection_sharing": true}}, want: false},
 	}
 	for _, testCase := range cases {
@@ -90,7 +92,7 @@ func TestRuntimeRouterCarriesProcessLocalLaunchCwdsLikeRust(t *testing.T) {
 	if got := runtime.Servers["docs"].Config.CWD; got != launchDir {
 		t.Fatalf("docs cwd = %q, want %q", got, launchDir)
 	}
-	values["features"] = map[string]any{"mcp_connection_sharing": true}
+	values["features"] = map[string]any{"mcp_shared_repl_cwd": false, "mcp_connection_sharing": true}
 	disabled := router.runtimeMCPConfigForThread(mcp.NewHostMCPServerContributionContext("", "", ""), values, t.TempDir(), nil, nil)
 	if got := disabled.Servers["docs"].Config.CWD; got != "" {
 		t.Fatalf("launch cwd applied without the feature: %q", got)

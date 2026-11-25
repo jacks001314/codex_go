@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "87de5e932dd03bb9efece4a6dd3eab4c5de45701",
+ "rustToInclusive": "3f65e9f13165d85d1b1fbe20ce06c55758f927b9",
  "commits": [
   {
    "sha": "27c05a52e0cdf93ef7db5a96ccaf88d6b9095472",
@@ -56993,6 +56993,18 @@
    "status": "complete",
    "evidence": [
     "Pinned all six packaged Go CLI ripgrep targets to 16.0.0 using the Rust dotslash manifest URLs, sizes, and SHA-256 digests; NOTICE and packaging contract test updated; staging verification passed for windows-amd64."
+   ]
+  },
+  {
+   "sha": "3f65e9f13165d85d1b1fbe20ce06c55758f927b9",
+   "subject": "Enable fixed launch directories for shared MCP REPL servers (#63821)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "Promoted mcp_shared_repl_cwd to stable/default-on while preserving explicit disable and the mcp_connection_sharing gate; feature and appserver launch-directory regressions passed."
    ]
   }
  ]
