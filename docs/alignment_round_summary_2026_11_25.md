@@ -76,8 +76,10 @@
 
 ## 风险
 
-1. `charm.land/glamour/v2 v2.0.1` 被上游重新发布过：sumdb 与当前 proxy 一致给出 `xl+r00A4…`（139,064 字节 zip），
-   而仓库 go.sum 锁的 `Vx2F81a4…` 对应 2026-11-07 缓存里的旧制品（3,793,168 字节 zip，含 gallery 图片）。
-   本机靠旧缓存能构建，全新 clone 或冷缓存会 checksum mismatch。切到新制品需要先刷新 module cache 再改 go.sum，未在本轮执行。
+1. `charm.land/glamour/v2 v2.0.1` 已统一到 sumdb 记录的制品：`h1:xl+r00A4…`（139,064 字节 zip）。此前 go.sum 锁的是
+   2026-11-07 缓存里的旧制品 `Vx2F81a4…`（3,793,168 字节，含 `styles/gallery` 图片），项目镜像用的是新值，两边不一致
+   才导致节点反复 checksum mismatch。现在仓库、镜像与本机 module cache 都是 `xl+r00A4…`，`go mod verify`、`go build ./...`
+   与 `go test ./tui/...` 全部通过。重新发布的那一版把 gallery 图片换成了占位文件（239 个文件不变，4.66MB → 0.55MB），
+   代码里没有 `go:embed` 依赖它们。
 2. macOS 无 Touch ID 硬件，Secure Enclave 端到端签名仍缺真机证据；该机 arm64 未测，且存在 13.0→12.0 链接警告。
 3. 六个原生平台的 SQLite 矩阵只观测到 3 个 amd64 单元；GitHub Actions 仍受账户计费限制。

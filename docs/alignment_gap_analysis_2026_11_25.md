@@ -167,21 +167,18 @@ Go 已经实现了 thread ownership 的“第一次观察者获胜”，但 agen
 
 ## 依赖校验风险：charm.land/glamour/v2 v2.0.1 的 sumdb 与镜像内容分叉
 
-这是本轮两个节点都撞到、且必须记录的一条外部风险，与代码对齐无关。下面的数字是 lead 在 Windows 上重新实测的，
-与两个节点先前的说法有出入，以这里为准：
+这是本轮两个节点都撞到的一条外部风险，与代码对齐无关，最终按下面的实测结论收敛：
 
 - sum.golang.org 的记录：`charm.land/glamour/v2 v2.0.1 h1:xl+r00A4aJWU0z8fgwKd9fQQ4rsphqGUzuEiXZP5n+c=`。
-- 用**全新 module cache**（`GOMODCACHE=C:\qaxtmp\modcache2`）+ `GOPROXY=goproxy.cn` + `GOSUMDB=sum.golang.org`
-  下载，`go mod download -json` 返回 `Sum` 就是 `xl+r00A4…`，zip 139,064 字节；用该 zip 重新计算 h1 得到同一个值，
-  说明 sumdb 与当前 proxy 是一致的。
-- 本机从 2026-11-07 起就有的缓存是另一份：zip 3,793,168 字节，解出的 239 个文件共 4,660,169 字节（含
-  `styles/gallery/*.png` 几张几百 KB 的图），其 h1 才是仓库 go.sum 里的 `Vx2F81a4SBR5/IqAkDyeZ3mfuT7u+9AYxeXQ+J1n2Wc=`。
-- 结论：该版本被重新发布过，新一版把 gallery 图片换成了占位文件。仓库的 `Vx2F81a4…` 是对**旧**制品的锁定，
-  只在本机这份缓存上成立；全新 clone 或冷缓存会 `checksum mismatch`。
+- 用全新 module cache + `GOPROXY=goproxy.cn` + `GOSUMDB=sum.golang.org` 下载，`go mod download -json` 返回的 `Sum`
+  就是 `xl+r00A4…`，zip 139,064 字节；对该 zip 重新计算 h1 得到同一个值，说明 sumdb 与当前 proxy 一致。
+- 本机 2026-11-07 起的缓存是另一份：zip 3,793,168 字节，解出 239 个文件共 4,660,169 字节（含 `styles/gallery/*.png`
+  几张几百 KB 的图），h1 才是旧 go.sum 里的 `Vx2F81a4…`。该版本被上游重新发布过，新版把 gallery 图片换成了占位文件。
+- 项目镜像当时已经采用 `xl+r00A4…`，目标仓库还锁着 `Vx2F81a4…`，两边不一致正是节点 checksum mismatch 的来源。
 
-处置：本轮不改 `go.sum`。本机换成 `xl+r00A4…` 时会立刻因为缓存里仍是旧制品而失败，而清缓存（`go clean -modcache`
-或删掉该模块目录）属于会改变构建输入的操作，我没有在这个环境里做。要把仓库切到当前上游制品，需要先在有旧缓存的
-机器上刷新 module cache，再改 go.sum；这件事留给用户决定。任何节点仍不要单方面改这个值。
+处置（已完成）：仓库 `go.sum`、项目镜像与本机 module cache 统一为 `xl+r00A4…`。本机缓存里 239 个文件按新制品逐个覆盖
+（同名集合完全一致，无需删除），zip 与 ziphash 换成新制品，随后 `go mod verify` 通过、`go build ./...` 退出 0、
+`go test ./tui/...` 全绿。代码里没有 `go:embed` 依赖 gallery 图片，渲染测试不受影响。
 
 
 ## 第三轮追加（#61900、probe 竞态、Seatbelt 规则顺序、macOS Keychain/plist）
