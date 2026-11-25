@@ -29,7 +29,11 @@ func NewLocalServerOutputProvider(inner tool.CodeModeRemoteProvider) tool.CodeMo
 }
 
 func (p *LocalServerOutputProvider) NewSession(delegate tool.CodeModeRemoteDelegate) tool.CodeModeRemoteSession {
-	return p.NewSessionWithOptions(delegate, tool.CodeModeSessionOptions{OutputTruncation: tool.CodeModeOutputTruncationServer})
+	return p.NewSessionWithOptions(delegate, p.DefaultSessionOptions())
+}
+
+func (p *LocalServerOutputProvider) DefaultSessionOptions() tool.CodeModeSessionOptions {
+	return tool.CodeModeSessionOptions{OutputTruncation: tool.CodeModeOutputTruncationServer}
 }
 
 func (p *LocalServerOutputProvider) NewSessionWithOptions(delegate tool.CodeModeRemoteDelegate, options tool.CodeModeSessionOptions) tool.CodeModeRemoteSession {

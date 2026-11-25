@@ -443,6 +443,26 @@ func (m *HostToClient) UnmarshalJSON(data []byte) error {
 	}
 	*m = HostToClient{Type: envelope.Type}
 	switch envelope.Type {
+	case "heartbeat":
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(data, &fields); err != nil {
+			return err
+		}
+		for field := range fields {
+			if field != "type" && field != "sessionId" {
+				return fmt.Errorf("heartbeat carries unexpected field %q", field)
+			}
+		}
+		var value struct {
+			SessionID SessionID `json:"sessionId"`
+		}
+		if err := json.Unmarshal(data, &value); err != nil {
+			return err
+		}
+		if strings.TrimSpace(string(value.SessionID)) == "" {
+			return fmt.Errorf("heartbeat requires sessionId")
+		}
+		m.SessionID = value.SessionID
 	case "connection/ready":
 		var value struct {
 			Type                string          `json:"type"`
@@ -513,6 +533,13 @@ func (m *HostToClient) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// HeartbeatMessage is emitted only for sessions that opt into idle heartbeats.
+// It is intentionally a separate host frame so old clients can continue to
+// process ordinary operation and delegate messages unchanged.
+func HeartbeatMessage(sessionID SessionID) HostToClient {
+	return HostToClient{Type: "heartbeat", SessionID: sessionID}
+}
+
 func HostHelloMessage(hello HostHello) HostToClient {
 	return HostToClient{Type: "connection/ready", Hello: &hello}
 }
@@ -543,6 +570,11 @@ func CellClosed(sessionID SessionID, cellID CellID) HostToClient {
 
 func (m HostToClient) MarshalJSON() ([]byte, error) {
 	switch m.Type {
+	case "heartbeat":
+		return json.Marshal(struct {
+			Type      string    `json:"type"`
+			SessionID SessionID `json:"sessionId"`
+		}{Type: m.Type, SessionID: m.SessionID})
 	case "connection/ready":
 		type hello HostHello
 		body, err := json.Marshal((*hello)(m.Hello))
@@ -610,6 +642,10 @@ type HostRequest struct {
 	// MCPResultDedup enables Rust #63540's text() deduplication for this
 	// session; omission keeps the legacy wire shape.
 	MCPResultDedup *bool `json:"mcpResultDedup,omitempty"`
+	// HeartbeatIntervalSeconds is omitted when zero so older generic hosts see
+	// exactly the legacy request. Typed gRPC hosts use the corresponding proto
+	// field.
+	HeartbeatIntervalSeconds uint32 `json:"heartbeatIntervalS,omitempty"`
 }
 
 func (r *HostRequest) UnmarshalJSON(data []byte) error {
@@ -617,19 +653,20 @@ func (r *HostRequest) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("host request is nil")
 	}
 	var envelope struct {
-		Method              string               `json:"method"`
-		SessionID           SessionID            `json:"sessionId"`
-		Request             json.RawMessage      `json:"request"`
-		CellID              CellID               `json:"cellId"`
-		CellExecutionLimits *CellExecutionLimits `json:"cellExecutionLimits"`
-		OutputTruncation    *OutputTruncation    `json:"outputTruncation"`
-		MaxOutputTokens     *int                 `json:"maxOutputTokens"`
-		MCPResultDedup      *bool                `json:"mcpResultDedup"`
+		Method                   string               `json:"method"`
+		SessionID                SessionID            `json:"sessionId"`
+		Request                  json.RawMessage      `json:"request"`
+		CellID                   CellID               `json:"cellId"`
+		CellExecutionLimits      *CellExecutionLimits `json:"cellExecutionLimits"`
+		OutputTruncation         *OutputTruncation    `json:"outputTruncation"`
+		MaxOutputTokens          *int                 `json:"maxOutputTokens"`
+		MCPResultDedup           *bool                `json:"mcpResultDedup"`
+		HeartbeatIntervalSeconds uint32               `json:"heartbeatIntervalS"`
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return err
 	}
-	*r = HostRequest{Method: envelope.Method, SessionID: envelope.SessionID, CellID: envelope.CellID, CellExecutionLimits: envelope.CellExecutionLimits, OutputTruncation: envelope.OutputTruncation, MaxOutputTokens: envelope.MaxOutputTokens, MCPResultDedup: envelope.MCPResultDedup}
+	*r = HostRequest{Method: envelope.Method, SessionID: envelope.SessionID, CellID: envelope.CellID, CellExecutionLimits: envelope.CellExecutionLimits, OutputTruncation: envelope.OutputTruncation, MaxOutputTokens: envelope.MaxOutputTokens, MCPResultDedup: envelope.MCPResultDedup, HeartbeatIntervalSeconds: envelope.HeartbeatIntervalSeconds}
 	if len(envelope.Request) == 0 || string(envelope.Request) == "null" {
 		return nil
 	}
@@ -677,6 +714,9 @@ func OpenSessionRequestWithOptions(sessionID SessionID, options SessionOptions) 
 	if options.MCPResultDedup {
 		dedup := true
 		request.MCPResultDedup = &dedup
+	}
+	if options.HeartbeatIntervalSeconds != 0 {
+		request.HeartbeatIntervalSeconds = options.HeartbeatIntervalSeconds
 	}
 	return request
 }

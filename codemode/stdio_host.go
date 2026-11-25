@@ -34,10 +34,12 @@ type stdioHostServer struct {
 	wg              sync.WaitGroup
 	// toolPreloads are the trusted host helpers each cell installs when its
 	// catalog exposes the matching nested tool (Rust #62430 HostState).
-	toolPreloads []tool.CodeModeToolPreload
+	toolPreloads     []tool.CodeModeToolPreload
+	sessionHeartbeat func(SessionID, uint32)
 }
 
 type codemodeHostOptions struct {
+	sessionHeartbeat func(SessionID, uint32)
 	// enforceSessionDelegateLimits mirrors the structured gRPC service, where
 	// each session owns a callback budget in addition to the shared host budget.
 	enforceSessionDelegateLimits bool
@@ -96,8 +98,9 @@ func runCodemodeHost(ctx context.Context, read func(*ClientToHost) (bool, error)
 		requests: map[RequestID]*stdioHostRequest{}, pending: map[DelegateRequestID]chan delegateHostResult{},
 		pendingSession: map[SessionID]int{}, activeCells: map[activeCellKey]struct{}{},
 		delegateLimit: LegacyMaxPendingDelegateCalls, activeCellLimit: MaxActiveCells,
-		enforceSessions: options.enforceSessionDelegateLimits,
-		toolPreloads:    options.toolPreloads,
+		enforceSessions:  options.enforceSessionDelegateLimits,
+		toolPreloads:     options.toolPreloads,
+		sessionHeartbeat: options.sessionHeartbeat,
 	}
 	if err := host.negotiate(); err != nil {
 		return err
@@ -228,6 +231,9 @@ func (h *stdioHostServer) handleRequest(ctx context.Context, id RequestID, reque
 			}
 			h.sessions[request.SessionID] = session
 			h.seen[request.SessionID] = struct{}{}
+			if h.sessionHeartbeat != nil {
+				h.sessionHeartbeat(request.SessionID, request.HeartbeatIntervalSeconds)
+			}
 		}
 		h.mu.Unlock()
 		if active || reused {
@@ -297,6 +303,9 @@ func (h *stdioHostServer) handleRequest(ctx context.Context, id RequestID, reque
 		h.mu.Lock()
 		session := h.sessions[request.SessionID]
 		delete(h.sessions, request.SessionID)
+		if h.sessionHeartbeat != nil {
+			h.sessionHeartbeat(request.SessionID, 0)
+		}
 		h.releaseSessionActiveCellsLocked(request.SessionID)
 		h.mu.Unlock()
 		if session == nil {

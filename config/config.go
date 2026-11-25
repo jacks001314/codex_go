@@ -2840,10 +2840,8 @@ func (c *Config) CodeModeDefaultExecYieldTime() time.Duration {
 
 // CodeModeHeartbeatIntervalSeconds mirrors Rust's top-level
 // `[code_mode] heartbeat_interval_s` (#61385): idle seconds between gRPC stream
-// heartbeats, where zero (the default) disables them. Go's gRPC code-mode path
-// carries the IPC JSON framing over the generic Transport RPC, which has no
-// typed heartbeat frames, so the value is exposed for host parity and config
-// compatibility rather than applied to a stream.
+// heartbeats, where zero (the default) disables them. The gRPC Transport host
+// applies the interval to idle output and the client ignores liveness frames.
 func (c *Config) CodeModeHeartbeatIntervalSeconds() uint32 {
 	if c == nil || c.Values == nil {
 		return 0

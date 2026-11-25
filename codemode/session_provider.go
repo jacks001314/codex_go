@@ -20,9 +20,10 @@ func CreateSessionWithOptions(provider tool.CodeModeRemoteProvider, delegate too
 	}
 	if optionsProvider, ok := provider.(tool.CodeModeRemoteSessionOptionsProvider); ok {
 		return optionsProvider.NewSessionWithOptions(delegate, tool.CodeModeSessionOptions{
-			CellExecutionLimits: cellExecutionLimitsFromSessionOptions(options),
-			OutputTruncation:    tool.CodeModeOutputTruncation(options.OutputTruncation),
-			MCPResultDedup:      options.MCPResultDedup,
+			CellExecutionLimits:      cellExecutionLimitsFromSessionOptions(options),
+			OutputTruncation:         tool.CodeModeOutputTruncation(options.OutputTruncation),
+			MCPResultDedup:           options.MCPResultDedup,
+			HeartbeatIntervalSeconds: options.HeartbeatIntervalSeconds,
 		}), nil
 	}
 	if options.OutputTruncation == OutputTruncationServer {
@@ -34,7 +35,7 @@ func CreateSessionWithOptions(provider tool.CodeModeRemoteProvider, delegate too
 // sessionOptionsFromTool maps the tool-package options shared with Core onto
 // the protocol-level session options.
 func sessionOptionsFromTool(options tool.CodeModeSessionOptions) SessionOptions {
-	out := SessionOptions{OutputTruncation: OutputTruncation(options.OutputTruncation), MCPResultDedup: options.MCPResultDedup}
+	out := SessionOptions{OutputTruncation: OutputTruncation(options.OutputTruncation), MCPResultDedup: options.MCPResultDedup, HeartbeatIntervalSeconds: options.HeartbeatIntervalSeconds}
 	if limits := options.CellExecutionLimits; limits != nil {
 		out.CellExecutionLimits = &CellExecutionLimits{MaxYieldTimeMS: limits.MaxYieldTimeMS, MaxHeapSizeBytes: limits.MaxHeapSizeBytes}
 	}

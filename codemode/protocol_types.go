@@ -175,6 +175,9 @@ type SessionOptions struct {
 	// MCPResultDedup asks the host's text() helper to omit an MCP text
 	// fallback that duplicates structuredContent (Rust #63540).
 	MCPResultDedup bool
+	// HeartbeatIntervalSeconds requests idle stream heartbeats. Zero (the
+	// default) disables heartbeats and keeps the legacy wire shape.
+	HeartbeatIntervalSeconds uint32
 }
 
 // ValidateSessionOptions rejects malformed truncation settings. Whether a

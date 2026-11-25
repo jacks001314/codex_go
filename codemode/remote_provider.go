@@ -1166,6 +1166,10 @@ func (c *remoteConnection) readBulkLoop() {
 
 func (c *remoteConnection) handle(message HostToClient) {
 	switch message.Type {
+	case "heartbeat":
+		// Idle stream heartbeats are transport liveness markers. They must not
+		// admit callbacks or alter pending operation state.
+		return
 	case "operation/response":
 		c.mu.Lock()
 		pending := c.pending[message.ID]

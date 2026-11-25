@@ -293,6 +293,9 @@ type CodeModeSessionOptions struct {
 	// MCPResultDedup omits an MCP text fallback duplicating structuredContent
 	// when Code Mode prints the tool result (Rust #63540).
 	MCPResultDedup bool
+	// HeartbeatIntervalSeconds requests idle stream heartbeats from hosts that
+	// support them. Zero preserves the legacy wire behavior and disables them.
+	HeartbeatIntervalSeconds uint32
 }
 
 // CodeModeCellExecutionLimits mirrors Rust CodeModeSessionCellExecutionLimits.
@@ -306,6 +309,12 @@ type CodeModeCellExecutionLimits struct {
 // Providers without it retain control of their session settings.
 type CodeModeRemoteSessionOptionsProvider interface {
 	NewSessionWithOptions(delegate CodeModeRemoteDelegate, options CodeModeSessionOptions) CodeModeRemoteSession
+}
+
+// CodeModeRemoteDefaultSessionOptionsProvider supplies provider-owned defaults
+// when Core overrides the heartbeat interval (Rust #61385).
+type CodeModeRemoteDefaultSessionOptionsProvider interface {
+	DefaultSessionOptions() CodeModeSessionOptions
 }
 
 // CodeModeRemoteOutputTruncation reports the output policy pinned by the
@@ -466,6 +475,20 @@ func NewCodeModeRuntime(provider CodeModeRemoteProvider, disableFallback bool) *
 // NewCodeModeRuntimeWithOptions creates a runtime whose remote host session
 // honors the requested session options (Rust create_session_with_options).
 func NewCodeModeRuntimeWithOptions(provider CodeModeRemoteProvider, disableFallback bool, options CodeModeSessionOptions) *CodeModeRuntime {
+	if options.HeartbeatIntervalSeconds != 0 {
+		if defaultsProvider, ok := provider.(CodeModeRemoteDefaultSessionOptionsProvider); ok {
+			defaults := defaultsProvider.DefaultSessionOptions()
+			defaults.HeartbeatIntervalSeconds = options.HeartbeatIntervalSeconds
+			if options.CellExecutionLimits != nil {
+				defaults.CellExecutionLimits = options.CellExecutionLimits
+			}
+			if options.OutputTruncation != "" {
+				defaults.OutputTruncation = options.OutputTruncation
+			}
+			defaults.MCPResultDedup = defaults.MCPResultDedup || options.MCPResultDedup
+			options = defaults
+		}
+	}
 	exec := &codeModeExecExecutor{
 		sessionOptions: options,
 		store:          map[string]json.RawMessage{}, cells: map[string]*codeModeCell{}, remoteCells: map[string]*Registry{},

@@ -1718,6 +1718,9 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		if run.Config != nil && features.Enabled(run.Config.FeatureSettings(), "code_mode_mcp_result_dedup") {
 			runtimeOptions.MCPResultDedup = true
 		}
+		if run.Config != nil {
+			runtimeOptions.HeartbeatIntervalSeconds = run.Config.CodeModeHeartbeatIntervalSeconds()
+		}
 		runForRouter.CodeModeRuntime = tool.NewCodeModeRuntimeWithOptions(provider, run.DisableCodeModeFallback, runtimeOptions)
 	}
 	if runForRouter.CodeModeRuntime != nil {

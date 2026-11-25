@@ -214,7 +214,11 @@ func (s *grpcStdioHostServer) Transport(stream codemodev1.CodeModeHost_Transport
 	// Rust #57212: compress responses for clients that advertise zstd and keep
 	// identity responses for clients that do not.
 	_ = grpc.SetSendCompressor(stream.Context(), grpcZstdEncodingName)
-	ctx, cancel := context.WithCancel(s.ctx)
+	ctx, cancel := context.WithCancel(stream.Context())
+	if s.ctx != nil {
+		stop := context.AfterFunc(s.ctx, cancel)
+		defer stop()
+	}
 	defer cancel()
 	inbound := make(chan ClientToHost, outgoingChannelCapacity)
 	readErr := make(chan error, 1)
@@ -258,15 +262,19 @@ func (s *grpcStdioHostServer) Transport(stream codemodev1.CodeModeHost_Transport
 			return false, ctx.Err()
 		}
 	}
-	var writeMu sync.Mutex
-	write := func(message any) error {
-		data, err := json.Marshal(message)
-		if err != nil {
-			return err
-		}
-		writeMu.Lock()
-		defer writeMu.Unlock()
-		return stream.Send(&codemodev1.FramedMessage{Payload: data})
+	writer := newGrpcHeartbeatWriter(ctx, stream.Send)
+	hostDone := make(chan error, 1)
+	go func() {
+		hostDone <- runCodemodeHost(ctx, read, writer.write, codemodeHostOptions{
+			enforceSessionDelegateLimits: true, sessionHeartbeat: writer.configure,
+		})
+	}()
+	select {
+	case err := <-hostDone:
+		return err
+	case err := <-writer.done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	return runCodemodeHost(ctx, read, write, codemodeHostOptions{enforceSessionDelegateLimits: true})
 }
