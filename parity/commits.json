@@ -49778,8 +49778,9 @@
    ],
    "status": "blocked_precondition",
    "evidence": [
-    "Only the config surface ([rollout_trace] limits, batch 81) landed; the rollout trace recorder that enforces the limits is not ported.",
-    "plan: update/plan_2026_11_16.md batch 74"
+    "Go accepts the two rollout_trace config keys and rejects wrong types and unknown keys, but has no runtime limit resolver, no CODEX_ROLLOUT_TRACE_ROOT, no TraceWriter, no ThreadTraceContext and no capture producer. rollout.Recorder is the user-session JSONL writer and must not be truncated by diagnostic limits.",
+    "The wire format also diverges: Go trace_reduce is pinned to schema 2 with one full JSON payload, while Rust 3f65e9f1 manifest/raw/reduced are schema 3 with dual-stream Zstd shards plus capture/parts/gaps. A bounded writer alone would emit artifacts the current Go cannot replay, so the slice order is P0 v3 format and reader, P1 bounded writer with the 64/256MiB defaults, explicit zero, truncated/omitted marking and no eviction, P2 real session/root-child/tool-payload capture with self-produced replay, P3 remaining producers.",
+    "Frozen semantics and the candidate file set are in artifacts/rollout-align/REPORT.md and CONTRACTS.json (linux-align, verified against the upstream commit on a native Linux node)."
    ]
   },
   {
