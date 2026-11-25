@@ -20,6 +20,9 @@
 | `46ea8874a` `77084e84d` | bwrap 探针 drain 截止时间改成当前时间 +50ms（原来的 `time.Now()` 会直接 deadline），并记录全量跑出的临时路径产物 | 修复 drain 用例 50/50 失败 |
 | `9727927c4` `3d361033e` `4f76a3c3a` `8057cf9f1` | Windows 测试环境修整：no-network 环境用例的 homedir 缓存隔离、mxc 运行日志先关闭再加载、子 agent 结束前 `CloseAgent`；并把 #61945 的台账证据改成「能力已在 store 的 fork API，缺的是 host 协议面与拒绝守卫」 | 消除 TempDir 清理竞态、让阻塞证据可执行 |
 | `f25809c92` | `TestSubagentSpawnServiceTierLikeRust` 在 `CloseAgent` 之后等 `WaitForTurnWorkers` 再返回：只关 agent 仍会让子 agent 的 turn worker 在 TempDir 清理时继续写盘 | 该用例 3/20 偶发失败 → 30/30 通过 |
+| `0767e6288` | #60075 host service-tier 异步读取与接受（darwin-align 实现）：`RuntimeServices.ServiceTier` 提供 `Current(ctx)` 与可重复等待的接受回执，接入 thread start、显式 settings 回复、child 准备、startup prewarm 与后续 sampling step；读错误与接受错误分开、`errors.Is` 可辨，默认 10s 等待且尊重更短 caller deadline，等待不在 config/registry/turnAdmission 锁内；同 tier 并发共享回执、显式失败可重试、取消等待不影响传播、拒绝不回滚已提交配置 | #60075 |
+| `49a712ea1` | #61385 Code Mode 可配置 idle heartbeat（subagent-align 实现）：`[code_mode] heartbeat_interval_s` 默认 0（不发、不加 wire 字段），负值越界拒绝；心跳走真实的共享 JSON-framed Transport，普通帧重置 idle deadline，心跳不进输出队列也不触发工具回调，shutdown 清除 deadline，取消/阻塞发送/断连及时退出 | #61385（typed RPC surface 仍缺） |
+| `938f50d51` | #61898 Linux proxy bridge 与 launcher 生命周期绑定（linux-align 实现）：外层持有 listener 与 upstream，re-exec worker 用独立 FD 表跑真实 bwrap；信号缓冲后带真实 wait status 转发，取消/父死清理连接，pidfd 与 OS 线程锁覆盖 caller 退出与 Pdeathsig；transparent 路径保留 namespace 内 NET_ADMIN/NET_BIND_SERVICE 并在 exec 前清零，且在 `ApplyPreMain` 置 dumpable=0 的窗口内恢复以写入 uid/gid maps | #61898 转 partial |
 | `863c88978` | #61919 侧栏图片预览与生成图在回答后呈现（darwin-align 实现）：PNG/JPEG/GIF/静态 WebP 解码，复用 Kitty / Kitty local-file / Sixel 输出与清理生命周期；远程图走授权 `fs/readFile` 字节；不支持终端、raw、Zellij、旧 iTerm、未测量 Sixel、tmux 无透传降级为路径加元数据提示；生成图按 thread/turn 排队，在完成/中断/失败后呈现，恢复历史去重排序；预览同时校验 requested 与 canonical 路径，顺带修掉 Darwin deny-read 回归 | 两个 sidebar contract 仍 partial：残差为 Rust 大图尺寸与左对齐文案、split-turn item 跨页图像重定位与 search anchor 调整、side-companion captured queue 交接、Kitty 启动时的主动 query/reply；Go 的 whole-turn summary 分页只覆盖 per-turn 排序 |
 | `ac76dda16` | 补入 macOS 节点验证过的 darwin PTY 测试：真实 controlling PTY 的 SIGTSTP/SIGCONT、TIOCGPGRP 前台门控、CPR（`ESC[6n`）输入不会落进 composer，以及 darwin 撤销绑定保留 Ctrl-Z 给挂起 | #63520 的 darwin 侧证据进仓库 |
 | `b2c815beb` | 采用带 `RequestCursorPosition` 的 `ResumeMsg`，并记录 inline viewport realign 未移植 | #63520 残差 |
@@ -28,7 +31,7 @@
 | `6ce6cb67b` | #61909/#61916 item-boundary 采样中断与 remote compaction summary 保留（subagent-align 实现）：工具取消与采样取消分离、保留已完成前缀、aborted 工具输出、follow-up 串行、mail 排队；默认关闭 | #61909、#61916 |
 | `9eb91f2d8` `6b310f1fe` `decb18014` `cb8bee7f0` `0684cf0aa` `6976db562` | 缺口文档与台账修订：开项计数、sidebar contract 的阻塞原因、linux/darwin 原生 SQLite 证据、parity 门结论、macOS Info.plist 差异、glamour 校验分叉风险 | — |
 
-台账现状：3,675 complete / 51 equivalent / 845 not_applicable / 11 partial / 13 blocked_precondition；
+台账现状：3,677 complete / 51 equivalent / 845 not_applicable / 10 partial / 12 blocked_precondition；
 4 个 domain、4 个 contract 仍 open；`certificationReady: false`。
 
 ## 本机验证结果（Windows，CGO_ENABLED=0）
