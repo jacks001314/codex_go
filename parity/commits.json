@@ -51448,7 +51448,8 @@
    "evidence": [
     "sandbox/bwrap.go now gives the launcher its own stderr pipe and reads only the bytes that already arrived, so the user-namespace probe reaches its verdict as soon as the launcher exits instead of waiting for a descendant that keeps the pipe open (Rust #62160 pidfd wait); the bounded capture mirrors their 64 KiB limit and the timeout/kill path still treats an unresponsive launcher as usable.",
     "tests: sandbox TestProbeSystemBwrapDoesNotWaitForDescendantHoldingStderr (Linux-gated: a fake launcher that exits after spawning a 5s background sleep holding stderr must still be classified as a user-namespace failure well inside the 500 ms probe timeout), TestProbeSystemBwrapBoundsCapturedStderr, TestProbeSystemBwrapTreatsUnstartableLauncherAsUsable; the existing classification test still passes. Verified go build ./sandbox, GOOS=linux go build ./sandbox and go vet ./sandbox.",
-    "plan: update/plan_2026_11_19.md batch 8"
+    "plan: update/plan_2026_11_19.md batch 8",
+    "Batch 183: the probe previously snapshotted the bounded stderr buffer before the reader goroutine finished, so a launcher that wrote its user-namespace failure and exited while a descendant kept the write end open could be sampled empty and reported as usable - an intermittent false negative the Linux node hit on its first native run (bwrap_probe_test.go:23). drainBwrapProbeStderr now mirrors Rust's non-blocking read-until-WouldBlock: on Linux it sets the pipe read deadline to now so the reader drains the bytes the launcher already wrote and then stops immediately, with a 50ms grace plus read-end close as the fallback where deadlines are unsupported, and only then takes the snapshot. New regression TestDrainBwrapProbeStderrKeepsLauncherOutput writes the failure line, keeps the write end open, and asserts the line is captured without waiting; go test ./sandbox/... and go vet ./sandbox pass."
    ]
   },
   {

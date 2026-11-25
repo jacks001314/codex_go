@@ -133,10 +133,7 @@ func probeSystemBwrapUserNamespaces(bwrapPath string, timeout time.Duration) boo
 		}
 		<-done
 	}
-	captured := stderr.String()
-	// Closing the read end releases a reader still blocked on a descendant.
-	_ = readEnd.Close()
-	<-readerDone
+	captured := drainBwrapProbeStderr(readEnd, readerDone, stderr)
 	if timedOut {
 		return true
 	}
@@ -144,6 +141,36 @@ func probeSystemBwrapUserNamespaces(bwrapPath string, timeout time.Duration) boo
 		return true
 	}
 	return !isUserNamespaceFailure(captured)
+}
+
+// bwrapProbeDrainGrace bounds the fallback used on platforms where a pipe read
+// deadline is unavailable. Linux, where the probe actually runs, drains without
+// sleeping.
+const bwrapProbeDrainGrace = 50 * time.Millisecond
+
+// drainBwrapProbeStderr returns everything the launcher already wrote without
+// waiting for a descendant that inherited the stderr write end (Rust #62160 sets
+// the fd non-blocking and reads until WouldBlock). The snapshot must be taken
+// after the reader has consumed the buffered bytes, otherwise a failure line the
+// launcher wrote before exiting can be missed and a broken launcher reported as
+// usable.
+func drainBwrapProbeStderr(readEnd *os.File, readerDone <-chan struct{}, snapshot *bwrapStderrSnapshot) string {
+	if err := readEnd.SetReadDeadline(time.Now()); err == nil {
+		// A deadline in the past makes the next read fail only once the pipe holds
+		// no more data, so the reader stops exactly like Rust stops at WouldBlock.
+		<-readerDone
+		_ = readEnd.SetReadDeadline(time.Time{})
+		_ = readEnd.Close()
+		return snapshot.String()
+	}
+	select {
+	case <-readerDone:
+	case <-time.After(bwrapProbeDrainGrace):
+		// Releasing the read end unblocks a reader waiting on a live descendant.
+		_ = readEnd.Close()
+		<-readerDone
+	}
+	return snapshot.String()
 }
 
 // bwrapStderrSnapshot keeps the bounded prefix of a launcher's stderr while the
