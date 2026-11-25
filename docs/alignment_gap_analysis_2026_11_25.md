@@ -128,7 +128,7 @@ Go 已经实现了 thread ownership 的“第一次观察者获胜”，但 agen
 ### P2：平台相关
 
 - Windows 原生 MXC：`sandbox/mxc/run_windows.go` 仍返回 `native MXC is unavailable on this executor`，`execserver` 的 `windowsMxc` 能力为 false。对应 `#42841`、`#55378`。
-- Linux bwrap launcher：proxy bridge 生命周期和 Bubblewrap 0.12 proc mount fallback 依赖 Go 尚未实现的 launcher 架构。对应 `#61898`、`#61900`。
+- Linux bwrap launcher：proxy bridge 生命周期依赖 Go 尚未实现的 launcher 架构（`#61898` 仍未做）。Bubblewrap 0.12 的 proc mount fallback（`#61900`）已在本轮实现并合并：`execBubblewrap` 改为共用 builder 加最小只读 `/bin/true` 预检，命中同一行 `Can't mount proc on /newroot/proc|/proc: Invalid argument|Operation not permitted|Permission denied` 时去掉 `--proc` 重跑，真实用户命令只执行一次；残差是该节点没有真实的 0.12 proc-denial 环境，回退路径用包装脚本注入诊断验证。
 - TUI Ctrl-Z suspend：`tui/tui/job_control.go` 只有 `SuspendKey` 常量和纯模型，tea model 没有 `SuspendMsg`，也没有恢复前的 foreground ownership 检查。对应 `#63520`。
 - macOS Secure Enclave：`appserver/user_verification_macos_cgo.go` 已经包含 `LAContext` 和 `kSecAttrTokenIDSecureEnclave` 的 cgo 实现，缺的是 macOS 真机与已登记生物识别的验证，不是“完全没写”。对应 `#43624`。
 
@@ -182,6 +182,14 @@ Go 已经实现了 thread ownership 的“第一次观察者获胜”，但 agen
 应在隔离副本里改 go.sum 或使用本地 vendor，结果只作为实验证据，不回写项目。等上游澄清该版本是否被重打 tag 后再决定是否
 把这条依赖升级到新版本。
 
+
+## 第三轮追加（#61900、probe 竞态、Seatbelt 规则顺序、macOS Keychain/plist）
+
+- `#61900`：Linux 节点实现 proc-mount 预检与 fallback，已合并。
+- 探针竞态：`sandbox/bwrap.go` 原来在读取协程结束前就取 stderr 快照，launcher 写了失败行但派生进程仍持有写端时，快照可能为空，于是把坏 launcher 判成可用。新增 `drainBwrapProbeStderr`：Linux 上把管道读 deadline 设为当下时刻，先抽干已写入字节再停止（等价 Rust 的读到 WouldBlock），不支持 deadline 的平台退化为 50ms 宽限加关闭读端；新增确定性回归 `TestDrainBwrapProbeStderrKeepsLauncherOutput`。
+- Seatbelt 规则顺序：workspace 位于 `/private/tmp` 这类 scratch 别名下时，`PROTECTED_WRITE` 的 deny 会早于更宽的 `/private/tmp` allow 输出，而 Seatbelt 取最后匹配规则，导致 `.git` 被重新放开。现在把 scratch 排除、root anchor unlink 与 PROTECTED_WRITE 全部延后到最后统一输出（与 Rust 把 root_anchor_denies 追加在 allows 之后一致）；新增 `TestSeatbeltPolicyKeepsWriteDeniesAfterScratchAllowances`，该用例在旧顺序下失败、新顺序下通过。
+- macOS Keychain：Rust 用 `kSecAttrLabel`（`ItemSearchOptions::label` 与 `GenerateKeyOptions::set_label`），Go 原来用 `kSecAttrApplicationLabel`，两边密钥互不可见；已统一到 `kSecAttrLabel` 并补 `kSecMatchLimitOne`。旧 Go 条目视为不存在，需要重新 enroll。
+- doctor/desktop_darwin.go：改为 `plutil -convert json`（5s 超时、64KiB 上限），bundle id 不匹配视为不是 Codex，version 回退与 build 数字校验按 Rust 实现；新增 XML 实体转义、binary plist、非 Codex bundle 与软件 P-256 缺 SecureEnclave token 被真实 C validator 拒绝四条 darwin 测试。
 
 ## 建议顺序
 
@@ -278,4 +286,4 @@ linux-align（Linux 节点，go1.26.3 linux/amd64）实现了 #63520，代码已
 
 这里**没有采纳**该补丁里的 `go.sum` 改动。节点把 `charm.land/glamour/v2 v2.0.1` 的 h1 改成了 `xl+r00A4…`（sum.golang.org 上的记录），但本机与 proxy.golang.org / goproxy.cn 实际取到的模块字节计算出的 h1 都是 `Vx2F81a4…`。也就是说这个模块版本的公开发布记录与镜像当前提供的内容不一致，直接改成 sumdb 值会让所有依赖验证失败（`checksum mismatch`）。仓库保留原值，并把这条上游 provenance 不一致记为风险待上游确认。
 
-#61898 / #61900 该节点已核对 3f65e9f1 的真实 diff 并给出结论与分阶段方案（见 `deliverables/linux-align/REPORT.md`）：Go 的 `sandbox/linuxsandbox/linux.go` 目前是进程内直接 `unix.Exec`，既没有 proc-mount 预检/自动 fallback，也没有 Rust 那套 proxy supervisor → mount cleanup supervisor → bwrap 的交接结构；普通 goroutine 无法照搬 Rust 的 `CLONE_FILES` 私有线程 FD 表，需要 re-exec 进程隔离。这两项仍未实现。
+#61900 已由该节点实现并合并（三个文件：`sandbox/linuxsandbox/linux.go`、`proc_mount_linux.go`、`proc_mount_linux_test.go`；单元测试与 race 通过，真实 bwrap 下两种诊断注入都能回退且 payload 只执行一次）。#61898 仍缺：Go 的 `execBubblewrap` 是进程内直接 `unix.Exec`，没有 Rust 那套 proxy supervisor → mount cleanup supervisor → bwrap 的交接结构；普通 goroutine 无法照搬 Rust 的 `CLONE_FILES` 私有线程 FD 表，需要 re-exec 进程隔离，方案见 `deliverables/linux-align/REPORT.md`。
