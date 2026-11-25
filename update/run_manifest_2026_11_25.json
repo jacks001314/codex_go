@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "startedAt": "2026-11-25T11:00:00+08:00",
+  "platform": "windows/amd64",
+  "osVersion": "Microsoft Windows 10.0.26300",
+  "goVersion": "go1.26.5",
+  "goRepository": "D:\\qax\\reagent\\dev\\codex_go",
+  "goStartCommit": "3e02afa789243b32efc163b65bebae132aa4c25d",
+  "goStartDirty": false,
+  "rustRepository": "D:\\qax\\reagent\\dev\\git\\codex",
+  "rustBranch": "main",
+  "rustPreviousTarget": "a0d5b0a661db3b34cd87bdf1c93736b90fd3694b",
+  "rustCommit": "e2c31f625a030f65d4ed9f447a13a5bd0ef61ad5",
+  "rustWindowCommitCount": 70,
+  "ledgerWindow": "2026-11-25-a0d5b0a661-e2c31f625a",
+  "binaryHashes": {},
+  "sdkVersion": null,
+  "model": null,
+  "scenarios": [
+    "L0 parity static contracts",
+    "L1 affected Go package tests",
+    "L2 affected replay contracts"
+  ],
+  "environmentVariablesRecorded": []
+}

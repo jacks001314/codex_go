@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"codex_go/rollout"
@@ -139,8 +140,33 @@ func assertSearchCursor(t *testing.T, raw *string, threadID, searchTerm string, 
 	if err := json.Unmarshal([]byte(*raw), &cursor); err != nil {
 		t.Fatal(err)
 	}
-	if cursor.ThreadID != threadID || cursor.SearchTerm != searchTerm || cursor.NextOccurrenceIndex != occurrenceIndex {
+	if cursor.ThreadID != threadID || cursor.SearchTerm != searchTerm || cursor.NextVisibleOccurrenceIndex != occurrenceIndex {
 		t.Fatalf("search cursor = %#v", cursor)
+	}
+}
+
+func TestThreadHistorySearchUsesVisibleUserLinkLabelsLikeRust(t *testing.T) {
+	item := "{\"type\":\"userMessage\",\"content\":[{\"type\":\"text\",\"text\":\"Needle [label](https://example.com/hidden-needle)  end\\n\\n```\\na  b\\n```\"}]}"
+	text, ok, err := searchableThreadHistoryItemText(item)
+	if err != nil || !ok {
+		t.Fatalf("searchable text ok=%v err=%v", ok, err)
+	}
+	want := "Needle label  end\n\n```\na  b\n```"
+	if text != want {
+		t.Fatalf("searchable text = %q, want %q", text, want)
+	}
+	if matches := newThreadHistoryLiteralMatcher("hidden-needle").findRanges(text, 1); len(matches) != 0 {
+		t.Fatalf("hidden link destination remained searchable: %#v", matches)
+	}
+	if matches := newThreadHistoryLiteralMatcher("label").findRanges(text, 1); len(matches) != 1 {
+		t.Fatalf("visible link label matches = %#v", matches)
+	}
+}
+
+func TestThreadHistorySearchRejectsLegacyRawOccurrenceCursorLikeRust(t *testing.T) {
+	legacy := `{"threadId":"thread-1","searchTerm":"needle","nextRolloutOrdinal":2,"nextOccurrenceIndex":1}`
+	if _, err := parseThreadHistorySearchCursor(&legacy, "thread-1", "needle"); err == nil || !strings.Contains(err.Error(), "invalid cursor") {
+		t.Fatalf("legacy cursor error = %v", err)
 	}
 }
 

@@ -179,7 +179,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// remote-exec suites joined core/tests/suite.
 			// Re-anchored to upstream 1985925638: #63533 added the
 			// client_websockets_catalog_etag and models_etag_responses suites.
-			Files: 508,
+			Files: 511,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{

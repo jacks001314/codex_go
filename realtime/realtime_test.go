@@ -144,11 +144,14 @@ func TestStartParamsJSONMatchesRustOptionalAndRequiredFieldSemantics(t *testing.
 	for _, name := range []string{
 		"clientManagedHandoffs", "flushTranscriptTailOnSessionEnd", "codexResponsesAsItems",
 		"codexResponseItemPrefix", "codexResponseHandoffMode", "codexResponseHandoffChannelPrefixes",
-		"model", "includeStartupContext", "initialItems", "realtimeSessionId", "transport", "version", "voice",
+		"model", "includeStartupContext", "initialItems", "realtimeSessionId", "transport", "version",
 	} {
 		if field, ok := value[name]; !ok || field != nil {
 			t.Fatalf("%s = %#v, want explicit null in %s", name, field, encoded)
 		}
+	}
+	if _, ok := value["voice"]; ok {
+		t.Fatalf("retired voice field must be omitted: %s", encoded)
 	}
 	if _, ok := value["prompt"]; ok {
 		t.Fatalf("unset prompt must be omitted: %s", encoded)

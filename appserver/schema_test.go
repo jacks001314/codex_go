@@ -860,16 +860,15 @@ func rustAppServerProtocolSchemaRoot(t *testing.T) string {
 	if env := os.Getenv("CODEX_RUST_APP_SERVER_PROTOCOL_SCHEMA"); env != "" {
 		candidates = append(candidates, env)
 	}
-	// Prefer the frozen Rust worktrees: a plain sibling checkout can lag the
-	// commit the ledger targets, which would compare Go against older fixtures.
-	for _, root := range rustsrc.AnchorRoots() {
-		candidates = append(candidates, filepath.Join(root, "app-server-protocol", "schema", "json"))
-	}
 	candidates = append(candidates,
+		filepath.Join("..", "git", "codex", "codex-rs", "app-server-protocol", "schema", "json"),
 		filepath.Join("..", "..", "git", "codex", "codex-rs", "app-server-protocol", "schema", "json"),
 		filepath.Join("..", "..", "..", "codex-main", "codex-rs", "app-server-protocol", "schema", "json"),
 		filepath.Join("..", "codex-main", "codex-rs", "app-server-protocol", "schema", "json"),
 	)
+	for _, root := range rustsrc.AnchorRoots() {
+		candidates = append(candidates, filepath.Join(root, "app-server-protocol", "schema", "json"))
+	}
 	for _, candidate := range candidates {
 		abs, err := filepath.Abs(candidate)
 		if err != nil {
@@ -908,12 +907,13 @@ func rustAppServerProtocolRustRoot(t *testing.T) string {
 	if env := os.Getenv("CODEX_RUST_ROOT"); env != "" {
 		candidates = append(candidates, env)
 	}
-	candidates = append(candidates, rustsrc.AnchorRoots()...)
 	candidates = append(candidates,
+		filepath.Join("..", "git", "codex", "codex-rs"),
 		filepath.Join("..", "..", "git", "codex", "codex-rs"),
 		filepath.Join("..", "..", "codex-main", "codex-rs"),
 		filepath.Join("..", "..", "..", "codex-main", "codex-rs"),
 	)
+	candidates = append(candidates, rustsrc.AnchorRoots()...)
 	for _, candidate := range candidates {
 		abs, err := filepath.Abs(candidate)
 		if err != nil {

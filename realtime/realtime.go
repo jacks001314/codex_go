@@ -337,7 +337,9 @@ type StartParams struct {
 	VoiceSessionID *string         `json:"voiceSessionId,omitempty"`
 	Transport      *StartTransport `json:"transport,omitempty"`
 	Version        *Version        `json:"version,omitempty"`
-	Voice          *Voice          `json:"voice,omitempty"`
+	// Voice is retained as an internal compatibility field. The app-server wire
+	// protocol no longer accepts or emits it; ChatGPT account preferences own it.
+	Voice *Voice `json:"-"`
 }
 
 // String implements fmt.Stringer with the same redaction contract as Rust's
@@ -382,7 +384,6 @@ func (p StartParams) MarshalJSON() ([]byte, error) {
 		VoiceSessionID                      *string                   `json:"voiceSessionId"`
 		Transport                           *StartTransport           `json:"transport"`
 		Version                             *Version                  `json:"version"`
-		Voice                               *Voice                    `json:"voice"`
 	}{
 		ThreadID:                            p.ThreadID,
 		ClientManagedHandoffs:               p.ClientManagedHandoffs,
@@ -402,7 +403,6 @@ func (p StartParams) MarshalJSON() ([]byte, error) {
 		VoiceSessionID:                      p.VoiceSessionID,
 		Transport:                           p.Transport,
 		Version:                             p.Version,
-		Voice:                               p.Voice,
 	})
 }
 
@@ -437,9 +437,6 @@ func (p *StartParams) UnmarshalJSON(data []byte) error {
 		default:
 			return fmt.Errorf("unknown Codex response handoff mode %q", *decoded.CodexResponseHandoffMode)
 		}
-	}
-	if decoded.Voice != nil && !isKnownVoice(*decoded.Voice) {
-		return fmt.Errorf("unknown realtime voice %q", *decoded.Voice)
 	}
 	*p = StartParams(decoded)
 	return nil
@@ -531,7 +528,7 @@ func (p *StartParams) validateVersion(version Version, transport *StartTransport
 		}
 		includeStartupContext := p.IncludeStartupContext == nil || *p.IncludeStartupContext
 		hasSessionConfiguration := includeStartupContext || p.Prompt.Set || len(p.InitialItems) > 0 ||
-			p.Model != nil || p.Voice != nil || p.DelegationAckFiller != nil
+			p.Model != nil || p.DelegationAckFiller != nil
 		if hasSessionConfiguration {
 			return fmt.Errorf("%w: existing realtime calls do not support session configuration options", ErrInvalidRealtimeRequest)
 		}

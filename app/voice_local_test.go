@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"codex_go/appserver"
+	"codex_go/auth"
 	"codex_go/config"
 	"codex_go/realtime"
 	codextea "codex_go/tui/tea"
@@ -24,6 +25,13 @@ func (r *recordingInteractiveVoiceRouter) Handle(request *appserver.Request) *ap
 		return &appserver.Response{JSONRPC: "2.0", ID: request.ID, Result: &realtime.ListVoicesResponse{
 			Voices: realtime.VoicesList{V1: []realtime.Voice{"maple", "juniper"}, DefaultV1: "maple", V3: []realtime.Voice{"marin", "viola"}},
 		}}
+	case appserver.MethodAccountVoiceSettingsRead:
+		return &appserver.Response{JSONRPC: "2.0", ID: request.ID, Result: &auth.AccountVoiceSettingsReadResponse{
+			Selected: "juniper",
+			Voices:   []auth.AccountVoiceOption{{Voice: "marin", Name: "Marin"}, {Voice: "viola", Name: "Viola"}},
+		}}
+	case appserver.MethodAccountVoiceSettingsWrite:
+		return &appserver.Response{JSONRPC: "2.0", ID: request.ID, Result: &auth.AccountVoiceSettingsWriteResponse{}}
 	case appserver.MethodConfigRead:
 		return &appserver.Response{JSONRPC: "2.0", ID: request.ID, Result: &config.ConfigReadResponse{
 			Config: map[string]any{"realtime": map[string]any{"voice": "juniper"}},
@@ -77,15 +85,15 @@ func TestInteractiveLocalVoiceCallbacksUseAppServerProtocol(t *testing.T) {
 	}
 }
 
-func TestInteractiveLocalVoiceSettingsFallsBackToBuiltinCatalog(t *testing.T) {
+func TestInteractiveLocalVoiceSettingsReportsUnavailableRuntime(t *testing.T) {
 	settings := interactiveLocalVoiceSettings(func() interactiveVoiceRouter { return nil })
 	message := settings()()
 	result, ok := message.(codextea.VoiceSettingsMsg)
 	if !ok {
 		t.Fatalf("settings message = %T", message)
 	}
-	if len(result.Voices) == 0 || result.Current != "" {
-		t.Fatalf("builtin settings = %#v", result)
+	if result.Err == nil {
+		t.Fatalf("settings = %#v, want unavailable error", result)
 	}
 }
 
@@ -113,7 +121,7 @@ func TestInteractiveLocalVoiceSaverPersistsThroughRouter(t *testing.T) {
 	if saved.Err != nil || saved.Voice != "juniper" {
 		t.Fatalf("save = %#v, want juniper without error", saved)
 	}
-	wantMethods := []appserver.Method{appserver.MethodConfigBatchWrite, appserver.MethodConfigRead}
+	wantMethods := []appserver.Method{appserver.MethodAccountVoiceSettingsWrite}
 	if len(router.requests) != len(wantMethods) {
 		t.Fatalf("requests = %d, want %d", len(router.requests), len(wantMethods))
 	}
@@ -169,7 +177,7 @@ func TestRealtimeNotificationMessageMapsWirePayloads(t *testing.T) {
 func TestInteractiveLocalVoicePickerUsesV3LikeRust(t *testing.T) {
 	router := &recordingInteractiveVoiceRouter{}
 	result := interactiveLocalVoiceSettings(func() interactiveVoiceRouter { return router })()().(codextea.VoiceSettingsMsg)
-	if len(result.Voices) != 2 || result.Voices[0] != "marin" {
+	if len(result.Voices) != 2 || result.Voices[0] != "marin" || result.Names["marin"] != "Marin" {
 		t.Fatalf("voices=%v", result.Voices)
 	}
 }
@@ -197,6 +205,10 @@ type voiceSaveConfirmationRouter struct {
 
 func (r voiceSaveConfirmationRouter) Handle(req *appserver.Request) *appserver.Response {
 	response := &appserver.Response{JSONRPC: "2.0", ID: req.ID}
+	if req.Method == appserver.MethodAccountVoiceSettingsWrite {
+		response.Result = &auth.AccountVoiceSettingsWriteResponse{}
+		return response
+	}
 	if req.Method == appserver.MethodConfigBatchWrite {
 		response.Result = &config.ConfigWriteResponse{Status: r.status}
 		return response
@@ -220,7 +232,7 @@ func TestLocalVoiceSaveRequiresEffectiveSelectionLikeRust(t *testing.T) {
 	} {
 		router := voiceSaveConfirmationRouter{value: tc.value, readCode: tc.code, status: tc.status}
 		saved := interactiveLocalVoiceSaver(func() interactiveVoiceRouter { return router })("marin")().(codextea.VoiceSavedMsg)
-		if (saved.Err != nil) != tc.wantErr || (tc.wantErr && !saved.Saved) {
+		if saved.Err != nil || saved.EffectiveVoice == nil || *saved.EffectiveVoice != "marin" {
 			t.Fatalf("case=%#v save=%#v", tc, saved)
 		}
 	}
@@ -249,7 +261,7 @@ func TestLocalVoiceReadsCurrentCWDLikeRust(t *testing.T) {
 		}
 		got = append(got, *params.CWD)
 	}
-	if len(got) != 3 || got[0] != "project-one" || got[1] != "project-two" || got[2] != "project-two" {
+	if len(got) != 2 || got[0] != "project-one" || got[1] != "project-two" {
 		t.Fatalf("cwd reads=%v", got)
 	}
 }

@@ -45,6 +45,11 @@ var Registry = []Spec{
 		ExperimentalName:            "Analytics plan history",
 		ExperimentalMenuDescription: "Preview five-hour and weekly allowance history for consumer accounts in /analytics.",
 	},
+	// Rust #63780: fetching Statsig decisions is an opt-in, under-development
+	// capability. Go distributions do not bundle a client SDK key, so the
+	// runtime remains disabled unless a host supplies the corresponding
+	// integration.
+	{Key: "statsig_gates", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust #59447 restores the flag to stable/default-on: eligible interactive
 	// launches auto-start the shared daemon unless this setting or --no-daemon
 	// disables it.
@@ -526,6 +531,10 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs a5ef02e561 #57441): preserve native
 	// MAv2 tool calls in synchronous Guardian history.
 	{Key: "guardian_native_multi_agent_history", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust #63649: frame pending native agent tool calls as Guardian actions.
+	// The Go Guardian carrier already implements the behavior; retain the
+	// under-development, default-off configuration key for surface parity.
+	{Key: "guardian_native_action_framing", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs 59ac39addb): pass nested approval
 	// context to Guardian reviews.
 	{Key: "guardian_nested_approval_context", Stage: StageUnderDevelopment, DefaultEnabled: false},

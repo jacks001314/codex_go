@@ -260,7 +260,7 @@ func runLinuxSandboxCommand(cmd *linuxSandboxCommand) error {
 				return errors.New("managed proxy mode requires --proxy-route-spec")
 			}
 			var err error
-			socksBridge, err = activateProxyRoutesInNetns(cmd.ProxyRouteSpec)
+			socksBridge, err = activateProxyRoutesInNetns(cmd.ProxyRouteSpec, cmd.ManagedNetwork)
 			if err != nil {
 				return fmt.Errorf("error activating Linux proxy routing bridge: %w", err)
 			}
@@ -281,7 +281,10 @@ func runLinuxSandboxCommand(cmd *linuxSandboxCommand) error {
 	}
 	if !cmd.UseLegacyLandlock {
 		if managedNetwork {
-			spec, err := prepareHostProxyRouteSpec()
+			if cmd.TransparentTCP && len(cmd.ManagedNetwork.LoopbackPorts) == 0 {
+				return errors.New("transparent TCP proxy endpoint is outside the managed sandbox context")
+			}
+			spec, err := prepareHostProxyRouteSpec(cmd.ManagedNetwork)
 			if err != nil {
 				return fmt.Errorf("failed to prepare host proxy routing bridge: %w", err)
 			}
@@ -1281,11 +1284,21 @@ type plannedProxyRoute struct {
 	Endpoint string
 }
 
-func prepareHostProxyRouteSpec() (string, error) {
-	routes, hasProxyConfig := planProxyRoutesFromEnv()
+func prepareHostProxyRouteSpec(context *linuxManagedNetworkContext) (string, error) {
+	routes, hasProxyConfig, err := planProxyRoutesFromEnv(context.LoopbackPorts)
+	if err != nil {
+		return "", err
+	}
 	if len(routes) == 0 {
+		if len(context.LoopbackPorts) == 0 {
+			data, err := json.Marshal(&proxyRouteSpec{})
+			if err != nil {
+				return "", err
+			}
+			return string(data), nil
+		}
 		if hasProxyConfig {
-			return "", errors.New("managed proxy mode requires parseable loopback proxy endpoints")
+			return "", errors.New("managed proxy mode requires a proxy endpoint on an allowed loopback port")
 		}
 		return "", errors.New("managed proxy mode requires proxy environment variables")
 	}
@@ -1320,13 +1333,13 @@ func prepareHostProxyRouteSpec() (string, error) {
 	return string(data), nil
 }
 
-func activateProxyRoutesInNetns(serializedSpec string) (*net.TCPAddr, error) {
+func activateProxyRoutesInNetns(serializedSpec string, context *linuxManagedNetworkContext) (*net.TCPAddr, error) {
 	var spec proxyRouteSpec
 	if err := json.Unmarshal([]byte(serializedSpec), &spec); err != nil {
 		return nil, err
 	}
-	if len(spec.Routes) == 0 {
-		return nil, errors.New("proxy routing spec contained no routes")
+	if (len(spec.Routes) == 0) != (len(context.LoopbackPorts) == 0) {
+		return nil, errors.New("proxy routes do not match the managed loopback port policy")
 	}
 	portByUDS := map[string]uint16{}
 	for _, route := range spec.Routes {
@@ -1366,7 +1379,7 @@ func activateProxyRoutesInNetns(serializedSpec string) (*net.TCPAddr, error) {
 	return socksBridge, nil
 }
 
-func planProxyRoutesFromEnv() ([]plannedProxyRoute, bool) {
+func planProxyRoutesFromEnv(loopbackPorts []uint16) ([]plannedProxyRoute, bool, error) {
 	var routes []plannedProxyRoute
 	hasProxyConfig := false
 	for _, entry := range os.Environ() {
@@ -1383,9 +1396,30 @@ func planProxyRoutesFromEnv() ([]plannedProxyRoute, bool) {
 		if !ok {
 			continue
 		}
+		_, portText, err := net.SplitHostPort(endpoint)
+		if err != nil {
+			return nil, hasProxyConfig, err
+		}
+		port, err := strconv.ParseUint(portText, 10, 16)
+		if err != nil {
+			return nil, hasProxyConfig, err
+		}
+		if len(loopbackPorts) == 0 {
+			continue
+		}
+		allowed := false
+		for _, granted := range loopbackPorts {
+			if granted == uint16(port) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return nil, hasProxyConfig, errors.New("proxy endpoint is outside the managed sandbox context")
+		}
 		routes = append(routes, plannedProxyRoute{EnvKey: key, Endpoint: endpoint})
 	}
-	return routes, hasProxyConfig
+	return routes, hasProxyConfig, nil
 }
 
 func cutEnv(entry string) (string, string, bool) {

@@ -796,6 +796,24 @@ type GetAccountTokenUsageResponse struct {
 	ThreadUsage *ThreadUsage `json:"threadUsage,omitempty"`
 }
 
+// AccountVoiceSettingsReadResponse is the ChatGPT account-owned voice
+// preference and catalog returned by account/voiceSettings/read.
+type AccountVoiceSettingsReadResponse struct {
+	Selected string               `json:"selected"`
+	Voices   []AccountVoiceOption `json:"voices"`
+}
+
+type AccountVoiceOption struct {
+	Voice string `json:"voice"`
+	Name  string `json:"name"`
+}
+
+type AccountVoiceSettingsWriteParams struct {
+	Voice string `json:"voice"`
+}
+
+type AccountVoiceSettingsWriteResponse struct{}
+
 type AccountTokenUsageSummary struct {
 	LifetimeTokens        *int64 `json:"lifetimeTokens"`
 	PeakDailyTokens       *int64 `json:"peakDailyTokens"`

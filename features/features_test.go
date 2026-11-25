@@ -80,6 +80,23 @@ func TestAnalyticsPlanHistoryExperimentalLikeRust(t *testing.T) {
 	}
 }
 
+func TestStatsigGatesFeatureIsOptInLikeRust(t *testing.T) {
+	const key = "statsig_gates"
+	var spec Spec
+	for _, candidate := range Registry {
+		if candidate.Key == key {
+			spec = candidate
+			break
+		}
+	}
+	if spec.Key == "" {
+		t.Fatalf("feature %q is not registered", key)
+	}
+	if spec.Stage != StageUnderDevelopment || spec.DefaultEnabled {
+		t.Fatalf("feature %q = %#v, want under-development and disabled", key, spec)
+	}
+}
+
 func TestPluginRecommendationsEnabledLikeRust(t *testing.T) {
 	for _, test := range []struct {
 		name   string

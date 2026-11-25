@@ -65,8 +65,8 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	// (#63553) added the alternate-provider and unscoped-remote picker
 	// goldens (1581 -> 1583). Re-anchored to 8b096dce07: #63619 removed the
 	// /mcp secret-masking history snapshot (1583 -> 1582).
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1582 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1582", got)
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1577 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1577", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -183,7 +183,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// added one.
 			// Re-anchored to 6bfdc75f: the command-center ownership and Cloud
 			// reconnect work (#60929/#60969) added one app golden.
-			Files:    92,
+			Files:    89,
 			Owner:    "tui/app",
 			Focus:    "app-level catalog and migration prompts",
 			Priority: []string{"app", "model"},
@@ -254,7 +254,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// Re-anchored to upstream a394ff9cf6: the prepared footer viewport
 			// golden moved here from bottom_pane/footer (263).
 			// Re-anchored to upstream 59ac39addb: one more bottom-pane golden.
-			Files:    268,
+			Files:    269,
 			Owner:    "tui/bottom_pane",
 			Focus:    "composer, footer, slash popup, approval overlays, MCP elicitation, queued input, and bottom pane layout",
 			Priority: []string{"composer", "approval", "status", "mcp", "slash"},
@@ -354,7 +354,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// Re-anchored to a7a9d82f: the rate-limit recovery notice (#60435) and one more golden landed.
 			// Re-anchored to 8e757686c1: the provider-scoped model picker added
 			// the alternate-provider and unscoped-remote picker goldens (346).
-			Files:    346,
+			Files:    344,
 			Owner:    "tui/chatwidget, tui/tea",
 			Focus:    "main chat widget terminal snapshots for status lines, approvals, plugins, hooks, review, usage, and unified exec",
 			Priority: []string{"approval", "status", "history", "unified-exec", "review"},
@@ -387,13 +387,12 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/clipboard_copy/snapshots",
-			Files:    5,
+			Files:    4,
 			Owner:    "tui/clipboard_copy",
 			Focus:    "clipboard copy failure routing for empty selections and tmux targets",
 			Priority: []string{"render"},
 			Required: []string{
 				"tui/src/clipboard_copy/snapshots/codex_tui__clipboard_copy__routing_tests__empty_copy_reports_failure_without_touching_clipboards.snap",
-				"tui/src/clipboard_copy/snapshots/codex_tui__clipboard_copy__tmux__tests__tmux_clipboard_target_rejects_no_attached_client.snap",
 			},
 		},
 		{
@@ -452,7 +451,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// #48101 added the truncated multiline `/ps` command preview.
 			// #48562 removed the halfwidth sound-marks header snapshot with the
 			// boxed card. #63619 removed the /mcp secret-masking snapshot.
-			Files:    94,
+			Files:    93,
 			Owner:    "tui/history_cell",
 			Focus:    "history cell rendering for exec, MCP, plan updates, errors, sessions, user messages, and web search",
 			Priority: []string{"history-cell", "mcp", "status"},
@@ -651,6 +650,16 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			Priority: []string{"app", "composer"},
 			Required: []string{
 				"tui/src/tooltips/snapshots/codex_tui__tooltips__keybinding_tests__configured_shortcut_tips_render_at_narrow_width.snap",
+			},
+		},
+		{
+			Path:     "tui/src/terminal_capabilities/snapshots",
+			Files:    1,
+			Owner:    "tui",
+			Focus:    "central terminal capability and clipboard routing decisions",
+			Priority: []string{"app", "composer"},
+			Required: []string{
+				"tui/src/terminal_capabilities/snapshots/codex_tui__terminal_capabilities__tmux_clipboard__tests__tmux_clipboard_target_rejects_no_attached_client.snap",
 			},
 		},
 	}

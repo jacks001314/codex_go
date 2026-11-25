@@ -1,7 +1,7 @@
 # Codex Go
 
-The current alignment candidate is Rust `main` at `a0d5b0a661db3b34cd87bdf1c93736b90fd3694b`; see [the
-2026-11-23 sync record](./update/plan_2026_11_23.md). Per-commit certification for the candidate window is still in progress, so `parity/commits.json` records every upstream commit with its audit status.
+The current alignment candidate is Rust `main` at `e2c31f625a030f65d4ed9f447a13a5bd0ef61ad5`; see [the
+2026-11-25 sync record](./update/plan_2026_11_25.md). Per-commit certification for the candidate window is still in progress, so `parity/commits.json` records every upstream commit with its audit status.
 [parity.json](./parity.json) records the current SDK and implementation evidence. Candidate baseline, commit, domain, and contract state live under [parity/](./parity/); only `parity/baseline.json` with `certificationReady: true` denotes a fully certified release.
 
 `codex_go` 是 Codex CLI 的 Go 实现，目标是逐步对齐 Rust 版 Codex CLI 的命令行行为、配置语义、认证、模型请求、TUI、app-server、MCP、插件、沙箱和会话能力。

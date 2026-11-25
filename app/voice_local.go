@@ -219,19 +219,35 @@ func interactiveLocalVoiceCallbacks(factory interactiveVoiceRouterFactory, cwd .
 
 // interactiveLocalVoiceSettings opens the voice picker with the local catalog.
 func interactiveLocalVoiceSettings(factory interactiveVoiceRouterFactory, cwd ...func() string) func() bubbletea.Cmd {
-	settings, voices, _, _ := interactiveLocalVoiceCallbacks(factory, cwd...)
+	if factory == nil {
+		factory = func() interactiveVoiceRouter { return nil }
+	}
 	return func() bubbletea.Cmd {
 		return func() bubbletea.Msg {
-			ctx := context.Background()
-			catalog := voices(ctx)
-			current := settings(ctx)
-			if current.VoiceErr != "" {
-				return codextea.VoiceSettingsMsg{Err: errors.New(current.VoiceErr)}
+			router := factory()
+			if router == nil {
+				return codextea.VoiceSettingsMsg{Err: errors.New("voice settings failed in TUI: app-server is unavailable")}
 			}
-			name := current.Voice
+			result, err := localVoiceRequest(router, appserver.IntID(2), appserver.MethodAccountVoiceSettingsRead, nil)
+			if err != nil {
+				return codextea.VoiceSettingsMsg{Err: err}
+			}
+			accountSettings, ok := result.(*auth.AccountVoiceSettingsReadResponse)
+			if !ok || accountSettings == nil {
+				return codextea.VoiceSettingsMsg{Err: errors.New("account/voiceSettings/read returned an invalid response")}
+			}
+			voices := make([]string, 0, len(accountSettings.Voices))
+			names := make(map[string]string, len(accountSettings.Voices))
+			for _, option := range accountSettings.Voices {
+				voices = append(voices, option.Voice)
+				names[option.Voice] = option.Name
+			}
+			settings, _, _, _ := interactiveLocalVoiceCallbacks(factory, cwd...)
+			current := settings(context.Background())
 			return codextea.VoiceSettingsMsg{
-				Voices:  RealtimeVoiceNames(catalog.V3),
-				Current: name,
+				Voices:  voices,
+				Names:   names,
+				Current: accountSettings.Selected,
 				// Rust #49437: the settings tree shows the machine-local
 				// audio.microphone / audio.speaker / audio.microphone_channel
 				// selection alongside the voice catalog.
@@ -241,8 +257,8 @@ func interactiveLocalVoiceSettings(factory interactiveVoiceRouterFactory, cwd ..
 	}
 }
 
-// interactiveLocalVoiceSaver persists the chosen voice through the local config
-// write RPC and confirms it is the effective preference.
+// interactiveLocalVoiceSaver persists the chosen ChatGPT account voice through
+// the embedded app-server.
 func interactiveLocalVoiceSaver(factory interactiveVoiceRouterFactory, cwd ...func() string) func(voice string) bubbletea.Cmd {
 	if factory == nil {
 		factory = func() interactiveVoiceRouter { return nil }
@@ -255,38 +271,11 @@ func interactiveLocalVoiceSaver(factory interactiveVoiceRouterFactory, cwd ...fu
 			if router == nil {
 				return codextea.VoiceSavedMsg{Voice: voice, Err: errors.New("config write failed in TUI: app-server is unavailable")}
 			}
-			result, err := localVoiceRequest(router, appserver.IntID(2), appserver.MethodConfigBatchWrite, config.ConfigBatchWriteParams{
-				Edits: []config.ConfigEdit{{
-					KeyPath:       "realtime.voice",
-					Value:         voice,
-					MergeStrategy: config.MergeReplace,
-				}},
-			})
+			_, err := localVoiceRequest(router, appserver.IntID(2), appserver.MethodAccountVoiceSettingsWrite, auth.AccountVoiceSettingsWriteParams{Voice: voice})
 			if err != nil {
 				return codextea.VoiceSavedMsg{Voice: voice, Err: err}
 			}
-			read, err := localVoiceRequest(router, appserver.IntID(3), appserver.MethodConfigRead, voiceConfigReadParams(cwd))
-			if err != nil {
-				if voiceConfigReadUnsupported(err) {
-					written, ok := result.(*config.ConfigWriteResponse)
-					if ok && written != nil && written.Status != config.WriteOKOverridden {
-						return codextea.VoiceSavedMsg{Voice: voice}
-					}
-				}
-				return codextea.VoiceSavedMsg{Voice: voice, Saved: true, Err: err}
-			}
-			response, ok := read.(*config.ConfigReadResponse)
-			if !ok || response == nil {
-				return codextea.VoiceSavedMsg{Voice: voice, Saved: true, Err: errors.New("config/read returned an invalid response")}
-			}
-			effective := RealtimeSettingsFromConfigValues(response.Config)
-			if effective.VoiceErr != "" {
-				return codextea.VoiceSavedMsg{Voice: voice, Saved: true, Err: errors.New(effective.VoiceErr)}
-			}
-			if !effective.VoiceSet || effective.Voice != voice {
-				return codextea.VoiceSavedMsg{Voice: voice, EffectiveVoice: &effective.Voice, Saved: true, Err: errors.New("the saved voice is overridden by a managed setting")}
-			}
-			return codextea.VoiceSavedMsg{Voice: voice, EffectiveVoice: &effective.Voice}
+			return codextea.VoiceSavedMsg{Voice: voice, EffectiveVoice: &voice}
 		}
 	}
 }

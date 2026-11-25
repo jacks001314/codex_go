@@ -75,8 +75,8 @@ func TestVoiceRuntimeStartsHelperAndPostsOffer(t *testing.T) {
 	if gotParams.Model == nil || *gotParams.Model != "gpt-realtime-test" {
 		t.Fatalf("model = %#v", gotParams.Model)
 	}
-	if gotParams.Voice == nil || *gotParams.Voice != realtime.Voice("cove") {
-		t.Fatalf("voice = %#v", gotParams.Voice)
+	if gotParams.Voice != nil {
+		t.Fatalf("account-owned voice leaked into start params: %#v", gotParams.Voice)
 	}
 	if options.PackageDir != "/pkg" || options.BuildCommit != "commit-1" {
 		t.Fatalf("session options = %#v", options)
@@ -276,12 +276,8 @@ func TestVoiceRuntimeStartsWithoutCatalogLikeRust(t *testing.T) {
 		if err != nil {
 			t.Fatalf("start params: %v", err)
 		}
-		if settings.Voice == "marin" {
-			if params.Voice == nil || *params.Voice != realtime.VoiceMarin {
-				t.Fatalf("explicit voice=%v", params.Voice)
-			}
-		} else if params.Voice != nil {
-			t.Fatalf("unspecified/unknown voice=%v", params.Voice)
+		if params.Voice != nil {
+			t.Fatalf("legacy voice leaked into start params=%v", params.Voice)
 		}
 	}
 }
@@ -635,8 +631,8 @@ func TestRealtimeVoiceConfigParsingLikeRust(t *testing.T) {
 			t.Fatalf("raw=%v accepted", raw)
 		}
 		runtime := newVoiceRuntime(voiceRuntimeOptions{})
-		if _, err := runtime.startParams(context.Background(), "thread-1", "offer", got); err == nil {
-			t.Fatal("invalid voice reached start request")
+		if _, err := runtime.startParams(context.Background(), "thread-1", "offer", got); err != nil {
+			t.Fatalf("retired local voice blocked start: %v", err)
 		}
 	}
 }

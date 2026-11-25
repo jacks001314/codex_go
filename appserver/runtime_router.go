@@ -3967,7 +3967,9 @@ var goOnlyExperimentalAliases = []Method{
 
 func experimentalAPIMethod(method Method) bool {
 	switch method {
-	case MethodAccountSessionList,
+	case MethodAccountVoiceSettingsRead,
+		MethodAccountVoiceSettingsWrite,
+		MethodAccountSessionList,
 		MethodAccountSessionSwitch,
 		MethodBedrockCheckGovCloudRequirements,
 		MethodBedrockDiscover,
@@ -4646,6 +4648,10 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 		return r.handleConsumeResetCredit(request)
 	case MethodGetAccountTokenUsage:
 		return r.handleGetAccountTokenUsage(request)
+	case MethodAccountVoiceSettingsRead:
+		return r.handleAccountVoiceSettingsRead(request)
+	case MethodAccountVoiceSettingsWrite:
+		return r.handleAccountVoiceSettingsWrite(request)
 	case MethodGetWorkspaceMessages:
 		return r.handleGetWorkspaceMessages(request)
 	case MethodSendAddCreditsNudgeEmail:
@@ -16720,6 +16726,57 @@ func (r *RuntimeRouter) handleGetAccountTokenUsage(request *Request) (*auth.GetA
 	usage := accountTokenUsageFromBackend(profile)
 	r.requireAccount().SetTokenUsage(usage)
 	return r.requireAccount().TokenUsage(), nil
+}
+
+func (r *RuntimeRouter) voiceSettingsClient() (*chatgptapi.CloudClient, error) {
+	codexHome := r.codexHomeForRollout()
+	resolved, err := r.resolveAuthWithLoginRestrictions(codexHome)
+	if err != nil {
+		return nil, err
+	}
+	if resolved == nil || (resolved.Auth.Mode() != "chatgpt" && resolved.Auth.Mode() != "chatgptAuthTokens") {
+		return nil, invalidAccountRequest("ChatGPT authentication required for voice settings")
+	}
+	client, err := r.accountBackendClient(&resolved.Auth)
+	if err != nil {
+		return nil, fmt.Errorf("failed to construct backend client: %w", err)
+	}
+	return client, nil
+}
+
+func (r *RuntimeRouter) handleAccountVoiceSettingsRead(_ *Request) (*auth.AccountVoiceSettingsReadResponse, error) {
+	client, err := r.voiceSettingsClient()
+	if err != nil {
+		return nil, err
+	}
+	settings, err := client.GetVoiceSettings(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	voices := make([]auth.AccountVoiceOption, 0, len(settings.Voices))
+	for _, option := range settings.Voices {
+		name := option.Voice
+		if option.Name != nil {
+			name = *option.Name
+		}
+		voices = append(voices, auth.AccountVoiceOption{Voice: option.Voice, Name: name})
+	}
+	return &auth.AccountVoiceSettingsReadResponse{Selected: settings.Selected, Voices: voices}, nil
+}
+
+func (r *RuntimeRouter) handleAccountVoiceSettingsWrite(request *Request) (*auth.AccountVoiceSettingsWriteResponse, error) {
+	var params auth.AccountVoiceSettingsWriteParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	client, err := r.voiceSettingsClient()
+	if err != nil {
+		return nil, err
+	}
+	if err := client.SetVoiceSettings(context.Background(), params.Voice); err != nil {
+		return nil, err
+	}
+	return &auth.AccountVoiceSettingsWriteResponse{}, nil
 }
 
 func (r *RuntimeRouter) handleGetWorkspaceMessages(request *Request) (*auth.GetWorkspaceMessagesResponse, error) {

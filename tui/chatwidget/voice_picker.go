@@ -14,17 +14,25 @@ const VoicePickerOptionPrefix = "voice:"
 
 // NewVoicePickerView lists the supported voices with the current preference
 // marked. An empty list renders a disabled row so the picker stays readable.
-func NewVoicePickerView(current string, voices []string) SelectionView {
+func NewVoicePickerView(current string, voices []string, displayNames ...map[string]string) SelectionView {
 	current = strings.TrimSpace(current)
+	var names map[string]string
+	if len(displayNames) > 0 {
+		names = displayNames[0]
+	}
 	items := make([]SelectionItem, 0, len(voices))
 	for _, voice := range voices {
 		voice = strings.TrimSpace(voice)
 		if voice == "" {
 			continue
 		}
+		name := strings.TrimSpace(names[voice])
+		if name == "" {
+			name = voice
+		}
 		items = append(items, SelectionItem{
 			ID:        VoicePickerOptionPrefix + voice,
-			Name:      voice,
+			Name:      name,
 			IsCurrent: voice == current,
 		})
 	}

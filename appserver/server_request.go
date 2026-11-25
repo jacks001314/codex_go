@@ -289,15 +289,20 @@ type PermissionsRequestApprovalParams struct {
 }
 
 type DynamicToolCallParams struct {
-	ThreadID  string  `json:"threadId"`
-	TurnID    string  `json:"turnId"`
-	CallID    string  `json:"callId"`
-	Namespace *string `json:"namespace"`
-	Tool      string  `json:"tool"`
-	Arguments any     `json:"arguments"`
-	ToolName  string  `json:"toolName,omitempty"`
-	Input     any     `json:"input,omitempty"`
+	SupportedResultFormat *DynamicToolResultFormat `json:"supportedResultFormat,omitempty"`
+	ThreadID              string                   `json:"threadId"`
+	TurnID                string                   `json:"turnId"`
+	CallID                string                   `json:"callId"`
+	Namespace             *string                  `json:"namespace"`
+	Tool                  string                   `json:"tool"`
+	Arguments             any                      `json:"arguments"`
+	ToolName              string                   `json:"toolName,omitempty"`
+	Input                 any                      `json:"input,omitempty"`
 }
+
+type DynamicToolResultFormat string
+
+const DynamicToolResultFormatStructuredContent DynamicToolResultFormat = "structuredContent"
 
 func (p *DynamicToolCallParams) MarshalJSON() ([]byte, error) {
 	tool := p.Tool
@@ -312,19 +317,21 @@ func (p *DynamicToolCallParams) MarshalJSON() ([]byte, error) {
 		arguments = map[string]any{}
 	}
 	return json.Marshal(struct {
-		ThreadID  string  `json:"threadId"`
-		TurnID    string  `json:"turnId"`
-		CallID    string  `json:"callId"`
-		Namespace *string `json:"namespace"`
-		Tool      string  `json:"tool"`
-		Arguments any     `json:"arguments"`
+		SupportedResultFormat *DynamicToolResultFormat `json:"supportedResultFormat,omitempty"`
+		ThreadID              string                   `json:"threadId"`
+		TurnID                string                   `json:"turnId"`
+		CallID                string                   `json:"callId"`
+		Namespace             *string                  `json:"namespace"`
+		Tool                  string                   `json:"tool"`
+		Arguments             any                      `json:"arguments"`
 	}{
-		ThreadID:  p.ThreadID,
-		TurnID:    p.TurnID,
-		CallID:    p.CallID,
-		Namespace: p.Namespace,
-		Tool:      tool,
-		Arguments: arguments,
+		SupportedResultFormat: p.SupportedResultFormat,
+		ThreadID:              p.ThreadID,
+		TurnID:                p.TurnID,
+		CallID:                p.CallID,
+		Namespace:             p.Namespace,
+		Tool:                  tool,
+		Arguments:             arguments,
 	})
 }
 
@@ -594,11 +601,25 @@ func (a *ToolRequestUserInputAnswer) MarshalJSON() ([]byte, error) {
 }
 
 type DynamicToolCallResponse struct {
-	Success      bool                           `json:"success"`
-	ContentItems []DynamicToolCallOutputContent `json:"contentItems"`
+	Success           bool                           `json:"success"`
+	ContentItems      []DynamicToolCallOutputContent `json:"contentItems,omitempty"`
+	StructuredContent any                            `json:"structuredContent,omitempty"`
+	ErrorMessage      *string                        `json:"errorMessage,omitempty"`
 }
 
 func (r *DynamicToolCallResponse) MarshalJSON() ([]byte, error) {
+	if r.ErrorMessage != nil {
+		return json.Marshal(struct {
+			Success      bool   `json:"success"`
+			ErrorMessage string `json:"errorMessage"`
+		}{Success: false, ErrorMessage: *r.ErrorMessage})
+	}
+	if r.StructuredContent != nil {
+		return json.Marshal(struct {
+			Success           bool `json:"success"`
+			StructuredContent any  `json:"structuredContent"`
+		}{Success: r.Success, StructuredContent: r.StructuredContent})
+	}
 	contentItems := append([]DynamicToolCallOutputContent(nil), r.ContentItems...)
 	if contentItems == nil {
 		contentItems = []DynamicToolCallOutputContent{}

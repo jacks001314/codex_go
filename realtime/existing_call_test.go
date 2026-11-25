@@ -233,7 +233,6 @@ func TestExistingCallRejectsSessionConfiguration(t *testing.T) {
 	falseValue := false
 	trueValue := true
 	model := "gpt-realtime-1.5"
-	voice := VoiceCove
 	versionV2 := VersionV2
 	filler := true
 	tests := []struct {
@@ -275,16 +274,6 @@ func TestExistingCallRejectsSessionConfiguration(t *testing.T) {
 				Transport:             ExistingCallTransport("rtc_1"),
 				IncludeStartupContext: &falseValue,
 				Model:                 &model,
-			},
-		},
-		{
-			name: "voice override",
-			params: StartParams{
-				ThreadID:              "thread-existing",
-				OutputModality:        OutputAudio,
-				Transport:             ExistingCallTransport("rtc_1"),
-				IncludeStartupContext: &falseValue,
-				Voice:                 &voice,
 			},
 		},
 		{

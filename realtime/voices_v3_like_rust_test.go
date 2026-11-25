@@ -67,7 +67,7 @@ func TestKnownVoiceIncludesEntireV3Catalog(t *testing.T) {
 	}
 }
 
-func TestV3VoiceStartProtocolPreservesCatalogValues(t *testing.T) {
+func TestV3VoiceStartProtocolIgnoresLegacyVoiceFieldLikeRust(t *testing.T) {
 	for _, voice := range BuiltinVoices().V3 {
 		t.Run(string(voice), func(t *testing.T) {
 			wire, err := json.Marshal(map[string]any{"threadId": "thread-1", "outputModality": "audio", "version": "v3", "voice": voice})
@@ -82,20 +82,15 @@ func TestV3VoiceStartProtocolPreservesCatalogValues(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cfg.Voice != voice {
-				t.Fatalf("voice=%q want=%q", cfg.Voice, voice)
-			}
-			session := realtimeSessionUpdate(cfg)["session"].(map[string]any)
-			output := session["audio"].(map[string]any)["output"].(map[string]any)
-			if output["voice"] != voice {
-				t.Fatalf("wire voice=%v want=%q", output["voice"], voice)
+			if cfg.Voice != "" {
+				t.Fatalf("legacy wire voice=%q, want account-owned empty value", cfg.Voice)
 			}
 		})
 	}
 	for _, raw := range []string{`"future-voice"`, `" viola "`, `3`, `true`} {
 		var params StartParams
-		if err := json.Unmarshal([]byte(`{"threadId":"thread-1","outputModality":"audio","version":"v3","voice":`+raw+`}`), &params); err == nil {
-			t.Fatalf("invalid wire voice %s accepted", raw)
+		if err := json.Unmarshal([]byte(`{"threadId":"thread-1","outputModality":"audio","version":"v3","voice":`+raw+`}`), &params); err != nil {
+			t.Fatalf("retired wire voice %s was not ignored: %v", raw, err)
 		}
 	}
 }

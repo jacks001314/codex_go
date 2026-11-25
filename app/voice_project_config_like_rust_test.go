@@ -49,12 +49,12 @@ func TestVoiceProjectConfigFollowsCurrentDirectoryLikeRust(t *testing.T) {
 			t.Fatalf("project %d settings=%#v", i, got)
 		}
 		picker := interactiveLocalVoiceSettings(factory, cwd)()().(codextea.VoiceSettingsMsg)
-		if picker.Err != nil || picker.Current != voices[i] {
-			t.Fatalf("project %d picker=%#v", i, picker)
+		if picker.Err == nil {
+			t.Fatalf("project %d picker unexpectedly used local realtime.voice: %#v", i, picker)
 		}
 	}
 	saved := interactiveLocalVoiceSaver(factory, cwd)("marin")().(codextea.VoiceSavedMsg)
-	if saved.Err == nil || !saved.Saved || saved.EffectiveVoice == nil || *saved.EffectiveVoice != "viola" {
-		t.Fatalf("project override save=%#v", saved)
+	if saved.Err == nil {
+		t.Fatalf("project config unexpectedly accepted account voice save=%#v", saved)
 	}
 }

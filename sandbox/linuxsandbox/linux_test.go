@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	json "github.com/goccy/go-json"
 	"golang.org/x/sys/unix"
 )
 
@@ -283,7 +284,10 @@ func TestManagedProxyRoutesWebsocketEnvAndSocketDirsAreSearchable(t *testing.T) 
 		}
 	}()
 	_ = os.Setenv("WSS_PROXY", "http://127.0.0.1:8765")
-	routes, configured := planProxyRoutesFromEnv()
+	routes, configured, err := planProxyRoutesFromEnv([]uint16{8765})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !configured {
 		t.Fatal("proxy not configured")
 	}
@@ -307,6 +311,40 @@ func TestManagedProxyRoutesWebsocketEnvAndSocketDirsAreSearchable(t *testing.T) 
 	}
 	if info.Mode().Perm()&0o111 == 0 {
 		t.Fatalf("mode=%o", info.Mode().Perm())
+	}
+}
+
+func TestManagedProxyRoutesRequireLoopbackPortGrantLikeRust(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:8765")
+
+	routes, configured, err := planProxyRoutesFromEnv(nil)
+	if err != nil || !configured || len(routes) != 0 {
+		t.Fatalf("no grants: routes=%#v configured=%v err=%v", routes, configured, err)
+	}
+	if _, _, err := planProxyRoutesFromEnv([]uint16{9000}); err == nil || !strings.Contains(err.Error(), "outside the managed sandbox context") {
+		t.Fatalf("ungranted endpoint error = %v", err)
+	}
+	routes, configured, err = planProxyRoutesFromEnv([]uint16{8765})
+	if err != nil || !configured || len(routes) == 0 {
+		t.Fatalf("granted endpoint: routes=%#v configured=%v err=%v", routes, configured, err)
+	}
+}
+
+func TestManagedProxyEmptyGrantProducesNoBridgeSpecLikeRust(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:8765")
+	spec, err := prepareHostProxyRouteSpec(&linuxManagedNetworkContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded proxyRouteSpec
+	if err := json.Unmarshal([]byte(spec), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Routes) != 0 {
+		t.Fatalf("routes = %#v, want none", decoded.Routes)
+	}
+	if _, err := activateProxyRoutesInNetns(spec, &linuxManagedNetworkContext{}); err != nil {
+		t.Fatalf("activate empty route spec: %v", err)
 	}
 }
 
@@ -355,11 +393,11 @@ func TestLinuxNetworkSeccompModeForProfile(t *testing.T) {
 	}
 	unrestrictedFS := linuxUnrestrictedFilesystemPolicy()
 	cases := []struct {
-		name        string
-		profile     *linuxPermissionProfile
-		allowProxy  bool
-		routing     linuxProxyRouting
-		want        linuxNetworkSeccompMode
+		name       string
+		profile    *linuxPermissionProfile
+		allowProxy bool
+		routing    linuxProxyRouting
+		want       linuxNetworkSeccompMode
 	}{
 		{
 			name:    "filesystem restricted network enabled installs vm socket filter",
@@ -377,11 +415,11 @@ func TestLinuxNetworkSeccompModeForProfile(t *testing.T) {
 			want:    linuxNetworkSeccompRestricted,
 		},
 		{
-			name:        "managed proxy routing keeps the proxy-routed filter",
-			profile:     &linuxPermissionProfile{Filesystem: restrictedFS, NetworkEnabled: true},
-			allowProxy:  true,
-			routing:     linuxProxyRoutingExplicit,
-			want:        linuxNetworkSeccompProxyRouted,
+			name:       "managed proxy routing keeps the proxy-routed filter",
+			profile:    &linuxPermissionProfile{Filesystem: restrictedFS, NetworkEnabled: true},
+			allowProxy: true,
+			routing:    linuxProxyRoutingExplicit,
+			want:       linuxNetworkSeccompProxyRouted,
 		},
 		{
 			name:       "managed proxy without routing keeps the restricted filter",
@@ -390,10 +428,10 @@ func TestLinuxNetworkSeccompModeForProfile(t *testing.T) {
 			want:       linuxNetworkSeccompRestricted,
 		},
 		{
-			name:        "filesystem restricted falls back to vm sockets without proxy opt-in",
-			profile:     &linuxPermissionProfile{Filesystem: restrictedFS, NetworkEnabled: true},
-			routing:     linuxProxyRoutingExplicit,
-			want:        linuxNetworkSeccompVmSocketRestricted,
+			name:    "filesystem restricted falls back to vm sockets without proxy opt-in",
+			profile: &linuxPermissionProfile{Filesystem: restrictedFS, NetworkEnabled: true},
+			routing: linuxProxyRoutingExplicit,
+			want:    linuxNetworkSeccompVmSocketRestricted,
 		},
 		{
 			name:    "missing profile installs nothing",

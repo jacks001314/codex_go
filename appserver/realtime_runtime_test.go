@@ -90,7 +90,7 @@ voice = "cove"
 	if options == nil || options.Backend == nil {
 		t.Fatal("realtimeStartOptions returned no backend")
 	}
-	if options.DefaultModel != "realtime-test-model" || options.DefaultVersion != realtime.VersionV3 || options.DefaultVoice != realtime.VoiceCove || options.SessionMode != realtime.SessionModeTranscription {
+	if options.DefaultModel != "realtime-test-model" || options.DefaultVersion != realtime.VersionV3 || options.DefaultVoice != "" || options.SessionMode != realtime.SessionModeTranscription {
 		t.Fatalf("realtime defaults = model %q version %q voice %q type %q", options.DefaultModel, options.DefaultVersion, options.DefaultVoice, options.SessionMode)
 	}
 	if options.Instructions == nil || *options.Instructions != "custom backend prompt\n\nstartup context" {

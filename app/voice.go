@@ -16,6 +16,7 @@ import (
 
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
+	"codex_go/auth"
 	"codex_go/config"
 	"codex_go/realtime"
 	"codex_go/tui/chatwidget"
@@ -268,8 +269,8 @@ func (r *voiceRuntime) voiceSettings(ctx context.Context) VoiceSettings {
 
 // startParams builds the app-server start request the TUI sends for a voice
 // session: a V3 WebRTC conversation with client-managed handoffs and no startup
-// context, carrying the configured model and voice.
-func (r *voiceRuntime) startParams(ctx context.Context, threadID string, offerSDP string, settings VoiceSettings) (realtime.StartParams, error) {
+// context. The ChatGPT account owns the selected voice.
+func (r *voiceRuntime) startParams(_ context.Context, threadID string, offerSDP string, settings VoiceSettings) (realtime.StartParams, error) {
 	clientManagedHandoffs := true
 	includeStartupContext := false
 	version := realtime.VersionV3
@@ -284,18 +285,11 @@ func (r *voiceRuntime) startParams(ctx context.Context, threadID string, offerSD
 	if model := strings.TrimSpace(settings.Model); model != "" {
 		params.Model = &model
 	}
-	voice, err := r.resolveVoice(ctx, settings)
-	if err != nil {
-		return realtime.StartParams{}, err
-	}
-	if voice != nil {
-		params.Voice = voice
-	}
 	return params, nil
 }
 
-// resolveVoice preserves an unset preference for the provider-specific default.
-// Known explicit voices do not depend on the server's picker catalog.
+// resolveVoice remains available to internal callers, but the app-server start
+// wire no longer carries its result.
 func (r *voiceRuntime) resolveVoice(_ context.Context, settings VoiceSettings) (*realtime.Voice, error) {
 	if settings.VoiceErr != "" {
 		return nil, errors.New(settings.VoiceErr)
@@ -654,18 +648,26 @@ func interactiveRemoteVoiceSettings(endpoint *appserverdaemon.RemoteAppServerEnd
 		return func() bubbletea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), voiceSettingsTimeout)
 			defer cancel()
-			voices, err := interactiveRemoteRealtimeVoices(endpoint)(ctx)
+			client, err := openRemoteSessionClient(ctx, endpoint)
 			if err != nil {
 				return codextea.VoiceSettingsMsg{Err: err}
 			}
-			settings := interactiveRemoteRealtimeSettings(endpoint, cwd...)(ctx)
-			if settings.VoiceErr != "" {
-				return codextea.VoiceSettingsMsg{Err: errors.New(settings.VoiceErr)}
+			defer client.close()
+			var accountSettings auth.AccountVoiceSettingsReadResponse
+			if err := remoteSessionRequest(ctx, client, appserver.MethodAccountVoiceSettingsRead, nil, &accountSettings); err != nil {
+				return codextea.VoiceSettingsMsg{Err: err}
 			}
-			current := settings.Voice
+			settings := interactiveRemoteRealtimeSettings(endpoint, cwd...)(ctx)
+			voices := make([]string, 0, len(accountSettings.Voices))
+			names := make(map[string]string, len(accountSettings.Voices))
+			for _, option := range accountSettings.Voices {
+				voices = append(voices, option.Voice)
+				names[option.Voice] = option.Name
+			}
 			return codextea.VoiceSettingsMsg{
-				Voices:  RealtimeVoiceNames(voices.V3),
-				Current: current,
+				Voices:  voices,
+				Names:   names,
+				Current: accountSettings.Selected,
 				// Rust #49437: the settings tree shows the machine-local
 				// audio.microphone / audio.speaker / audio.microphone_channel
 				// selection alongside the voice catalog.
@@ -696,41 +698,12 @@ func interactiveRemoteVoiceSaver(endpoint *appserverdaemon.RemoteAppServerEndpoi
 				return codextea.VoiceSavedMsg{Voice: voice, Err: err}
 			}
 			defer client.close()
-			var response config.ConfigWriteResponse
-			err = remoteSessionRequest(ctx, client, appserver.MethodConfigBatchWrite, config.ConfigBatchWriteParams{
-				Edits: []config.ConfigEdit{{
-					KeyPath:       "realtime.voice",
-					Value:         voice,
-					MergeStrategy: config.MergeReplace,
-				}},
-			}, &response)
+			var response auth.AccountVoiceSettingsWriteResponse
+			err = remoteSessionRequest(ctx, client, appserver.MethodAccountVoiceSettingsWrite, auth.AccountVoiceSettingsWriteParams{Voice: voice}, &response)
 			if err != nil {
 				return codextea.VoiceSavedMsg{Voice: voice, Err: err}
 			}
-			// A managed layer can override the saved value, in which case the
-			// preference is stored but not applied.
-			var effective config.ConfigReadResponse
-			if err := remoteSessionRequest(ctx, client, appserver.MethodConfigRead, voiceConfigReadParams(cwd), &effective); err != nil {
-				if voiceConfigReadUnsupported(err) {
-					if response.Status != config.WriteOKOverridden {
-						return codextea.VoiceSavedMsg{Voice: voice}
-					}
-					return codextea.VoiceSavedMsg{Voice: voice, Saved: true, Err: errors.New("the saved voice is overridden, but this server cannot read effective settings")}
-				}
-				return codextea.VoiceSavedMsg{Voice: voice, Saved: true, Err: fmt.Errorf("the effective voice could not be confirmed: %w", err)}
-			}
-			settings := RealtimeSettingsFromConfigValues(effective.Config)
-			if settings.VoiceErr != "" {
-				return codextea.VoiceSavedMsg{Voice: voice, Saved: true, Err: errors.New(settings.VoiceErr)}
-			}
-			if !settings.VoiceSet || settings.Voice != voice {
-				return codextea.VoiceSavedMsg{
-					Voice: voice, EffectiveVoice: &settings.Voice,
-					Saved: true,
-					Err:   errors.New("the saved voice is overridden by a managed setting"),
-				}
-			}
-			return codextea.VoiceSavedMsg{Voice: voice, EffectiveVoice: &settings.Voice}
+			return codextea.VoiceSavedMsg{Voice: voice, EffectiveVoice: &voice}
 		}
 	}
 }

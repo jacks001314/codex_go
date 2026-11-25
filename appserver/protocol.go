@@ -216,6 +216,8 @@ const (
 	MethodGetAccountSecuritySetup            Method = "account/securitySetup/read"
 	MethodConsumeAccountRateLimitResetCredit Method = "account/rateLimitResetCredit/consume"
 	MethodGetAccountTokenUsage               Method = "account/usage/read"
+	MethodAccountVoiceSettingsRead           Method = "account/voiceSettings/read"
+	MethodAccountVoiceSettingsWrite          Method = "account/voiceSettings/write"
 	MethodGetWorkspaceMessages               Method = "account/workspaceMessages/read"
 	MethodSendAddCreditsNudgeEmail           Method = "account/sendAddCreditsNudgeEmail"
 	MethodGatewayOAuthRead                   Method = "account/gatewayOAuth/read"

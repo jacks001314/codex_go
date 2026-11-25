@@ -511,7 +511,7 @@ func (r *RuntimeRouter) realtimeStartOptions(params *realtime.StartParams) (*rea
 		Backend:        backend,
 		DefaultModel:   stringConfigValue(cfg, "experimental_realtime_ws_model"),
 		DefaultVersion: realtimeVersionFromConfig(cfg),
-		DefaultVoice:   realtimeVoiceFromConfig(cfg),
+		DefaultVoice:   "",
 		SessionMode:    realtimeSessionModeFromConfig(cfg),
 		Instructions:   &instructions,
 	}, nil
@@ -549,29 +549,6 @@ func (r *RuntimeRouter) effectiveRealtimeThreadConfig(start *realtime.StartParam
 	cfg, err := r.effectiveConfigForTurn(params)
 	if err != nil {
 		return nil, nil, err
-	}
-	// Only new, explicitly V3 requests without a voice reload the preference.
-	// Preserve a cleared preference instead of inheriting the thread snapshot.
-	attachesExistingCall := start.Transport != nil && start.Transport.Type == "existingCall"
-	if start.Version != nil && *start.Version == realtime.VersionV3 && start.Voice == nil && !attachesExistingCall && r.services.Config != nil {
-		current, loadErr := config.LoadWithOptions(r.services.Config.CodexHome(), &config.LoadOptions{CWD: turnCWD(params)})
-		if loadErr != nil {
-			return nil, nil, loadErr
-		}
-		// Thread request overrides are retained session flags, not stale file values.
-		applyRuntimeConfigOverrides(current, turnConfigOverrides(params))
-		values := map[string]any{}
-		if old, ok := cfg.Values["realtime"].(map[string]any); ok {
-			for key, value := range old {
-				values[key] = value
-			}
-		}
-		delete(values, "voice")
-		if voice := realtimeVoiceFromConfig(current); voice != "" {
-			values["voice"] = string(voice)
-		}
-		delete(cfg.Values, "realtime.voice")
-		cfg.Values["realtime"] = values
 	}
 	return cfg, record, nil
 }
@@ -670,6 +647,8 @@ func realtimeVersionFromConfig(cfg *config.Config) realtime.Version {
 	}
 }
 
+// realtimeVoiceFromConfig remains for compatibility with internal callers and
+// tests; new app-server start requests do not use local realtime.voice.
 func realtimeVoiceFromConfig(cfg *config.Config) realtime.Voice {
 	return realtime.Voice(strings.TrimSpace(realtimeConfigString(cfg, "voice")))
 }

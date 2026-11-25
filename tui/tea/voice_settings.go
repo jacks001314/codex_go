@@ -190,7 +190,7 @@ func (m *Model) applyVoiceSettingsOption(optionID string) bubbletea.Cmd {
 	case chatwidget.VoiceSettingsVoicesOptionID:
 		// Rust #49437: the voice catalog is the server list the host already
 		// fetched for /voice.
-		m.openSelectionViewModal(ModalKindGeneric, chatwidget.NewVoicePickerView(m.voicePreference, m.voiceChoices))
+		m.openSelectionViewModal(ModalKindGeneric, chatwidget.NewVoicePickerView(m.voicePreference, m.voiceChoices, m.voiceNames))
 		return nil
 	default:
 		return nil

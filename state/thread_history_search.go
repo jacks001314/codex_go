@@ -45,10 +45,10 @@ type ThreadHistoryOccurrencePage struct {
 }
 
 type threadHistorySearchCursor struct {
-	ThreadID            string `json:"threadId"`
-	SearchTerm          string `json:"searchTerm"`
-	NextRolloutOrdinal  int64  `json:"nextRolloutOrdinal"`
-	NextOccurrenceIndex int    `json:"nextOccurrenceIndex"`
+	ThreadID                   string `json:"threadId"`
+	SearchTerm                 string `json:"searchTerm"`
+	NextRolloutOrdinal         int64  `json:"nextRolloutOrdinal"`
+	NextVisibleOccurrenceIndex int    `json:"nextVisibleOccurrenceIndex"`
 }
 
 type threadHistorySearchCandidate struct {
@@ -157,7 +157,7 @@ func (r *StateRuntime) SearchThreadHistoryOccurrences(ctx context.Context, param
 				if len(items) == params.PageSize {
 					next, serializeErr := serializeThreadHistorySearchCursor(threadHistorySearchCursor{
 						ThreadID: params.ThreadID, SearchTerm: params.SearchTerm,
-						NextRolloutOrdinal: candidate.row.rolloutOrdinal, NextOccurrenceIndex: occurrenceIndex,
+						NextRolloutOrdinal: candidate.row.rolloutOrdinal, NextVisibleOccurrenceIndex: occurrenceIndex,
 					})
 					if serializeErr != nil {
 						return nil, serializeErr
@@ -234,7 +234,7 @@ func collectThreadHistorySearchCandidates(rows *sql.Rows, cursor *threadHistoryS
 		}
 		firstOccurrenceIndex := 0
 		if cursor != nil && cursor.NextRolloutOrdinal == row.rolloutOrdinal {
-			firstOccurrenceIndex = cursor.NextOccurrenceIndex
+			firstOccurrenceIndex = cursor.NextVisibleOccurrenceIndex
 		}
 		remaining := pageSize + 1 - existingItems - matchingOccurrences
 		if remaining < 0 {
@@ -286,7 +286,9 @@ func parseThreadHistorySearchCursor(value *string, threadID, searchTerm string) 
 		return nil, nil
 	}
 	var cursor threadHistorySearchCursor
-	if err := json.Unmarshal([]byte(*value), &cursor); err != nil || cursor.ThreadID != threadID || cursor.SearchTerm != searchTerm || cursor.NextRolloutOrdinal < 0 || cursor.NextOccurrenceIndex < 0 {
+	decoder := json.NewDecoder(strings.NewReader(*value))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cursor); err != nil || cursor.ThreadID != threadID || cursor.SearchTerm != searchTerm || cursor.NextRolloutOrdinal < 0 || cursor.NextVisibleOccurrenceIndex < 0 {
 		return nil, invalidThreadHistory("invalid cursor: " + *value)
 	}
 	return &cursor, nil
@@ -306,8 +308,9 @@ func searchableThreadHistoryItemText(itemJSON string) (string, bool, error) {
 		Type    string `json:"type"`
 		Text    string `json:"text"`
 		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
+			Type         string            `json:"type"`
+			Text         string            `json:"text"`
+			TextElements []json.RawMessage `json:"text_elements"`
 		} `json:"content"`
 	}
 	if err := json.Unmarshal([]byte(itemJSON), &item); err != nil {
@@ -316,8 +319,10 @@ func searchableThreadHistoryItemText(itemJSON string) (string, bool, error) {
 	switch item.Type {
 	case "userMessage":
 		var text strings.Builder
+		hasTextElements := false
 		for _, input := range item.Content {
 			if input.Type == "text" {
+				hasTextElements = hasTextElements || len(input.TextElements) > 0
 				part := stripThreadHistoryUserMessagePrefix(input.Text)
 				if part != "" {
 					text.WriteString(part)
@@ -327,13 +332,59 @@ func searchableThreadHistoryItemText(itemJSON string) (string, bool, error) {
 		if text.Len() == 0 {
 			return "", false, nil
 		}
-		return text.String(), true, nil
+		value := text.String()
+		if !hasTextElements {
+			value = threadHistoryUserLinkLabels(value)
+		}
+		return value, true, nil
 	case "agentMessage":
 		text := markdownThreadHistorySearchText(item.Text)
 		return text, text != "", nil
 	default:
 		return "", false, nil
 	}
+}
+
+// threadHistoryUserLinkLabels removes hidden inline-link destinations while
+// preserving the user's literal label, code, and whitespace. Text elements
+// already address literal byte ranges and therefore bypass this projection.
+func threadHistoryUserLinkLabels(source string) string {
+	if !strings.Contains(source, "](") {
+		return source
+	}
+	var out strings.Builder
+	copied := 0
+	for search := 0; search < len(source); {
+		closeLabel := strings.Index(source[search:], "](")
+		if closeLabel < 0 {
+			break
+		}
+		closeLabel += search
+		openLabel := strings.LastIndex(source[copied:closeLabel], "[")
+		if openLabel < 0 {
+			search = closeLabel + 2
+			continue
+		}
+		openLabel += copied
+		if openLabel > 0 && source[openLabel-1] == '!' {
+			search = closeLabel + 2
+			continue
+		}
+		closeDestination := strings.IndexByte(source[closeLabel+2:], ')')
+		if closeDestination < 0 {
+			break
+		}
+		closeDestination += closeLabel + 2
+		out.WriteString(source[copied:openLabel])
+		out.WriteString(source[openLabel+1 : closeLabel])
+		copied = closeDestination + 1
+		search = copied
+	}
+	if copied == 0 {
+		return source
+	}
+	out.WriteString(source[copied:])
+	return out.String()
 }
 
 func stripThreadHistoryUserMessagePrefix(value string) string {

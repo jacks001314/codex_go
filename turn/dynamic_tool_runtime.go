@@ -71,17 +71,80 @@ func dynamicToolEntries(tools []DynamicToolSpec) []dynamicToolEntry {
 }
 
 type DynamicToolCallParams struct {
-	ThreadID  string `json:"threadId"`
-	TurnID    string `json:"turnId"`
-	CallID    string `json:"callId"`
-	Namespace any    `json:"namespace"`
-	Tool      string `json:"tool"`
-	Arguments any    `json:"arguments"`
+	SupportedResultFormat *DynamicToolResultFormat `json:"supportedResultFormat,omitempty"`
+	ThreadID              string                   `json:"threadId"`
+	TurnID                string                   `json:"turnId"`
+	CallID                string                   `json:"callId"`
+	Namespace             any                      `json:"namespace"`
+	Tool                  string                   `json:"tool"`
+	Arguments             any                      `json:"arguments"`
 }
 
+type DynamicToolResultFormat string
+
+const DynamicToolResultFormatStructuredContent DynamicToolResultFormat = "structuredContent"
+
 type DynamicToolCallResponse struct {
-	ContentItems []DynamicToolCallOutputContentItem `json:"contentItems"`
-	Success      bool                               `json:"success"`
+	ContentItems      []DynamicToolCallOutputContentItem `json:"contentItems,omitempty"`
+	StructuredContent any                                `json:"structuredContent,omitempty"`
+	ErrorMessage      string                             `json:"errorMessage,omitempty"`
+	Success           bool                               `json:"success"`
+	resultKind        dynamicToolResultKind
+}
+
+type dynamicToolResultKind uint8
+
+const (
+	dynamicToolResultContentItems dynamicToolResultKind = iota + 1
+	dynamicToolResultStructuredContent
+	dynamicToolResultError
+)
+
+func (r *DynamicToolCallResponse) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Success bool `json:"success"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	_, hasContentItems := fields["contentItems"]
+	_, hasStructuredContent := fields["structuredContent"]
+	_, hasErrorMessage := fields["errorMessage"]
+	if countTrue(hasContentItems, hasStructuredContent, hasErrorMessage) != 1 {
+		return fmt.Errorf("expected exactly one of contentItems, structuredContent or errorMessage")
+	}
+	*r = DynamicToolCallResponse{Success: wire.Success}
+	switch {
+	case hasContentItems:
+		r.resultKind = dynamicToolResultContentItems
+		if string(fields["contentItems"]) == "null" {
+			return nil
+		}
+		return json.Unmarshal(fields["contentItems"], &r.ContentItems)
+	case hasStructuredContent:
+		r.resultKind = dynamicToolResultStructuredContent
+		return json.Unmarshal(fields["structuredContent"], &r.StructuredContent)
+	default:
+		if r.Success {
+			return fmt.Errorf("a dynamic tool error requires success: false")
+		}
+		r.resultKind = dynamicToolResultError
+		return json.Unmarshal(fields["errorMessage"], &r.ErrorMessage)
+	}
+}
+
+func countTrue(values ...bool) int {
+	count := 0
+	for _, value := range values {
+		if value {
+			count++
+		}
+	}
+	return count
 }
 
 type DynamicToolCallOutputContentItem struct {
@@ -231,12 +294,13 @@ func (e *dynamicToolExecutor) Execute(ctx context.Context, invocation *tool.Invo
 		return e.fallbackOutput(invocation, arguments, started, dynamicToolCancelledMessage), nil
 	}
 	params := &DynamicToolCallParams{
-		ThreadID:  e.threadID,
-		TurnID:    e.turnID,
-		CallID:    invocation.CallID,
-		Namespace: e.namespace,
-		Tool:      e.tool,
-		Arguments: arguments,
+		SupportedResultFormat: dynamicToolResultFormatPointer(DynamicToolResultFormatStructuredContent),
+		ThreadID:              e.threadID,
+		TurnID:                e.turnID,
+		CallID:                invocation.CallID,
+		Namespace:             e.namespace,
+		Tool:                  e.tool,
+		Arguments:             arguments,
 	}
 	response, err := requestDynamicToolResponse(ctx, e.caller, params)
 	if err != nil {
@@ -252,6 +316,16 @@ func (e *dynamicToolExecutor) Execute(ctx context.Context, invocation *tool.Invo
 	// not be fed back into the model context.
 	if ctx != nil && ctx.Err() != nil {
 		return e.fallbackOutput(invocation, arguments, started, dynamicToolCancelledMessage), nil
+	}
+	if response.resultKind == dynamicToolResultStructuredContent || response.StructuredContent != nil {
+		return e.structuredOutput(invocation, arguments, started, response.StructuredContent, response.Success), nil
+	}
+	if response.resultKind == dynamicToolResultError || response.ErrorMessage != "" {
+		message := response.ErrorMessage
+		if strings.TrimSpace(message) == "" {
+			message = "dynamic tool response was invalid"
+		}
+		return e.structuredErrorOutput(invocation, arguments, started, message), nil
 	}
 	var valid bool
 	response.ContentItems, valid = normalizeDynamicToolContentItems(response.ContentItems)
@@ -271,6 +345,53 @@ func (e *dynamicToolExecutor) Execute(ctx context.Context, invocation *tool.Invo
 		Data:        e.outputData(arguments, response.ContentItems, response.Success, started),
 		CompletedAt: e.timeNow(),
 	}, nil
+}
+
+func dynamicToolResultFormatPointer(value DynamicToolResultFormat) *DynamicToolResultFormat {
+	return &value
+}
+
+func (e *dynamicToolExecutor) structuredOutput(invocation *tool.Invocation, arguments any, started time.Time, structured any, success bool) *tool.Output {
+	encoded, err := json.Marshal(structured)
+	if err != nil {
+		return e.structuredErrorOutput(invocation, arguments, started, "dynamic tool response was invalid")
+	}
+	text := string(encoded)
+	item := DynamicToolCallOutputContentItem{Type: "inputText", Text: text}
+	data := e.outputData(arguments, []DynamicToolCallOutputContentItem{item}, success, started)
+	data["structuredContent"] = structured
+	return &tool.Output{
+		CallID:      invocation.CallID,
+		ToolName:    invocation.ToolName,
+		Success:     success,
+		Body:        text,
+		Data:        data,
+		CompletedAt: e.timeNow(),
+		ResultBodySource: &tool.ResultBodySource{
+			Content:           []any{map[string]any{"type": "text", "text": text}},
+			StructuredContent: structured,
+			IsError:           !success,
+		},
+	}
+}
+
+func (e *dynamicToolExecutor) structuredErrorOutput(invocation *tool.Invocation, arguments any, started time.Time, message string) *tool.Output {
+	item := DynamicToolCallOutputContentItem{Type: "inputText", Text: message}
+	data := e.outputData(arguments, []DynamicToolCallOutputContentItem{item}, false, started)
+	data["errorMessage"] = message
+	return &tool.Output{
+		CallID:      invocation.CallID,
+		ToolName:    invocation.ToolName,
+		Success:     false,
+		Body:        message,
+		Error:       message,
+		Data:        data,
+		CompletedAt: e.timeNow(),
+		ResultBodySource: &tool.ResultBodySource{
+			Content: []any{map[string]any{"type": "text", "text": message}},
+			IsError: true,
+		},
+	}
 }
 
 // dynamicToolResponseResult carries the outcome of a dynamic tool request so the
