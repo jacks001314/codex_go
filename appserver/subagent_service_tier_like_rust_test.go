@@ -67,6 +67,11 @@ func TestSubagentSpawnServiceTierLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SpawnAgent() error = %v", err)
 	}
+	// The spawned child keeps the store directory open, which makes TempDir
+	// cleanup fail on Windows; shut it down before the test returns.
+	t.Cleanup(func() {
+		_, _ = controller.CloseAgent(context.Background(), &agent.CloseAgentArgs{Target: child.AgentID})
+	})
 	childRecord, err := store.Read(session.ThreadID(child.AgentID), false, true)
 	if err != nil {
 		t.Fatal(err)
