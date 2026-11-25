@@ -1933,6 +1933,25 @@ reviewAttempt:
 		}
 		return finishExhaustedInputBudget()
 	}
+	// #61946 admits the complete enclosing call only after ordinary evidence
+	// and images have won their budget. It must never displace that evidence.
+	if action.Type == "mcp_tool_call" {
+		if enclosing := transcriptSnapshot.enclosingCall(guardianEnclosingInvocationFromContext(ctx)); enclosing != nil {
+			buildOptions.EnclosingCall = enclosing
+			previousLedger, previousImages := admittedLedger, admittedImages
+			previousPrompt, previousParts, previousCosts := prompt, promptParts, promptCosts
+			previousItems := append([]any(nil), inputItems...)
+			candidatePrompt, candidateItems, candidateErr := composeRequest()
+			if candidateErr == nil && guardianCompleteRequestTokens(candidatePrompt, candidateItems, outputSchema, historyTokens) <= budgetLimit && len(admittedImages) >= len(previousImages) {
+				prompt, inputItems = candidatePrompt, candidateItems
+			} else {
+				buildOptions.EnclosingCall = nil
+				prompt, promptParts, promptCosts = previousPrompt, previousParts, previousCosts
+				inputItems = previousItems
+				admittedLedger, admittedImages = previousLedger, previousImages
+			}
+		}
+	}
 	r.emitGuardianContextMetrics(promptCosts, prompt, plan.Instructions, inputItems)
 	reviewRequest := &model.AgentRequest{
 		Prompt:          prompt,
@@ -2908,8 +2927,12 @@ const (
 // native-message omission and heartbeat compression so the caller's profile and
 // budgeting mode decide what the request delivers.
 type guardianCollectedTranscriptEntry struct {
-	entry    state.GuardianTranscriptEntry
-	evidence state.TranscriptEvidenceEntry
+	// callID is host identity, separate from model-authored transcript text.
+	callID        string
+	callArguments string
+	callMatches   int
+	entry         state.GuardianTranscriptEntry
+	evidence      state.TranscriptEvidenceEntry
 	// nativeKind and nativeSize describe a native payload that fixed
 	// preparation may replace with an omission notice at the same position.
 	nativeKind guardianNativeEntryKind
@@ -2985,7 +3008,11 @@ func (r *RuntimeRouter) guardianCollectTranscriptWithProfile(threadID string, pr
 	items := r.guardianReviewHistoryItems(threadID, record)
 	retainedContext := r.guardianRetainedContextForTurn(threadID, "")
 	toolCalls := map[string]session.Item{}
+	callMatches := map[string]int{}
 	for _, item := range items {
+		if item.Type == "function_call" || item.Type == "custom_tool_call" {
+			callMatches[item.CallID]++
+		}
 		switch strings.ToLower(strings.TrimSpace(item.Type)) {
 		case "function_call", "custom_tool_call", "tool_search_call", "local_shell_call", "web_search_call":
 			if callID := strings.TrimSpace(item.CallID); callID != "" {
@@ -3039,6 +3066,8 @@ func (r *RuntimeRouter) guardianCollectTranscriptWithProfile(threadID string, pr
 			name := guardianNativeFunctionCallName(&item)
 			lineRole := "tool " + name + " call"
 			collected = append(collected, guardianCollectedTranscriptEntry{
+				callID:      item.CallID,
+				callMatches: callMatches[item.CallID],
 				entry: state.GuardianTranscriptEntry{
 					Author:   "tool",
 					Label:    name,
@@ -3088,7 +3117,14 @@ func (r *RuntimeRouter) guardianCollectTranscriptWithProfile(threadID string, pr
 				mcp.IsNodeReplBackedServer(strings.TrimSpace(item.Name)) {
 				capKind = guardianTranscriptCapNodeRepl
 			}
+			callID := ""
+			if item.Type == "function_call" || item.Type == "custom_tool_call" {
+				callID = item.CallID
+			}
 			collected = append(collected, guardianCollectedTranscriptEntry{
+				callID:        callID,
+				callArguments: item.Text,
+				callMatches:   callMatches[callID],
 				entry: state.GuardianTranscriptEntry{
 					Author:          "tool",
 					Label:           label,

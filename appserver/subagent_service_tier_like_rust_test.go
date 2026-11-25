@@ -192,4 +192,18 @@ func TestSubagentSpawnServiceTierValidationLikeRust(t *testing.T) {
 	if offRecord.Metadata.ServiceTier != "" {
 		t.Fatalf("gated spawn stored tier = %q, want none", offRecord.Metadata.ServiceTier)
 	}
+	// Both spawned children keep writing into the store directory; stop them and
+	// let their turn workers finish before the temp dirs are removed.
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_, _ = controller.CloseAgent(ctx, &agent.CloseAgentArgs{Target: defaultChild.AgentID})
+		_, _ = offController.CloseAgent(ctx, &agent.CloseAgentArgs{Target: offChild.AgentID})
+		if err := router.threads.WaitForTurnWorkers(ctx); err != nil {
+			t.Errorf("wait for the child turn workers: %v", err)
+		}
+		if err := offRouter.threads.WaitForTurnWorkers(ctx); err != nil {
+			t.Errorf("wait for the gated child turn workers: %v", err)
+		}
+	})
 }

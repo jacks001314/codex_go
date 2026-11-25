@@ -18138,9 +18138,10 @@ func (r *RuntimeRouter) effectiveMCPConfigForThread(threadID string) *config.Con
 func (r *RuntimeRouter) currentMCPElicitationAuthority(threadID, serverName, connectorID, toolName, toolTitle string) mcpElicitationAuthority {
 	cfg := r.effectiveMCPConfigForThread(threadID)
 	authority := mcpElicitationAuthority{
-		ApprovalPolicy:        turnApprovalPolicyForTurn(cfg, nil),
-		ApprovalsReviewer:     turnApprovalsReviewerForTurn(cfg, nil),
-		AllowsMCPElicitations: granularMCPElicitationsAllowed(cfg, nil),
+		GuardianNestedApprovalContext: cfg != nil && features.Enabled(cfg.FeatureSettings(), "guardian_nested_approval_context"),
+		ApprovalPolicy:                turnApprovalPolicyForTurn(cfg, nil),
+		ApprovalsReviewer:             turnApprovalsReviewerForTurn(cfg, nil),
+		AllowsMCPElicitations:         granularMCPElicitationsAllowed(cfg, nil),
 	}
 	settings := r.threadSettingsForTurn(threadID)
 	cwd := ""

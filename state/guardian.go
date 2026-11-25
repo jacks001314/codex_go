@@ -772,6 +772,8 @@ func BuildPrompt(action Action, transcript []string) (string, error) {
 
 // BuildPromptOptions controls optional Guardian prompt specialization.
 type BuildPromptOptions struct {
+	// EnclosingCall is optional, verified outer-call evidence for a nested review.
+	EnclosingCall *GuardianEnclosingCall
 	// Presentation selects the framing the reviewed consumer uses. The default
 	// is the full synchronous review.
 	Presentation ActionPresentation
@@ -1068,7 +1070,7 @@ func BuildPromptPartsWithSectionCosts(
 	if err != nil {
 		return nil, nil, err
 	}
-	addSection("planned_action", actionPrompt)
+	addSection("planned_action", insertGuardianEnclosingCall(actionPrompt, guardianEnclosingCallText(action, options)))
 	if descriptions := renderGuardianToolDescriptions(action); descriptions != "" {
 		addSection("planned_action", descriptions)
 	}

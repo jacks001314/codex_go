@@ -50087,10 +50087,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "blocked_precondition",
+   "status": "complete",
    "evidence": [
-    "Nested Guardian approval enclosing-tool context: nested Guardian approvals are not ported.",
-    "plan: update/plan_2026_11_16.md batch 74"
+    "Go carries the enclosing tool context for nested Guardian MCP elicitations. appserver/mcp_elicitation.go attaches the identity only from the host live invocation when guardian_nested_approval_context is on, the thread and turn match, and the request is not a Node REPL js preflight; a provider-supplied identity is never trusted and the reviewed inner action is left untouched.",
+    "The reviewer keeps the original, untrimmed tool arguments, matches the call ID once (duplicate, missing, non-text or native evidence produces no context), and can re-read the outer call from the full host snapshot for a later review of the same reviewer; the failed-reassembly path restores the original prompt, input items and image ledger. state renders the JSON enclosing line after the approval marker under the tool entry byte cap and omits it for async presentation.",
+    "state/guardian_elastic_prompt.go admits the enclosing line only after ordinary evidence and screenshot selection, and drops the whole line when the entry, planned-action supporting total or aggregate request budget would be exceeded.",
+    "Tests cover nested allow, deny, timeout, feature default off, non-nested, previous turn, duplicate call ids, empty or partial duplicate identity, custom tool wrapper, Node REPL preflight, a strict Browser connector and repeated nested reviews on one reviewer, plus state sync full/delta, async omission, JSON escaping, entry cap, fixed and elastic budgets. Verified on the Linux node and re-verified here: go build ./..., the focused TestGuardianEnclosing set, go vet ./appserver ./state and go test ./state all pass on Windows."
    ]
   },
   {

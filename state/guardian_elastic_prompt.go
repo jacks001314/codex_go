@@ -44,6 +44,7 @@ func BuildGuardianElasticPromptPartsWithSectionCosts(
 	if err != nil {
 		return nil, nil, err
 	}
+	admitGuardianElasticEnclosingCall(&admitted, action, options, config, budget)
 	return renderGuardianElasticPromptParts(admitted)
 }
 

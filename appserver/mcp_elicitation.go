@@ -47,10 +47,11 @@ func (h *appserverMCPElicitationHandler) fullAccessFormInputEnabled() bool {
 }
 
 type mcpElicitationAuthority struct {
-	ApprovalPolicy        sandbox.AskForApproval
-	ApprovalsReviewer     string
-	PermissionProfile     *sandbox.PermissionProfile
-	AllowsMCPElicitations bool
+	GuardianNestedApprovalContext bool
+	ApprovalPolicy                sandbox.AskForApproval
+	ApprovalsReviewer             string
+	PermissionProfile             *sandbox.PermissionProfile
+	AllowsMCPElicitations         bool
 	// ServerAuthorityPublished reports that the thread's MCP runtime published
 	// per-server authority. When set and PermissionProfile is nil, the server
 	// has no owner permissions and the elicitation must be declined (Rust #40728).
@@ -147,6 +148,13 @@ func (h *appserverMCPElicitationHandler) HandleMCPElicitation(ctx context.Contex
 			reviewCtx := ctx
 			if liveOK && strings.TrimSpace(liveInvocation.ServerName) == serverName {
 				reviewCtx = withGuardianTimingCallID(ctx, originatingCallID)
+				// Only the host's live invocation can identify an enclosing call.
+				// A JS preflight is reviewing the wrapper itself, not a nested action.
+				if authority.GuardianNestedApprovalContext &&
+					liveInvocation.ThreadID == request.ThreadID && liveInvocation.TurnID == request.TurnID &&
+					!(mcpElicitationToolName(request) == "js" && mcpElicitationConnectorID(request) == "node_repl") {
+					reviewCtx = withGuardianEnclosingInvocation(reviewCtx, originatingCallID)
+				}
 				// Rust #59489: keep the action the server asked about, but review
 				// it with the owning environment's rules captured when the
 				// originating call was prepared.
