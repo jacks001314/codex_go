@@ -24,6 +24,10 @@ func TestPrepareFileSystemPolicyLogsLaunchPhasesLikeRust(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// InitRuntimeLog pins the first codex home it sees, so another test in this
+	// package may already have claimed the log directory. Reset it first so this
+	// test always reads the log file it just wrote.
+	windowssandbox.CloseRuntimeLog()
 	windowssandbox.InitRuntimeLog(home)
 	t.Cleanup(windowssandbox.CloseRuntimeLog)
 	logLaunch("phase=prepare_request")
