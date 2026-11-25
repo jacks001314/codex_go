@@ -241,6 +241,8 @@ macOS 节点（darwin-align，macOS 12.4 / darwin-amd64 / Go 1.27.1 / CGO=1）�
 
 `go test ./appserver -run 'TestPrecomputedExportArtifactsMatchTargetRustCommit|TestRustProtocolMethodSurfaceAgainstGoConstants'` 通过。
 
+macOS 还有一个本轮发现、尚未合并的 doctor 缺口：`doctor/desktop_darwin.go` 的 `desktopBundleMetadata` 把 `Contents/Info.plist` 当 XML 文本读，用 `<key>…</key>` 之后最近的 `<string>` 取值。Rust 3f65e9f1 并不自己解析 plist，而是执行 `/usr/bin/plutil -convert json -o -`（5 秒超时、`kill_on_drop`、stderr 丢弃、stdout 上限 64KiB），再按 JSON 键精确取值，`CFBundleIdentifier` 不等于 `com.openai.codex` 时返回「不是 Codex」而不是错误，`version = CFBundleShortVersionString ?? CFBundleVersion`，`CFBundleVersion` 必须能解析成数字。因此 Go 在二进制 plist、XML 实体转义、以及 key 与 string 之间夹其它元素这三种情况下会读错或读不到。对照源码已放进 `deliverables/darwin-align-rust-reference/`（含 README 的最小改法），由 macOS 节点实现并用 `plutil -convert binary1` 造 fixture 验证后由 lead 合并。
+
 macOS 节点仍报告的另外三处 sandbox 失败（`TestNativeSeatbeltEnforcesWorkspaceAndMetadata` exit 21、两个 symlink 测试在非 canonical TMPDIR 下失败）正在请该节点判定是产品缺口还是测试自身的路径规范化问题，未擅自改 sandbox 生产代码。
 
 ## Linux 节点交付（#63520 Ctrl-Z suspend 已合并）
