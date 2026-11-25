@@ -3,10 +3,15 @@
 package doctor
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
 
 var errDesktopBundle = errors.New("desktop bundle metadata is unreadable")
@@ -32,21 +37,13 @@ func desktopInstalledApp() (*desktopApp, error) {
 			if !info.IsDir() {
 				continue
 			}
-			metadata, err := desktopBundleMetadata(bundle)
+			app, err := desktopInspectBundle(bundle)
 			if err != nil {
 				return nil, err
 			}
-			if metadata["CFBundleIdentifier"] != desktopMacBundleIdentifier {
-				continue
+			if app != nil {
+				return app, nil
 			}
-			version := metadata["CFBundleShortVersionString"]
-			if version == "" {
-				version = metadata["CFBundleVersion"]
-			}
-			if version == "" || metadata["CFBundleVersion"] == "" {
-				return nil, errDesktopBundle
-			}
-			return &desktopApp{identity: desktopMacBundleIdentifier, version: version, bundle: bundle}, nil
 		}
 	}
 	return nil, nil
@@ -70,35 +67,47 @@ func desktopApplicationRunning(app *desktopApp, pid int) bool {
 	return strings.HasPrefix(executable, macOSDirectory+string(os.PathSeparator))
 }
 
-func desktopBundleMetadata(bundle string) (map[string]string, error) {
-	contents, err := os.ReadFile(bundle + "/Contents/Info.plist")
+// desktopInspectBundle mirrors Rust 3f65e9f1 inspect_macos_bundle, including
+// property-list conversion and string/u64 validation.
+func desktopInspectBundle(bundle string) (*desktopApp, error) {
+	metadata, err := desktopBundleMetadata(bundle)
 	if err != nil {
+		return nil, err
+	}
+	if metadata["CFBundleIdentifier"] != desktopMacBundleIdentifier {
+		return nil, nil
+	}
+	versionValue, present := metadata["CFBundleShortVersionString"]
+	if !present {
+		versionValue = metadata["CFBundleVersion"]
+	}
+	version, ok := versionValue.(string)
+	if !ok {
 		return nil, errDesktopBundle
 	}
-	metadata := map[string]string{}
-	for _, key := range []string{"CFBundleIdentifier", "CFBundleShortVersionString", "CFBundleVersion"} {
-		if value, ok := desktopPlistString(string(contents), key); ok {
-			metadata[key] = value
-		}
+	build, ok := metadata["CFBundleVersion"].(string)
+	if !ok {
+		return nil, errDesktopBundle
 	}
-	return metadata, nil
+	if _, err := strconv.ParseUint(strings.TrimPrefix(build, "+"), 10, 64); err != nil {
+		return nil, errDesktopBundle
+	}
+	return &desktopApp{identity: desktopMacBundleIdentifier, version: version, bundle: bundle}, nil
 }
 
-func desktopPlistString(plist string, key string) (string, bool) {
-	marker := "<key>" + key + "</key>"
-	index := strings.Index(plist, marker)
-	if index < 0 {
-		return "", false
+func desktopBundleMetadata(bundle string) (map[string]any, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "/usr/bin/plutil", "-convert", "json", "-o", "-", filepath.Join(bundle, "Contents", "Info.plist"))
+	output := &boundedOutput{limit: 64 * 1024}
+	command.Stdout = output
+	if err := command.Run(); err != nil || output.truncated {
+		return nil, errDesktopBundle
 	}
-	rest := plist[index+len(marker):]
-	open := strings.Index(rest, "<string>")
-	if open < 0 {
-		return "", false
+	var decoded any
+	if err := json.Unmarshal(output.buffer.Bytes(), &decoded); err != nil {
+		return nil, errDesktopBundle
 	}
-	rest = rest[open+len("<string>"):]
-	close := strings.Index(rest, "</string>")
-	if close < 0 {
-		return "", false
-	}
-	return strings.TrimSpace(rest[:close]), true
+	metadata, _ := decoded.(map[string]any)
+	return metadata, nil
 }

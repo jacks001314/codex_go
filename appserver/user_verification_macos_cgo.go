@@ -157,7 +157,9 @@ static int uv_export_public_key(SecKeyRef key, unsigned char **der_out, int *len
 // the same SecKeyCopyExternalRepresentation call the provider uses for
 // credentials. Tests compare the result with the pure-Go SPKI derivation; it
 // needs no Secure Enclave, which keeps that parity check runnable on any Mac.
-static int uv_test_export_ephemeral_sec1(unsigned char **out, int *len_out, uv_error *err) {
+static int uv_test_export_ephemeral_sec1(unsigned char **out, int *len_out, int *has_token, int *protected_key, uv_error *err) {
+    *has_token = 0;
+    *protected_key = 0;
     *out = NULL;
     *len_out = 0;
     int bits = 256;
@@ -182,6 +184,12 @@ static int uv_test_export_ephemeral_sec1(unsigned char **out, int *len_out, uv_e
         if (error) { CFRelease(error); }
         return UV_ERROR;
     }
+    CFDictionaryRef key_attributes = SecKeyCopyAttributes(key);
+    if (key_attributes) {
+        *has_token = CFDictionaryContainsKey(key_attributes, kSecAttrTokenID);
+        CFRelease(key_attributes);
+    }
+    *protected_key = uv_validate_key(key);
     SecKeyRef public_key = SecKeyCopyPublicKey(key);
     CFRelease(key);
     if (!public_key) {
@@ -223,8 +231,9 @@ static OSStatus uv_copy_key(const char *label, id ctx, int want_attributes, CFTy
     }
     CFDictionarySetValue(query, kSecClass, kSecClassKey);
     CFDictionarySetValue(query, kSecAttrKeyClass, kSecAttrKeyClassPrivate);
-    CFDictionarySetValue(query, kSecAttrApplicationLabel, label_string);
+    CFDictionarySetValue(query, kSecAttrLabel, label_string);
     CFDictionarySetValue(query, kSecUseDataProtectionKeychain, kCFBooleanTrue);
+    CFDictionarySetValue(query, kSecMatchLimit, kSecMatchLimitOne);
     CFDictionarySetValue(query, kSecReturnRef, kCFBooleanTrue);
     if (want_attributes) {
         CFDictionarySetValue(query, kSecReturnAttributes, kCFBooleanTrue);
@@ -285,10 +294,11 @@ static int uv_create_key(const char *label, unsigned char **der_out, int *len_ou
     CFMutableDictionaryRef private_attributes = CFDictionaryCreateMutable(
         kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     CFDictionarySetValue(private_attributes, kSecAttrIsPermanent, kCFBooleanTrue);
-    CFDictionarySetValue(private_attributes, kSecAttrApplicationLabel, label_string);
+    CFDictionarySetValue(private_attributes, kSecAttrLabel, label_string);
     CFDictionarySetValue(private_attributes, kSecAttrAccessControl, access);
     CFMutableDictionaryRef attributes = CFDictionaryCreateMutable(
         kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionarySetValue(attributes, kSecAttrLabel, label_string);
     CFDictionarySetValue(attributes, kSecAttrKeyType, kSecAttrKeyTypeECSECPrimeRandom);
     CFDictionarySetValue(attributes, kSecAttrKeySizeInBits, size);
     CFDictionarySetValue(attributes, kSecAttrTokenID, kSecAttrTokenIDSecureEnclave);
@@ -324,7 +334,7 @@ static int uv_delete_keys(const char *label, uv_error *out) {
     CFMutableDictionaryRef query = CFDictionaryCreateMutable(
         kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     CFDictionarySetValue(query, kSecClass, kSecClassKey);
-    CFDictionarySetValue(query, kSecAttrApplicationLabel, label_string);
+    CFDictionarySetValue(query, kSecAttrLabel, label_string);
     CFDictionarySetValue(query, kSecUseDataProtectionKeychain, kCFBooleanTrue);
     OSStatus status = SecItemDelete(query);
     CFRelease(query);
@@ -572,20 +582,22 @@ func newUserVerificationPlatformProvider() UserVerificationProvider {
 	return &darwinUserVerificationProvider{backend: cgoDarwinUserVerificationBackend{}}
 }
 
-// darwinUserVerificationTestSEC1 exports a throwaway software P-256 key's SEC1
+// darwinUserVerificationTestSEC1 reports token/protection attributes and exports
+// a throwaway software P-256 key's SEC1
 // point through Security.framework. It exists so tests can pin the encoding the
 // provider relies on without Secure Enclave hardware; production code never
 // calls it.
-func darwinUserVerificationTestSEC1() ([]byte, *darwinUserVerificationError) {
+func darwinUserVerificationTestSEC1() ([]byte, bool, bool, *darwinUserVerificationError) {
 	var der *C.uchar
 	var length C.int
+	var hasToken, protectedKey C.int
 	var native C.uv_error
 	C.uv_clear_error(&native)
-	if C.uv_test_export_ephemeral_sec1(&der, &length, &native) != C.UV_OK {
-		return nil, classifyDarwinNativeError(native)
+	if C.uv_test_export_ephemeral_sec1(&der, &length, &hasToken, &protectedKey, &native) != C.UV_OK {
+		return nil, false, false, classifyDarwinNativeError(native)
 	}
 	defer C.free(unsafe.Pointer(der))
-	return C.GoBytes(unsafe.Pointer(der), length), nil
+	return C.GoBytes(unsafe.Pointer(der), length), hasToken != 0, protectedKey != 0, nil
 }
 
 func (cgoDarwinUserVerificationBackend) DeviceSupported() bool {

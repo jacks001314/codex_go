@@ -142,7 +142,7 @@ func TestDarwinUserVerificationDeviceSupportUsesPlatformProbe(t *testing.T) {
 // SubjectPublicKeyInfo we build from it must be byte-identical to the DER Rust's
 // p256 crate emits (fixed 26-byte P-256 header plus the 65-byte point).
 func TestDarwinUserVerificationKeyInfoMatchesSecurityFrameworkExport(t *testing.T) {
-	sec1, err := darwinUserVerificationTestSEC1()
+	sec1, _, _, err := darwinUserVerificationTestSEC1()
 	if err != nil {
 		t.Fatalf("Security.framework export: %+v", err)
 	}
@@ -176,5 +176,21 @@ func TestDarwinUserVerificationKeyInfoMatchesSecurityFrameworkExport(t *testing.
 	digest := sha256.Sum256(wantSPKI)
 	if want := base64.RawURLEncoding.EncodeToString(digest[:]); key.credentialID != want {
 		t.Fatalf("credentialId = %q, want %q", key.credentialID, want)
+	}
+}
+
+// Rust key_protection::validate rejects a software key even when its curve,
+// size, and private-key class match. Use a real ephemeral Security.framework
+// key to cover the missing kSecAttrTokenID branch without Secure Enclave.
+func TestDarwinUserVerificationRejectsKeyWithoutSecureEnclaveToken(t *testing.T) {
+	_, hasToken, protectedKey, err := darwinUserVerificationTestSEC1()
+	if err != nil {
+		t.Fatalf("create ephemeral software key: %v", err)
+	}
+	if hasToken {
+		t.Fatal("software fixture unexpectedly contains kSecAttrTokenID")
+	}
+	if protectedKey {
+		t.Fatal("native validator accepted a software key without kSecAttrTokenID")
 	}
 }

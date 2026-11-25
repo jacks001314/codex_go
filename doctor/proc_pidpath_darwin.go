@@ -17,7 +17,7 @@ import (
 // libproc's proc_pidpath, the same call Rust's platform::process_executable_path
 // uses. It returns false when the process is gone or the path is not readable.
 func darwinProcessExecutablePath(pid int) (string, bool) {
-	if pid <= 0 {
+	if pid <= 0 || pid > 1<<31-1 {
 		return "", false
 	}
 	buffer := make([]byte, int(C.PROC_PIDPATHINFO_MAXSIZE))
