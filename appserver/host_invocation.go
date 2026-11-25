@@ -179,7 +179,16 @@ func (r *RuntimeRouter) prepareChildContext(ctx context.Context, threadID string
 		instructions = parent.Metadata.Instructions
 	}
 	baseInstructions, developerInstructions := r.preparedChildInheritedInstructions(threadID, cfg, parent)
+	var tier *string
+	if r.services.ServiceTier != nil {
+		value, err := r.readHostServiceTier(ctx)
+		if err != nil {
+			return nil, err
+		}
+		tier = cloneString(&value)
+	}
 	return &agent.PreparedChildContext{
+		ServiceTier:                  tier,
 		Originator:                   strings.TrimSpace(params.Originator),
 		UserInstructions:             instructions,
 		BaseInstructions:             baseInstructions,
@@ -435,6 +444,7 @@ func (r *RuntimeRouter) createReservedChild(ctx context.Context, threadID string
 		return nil, errors.New("agent runtime is unavailable")
 	}
 	runtimeController.disabledPluginIDs = append([]string{}, created.DisabledPluginIDs...)
+	runtimeController.preparedServiceTier = cloneString(created.ServiceTier)
 	taskName := strings.TrimSpace(request.TaskName)
 	if taskName == "" {
 		taskName = "agent_" + strings.ToLower(safeIdentifier(string(newThreadID())))

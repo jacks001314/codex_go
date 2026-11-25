@@ -241,6 +241,9 @@ type AgentLoopRequest struct {
 	// metadata of every step after the first (Rust Session::update_step_settings
 	// reaching a later sampling step).
 	StepSettings func() *AgentStepSettings
+	// StepSettingsContext awaits host I/O at later step boundaries. It takes
+	// precedence over StepSettings and can abort capture with ctx cancellation.
+	StepSettingsContext func(context.Context) (*AgentStepSettings, error)
 	// StepInputItems, when set, rebuilds request-scoped context for the model
 	// selected for this step (Rust context/world_state built from StepContext).
 	StepInputItems               StepInputItemsProvider
@@ -519,8 +522,18 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		stepServiceTier := request.ServiceTier
 		stepRequestCountry := request.RequestCountry
 		stepHookPermissionMode := ""
-		if iteration > 0 && request.StepSettings != nil {
-			if settings := request.StepSettings(); settings != nil {
+		if iteration > 0 && (request.StepSettings != nil || request.StepSettingsContext != nil) {
+			var settings *AgentStepSettings
+			if request.StepSettingsContext != nil {
+				var err error
+				settings, err = request.StepSettingsContext(ctx)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				settings = request.StepSettings()
+			}
+			if settings != nil {
 				if modelID := strings.TrimSpace(settings.Model); modelID != "" {
 					stepModel = modelID
 				}

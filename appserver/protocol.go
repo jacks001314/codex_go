@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -501,10 +502,11 @@ func (id *RequestID) UnmarshalJSON(data []byte) error {
 }
 
 type Request struct {
-	JSONRPC string          `json:"jsonrpc,omitempty"`
-	ID      RequestID       `json:"id"`
-	Method  Method          `json:"method"`
-	Params  json.RawMessage `json:"params,omitempty"`
+	hostContext context.Context
+	JSONRPC     string          `json:"jsonrpc,omitempty"`
+	ID          RequestID       `json:"id"`
+	Method      Method          `json:"method"`
+	Params      json.RawMessage `json:"params,omitempty"`
 	// Trace carries the optional W3C trace context the transport continues
 	// (Rust app-server-protocol rpc.rs::JSONRPCRequest::trace); the request
 	// span adopts it as its parent.

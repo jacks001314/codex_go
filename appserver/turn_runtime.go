@@ -2143,7 +2143,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		CWD:                          firstNonEmpty(params.CWD, r.services.DefaultCWD),
 		Tracer:                       r.sessionTelemetryForThread(threadID),
 		OnModelRequest:               r.modelRequestHookCallback(threadID, firstNonEmpty(runConfig.SessionID, threadID), firstNonEmpty(params.CWD, r.services.DefaultCWD)),
-		StepSettings:                 r.turnStepSettingsProvider(threadID, turnID),
+		StepSettingsContext:          r.hostTurnStepSettingsProvider(threadID, turnID),
 		StepInputItems:               r.turnStepInputItemsProvider(threadID, turnID, runConfig),
 		AttestationProvider:          runConfig.AttestationProvider,
 		OutputSchema:                 params.OutputSchema,
@@ -9814,6 +9814,13 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 	// keeps a flex tier either way.
 	if rootTier := r.subagentRootServiceTier(threadID); rootTier != "" {
 		serviceTier = model.ServiceTierForConfiguredRequest(modelInfo, rootTier, cfg.FeatureSettings())
+	}
+	if r.hostTierInherits(threadID) {
+		tier, err := r.readHostServiceTier(ctx)
+		if err != nil {
+			return nil, err
+		}
+		serviceTier = model.ServiceTierForConfiguredRequest(modelInfo, tier, cfg.FeatureSettings())
 	}
 	hostedTools, err := r.hostedToolsForTurn(params, turnRuntime)
 	if err != nil {

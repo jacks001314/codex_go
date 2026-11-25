@@ -100,11 +100,15 @@ type RuntimeServices struct {
 	// UsageAccounting is the embedding host's accounting for completed model
 	// responses (Rust AgentRuntimeServices::Host usage_accounting, #61958).
 	// Nil keeps the native rollout budget.
-	UsageAccounting UsageAccounting
-	Hooks           *HookRegistry
-	HooksDiscovery  *HookDiscoveryService
-	HookRunner      *HookRunner
-	Skills          *SkillsService
+	// ServiceTier is the host-owned session tier provider; nil uses native controller state.
+	ServiceTier AgentServiceTier
+	// ServiceTierTimeout bounds each host read or acceptance wait (default 10s).
+	ServiceTierTimeout time.Duration
+	UsageAccounting    UsageAccounting
+	Hooks              *HookRegistry
+	HooksDiscovery     *HookDiscoveryService
+	HookRunner         *HookRunner
+	Skills             *SkillsService
 	// SkillInvocationContributors are extension contributors that may require
 	// host-owned skills; any one of them disables skip_host_skill_discovery
 	// (Rust #40631).
@@ -348,7 +352,8 @@ type RuntimeRouterOptions struct {
 }
 
 type RuntimeRouter struct {
-	services RuntimeServices
+	hostServiceTiers hostServiceTierState
+	services         RuntimeServices
 	// feedbackMu guards the host-provided feedback snapshot that every request
 	// clones, mirroring Rust's per-request FeedbackSnapshot.
 	feedbackMu            sync.Mutex
@@ -6557,6 +6562,9 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 			}
 			if request.Method == MethodThreadStart {
 				r.startMemoriesStartupTask(response, request)
+				if err := r.startHostServiceTier(hostRequestContext(request), response); err != nil {
+					return nil, err
+				}
 				r.scheduleStartupPrewarm(response)
 				// Rust records the whole thread/start latency once the client has
 				// been notified and the post-start work has been scheduled.
@@ -9406,6 +9414,9 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 	if err != nil {
 		return nil, err
 	}
+	if !request.Internal && r.hostTierChild(params.ThreadID) && (params.ServiceTierForTurn != nil || params.ServiceTierSet || params.ServiceTier != nil) {
+		return nil, jsonRPCInvalidRequest("host-owned children cannot override shared service tier per turn")
+	}
 	// Rust #61962: validate the input shape, then capture client local
 	// attachments on the submitting host before the request waits for
 	// admission. Queued input can outlive its source files, so reading them
@@ -10247,7 +10258,7 @@ func (r *RuntimeRouter) applyTurnStartSettingsUpdate(params *SettingsUpdateParam
 	// Rust #44905: a turn-start override is a saved thread setting. Rust #40645
 	// routes both standalone and turn-start writes through the same committed
 	// snapshot path.
-	if _, err := r.commitThreadSettingsUpdate(params, params.DisabledPluginIDs != nil); err == nil {
+	if _, _, err := r.commitThreadSettingsUpdateWithReceipt(params, params.DisabledPluginIDs != nil, "", false, false); err == nil {
 		// Rust applies the turn-start settings snapshot to the rollout as well,
 		// which carries the runtime workspace roots from #43848.
 		r.checkpointThreadSettings(params.ThreadID)
@@ -10264,8 +10275,23 @@ func (r *RuntimeRouter) commitThreadSettingsUpdate(params *SettingsUpdateParams,
 // commitThreadSettingsUpdateWithConnection optionally defers the applied
 // notification until the transport has written the request response.
 func (r *RuntimeRouter) commitThreadSettingsUpdateWithConnection(params *SettingsUpdateParams, persist bool, connectionID string, deferNotification bool) (*SettingsUpdateResponse, error) {
+	return r.commitThreadSettingsUpdateContext(context.Background(), params, persist, connectionID, deferNotification)
+}
+
+func (r *RuntimeRouter) commitThreadSettingsUpdateContext(ctx context.Context, params *SettingsUpdateParams, persist bool, connectionID string, deferNotification bool) (*SettingsUpdateResponse, error) {
+	response, receipt, err := r.commitThreadSettingsUpdateWithReceipt(params, persist, connectionID, deferNotification, true)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.waitHostServiceTier(ctx, receipt); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (r *RuntimeRouter) commitThreadSettingsUpdateWithReceipt(params *SettingsUpdateParams, persist bool, connectionID string, deferNotification bool, hostAcceptanceInReply bool) (*SettingsUpdateResponse, *ServiceTierAcceptance, error) {
 	if r == nil || params == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	// Capture permission normalization before any settings are published. Work
 	// on a copy so callers can reuse compatibility input for previews (#61134).
@@ -10277,7 +10303,7 @@ func (r *RuntimeRouter) commitThreadSettingsUpdateWithConnection(params *Setting
 		}
 		currentProfile, currentErr := r.permissionProfileForSettingsPreservation(params.ThreadID, settings)
 		if currentErr != nil {
-			return nil, currentErr
+			return nil, nil, currentErr
 		}
 		settings.ActivePermissionProfile = cloneString(params.Permissions)
 		settings.normalizedPermissionProfile = nil
@@ -10292,20 +10318,20 @@ func (r *RuntimeRouter) commitThreadSettingsUpdateWithConnection(params *Setting
 		}
 		profile, err := r.subscribedIdlePermissionProfile(params.ThreadID, settings)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		raw, err := sandbox.RuntimePermissionProfileJSON(*profile)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if currentProfile != nil {
 			merged, err := sandbox.PreserveDeniedReads(*profile, *currentProfile)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			raw, err = sandbox.RuntimePermissionProfileJSON(*merged)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
 		normalized.normalizedPermissionProfile = json.RawMessage(raw)
@@ -10314,25 +10340,25 @@ func (r *RuntimeRouter) commitThreadSettingsUpdateWithConnection(params *Setting
 		record, _ := r.threadRecord(session.ThreadID(strings.TrimSpace(params.ThreadID)), false, false)
 		profile, err := r.normalizeThreadLegacySettings(params, record)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		normalized.normalizedPermissionProfile = profile
 	}
 	params = &normalized
 	if err := r.resolveThreadSettingsEnvironments(params); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	service := r.requireThreadExtras()
 	// Rust #59111: an incoming settings write is normalized against the latest
 	// provider catalog before it is committed and persisted.
 	r.normalizeChatSettingsUpdate(params)
-	response, committed, err := service.UpdateSettingsWithCommit(params)
+	response, committed, receipt, err := r.commitSettingsWithHostTier(service, params, hostAcceptanceInReply)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if persist {
 		if err := r.persistThreadSettingsUpdate(params, committed); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	if r.mcpRuntimes != nil {
@@ -10353,7 +10379,7 @@ func (r *RuntimeRouter) commitThreadSettingsUpdateWithConnection(params *Setting
 			r.notify(NotificationThreadSettingsUpdated, notification)
 		}
 	}
-	return response, nil
+	return response, receipt, nil
 }
 
 func (r *RuntimeRouter) prepareTurnStartParams(params *turn.TurnStartParams) error {
@@ -10961,6 +10987,9 @@ func (r *RuntimeRouter) handleTurnSettingsUpdate(request *Request) (*turn.TurnSe
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
+	if r.hostTierChild(params.ThreadID) && (params.ServiceTierSet || params.ServiceTier != nil) {
+		return nil, jsonRPCInvalidRequest("host-owned children cannot override shared service tier per turn")
+	}
 	if err := params.Validate(); err != nil {
 		return nil, jsonRPCInvalidRequest(err.Error())
 	}
@@ -11393,7 +11422,12 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 		return r.clearThreadGoal(request, &params)
 	case MethodThreadSettingsUpdate:
 		r.turnAdmissionMu.Lock()
-		defer r.turnAdmissionMu.Unlock()
+		admissionLocked := true
+		defer func() {
+			if admissionLocked {
+				r.turnAdmissionMu.Unlock()
+			}
+		}()
 		var params SettingsUpdateParams
 		if err := request.DecodeParams(&params); err != nil {
 			return nil, err
@@ -11437,8 +11471,13 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 				params.RequestedApprovalsReviewer = &preserved
 			}
 		}
-		response, err := r.commitThreadSettingsUpdateWithConnection(&params, true, deferredNotificationConnection(request), true)
+		response, receipt, err := r.commitThreadSettingsUpdateWithReceipt(&params, true, deferredNotificationConnection(request), true, true)
+		admissionLocked = false
+		r.turnAdmissionMu.Unlock()
 		if err != nil {
+			return nil, err
+		}
+		if err := r.waitHostServiceTier(hostRequestContext(request), receipt); err != nil {
 			return nil, err
 		}
 		return response, nil

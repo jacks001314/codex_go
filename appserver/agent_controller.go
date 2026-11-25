@@ -44,10 +44,11 @@ type runtimeAgentController struct {
 	// treeID correlates the whole loaded agent tree. It is generated when the
 	// tree is first seen and shared by its children, and it is deliberately
 	// distinct from any thread id (Rust #60190).
-	treeID            string
-	environments      []map[string]any
-	disabledPluginIDs []string
-	registry          *agent.Registry
+	preparedServiceTier *string
+	treeID              string
+	environments        []map[string]any
+	disabledPluginIDs   []string
+	registry            *agent.Registry
 }
 
 func newRuntimeAgentController(router *RuntimeRouter, parentID string, cwd string, maxThreads int) agent.ToolController {
@@ -160,6 +161,16 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	inheritedTier := c.rootServiceTierForSpawn()
+	if c.preparedServiceTier != nil {
+		inheritedTier = *c.preparedServiceTier
+	} else if c.router.services.ServiceTier != nil {
+		var err error
+		inheritedTier, err = c.router.readHostServiceTier(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if c.version == agent.VersionV1 && c.maxDepth >= 0 && c.depth+1 > c.maxDepth {
 		return nil, agent.ErrAgentDepthLimitReached
@@ -344,9 +355,11 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 	if spawnServiceTier != "" {
 		record.Metadata.ServiceTier = spawnServiceTier
 		extra[spawnServiceTierOverrideExtraKey] = spawnServiceTier
-		if inherited := c.rootServiceTierForSpawn(); inherited != "" {
+		if inherited := inheritedTier; inherited != "" {
 			extra[spawnServiceTierInheritedExtraKey] = inherited
 		}
+	} else if c.router.services.ServiceTier != nil || c.preparedServiceTier != nil {
+		record.Metadata.ServiceTier = inheritedTier
 	}
 	// Rust #50082: a fresh V2 subagent inherits the parent's client-defined
 	// dynamic tools when the disabled-by-default feature is enabled.
@@ -469,7 +482,7 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 		if spawnServiceTier != "" {
 			params.ServiceTier = stringPtrIfNotEmpty(spawnServiceTier)
 			params.ServiceTierSet = true
-		} else if rootTier := c.rootServiceTierForSpawn(); rootTier != "" {
+		} else if rootTier := inheritedTier; rootTier != "" {
 			params.ServiceTier = stringPtrIfNotEmpty(rootTier)
 			params.ServiceTierSet = true
 		}

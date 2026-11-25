@@ -168,25 +168,42 @@ func (r *RuntimeRouter) runStartupPrewarm(job startupPrewarmJob) {
 		defer cancel()
 		var responseID string
 		status := "failed"
-		resp, err := prewarmer.Prewarm(ctx, &model.AgentRequest{
-			Model:           job.modelID,
-			ServiceTier:     job.serviceTier,
-			ReasoningEffort: job.effort,
-			// Rust #61535: the startup prewarm turn captures the thread's
-			// trusted host country like any other sampling request.
-			RequestCountry: r.requestCountryForThread(threadID),
-			Instructions:   job.instructions,
-			InputItems:     job.inputItems,
-			// Rust #47912: the creating connection is registered before the
-			// startup prewarm dials, so the handshake can request attestation
-			// for the thread.
-			ThreadID:            threadID,
-			AttestationProvider: r.appServerAttestationProvider(),
-			PrewarmTools:        r.startupPrewarmToolProvider(job.params),
-			Originator:          "session_startup",
-			ClientMetadata:      prewarmMetadata,
-			PrewarmInputMode:    job.inputMode,
-		})
+		serviceTier := job.serviceTier
+		var tierErr error
+		if r.services.ServiceTier != nil {
+			serviceTier, tierErr = r.readHostServiceTier(ctx)
+			if tierErr == nil {
+				cfg, err := r.effectiveConfigForTurn(job.params)
+				if err != nil {
+					tierErr = err
+				} else {
+					serviceTier = model.ServiceTierForConfiguredRequest(r.modelInfoForRuntimeWithConfig(job.modelID, cfg), serviceTier, cfg.FeatureSettings())
+				}
+			}
+		}
+		var resp *model.AgentResponse
+		err := tierErr
+		if err == nil {
+			resp, err = prewarmer.Prewarm(ctx, &model.AgentRequest{
+				Model:           job.modelID,
+				ServiceTier:     serviceTier,
+				ReasoningEffort: job.effort,
+				// Rust #61535: the startup prewarm turn captures the thread's
+				// trusted host country like any other sampling request.
+				RequestCountry: r.requestCountryForThread(threadID),
+				Instructions:   job.instructions,
+				InputItems:     job.inputItems,
+				// Rust #47912: the creating connection is registered before the
+				// startup prewarm dials, so the handshake can request attestation
+				// for the thread.
+				ThreadID:            threadID,
+				AttestationProvider: r.appServerAttestationProvider(),
+				PrewarmTools:        r.startupPrewarmToolProvider(job.params),
+				Originator:          "session_startup",
+				ClientMetadata:      prewarmMetadata,
+				PrewarmInputMode:    job.inputMode,
+			})
+		}
 		if err == nil {
 			status = "ready"
 		}

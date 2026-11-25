@@ -211,7 +211,10 @@ type PreparedChildCapabilityRoot struct {
 // child's name, role, and history, and applies the requested child settings;
 // repository instructions are discovered at the destination.
 type PreparedChildContext struct {
-	Originator string
+	// ServiceTier captures the asynchronous host selection; nil means no host provider.
+	// The explicit default marker distinguishes a host default from configured fallback.
+	ServiceTier *string
+	Originator  string
 	// UserInstructions and ThreadInstructions collapse into Go's single
 	// captured developer-instruction field because a live Go step has no
 	// separate AGENTS.md instruction providers; the destination rediscovers
