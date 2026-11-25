@@ -1,0 +1,26 @@
+[
+  {
+    "command": [
+      "go",
+      "env",
+      "GOPROXY",
+      "GOSUMDB",
+      "GOFLAGS"
+    ],
+    "exit_code": 0,
+    "stdout": "https://goproxy.cn\nsum.golang.org\n\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "go",
+      "mod",
+      "download",
+      "-json",
+      "charm.land/glamour/v2@v2.0.1"
+    ],
+    "exit_code": 0,
+    "stdout": "{\n\t\"Path\": \"charm.land/glamour/v2\",\n\t\"Version\": \"v2.0.1\",\n\t\"Info\": \"/home/jacks/go/pkg/mod/cache/download/charm.land/glamour/v2/@v/v2.0.1.info\",\n\t\"GoMod\": \"/home/jacks/go/pkg/mod/cache/download/charm.land/glamour/v2/@v/v2.0.1.mod\",\n\t\"Zip\": \"/home/jacks/go/pkg/mod/cache/download/charm.land/glamour/v2/@v/v2.0.1.zip\",\n\t\"Dir\": \"/home/jacks/go/pkg/mod/charm.land/glamour/v2@v2.0.1\",\n\t\"Sum\": \"h1:xl+r00A4aJWU0z8fgwKd9fQQ4rsphqGUzuEiXZP5n+c=\",\n\t\"GoModSum\": \"h1:jo9z8XqVKPeEFMVdvCRLGk++RyJ3CdUwgNr7EvXLw3k=\"\n}\n",
+    "stderr": ""
+  }
+]

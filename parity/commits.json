@@ -49815,10 +49815,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "blocked_precondition",
+   "status": "complete",
    "evidence": [
     "bwrap 0.12 proc mount fallback detection depends on the same missing launcher.",
-    "plan: update/plan_2026_11_16.md batch 74"
+    "plan: update/plan_2026_11_16.md batch 74",
+    "Batch 184 (linux-align native node): implemented. sandbox/linuxsandbox/linux.go now builds the bubblewrap argv through a shared builder (buildBubblewrapArgs returning a plan with its data fds) and, only when TransparentTCP is off and the command would mount proc, runs a minimal read-only /bin/true preflight with the launcher already selected under the real command's policy before executing the real command once. proc_mount_linux.go adds isProcMountFailure with the exact single-line match on (destination /newroot/proc or /proc) x (Invalid argument, Operation not permitted, Permission denied), so /proc-other, ENOSPC/Limit exceeded and cross-line combinations do not trigger the fallback; the preflight keeps a 64KiB stderr prefix while draining the whole stream, stays silent, has a 10s timeout plus WaitDelay so a descendant holding stderr cannot stall it, and verifies the bundled launcher digest before executing it via /proc/self/fd. NoProc and inherit-PID commands skip the preflight. Tests: TestProcMountFailureDiagnosticsLikeRust (both destinations x three errnos plus six negative cases), TestProcMountPreflightBoundsStderrLikeRust, TestProcMountFallbackLaunchPathLikeRust and the race run go test -race ./sandbox/linuxsandbox -run ProcMount. Native environment: bubblewrap 0.11.0, unshare -Ur true exits 0, bwrap --unshare-user --unshare-pid --ro-bind / / --proc /proc -- /bin/true exits 0; the fallback was exercised by injecting both diagnostic formats through a wrapper, with the real payload run under the system bwrap and the payload executed exactly once (exit 23 preserved). Residual: this node has no real Bubblewrap 0.12 proc-denial host, so the fallback path itself is covered by injection rather than a genuine kernel refusal. Unrelated pre-existing failures in the same package (TestExpandUnreadableGlobsWalksInProcessLikeRust and the two-half managed-grant proxy errno 111, reproduced before this change) are not caused by it. Evidence: deliverables/linux-align/ REPORT.md, round2-proc.log, lead-request-bwrap-environment.json."
    ]
   },
   {

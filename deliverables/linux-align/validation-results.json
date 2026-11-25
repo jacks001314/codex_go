@@ -1,0 +1,52 @@
+{
+  "agent": "linux-align",
+  "platform": "linux/amd64",
+  "note": "Recorded observed exit codes; Windows compile-only; SQLite log from first round with unchanged SQLite code.",
+  "results": [
+    {
+      "command": "go test ./state ./sandbox ./network -count=1",
+      "exit_code": 0,
+      "log": "round2-core.log"
+    },
+    {
+      "command": "go test ./appserver ./tui/... -run 'UserVerification|JobControl|Suspend|WorkingDirectory' -count=1",
+      "exit_code": 0,
+      "log": "round2-focused.log"
+    },
+    {
+      "command": "CODEX_EXPECT_GOOS=linux CODEX_EXPECT_GOARCH=amd64 go test ./state -run 'SQLite' -count=1 -v",
+      "exit_code": 0,
+      "log": "sqlite.log"
+    },
+    {
+      "command": "go test ./sandbox/linuxsandbox -run ProcMount -count=1 -v",
+      "exit_code": 0,
+      "log": "round2-proc.log"
+    },
+    {
+      "command": "go test -race ./sandbox/linuxsandbox ./tui/tea -run 'ProcMount|JobControl|Suspend|CtrlZ' -count=1",
+      "exit_code": 0,
+      "log": "round2-race.log"
+    },
+    {
+      "command": "go vet ./...",
+      "exit_code": 0,
+      "log": "round2-vet.log"
+    },
+    {
+      "command": "GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test ./tui/tea -c -o /tmp/linux-align-tui-windows.test.exe",
+      "exit_code": 0,
+      "log": "round2-windows-build.log"
+    },
+    {
+      "command": "go test ./tui/... ./sandbox/linuxsandbox/... -count=1",
+      "exit_code": 1,
+      "log": "round2-full-native.log"
+    },
+    {
+      "command": "go test ./... -timeout=120s",
+      "exit_code": 1,
+      "log": "round2-all.log"
+    }
+  ]
+}

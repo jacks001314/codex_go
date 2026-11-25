@@ -964,8 +964,50 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 		// private namespace stage execs it after dropping capabilities.
 		return errors.New("transparent TCP requires a supported distro bubblewrap on PATH")
 	}
+	mountProc := !cmd.NoProc && !cmd.InheritPIDNamespace
+	if mountProc && !cmd.TransparentTCP {
+		supported, err := preflightProcMountSupport(cmd, launcher)
+		if err != nil {
+			return err
+		}
+		mountProc = supported
+	}
+	plan, err := buildBubblewrapArgs(cmd, inner, mountProc)
+	if err != nil {
+		return err
+	}
+	defer plan.close()
+	args := plan.args
+	args, err = applyInnerCommandArgv0(args, launcher.SupportsArgv0, os.Args[0])
+	if err != nil {
+		return err
+	}
+	makeFilesInheritable(plan.dataFDs)
+	if cmd.TransparentTCP {
+		resolver, target, err := prepareTransparentTCPResolverMount(cmd)
+		if err != nil {
+			return err
+		}
+		args, err = insertTransparentTCPResolverArgs(args, target)
+		if err != nil {
+			_ = resolver.Close()
+			return err
+		}
+		return execTransparentTCPBubblewrap(launcher.Program, args, resolver)
+	}
+	if launcher.Bundled {
+		return execBundledBwrap(launcher.Program, args, os.Environ())
+	}
+	return unix.Exec(launcher.Program, args, os.Environ())
+}
+
+func buildBubblewrapArgs(cmd *linuxSandboxCommand, inner []string, mountProc bool) (*bwrapPlan, error) {
 	var dataFDs []int
+	complete := false
 	defer func() {
+		if complete {
+			return
+		}
 		for _, fd := range dataFDs {
 			_ = unix.Close(fd)
 		}
@@ -976,7 +1018,6 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 	if !cmd.InheritPIDNamespace {
 		args = append(args, "--unshare-pid")
 	}
-	mountProc := !cmd.NoProc && !cmd.InheritPIDNamespace
 	if mountProc {
 		args = append(args, "--proc", "/proc")
 	}
@@ -988,7 +1029,7 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 	if fs != nil && !fs.hasFullDiskWriteAccess() {
 		duplicate, err := wslgDuplicateRootPresent()
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if duplicate {
 			wslgMask = true
@@ -1003,7 +1044,7 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 				paths = append(paths, executable)
 			}
 			if err := ensureNoWSLGDistroAlias(paths...); err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
@@ -1077,12 +1118,12 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 	if fs != nil {
 		unreadableRoots, err := fs.unreadableRoots(cmd.SandboxPolicyCWD)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		for _, path := range unreadableRoots {
 			fd, err := appendUnreadableRootBwrapArgs(&args, path)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			if fd >= 0 {
 				dataFDs = append(dataFDs, fd)
@@ -1101,15 +1142,15 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 	if fs != nil && !fs.hasFullDiskWriteAccess() {
 		daemonDirectory, err := codexuds.PrepareSharedDaemonSocketDirectory()
 		if err != nil {
-			return err
+			return nil, err
 		}
 		device, mountID, filesystem, err := daemonSocketIdentity(daemonDirectory)
 		if err != nil {
-			return fmt.Errorf("cannot establish app-server socket mount isolation: %w", err)
+			return nil, fmt.Errorf("cannot establish app-server socket mount isolation: %w", err)
 		}
 		mountinfo, err := os.ReadFile("/proc/self/mountinfo")
 		if err != nil {
-			return fmt.Errorf("cannot establish app-server socket mount isolation: %w", err)
+			return nil, fmt.Errorf("cannot establish app-server socket mount isolation: %w", err)
 		}
 		// The WSLg duplicate view is masked separately below, so an alias there is
 		// not exposed. Rust only passes masked_root when the WSLg distro mask is
@@ -1119,7 +1160,7 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 			maskedRoot = wslgDistroRoot
 		}
 		if err := validateDaemonSocketMountIsolation(daemonDirectory, device, filesystem, mountID, mountinfo, maskedRoot); err != nil {
-			return err
+			return nil, err
 		}
 		args = append(args, "--tmpfs", daemonDirectory)
 		// WSLg exposes a second view of the host root under
@@ -1135,27 +1176,8 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 	// process PID 1, and the inner stage must report the canonical sandbox name
 	// (or run through this CLI's argv[0] when the launcher predates --argv0).
 	args = injectAsPid1(args)
-	args, err := applyInnerCommandArgv0(args, launcher.SupportsArgv0, os.Args[0])
-	if err != nil {
-		return err
-	}
-	makeFilesInheritable(dataFDs)
-	if cmd.TransparentTCP {
-		resolver, target, err := prepareTransparentTCPResolverMount(cmd)
-		if err != nil {
-			return err
-		}
-		args, err = insertTransparentTCPResolverArgs(args, target)
-		if err != nil {
-			_ = resolver.Close()
-			return err
-		}
-		return execTransparentTCPBubblewrap(launcher.Program, args, resolver)
-	}
-	if launcher.Bundled {
-		return execBundledBwrap(launcher.Program, args, os.Environ())
-	}
-	return unix.Exec(launcher.Program, args, os.Environ())
+	complete = true
+	return &bwrapPlan{args: args, dataFDs: dataFDs}, nil
 }
 
 // linuxSandboxPathWithin reports whether path sits inside one of the roots the

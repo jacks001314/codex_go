@@ -1,0 +1,68 @@
+=== RUN   TestLinuxBwrapTwoHalfManagedGrantEndToEnd
+=== RUN   TestLinuxBwrapTwoHalfManagedGrantEndToEnd/vm
+    linux_test.go:1022: vm probe output inside bwrap:
+        codex-seccomp-probe sandbox_pid=1
+        codex-seccomp-probe vsock_device_open=2
+        codex-seccomp-probe vsock_socket=1
+        codex-seccomp-probe vsock_socketpair=1
+        codex-seccomp-probe unix_socket=0
+        codex-seccomp-probe unix_socketpair=0
+        codex-seccomp-probe inet_socket=0
+        codex-seccomp-probe io_uring_setup=1
+        PASS
+    linux_test.go:1031: vm: open(/dev/vsock) inside the sandbox = errno 2 (host open succeeds)
+=== RUN   TestLinuxBwrapTwoHalfManagedGrantEndToEnd/proxy
+    linux_test.go:1022: proxy probe output inside bwrap:
+        codex-seccomp-probe sandbox_pid=1
+        codex-seccomp-probe vsock_device_open=2
+        codex-seccomp-probe proxy_roundtrip=111
+        codex-seccomp-probe vsock_socket=1
+        codex-seccomp-probe vsock_socketpair=1
+        codex-seccomp-probe unix_socket=1
+        codex-seccomp-probe unix_socketpair=0
+        codex-seccomp-probe inet_socket=0
+        codex-seccomp-probe io_uring_setup=1
+        PASS
+    linux_test.go:1031: proxy: open(/dev/vsock) inside the sandbox = errno 2 (host open succeeds)
+    linux_test.go:1037: a request through the managed proxy chain failed with errno 111:
+        codex-seccomp-probe sandbox_pid=1
+        codex-seccomp-probe vsock_device_open=2
+        codex-seccomp-probe proxy_roundtrip=111
+        codex-seccomp-probe vsock_socket=1
+        codex-seccomp-probe vsock_socketpair=1
+        codex-seccomp-probe unix_socket=1
+        codex-seccomp-probe unix_socketpair=0
+        codex-seccomp-probe inet_socket=0
+        codex-seccomp-probe io_uring_setup=1
+        PASS
+=== RUN   TestLinuxBwrapTwoHalfManagedGrantEndToEnd/proxy-grant
+    linux_test.go:1022: proxy-grant probe output inside bwrap:
+        codex-seccomp-probe sandbox_pid=1
+        codex-seccomp-probe vsock_device_open=2
+        codex-seccomp-probe proxy_roundtrip=111
+        codex-seccomp-probe vsock_socket=1
+        codex-seccomp-probe vsock_socketpair=1
+        codex-seccomp-probe unix_socket=0
+        codex-seccomp-probe unix_socketpair=0
+        codex-seccomp-probe inet_socket=0
+        codex-seccomp-probe io_uring_setup=1
+        PASS
+    linux_test.go:1031: proxy-grant: open(/dev/vsock) inside the sandbox = errno 2 (host open succeeds)
+    linux_test.go:1037: a request through the managed proxy chain failed with errno 111:
+        codex-seccomp-probe sandbox_pid=1
+        codex-seccomp-probe vsock_device_open=2
+        codex-seccomp-probe proxy_roundtrip=111
+        codex-seccomp-probe vsock_socket=1
+        codex-seccomp-probe vsock_socketpair=1
+        codex-seccomp-probe unix_socket=0
+        codex-seccomp-probe unix_socketpair=0
+        codex-seccomp-probe inet_socket=0
+        codex-seccomp-probe io_uring_setup=1
+        PASS
+--- FAIL: TestLinuxBwrapTwoHalfManagedGrantEndToEnd (0.05s)
+    --- PASS: TestLinuxBwrapTwoHalfManagedGrantEndToEnd/vm (0.02s)
+    --- FAIL: TestLinuxBwrapTwoHalfManagedGrantEndToEnd/proxy (0.02s)
+    --- FAIL: TestLinuxBwrapTwoHalfManagedGrantEndToEnd/proxy-grant (0.02s)
+FAIL
+FAIL	codex_go/sandbox/linuxsandbox	0.055s
+FAIL

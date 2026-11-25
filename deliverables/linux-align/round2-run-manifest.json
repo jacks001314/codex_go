@@ -1,0 +1,28 @@
+{
+  "timestamp": "2026-11-25T14:36:33.671160+00:00",
+  "agent": "linux-align",
+  "platform": "linux/amd64",
+  "requested_go_baseline": "e524c8d69",
+  "go_commit_verification": "not available: mirror .git references Windows worktree",
+  "rust_target": "3f65e9f13165d85d1b1fbe20ce06c55758f927b9",
+  "parity_json_rustBaseline": "7ac6081623",
+  "parity_baseline_identifiers": {
+    "target": {
+      "goStartCommit": "3e02afa789243b32efc163b65bebae132aa4c25d",
+      "rustBranch": "main",
+      "rustCommit": "3f65e9f13165d85d1b1fbe20ce06c55758f927b9"
+    }
+  },
+  "gates": "L1 contract tests and native PTY/bwrap; no SDK/model certification",
+  "contracts": {
+    "63520": "JobControl LikeRust tests and native PTY inline/alternate",
+    "61900": "ProcMount LikeRust diagnostics and native bwrap denial-wrapper tests",
+    "61898": "architecture remains open"
+  },
+  "references": {
+    "attachments/job_control.rs": "6758e864735e18625d6a632ab671d5a8030ab68035875931b49af0a42abe9862",
+    "attachments/linux-sandbox-linux_run_main.rs": "653ef8a13cb9a93266452b73b5867d7292543ea35e52fd06ab51c4bdd2075f5d",
+    "attachments/61898-linux-sandbox-proxy-bridges.diff": "c6dbcb94d3a72663970da596b96eff36756311c2ef83d13a334c4182b391a74f",
+    "attachments/61900-bwrap-0.12-proc-mount-fallback.diff": "fdbb3c114287dda086c3a6a51a8b12a5ba5b3abaa30f01ba04fa0fc0c5dc2d20"
+  }
+}

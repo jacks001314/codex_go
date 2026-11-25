@@ -1,0 +1,46 @@
+{
+  "go": "go version go1.26.3 linux/amd64",
+  "bwrap": "bubblewrap 0.11.0",
+  "kernel": {
+    "system": "Linux",
+    "node": "jacks",
+    "release": "6.18.12+kali-amd64",
+    "version": "#1 SMP PREEMPT_DYNAMIC Kali 6.18.12-1kali1 (2026-02-25)",
+    "machine": "x86_64",
+    "processor": ""
+  },
+  "sysctls": {
+    "/proc/sys/kernel/unprivileged_userns_clone": "1",
+    "/proc/sys/user/max_user_namespaces": "126482",
+    "/proc/sys/kernel/apparmor_restrict_unprivileged_userns": "[Errno 2] No such file or directory: '/proc/sys/kernel/apparmor_restrict_unprivileged_userns'",
+    "/sys/module/apparmor/parameters/enabled": "Y",
+    "/proc/self/attr/current": "unconfined"
+  },
+  "unshare_userns": {
+    "command": [
+      "unshare",
+      "-Ur",
+      "true"
+    ],
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "bwrap_proc": {
+    "command": [
+      "bwrap",
+      "--unshare-user",
+      "--unshare-pid",
+      "--ro-bind",
+      "/",
+      "/",
+      "--proc",
+      "/proc",
+      "--",
+      "/bin/true"
+    ],
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  }
+}

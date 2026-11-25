@@ -1,0 +1,38 @@
+[
+  {
+    "command": [
+      "bwrap",
+      "--version"
+    ],
+    "exit_code": 0,
+    "stdout": "bubblewrap 0.11.0\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "unshare",
+      "-Ur",
+      "true"
+    ],
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "bwrap",
+      "--unshare-user",
+      "--unshare-pid",
+      "--ro-bind",
+      "/",
+      "/",
+      "--proc",
+      "/proc",
+      "--",
+      "/bin/true"
+    ],
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  }
+]

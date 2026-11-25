@@ -1,0 +1,211 @@
+ok  	codex_go/tui	5.925s
+ok  	codex_go/tui/agents_overview	0.147s
+ok  	codex_go/tui/analytics	0.126s
+ok  	codex_go/tui/anim	0.065s
+ok  	codex_go/tui/app	0.097s
+?   	codex_go/tui/app_server_session	[no test files]
+ok  	codex_go/tui/bottom_pane	0.065s
+ok  	codex_go/tui/bottom_pane/chat_composer	0.049s
+ok  	codex_go/tui/bottom_pane/mentions_v2	0.057s
+ok  	codex_go/tui/bottom_pane/request_user_input	0.049s
+ok  	codex_go/tui/bottom_pane/textarea	0.004s
+ok  	codex_go/tui/chatwidget	0.145s
+?   	codex_go/tui/chatwidget/tokens	[no test files]
+?   	codex_go/tui/chatwidget/tokens/chart	[no test files]
+ok  	codex_go/tui/diffview	0.095s
+ok  	codex_go/tui/exec_cell	0.135s
+?   	codex_go/tui/external_agent_config_migration	[no test files]
+ok  	codex_go/tui/footerhint	0.007s
+ok  	codex_go/tui/history_cell	0.124s
+ok  	codex_go/tui/ide_context	0.045s
+ok  	codex_go/tui/imagedecode	0.046s
+?   	codex_go/tui/keymap_setup	[no test files]
+?   	codex_go/tui/keymsg	[no test files]
+ok  	codex_go/tui/markdown	0.508s
+?   	codex_go/tui/markdown_render	[no test files]
+?   	codex_go/tui/mousemsg	[no test files]
+ok  	codex_go/tui/notifications	0.008s
+ok  	codex_go/tui/onboarding	0.064s
+ok  	codex_go/tui/onboarding/auth	0.006s
+ok  	codex_go/tui/overlay	0.052s
+ok  	codex_go/tui/pets	0.445s
+?   	codex_go/tui/public_widgets	[no test files]
+?   	codex_go/tui/render	[no test files]
+ok  	codex_go/tui/status	0.126s
+ok  	codex_go/tui/streaming	0.152s
+ok  	codex_go/tui/styles	0.015s
+]52;c;YW5zd2Vy]52;c;b25l]52;c;dGhyZWU=]52;c;dGV4dA==]52;c;aGVsbG8=]52;c;aGVsbG8=]52;c;aGVsbG8=]52;c;aGVsbG8=]52;c;aGVsbG8=]52;c;d29yZCB3b3JkIHdvcmQgd29yZCB3b3JkIHdvcmQgd29yZCB3b3JkIHdvcmQgd29yZCB3b3JkIHdvcmQgd29yZCB3b3JkIHdvcmQgd29yZCB3b3JkIHdvcmQgd29yZCB3b3JkIHdvcmQgd29yZCB3b3JkIA==]52;c;aGVsbG8=]52;c;aGVsbG8=]52;c;IyMgSGVhZGluZwoKYGBgZ28KcGFja2FnZSBtYWluCmBgYA==]52;c;cGFja2FnZSBtYWluCg==Archive of thread pending was not confirmed.
+Failed to archive thread failed: permission denied
+--- FAIL: TestPendingKeyChordGuideRevealsAfterDelayLikeRust (0.00s)
+    key_chord_hud_like_rust_test.go:39: guide title missing:
+          ^x
+          
+          ^s · Submit
+          ^t · Open Transcript
+          
+          Esc cancel
+--- FAIL: TestPendingKeyChordGuideSupportsCustomPrefixAndCompactLayout (0.00s)
+    key_chord_hud_like_rust_test.go:75: compact guide = "  ^k\n  \n  ^s · Submit\n  \n  Esc cancel"
+--- FAIL: TestPendingLeaderChordGuideGroupsWorkspaceActionsLikeRust (0.01s)
+    key_chord_hud_like_rust_test.go:139: leader guide missing "ctrl+x · Conversation":
+          ^x · Conversation
+          
+          Panes
+          a Command Center
+          c Main composer
+          s Sidebar content
+          t Open in sidebar
+          
+          Move
+          j         Next tab
+          k         Previous tab
+          l         Pane right
+          shift+tab Previous tab
+          tab       Next tab
+          ↑         Previous tab
+          →         Pane right
+          ↓         Next tab
+          
+          This pane
+          [ Select transcript
+          p Presets ›
+          z Zoom pane
+          
+          Esc cancel
+--- FAIL: TestPendingLeaderChordGuideUsesSidebarOriginLikeRust (0.00s)
+    key_chord_hud_like_rust_test.go:169: sidebar leader guide missing "ctrl+x · Sidebar":
+          ^x · Sidebar
+          
+          Panes
+          a Command Center
+          c Main composer
+          s Hide sidebar
+          t Open in sidebar
+          
+          Move
+          h         Pane left
+          j         Next tab
+          k         Previous tab
+          shift+tab Previous tab
+          tab       Next tab
+          ←         Pane left
+          ↑         Previous tab
+          ↓         Next tab
+          
+          This pane
+                  Hide pane
+          ,       Minimum width
+          .       Maximum width
+          =       Equal widths
+          [       Select transcript
+          p       Presets ›
+          r       Resize panes
+          shift+h Divider left
+          shift+l Divider right
+          … more shortcuts
+          Esc cancel
+--- FAIL: TestKeyChordHUDOverlaysWithoutMovingComposerLikeRust (0.01s)
+    key_chord_hud_overlay_like_rust_test.go:44: guide title missing from the frame:
+        No messages yet.                                                                                                        
+                                                                                                                                
+                                                                                                                                
+                                                                                                                                
+                                                               [38;2;48;49;50m⣀[38;2;47;48;48m⣤[38;2;48;49;49m⣤[38;2;45;47;48m⣤[38;2;44;46;48m⣀[38;2;38;42;45m⣀                             [0m                              
+                                                            [38;2;52;51;50m⣠[38;2;47;48;48m⣶[38;2;43;44;44m⣿[38;2;37;38;40m⣿[38;2;30;33;37m⣿[38;2;33;35;38m⣿[38;2;30;33;37m[38;2;35;37;40m[38;2;41;43;45m[38;2;45;46;48m[38;2;43;45;47m[38;2;50;51;51m[38;2;51;51;50m[38;2;49;49;49m[38;2;53;52;50m[38;2;49;50;50m[38;2;42;45;47m[38;2;40;43;46m[0m  ^x · Conversation                                           
+                                                          [38;2;44;46;49m⢀[38;2;48;48;49m⣾[38;2;38;40;42m⣿[38;2;26;30;35m⣿[38;2;23;29;34m⠿[38;2;23;27;32m⠋[38;2;22;26;31m⠉[38;2;22;25;31m⠉[38;2;30;33;37m[38;2;40;42;44m[38;2;43;44;45m[38;2;33;36;40m[38;2;29;32;37m[38;2;26;29;34m[38;2;26;29;35m[38;2;28;31;35m[38;2;28;31;36m[38;2;36;38;41m[38;2;43;44;46m[38;2;44;45;47m[38;2;40;42;45m[0m                                                              
+                                                         [38;2;47;49;51m⣀[38;2;47;48;49m⣾[38;2;35;37;40m⣿[38;2;25;32;37m⣿[38;2;24;33;38m⠃ [38;2;46;48;50m⣀[38;2;45;46;48m⣴[38;2;50;50;49m⣾[38;2;41;42;44m[38;2;31;34;38m[38;2;26;30;35m[38;2;23;26;32m[38;2;23;28;34m[38;2;44;46;49m[38;2;37;41;45m[38;2;22;25;30m[38;2;22;25;31m[38;2;26;29;34m[38;2;34;37;40m[38;2;43;45;47m[38;2;37;39;43m[0m  Panes                                                       
+                                                      [38;2;46;47;47m⣀[38;2;50;51;50m⣶[38;2;45;46;46m⣿[38;2;40;41;43m⣿[38;2;44;45;46m⣿[38;2;30;33;38m⣿[38;2;26;39;43m⡇ [38;2;42;44;47m⢸[38;2;47;48;48m⣿[38;2;31;34;38m⣿[38;2;25;29;34m⡿[38;2;22;26;32m[38;2;23;29;34m[38;2;45;47;50m[38;2;45;47;49m[38;2;51;51;50m[38;2;45;46;48m[38;2;42;44;46m[38;2;44;46;47m[38;2;42;45;47m[38;2;40;43;46m[38;2;38;42;46m[38;2;25;28;33m[38;2;26;28;34m[38;2;39;41;44m[38;2;44;45;47m[38;2;32;36;40m[0m  a Command Center                                            
+                                                     [38;2;50;50;50m⣰[38;2;44;45;46m⣿[38;2;31;34;38m⣿[38;2;24;29;34m⡿[38;2;27;31;36m⢿[38;2;48;49;49m⣿[38;2;31;34;38m⣿[38;2;26;39;43m⡇ [38;2;43;45;48m⢸[38;2;43;44;46m⣿[38;2;27;35;39m⣿[38;2;48;50;52m⢀[38;2;48;50;51m[38;2;49;49;49m[38;2;51;51;50m[38;2;46;47;47m[38;2;34;38;41m[38;2;26;30;35m[38;2;22;26;31m[38;2;26;29;34m[38;2;30;32;37m[38;2;37;39;42m[38;2;42;44;46m[38;2;44;46;47m[38;2;40;42;45m[38;2;42;44;46m[38;2;48;48;49m[38;2;29;34;39m[0m  c Main composer                                             
+                                                    [38;2;47;48;49m⢰[38;2;48;48;47m⣿[38;2;27;30;35m⣿[38;2;25;33;38m⡟[38;2;25;35;39m⠁[38;2;39;42;45m⢸[38;2;42;44;46m⣿[38;2;31;34;39m⣿[38;2;26;39;43m⡇ [38;2;45;47;49m⢸[38;2;49;49;48m⣿[38;2;44;45;47m⣿[38;2;43;44;46m⣿[38;2;37;39;41m[38;2;30;33;37m[38;2;33;36;40m[38;2;37;39;42m[38;2;44;45;47m[38;2;42;45;47m[38;2;44;46;48m[38;2;38;42;46m[38;2;29;40;44m[38;2;22;25;31m[38;2;25;28;33m[38;2;27;30;35m[38;2;33;35;39m[38;2;42;44;46m[38;2;43;44;46m[38;2;36;39;43m[0m  s Sidebar content                                           
+                                                    [38;2;44;45;46m⣾[38;2;40;42;44m⣿[38;2;26;35;39m⣿[38;2;26;37;41m⠃ [38;2;39;42;45m⢸[38;2;44;45;47m⣿[38;2;32;35;39m⣿[38;2;26;40;44m⡇ [38;2;46;47;49m⢸[38;2;45;46;47m⣿[38;2;28;34;38m⣿[38;2;22;26;32m⠋[38;2;23;27;32m[38;2;22;25;31m[38;2;24;27;32m[38;2;35;38;42m[38;2;50;50;50m[38;2;45;46;47m[38;2;45;47;48m[38;2;42;45;47m[38;2;39;44;47m[38;2;37;40;44m[38;2;23;26;31m[38;2;31;34;39m[38;2;42;44;46m[38;2;40;42;45m[38;2;30;35;39m[0m  t Open in sidebar                                           
+                                                    [38;2;42;44;47m⢸[38;2;41;43;45m⣿[38;2;28;33;38m⣿[38;2;27;40;44m⣇ [38;2;37;40;43m⠸[38;2;43;44;46m⣿[38;2;41;43;46m⣿⣷[38;2;38;43;46m⣦[38;2;42;46;48m⣼[38;2;44;45;46m⣿[38;2;27;35;40m⣿ [38;2;40;42;46m[38;2;50;50;50m[38;2;29;33;37m[38;2;28;31;36m[38;2;31;34;38m[38;2;44;45;47m[38;2;44;46;48m[38;2;32;36;40m[38;2;25;28;33m[38;2;32;35;39m[38;2;45;46;48m[38;2;32;36;40m[0m                                                              
+                                                    [38;2;33;35;39m⠈[38;2;39;40;44m⢿[38;2;42;44;46m⣿[38;2;35;39;43m⣿[38;2;31;41;44m⣦[38;2;27;40;44m⡀[38;2;22;25;31m⠈[38;2;28;30;35m⠛[38;2;35;37;41m⠿[38;2;39;40;44m⣿[38;2;48;49;48m⣿[38;2;44;45;47m⣿[38;2;33;40;43m⣿[38;2;35;41;45m⣄[38;2;29;40;44m[38;2;39;42;45m[38;2;44;46;48m[38;2;44;46;49m[38;2;49;49;49m[38;2;29;33;38m[38;2;38;41;44m[38;2;50;50;50m[38;2;32;35;40m[38;2;34;37;41m[38;2;48;49;50m[38;2;41;43;44m[38;2;25;31;36m[0m  Move                                                        
+                                                      [38;2;37;40;43m⢻[38;2;47;48;48m⣿[38;2;43;45;47m⣿[38;2;40;44;46m⣿[38;2;37;43;46m⣷[38;2;34;41;44m⣦[38;2;29;40;44m⣀[38;2;22;25;31m⠈[38;2;26;29;34m⠙[38;2;34;36;40m⠻[38;2;39;41;43m⣿[38;2;44;46;48m⣿[38;2;42;46;48m[38;2;49;49;50m[38;2;47;48;49m[38;2;44;45;46m[38;2;40;42;44m[38;2;47;48;49m[38;2;29;33;38m[38;2;39;41;44m[38;2;49;50;50m[38;2;31;35;39m[38;2;39;41;44m[38;2;41;43;46m[38;2;51;51;50m[38;2;28;32;37m[0m  j         Next tab                                          
+                                                      [38;2;40;43;46m⢸[38;2;47;48;48m⣿[38;2;28;32;37m⣿[38;2;31;37;41m⡿[38;2;37;39;42m⢿[38;2;42;43;46m⣿[38;2;42;45;47m⣿[38;2;37;43;46m⣿[38;2;35;42;46m⣦[38;2;43;46;48m⣠[38;2;47;49;50m⣴[38;2;44;45;47m⣿[38;2;46;47;48m[38;2;40;41;44m[38;2;34;37;40m[38;2;27;31;36m[38;2;24;27;33m[38;2;40;42;46m[38;2;48;49;50m[38;2;30;34;39m[38;2;38;40;44m[38;2;48;49;49m[38;2;29;37;41m[38;2;41;44;47m[38;2;46;48;49m[38;2;51;51;50m[38;2;38;40;42m[38;2;24;28;34m[0m  k         Previous tab                                      
+                                                      [38;2;39;41;45m⠘[38;2;42;44;46m⣿[38;2;37;39;42m⣿[38;2;27;39;43m⣷ [38;2;31;33;38m⠈[38;2;32;35;39m⠛[38;2;36;38;41m⢿[38;2;43;44;46m⣿⣿[38;2;34;36;40m⣿[38;2;30;33;37m⠿[38;2;26;30;35m[38;2;22;26;32m[38;2;40;42;46m[38;2;45;46;49m[38;2;47;48;49m[38;2;48;48;49m[38;2;30;34;39m[38;2;40;42;46m[38;2;50;50;50m[38;2;41;43;46m[38;2;51;51;50m[38;2;40;41;43m[38;2;30;32;37m[38;2;23;27;33m[0m  l         Pane right                                        
+                                                       [38;2;36;38;42m⠻[38;2;41;43;45m⣿[38;2;42;44;46m⣿[38;2;32;40;44m⣿[38;2;28;40;44m⣤[38;2;29;40;44m⣀ [38;2;23;26;31m⠈[38;2;22;26;31m⠉ [38;2;40;42;46m⢀[38;2;43;45;48m[38;2;46;48;49m[38;2;49;50;50m[38;2;46;47;48m[38;2;43;44;45m[38;2;38;40;42m[38;2;27;30;35m[38;2;22;26;32m[38;2;39;41;44m[38;2;44;46;49m[38;2;44;46;47m[38;2;27;31;36m[38;2;24;27;33m[38;2;23;26;32m[0m  shift+tab Previous tab                                      
+                                                        [38;2;36;39;42m⠈[38;2;37;39;42m⠿[38;2;41;42;44m⣿[38;2;44;46;48m⣿[38;2;42;45;47m⣿⣿[38;2;44;47;49m⣶[38;2;44;47;48m⣾[38;2;47;48;49m⣿[38;2;51;51;51m⣿[38;2;48;48;49m[38;2;36;39;42m[38;2;30;33;37m[38;2;24;27;33m[38;2;23;28;33m[38;2;40;42;46m[38;2;42;44;47m[38;2;49;50;50m[38;2;48;49;48m[38;2;31;34;38m[0m  tab       Next tab                                          
+                                                           [38;2;31;34;39m⠙⠛[38;2;35;37;41m⠛[38;2;38;40;42m⠛[38;2;36;38;40m⠻[38;2;29;32;37m⠛[38;2;37;40;43m⢿[38;2;40;42;45m[38;2;45;47;48m[38;2;40;45;47m[38;2;41;46;48m[38;2;41;45;48m[38;2;44;46;49m[38;2;47;48;49m[38;2;46;47;48m[38;2;46;47;47m[38;2;33;35;39m[38;2;24;28;34m[0m  ↑         Previous tab                                      
+                                                                  [38;2;30;33;38m[38;2;36;38;42m[38;2;37;38;41m[38;2;37;39;41m[38;2;35;37;40m[38;2;33;35;38m[38;2;27;30;35m[38;2;22;26;32m[0m  →         Pane right                                        
+                                                                    ↓         Next tab                                          
+                                                                                                                                
+                                                                    This pane                                                   
+                                                                    [ Select transcript                                         
+        [37m› [m[38;5;240mA[m[38;5;240msk Codex to do anything[m                                  p Presets ›                                                 
+                                                                    z Zoom pane                                                 
+        [90m  [39m/home/jacks/.local/share/syntropy/node/da9d3a7cacf9eb17f[m                                                              
+        [90m  5d601c49/project/tui/tea[0m[m                                  Esc cancel                                                  
+        [90m  ? for shortcuts[m                                                                                                       
+--- FAIL: TestKeyChordHUDOverlaysFullScreenSurfaceLikeRust (0.00s)
+    key_chord_hud_overlay_like_rust_test.go:81: guide missing from the overlaid surface:
+        line-1-xxxxxxxxxxxxxxxxxxxxxxxx  ^x · Conversation                 
+        line-2-xxxxxxxxxxxxxxxxxxxxxxxx                                    
+        line-3-xxxxxxxxxxxxxxxxxxxxxxxx  Panes                             
+        line-4-xxxxxxxxxxxxxxxxxxxxxxxx  a Command Center                  
+        line-5-xxxxxxxxxxxxxxxxxxxxxxxx  c Main composer                   
+        line-6-xxxxxxxxxxxxxxxxxxxxxxxx  … more shortcuts                  
+        line-7-xxxxxxxxxxxxxxxxxxxxxxxx  Esc cancel                        
+        line-8-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+]52;c;c2Vjb25k]52;c;ZmluYWwgYW5zd2Vy--- FAIL: TestModelStatusLineAndTitleCommands (0.00s)
+    model_test.go:6824: terminal title OSC missing "repo": "\x1b]0;codex | project | idle\a"
+]52;c;aGVsbG8=]52;c;PyBmb3Igcw==]52;c;PyBmb3Igcw==--- FAIL: TestSideContextLabelHidesToggleWithoutBindingLikeRust (0.00s)
+    side_context_label_like_rust_test.go:93: side context label without a toggle binding = "Side from main thread · ^c to close"
+]52;c;YWxwaGEgYmV0YQ==]52;c;YWxwaGEgYmV0YQ==]52;c;YWxwaGEgYmV0YQ==]52;c;YWxwaGEgYmV0YQpnYW1tYQ==]52;c;4oCiIGFnZW50IHRyYW5zY3JpcHQgbGluZSAw]52;c;SW50cm8KCmBgYHRleHQKY29kZSB3aXRoIHRyYWlsaW5nIHNwYWNlcyAgCmBgYAoKbGFzdCBsaW5lICA=]52;c;SW50cm8gIApsYXN0IGxpbmUgIA==]52;c;Z3B0LTUuNA==]52;c;L3N0YXR1cwoKICA+XyBPcGVuQUkgQ29kZXgKCiAgVmlzaXQgG104OztodHRwczovL2NoYXRncHQuY29tL3NldHRpbmdzL3VzYWdlB2h0dHBzOi8vY2hhdGdwdC5jb20vc2V0dGluZ3MvdXNhZ2UbXTg7OwcgZm9yIHVwLXRvLWRhdGUKICBpbmZvcm1hdGlvbiBvbiByYXRlIGxpbWl0cyBhbmQgY3JlZGl0cwoKICBNb2RlbDogICAgICAgICAgICAgICBncHQtNS40IChyZWFzb25pbmcgbm9uZSwgc3VtbWFyaWVzIGF1dG8pCiAgRGlyZWN0b3J5OiAgICAgICAgICAgL3dvcmsvZXhhbXBsZQogIFBlcm1pc3Npb25zOiAgICAgICAgIFJlYWQgT25seSAoQXNrIGZvciBhcHByb3ZhbCkKICBBZ2VudHMubWQ6ICAgICAgICAgICA8bm9uZT4KICBUaHJlYWQgbmFtZTogICAgICAgICBDbGlwYm9hcmQgZXhhbXBsZQogIENvbGxhYm9yYXRpb24gbW9kZTogIERlZmF1bHQKICBTZXNzaW9uOiAgICAgICAgICAgICAwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAxMjMKCiAgVG9rZW4gdXNhZ2U6ICAgICAgICAgMCB0b3RhbCAgKDAgaW5wdXQgKyAwIG91dHB1dCkKICBMaW1pdHM6ICAgICAgICAgICAgICBkYXRhIG5vdCBhdmFpbGFibGUgeWV0]52;c;ZmluYWwgYW5zd2Vy]52;c;L3N0YXR1cwoKICA+XyBPcGVuQUkgQ29kZXgKCiAgVmlzaXQgaHR0cHM6Ly9jaGF0Z3AKICB0LmNvbS9zZXR0aW5ncy91c2FnZQogIGZvciB1cC10by1kYXRlCiAgaW5mb3JtYXRpb24gb24gcmF0ZQogIGxpbWl0cyBhbmQgY3JlZGl0cwoKICBNb2RlbDoKICBkZWZhdWx0IChyZWFzb25pbmcgbgogIG9uZSwgc3VtbWFyaWVzIGF1dG8pCiAgRGlyZWN0b3J5OgogIC93b3Jrc3BhY2UvcHJvamVjdHMvCiAg55WM55WML++9tu++nu++ni9hLXZlcnktbG9uZwogIC1kaXJlY3RvcnktbmFtZS9jb2RlCiAgeAogIFBlcm1pc3Npb25zOgogIFJlYWQgT25seSAoQXNrIGZvciBhCiAgcHByb3ZhbCkKICBBZ2VudHMubWQ6CiAgPG5vbmU+CiAgQ29sbGFib3JhdGlvbiBtb2RlOgogIERlZmF1bHQKICBTZXNzaW9uOgogIDAwMDAwMDAwLTAwMDAtMDAwMC0wCiAgMDAwLTAwMDAwMDAwMDEyMwoKICBUb2tlbiB1c2FnZToKICAwIHRvdGFsICAoMCBpbnB1dCArCiAgMCBvdXRwdXQpCiAgTGltaXRzOgogIGRhdGEgbm90IGF2YWlsYWJsZSB5CiAgZXQ=]52;c;4oCiIGdhbW1hIGRlbHRhIGVwc2lsb24gemV0YQ==]52;c;YWxwaGEgYmV0YSBnYW1tYQ==]52;c;YWxwaGEgYmV0YSBnYW1tYQ==]52;c;VGlw]52;c;VGlw]52;c;VGlw]52;c;Rmlyc3Qgd2FybmluZw==]52;c;U2Vjb25kIHdhcm5pbmc=FAIL
+FAIL	codex_go/tui/tea	75.099s
+ok  	codex_go/tui/transcript_image	0.043s
+ok  	codex_go/tui/tui	0.275s
+ok  	codex_go/tui/welcome	0.037s
+--- FAIL: TestExpandUnreadableGlobsWalksInProcessLikeRust (0.00s)
+    glob_expand_linux_test.go:66: depth-limited paths = []string{"/tmp/TestExpandUnreadableGlobsWalksInProcessLikeRust3230633013/001/workspace/.hidden/hidden.key", "/tmp/TestExpandUnreadableGlobsWalksInProcessLikeRust3230633013/001/workspace/nested/nested.key", "/tmp/TestExpandUnreadableGlobsWalksInProcessLikeRust3230633013/001/workspace/top.key"}, want the top-level match
+--- FAIL: TestLinuxBwrapTwoHalfManagedGrantEndToEnd (0.06s)
+    --- FAIL: TestLinuxBwrapTwoHalfManagedGrantEndToEnd/proxy (0.02s)
+        linux_test.go:1022: proxy probe output inside bwrap:
+            codex-seccomp-probe sandbox_pid=1
+            codex-seccomp-probe vsock_device_open=2
+            codex-seccomp-probe proxy_roundtrip=111
+            codex-seccomp-probe vsock_socket=1
+            codex-seccomp-probe vsock_socketpair=1
+            codex-seccomp-probe unix_socket=1
+            codex-seccomp-probe unix_socketpair=0
+            codex-seccomp-probe inet_socket=0
+            codex-seccomp-probe io_uring_setup=1
+            PASS
+        linux_test.go:1031: proxy: open(/dev/vsock) inside the sandbox = errno 2 (host open succeeds)
+        linux_test.go:1037: a request through the managed proxy chain failed with errno 111:
+            codex-seccomp-probe sandbox_pid=1
+            codex-seccomp-probe vsock_device_open=2
+            codex-seccomp-probe proxy_roundtrip=111
+            codex-seccomp-probe vsock_socket=1
+            codex-seccomp-probe vsock_socketpair=1
+            codex-seccomp-probe unix_socket=1
+            codex-seccomp-probe unix_socketpair=0
+            codex-seccomp-probe inet_socket=0
+            codex-seccomp-probe io_uring_setup=1
+            PASS
+    --- FAIL: TestLinuxBwrapTwoHalfManagedGrantEndToEnd/proxy-grant (0.02s)
+        linux_test.go:1022: proxy-grant probe output inside bwrap:
+            codex-seccomp-probe sandbox_pid=1
+            codex-seccomp-probe vsock_device_open=2
+            codex-seccomp-probe proxy_roundtrip=111
+            codex-seccomp-probe vsock_socket=1
+            codex-seccomp-probe vsock_socketpair=1
+            codex-seccomp-probe unix_socket=0
+            codex-seccomp-probe unix_socketpair=0
+            codex-seccomp-probe inet_socket=0
+            codex-seccomp-probe io_uring_setup=1
+            PASS
+        linux_test.go:1031: proxy-grant: open(/dev/vsock) inside the sandbox = errno 2 (host open succeeds)
+        linux_test.go:1037: a request through the managed proxy chain failed with errno 111:
+            codex-seccomp-probe sandbox_pid=1
+            codex-seccomp-probe vsock_device_open=2
+            codex-seccomp-probe proxy_roundtrip=111
+            codex-seccomp-probe vsock_socket=1
+            codex-seccomp-probe vsock_socketpair=1
+            codex-seccomp-probe unix_socket=0
+            codex-seccomp-probe unix_socketpair=0
+            codex-seccomp-probe inet_socket=0
+            codex-seccomp-probe io_uring_setup=1
+            PASS
+FAIL
+FAIL	codex_go/sandbox/linuxsandbox	0.261s
+FAIL

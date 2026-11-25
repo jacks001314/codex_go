@@ -1,0 +1,58 @@
+=== RUN   TestProcMountFailureDiagnosticsLikeRust
+=== RUN   TestProcMountFailureDiagnosticsLikeRust//newroot/proc/Invalid_argument
+=== RUN   TestProcMountFailureDiagnosticsLikeRust//newroot/proc/Operation_not_permitted
+=== RUN   TestProcMountFailureDiagnosticsLikeRust//newroot/proc/Permission_denied
+=== RUN   TestProcMountFailureDiagnosticsLikeRust//proc/Invalid_argument
+=== RUN   TestProcMountFailureDiagnosticsLikeRust//proc/Operation_not_permitted
+=== RUN   TestProcMountFailureDiagnosticsLikeRust//proc/Permission_denied
+=== RUN   TestProcMountFailureDiagnosticsLikeRust/bwrap:_Can't_bind_mount_/dev/null:_Operation_not_permitted
+=== RUN   TestProcMountFailureDiagnosticsLikeRust/bwrap:_Can't_mount_proc_on_/proc-other:_Operation_not_permitted
+=== RUN   TestProcMountFailureDiagnosticsLikeRust/bwrap:_Can't_mount_proc_on_/proc:_Limit_exceeded_(ENOSPC)
+=== RUN   TestProcMountFailureDiagnosticsLikeRust/bwrap:_Can't_mount_proc_on_/newroot/proc:_Limit_exceeded_(ENOSPC)_bwrap:_Permission_denied
+=== RUN   TestProcMountFailureDiagnosticsLikeRust/bwrap:_Can't_mount_proc_on_/proc:_Permission_denied
+=== RUN   TestProcMountFailureDiagnosticsLikeRust/bwrap:_Can't_mount_proc_on_/proc:_Permission_denied_trailing_text
+--- PASS: TestProcMountFailureDiagnosticsLikeRust (0.00s)
+    --- PASS: TestProcMountFailureDiagnosticsLikeRust//newroot/proc/Invalid_argument (0.00s)
+    --- PASS: TestProcMountFailureDiagnosticsLikeRust//newroot/proc/Operation_not_permitted (0.00s)
+    --- PASS: TestProcMountFailureDiagnosticsLikeRust//newroot/proc/Permission_denied (0.00s)
+    --- PASS: TestProcMountFailureDiagnosticsLikeRust//proc/Invalid_argument (0.00s)
+    --- PASS: TestProcMountFailureDiagnosticsLikeRust//proc/Operation_not_permitted (0.00s)
+    --- PASS: TestProcMountFailureDiagnosticsLikeRust//proc/Permission_denied (0.00s)
+    --- PASS: TestProcMountFailureDiagnosticsLikeRust/bwrap:_Can't_bind_mount_/dev/null:_Operation_not_permitted (0.00s)
+    --- PASS: TestProcMountFailureDiagnosticsLikeRust/bwrap:_Can't_mount_proc_on_/proc-other:_Operation_not_permitted (0.00s)
+    --- PASS: TestProcMountFailureDiagnosticsLikeRust/bwrap:_Can't_mount_proc_on_/proc:_Limit_exceeded_(ENOSPC) (0.00s)
+    --- PASS: TestProcMountFailureDiagnosticsLikeRust/bwrap:_Can't_mount_proc_on_/newroot/proc:_Limit_exceeded_(ENOSPC)_bwrap:_Permission_denied (0.00s)
+    --- PASS: TestProcMountFailureDiagnosticsLikeRust/bwrap:_Can't_mount_proc_on_/proc:_Permission_denied (0.00s)
+    --- PASS: TestProcMountFailureDiagnosticsLikeRust/bwrap:_Can't_mount_proc_on_/proc:_Permission_denied_trailing_text (0.00s)
+=== RUN   TestProcMountPreflightBoundsStderrLikeRust
+--- PASS: TestProcMountPreflightBoundsStderrLikeRust (0.00s)
+=== RUN   TestProcMountFallbackLaunchPathLikeRust
+=== RUN   TestProcMountFallbackLaunchPathLikeRust/old-destination
+=== RUN   TestProcMountFallbackLaunchPathLikeRust/new-destination
+=== RUN   TestProcMountFallbackLaunchPathLikeRust/unrelated-destination
+=== RUN   TestProcMountFallbackLaunchPathLikeRust/unrelated-errno
+=== RUN   TestProcMountFallbackLaunchPathLikeRust/cross-line
+=== RUN   TestProcMountFallbackLaunchPathLikeRust/success
+=== RUN   TestProcMountFallbackLaunchPathLikeRust/no-proc
+=== RUN   TestProcMountFallbackLaunchPathLikeRust/inherited-pid
+--- PASS: TestProcMountFallbackLaunchPathLikeRust (0.14s)
+    --- PASS: TestProcMountFallbackLaunchPathLikeRust/old-destination (0.02s)
+    --- PASS: TestProcMountFallbackLaunchPathLikeRust/new-destination (0.02s)
+    --- PASS: TestProcMountFallbackLaunchPathLikeRust/unrelated-destination (0.02s)
+    --- PASS: TestProcMountFallbackLaunchPathLikeRust/unrelated-errno (0.02s)
+    --- PASS: TestProcMountFallbackLaunchPathLikeRust/cross-line (0.02s)
+    --- PASS: TestProcMountFallbackLaunchPathLikeRust/success (0.01s)
+    --- PASS: TestProcMountFallbackLaunchPathLikeRust/no-proc (0.01s)
+    --- PASS: TestProcMountFallbackLaunchPathLikeRust/inherited-pid (0.01s)
+=== RUN   TestProcMountFallbackNativeEndToEndLikeRust
+=== RUN   TestProcMountFallbackNativeEndToEndLikeRust//newroot/proc
+    proc_mount_linux_test.go:112: real bwrap: /newroot/proc denial -> no-proc fallback; command ran once; exit 23 preserved
+=== RUN   TestProcMountFallbackNativeEndToEndLikeRust//proc
+    proc_mount_linux_test.go:112: real bwrap: /proc denial -> no-proc fallback; command ran once; exit 23 preserved
+--- PASS: TestProcMountFallbackNativeEndToEndLikeRust (0.08s)
+    --- PASS: TestProcMountFallbackNativeEndToEndLikeRust//newroot/proc (0.04s)
+    --- PASS: TestProcMountFallbackNativeEndToEndLikeRust//proc (0.03s)
+=== RUN   TestProcMountPreflightPlanUsesMinimalPolicyLikeRust
+--- PASS: TestProcMountPreflightPlanUsesMinimalPolicyLikeRust (0.00s)
+PASS
+ok  	codex_go/sandbox/linuxsandbox	0.241s

@@ -1,0 +1,37 @@
+[
+  {
+    "path": "tui/tea/model.go",
+    "gofmt_content_matches": true,
+    "preserves_existing_crlf": true
+  },
+  {
+    "path": "sandbox/linuxsandbox/linux.go",
+    "gofmt_content_matches": true,
+    "preserves_existing_crlf": true
+  },
+  {
+    "path": "sandbox/linuxsandbox/proc_mount_linux.go",
+    "gofmt_content_matches": true,
+    "preserves_existing_crlf": false
+  },
+  {
+    "path": "sandbox/linuxsandbox/proc_mount_linux_test.go",
+    "gofmt_content_matches": true,
+    "preserves_existing_crlf": false
+  },
+  {
+    "path": "tui/tea/job_control.go",
+    "gofmt_content_matches": true,
+    "preserves_existing_crlf": false
+  },
+  {
+    "path": "tui/tea/job_control_like_rust_test.go",
+    "gofmt_content_matches": true,
+    "preserves_existing_crlf": false
+  },
+  {
+    "path": "tui/tea/job_control_windows_test.go",
+    "gofmt_content_matches": true,
+    "preserves_existing_crlf": false
+  }
+]
