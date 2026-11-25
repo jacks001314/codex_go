@@ -27,12 +27,15 @@ func TestJobControlPTYBackgroundContinueLikeRust(t *testing.T) {
 	if err != nil {
 		t.Skip("python3 is required for the native PTY supervisor")
 	}
-	for _, mode := range []string{"inline", "alternate"} {
-		t.Run(mode, func(t *testing.T) {
+	for _, test := range []struct{ mode, reply string }{
+		{"inline", "reply"}, {"inline", "no-reply"},
+		{"alternate", "reply"}, {"alternate", "no-reply"},
+	} {
+		t.Run(test.mode+"/"+test.reply, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, python, "-c", jobControlPTYSupervisor, os.Args[0])
-			cmd.Env = append(os.Environ(), "CODEX_JOB_CONTROL_PTY_MODE="+mode)
+			cmd.Env = append(os.Environ(), "CODEX_JOB_CONTROL_PTY_MODE="+test.mode, "CODEX_JOB_CONTROL_PTY_REPLY="+test.reply)
 			output, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("native PTY job control: %v\n%s", err, output)
@@ -67,6 +70,8 @@ func runJobControlPTYHelper(t *testing.T) {
 					released = true
 				}
 				if released && state.Lflag&unix.ICANON == 0 {
+					// Allow ResumeMsg, any query response and subsequent input to be processed.
+					time.Sleep(200 * time.Millisecond)
 					program.Quit()
 					return
 				}
@@ -77,8 +82,8 @@ func runJobControlPTYHelper(t *testing.T) {
 	if _, err := program.Run(); err != nil {
 		t.Fatalf("PTY program: %v", err)
 	}
-	if model.composerText() != "draft survives suspend" {
-		t.Fatal("draft changed across suspend")
+	if got := model.composerText(); got != "draft survives suspendx" {
+		t.Fatalf("draft after resume and typing = %q, want preserved draft plus x", got)
 	}
 	if model.notice != "" {
 		t.Fatalf("suspend notice: %s", model.notice)
@@ -120,17 +125,36 @@ try:
             stopped[0] = True
         return stopped[0]
     wait_until(is_stopped, "SIGTSTP")
+    # Discard output from startup and terminal release before inspecting resume.
+    while select.select([master], [], [], .02)[0]:
+        os.read(master, 65536)
     foreground(os.getpgrp())
     time.sleep(1.2)
     os.killpg(child.pid, signal.SIGCONT)
     time.sleep(.15)
     assert termios.tcgetattr(slave)[3] & termios.ICANON, "background SIGCONT restored raw mode"
     assert child.poll() is None, "job exited while in background"
+    background_output = bytearray()
+    while select.select([master], [], [], .02)[0]:
+        background_output.extend(os.read(master, 65536))
+    assert b"\x1b[6n" not in background_output, "cursor query sent before foreground ownership"
     foreground(child.pid)
+    resumed_output = bytearray()
+    def cursor_requested():
+        if select.select([master], [], [], .02)[0]:
+            resumed_output.extend(os.read(master, 65536))
+        return b"\x1b[6n" in resumed_output
+    wait_until(cursor_requested, "cursor query after foreground resume")
+    # Exercise the real decoder: an inserted focus report and CPR must not
+    # become composer text. Responses use a row different from startup.
+    if os.environ["CODEX_JOB_CONTROL_PTY_REPLY"] == "reply":
+        os.write(master, b"\x1b[I\x1b[7;11R")
+    # Also type when the terminal ignores the query: no CPR must not block input.
+    os.write(master, b"x")
     output = child.communicate(timeout=5)[0]
     assert child.returncode == 0, output.decode(errors="replace")
     assert b"resumed" in output, output
-    print("native PTY: Ctrl-Z -> SIGTSTP; background SIGCONT kept canonical mode; foreground restored raw mode; draft preserved")
+    print("native PTY: Ctrl-Z -> SIGTSTP; background SIGCONT kept canonical mode; foreground restored raw mode; cursor query; CPR mode " + os.environ["CODEX_JOB_CONTROL_PTY_REPLY"] + "; subsequent input preserved")
 finally:
     try: os.killpg(child.pid, signal.SIGKILL)
     except ProcessLookupError: pass
