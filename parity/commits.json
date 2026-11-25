@@ -44766,11 +44766,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "缺 host service-tier 的异步读取与接受：Go 无对应 host 钩子与接受路径",
-    "Go 锚点：appserver/（host service tier）",
-    "plan: update/plan_2026_11_08_misc_1.md（#60075），契约 async-host-service-tier-acceptance"
+    "RuntimeServices.ServiceTier supplies an asynchronous Current(ctx) and a repeatable Update receipt, wired into thread start, an explicit settings reply, child preparation and its retained controller, startup prewarm and later sampling steps. Read and acceptance failures stay separate with errors.Is, waits default to ten seconds with shorter caller deadlines winning, and none run under the config, registry or turn admission locks. Concurrent updates share one receipt, an explicit failure can be retried, cancelling a wait does not cancel propagation, a rejection leaves committed settings alone, a nil tier means default, and host-owned children keep their per-turn override rules.",
+    "Verified here with go build ./..., the HostServiceTier and AsyncServiceTier tests, go vet ./appserver ./turn ./agent, and the full appserver, turn and agent packages. Residual: a successful receipt means local acceptance only, with no claim about remote propagation or billing."
    ]
   },
   {
@@ -48262,9 +48261,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "[code_mode] heartbeat_interval_s is parsed and exposed (config.CodeModeHeartbeatIntervalSeconds, TestCodeModeHeartbeatIntervalLikeRust), but Go's Code Mode host only implements the JSON-frame Transport RPC, so the typed OpenSession/SubscribeToToolCalls stream that sends and consumes heartbeats is still missing."
+    "[code_mode] heartbeat_interval_s defaults to 0 (no heartbeat, no extra wire field), rejects negative and out-of-range values, and propagates into the Code Mode host. Heartbeats are emitted on the shared JSON-framed Transport RPC, ordinary frames reset the idle deadline, a heartbeat never enters the output queue or fires a tool callback, shutdown clears the deadline, and cancellation, blocked sends and disconnects exit promptly.",
+    "Verified here with go test ./codemode/..., go test ./config ./exec ./tool and go vet ./codemode/... ./config ./tool ./exec. Residual: Rust's typed OpenSession/SubscribeToToolCalls runtime is still unimplemented in Go - grpcStdioHostServer embeds Unimplemented and the host uses the generic Transport - so the heartbeat lands on the transport that exists rather than on the typed RPC surface."
    ]
   },
   {
@@ -49805,10 +49805,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "blocked_precondition",
+   "status": "partial",
    "evidence": [
-    "Linux sandbox proxy bridge lifetime depends on the bwrap launcher architecture Go does not implement.",
-    "plan: update/plan_2026_11_16.md batch 74"
+    "The outer launcher now owns the proxy bridge listeners and upstreams while a re-exec worker with its own descriptor table runs bwrap, so listeners and upstream sockets cannot leak into the sandbox or keep serving after the launcher dies. Signals buffer until readiness and are forwarded with their real wait status; cancellation and parent death clean connections and wait; pidfd plus an OS-thread lock cover caller exit and Pdeathsig. The transparent path restores dumpability around the namespace start because ApplyPreMain sets PR_SET_DUMPABLE=0, and keeps NET_ADMIN/NET_BIND_SERVICE only inside the private namespace.",
+    "Verified by the Linux node against /usr/bin/bwrap 0.11.0: linuxsandbox package and -race pass, go vet clean, the built CLI runs explicit and transparent commands once with exit 23, and the native matrix covers TERM/QUIT/INT/HUP, launcher SIGKILL, deny-file masks and zero workload capabilities. Here go test ./sandbox/... and GOOS=linux go vet ./sandbox/linuxsandbox pass.",
+    "Partial: Rust's separate mount cleanup supervisor, synthetic mount registration and identity cleanup, and the SCM_RIGHTS/attribution transport are still missing; the socket directory surviving the workload and being removed after wait is not evidence for synthetic mount cleanup."
    ]
   },
   {
