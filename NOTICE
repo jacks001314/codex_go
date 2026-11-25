@@ -32,7 +32,7 @@ are not covered by the Apache License, Version 2.0; each remains under its own
 license. The pinned versions, digests and download locations are recorded in
 the manifests under third_party/.
 
-* ripgrep 15.2.0 (https://github.com/BurntSushi/ripgrep), MIT OR Unlicense.
+* ripgrep 16.0.0 (https://github.com/BurntSushi/ripgrep), MIT OR Unlicense.
   Shipped as the codex-path search backend; see third_party/ripgrep/sources.json.
 
 * bubblewrap 0.13.0 (https://github.com/containers/bubblewrap),

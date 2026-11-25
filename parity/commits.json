@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "e2c31f625a030f65d4ed9f447a13a5bd0ef61ad5",
+ "rustToInclusive": "87de5e932dd03bb9efece4a6dd3eab4c5de45701",
  "commits": [
   {
    "sha": "27c05a52e0cdf93ef7db5a96ccaf88d6b9095472",
@@ -56981,6 +56981,18 @@
    "status": "complete",
    "evidence": [
     "Implemented account/voiceSettings/read and write using ChatGPT backend voice preferences, display-name fallback, account-owned TUI selection, and removal of voice from thread/realtime/start. chatgptapi/appserver/app/TUI/realtime suites passed."
+   ]
+  },
+  {
+   "sha": "87de5e932dd03bb9efece4a6dd3eab4c5de45701",
+   "subject": "Update packaged ripgrep to 16.0.0 (#63811)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "Pinned all six packaged Go CLI ripgrep targets to 16.0.0 using the Rust dotslash manifest URLs, sizes, and SHA-256 digests; NOTICE and packaging contract test updated; staging verification passed for windows-amd64."
    ]
   }
  ]

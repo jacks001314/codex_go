@@ -133,6 +133,60 @@ func TestPackagingFailsClosedOnMissingTools(t *testing.T) {
 	}
 }
 
+// TestRipgrepSourcesMatchRustPackage pins the release asset version and target
+// matrix used by Rust's scripts/codex_package/rg dotslash manifest. Keeping the
+// archive identities here prevents a partial version bump from publishing
+// platform-dependent search behavior.
+func TestRipgrepSourcesMatchRustPackage(t *testing.T) {
+	root := repositoryRoot(t)
+	data, err := os.ReadFile(filepath.Join(root, "third_party", "ripgrep", "sources.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		Targets []struct {
+			GOOS   string `json:"goos"`
+			GOARCH string `json:"goarch"`
+			Target string `json:"target"`
+			URL    string `json:"url"`
+			SHA256 string `json:"sha256"`
+			Bytes  int64  `json:"bytes"`
+		} `json:"targets"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("parse sources.json: %v", err)
+	}
+	wantTargets := map[string]string{
+		"windows-amd64": "x86_64-pc-windows-msvc",
+		"windows-arm64": "aarch64-pc-windows-msvc",
+		"darwin-amd64":  "x86_64-apple-darwin",
+		"darwin-arm64":  "aarch64-apple-darwin",
+		"linux-amd64":   "x86_64-unknown-linux-musl",
+		"linux-arm64":   "aarch64-unknown-linux-gnu",
+	}
+	if len(manifest.Targets) != len(wantTargets) {
+		t.Fatalf("ripgrep targets = %d, want %d", len(manifest.Targets), len(wantTargets))
+	}
+	digest := regexp.MustCompile(`^[0-9a-f]{64}$`)
+	for _, entry := range manifest.Targets {
+		platform := entry.GOOS + "-" + entry.GOARCH
+		wantTarget, ok := wantTargets[platform]
+		if !ok {
+			t.Errorf("unexpected ripgrep platform %q", platform)
+			continue
+		}
+		if entry.Target != wantTarget {
+			t.Errorf("%s target = %q, want %q", platform, entry.Target, wantTarget)
+		}
+		if !strings.Contains(entry.URL, "/releases/download/16.0.0/ripgrep-16.0.0-") {
+			t.Errorf("%s URL = %q, want pinned ripgrep 16.0.0 asset", platform, entry.URL)
+		}
+		if !digest.MatchString(entry.SHA256) || entry.Bytes <= 0 {
+			t.Errorf("%s source is not pinned: %+v", platform, entry)
+		}
+	}
+}
+
 // TestBuildScriptsStagePreparedBwrap pins that a package layout produced by the
 // local build scripts carries the Linux sandbox launcher, and that the warning
 // names the cross-platform staging command.
