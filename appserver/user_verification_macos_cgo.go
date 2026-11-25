@@ -325,7 +325,13 @@ static int uv_create_key(const char *label, unsigned char **der_out, int *len_ou
     return rc;
 }
 
-static int uv_delete_keys(const char *label, uv_error *out) {
+typedef OSStatus (*uv_delete_item_fn)(CFDictionaryRef, void *);
+
+static OSStatus uv_delete_item(CFDictionaryRef query, void *context) {
+    return SecItemDelete(query);
+}
+
+static int uv_delete_keys_with(const char *label, uv_error *out, uv_delete_item_fn delete_item, void *context) {
     CFStringRef label_string = CFStringCreateWithCString(kCFAllocatorDefault, label, kCFStringEncodingUTF8);
     if (!label_string) {
         uv_set_osstatus(errSecParam, out);
@@ -333,15 +339,61 @@ static int uv_delete_keys(const char *label, uv_error *out) {
     }
     CFMutableDictionaryRef query = CFDictionaryCreateMutable(
         kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    if (!query) {
+        CFRelease(label_string);
+        uv_set_osstatus(errSecAllocate, out);
+        return UV_ERROR;
+    }
     CFDictionarySetValue(query, kSecClass, kSecClassKey);
     CFDictionarySetValue(query, kSecAttrLabel, label_string);
     CFDictionarySetValue(query, kSecUseDataProtectionKeychain, kCFBooleanTrue);
-    OSStatus status = SecItemDelete(query);
+    OSStatus current_status = delete_item(query, context);
+    // Creation and lookup use only Rust's label namespace. Explicit deletion
+    // also cleans the old Go application-label namespace, even if the first
+    // deletion failed; never combine the two attributes into an AND query.
+    CFDictionaryRemoveValue(query, kSecAttrLabel);
+    CFDictionarySetValue(query, kSecAttrApplicationLabel, label_string);
+    OSStatus legacy_status = delete_item(query, context);
     CFRelease(query);
     CFRelease(label_string);
+    OSStatus status = current_status;
+    if (status == errSecSuccess || status == errSecItemNotFound) {
+        status = legacy_status;
+    }
     if (status == errSecSuccess || status == errSecItemNotFound) { return UV_OK; }
     uv_set_osstatus(status, out);
     return UV_ERROR;
+}
+
+static int uv_delete_keys(const char *label, uv_error *out) {
+    return uv_delete_keys_with(label, out, uv_delete_item, NULL);
+}
+
+// A callback inspects the real deletion queries without accessing Keychain.
+typedef struct { OSStatus current; OSStatus legacy; int attempts; int valid; } uv_test_delete_state;
+
+static OSStatus uv_test_delete_item(CFDictionaryRef query, void *context) {
+    uv_test_delete_state *state = context;
+    int legacy = state->attempts++;
+    CFStringRef wanted = legacy ? kSecAttrApplicationLabel : kSecAttrLabel;
+    CFStringRef unwanted = legacy ? kSecAttrLabel : kSecAttrApplicationLabel;
+    CFTypeRef value = CFDictionaryGetValue(query, wanted);
+    CFTypeRef item_class = CFDictionaryGetValue(query, kSecClass);
+    if (legacy > 1 || !value || !CFEqual(value, CFSTR("codex-delete-query-test")) ||
+        CFDictionaryContainsKey(query, unwanted) ||
+        !item_class || !CFEqual(item_class, kSecClassKey) ||
+        CFDictionaryGetValue(query, kSecUseDataProtectionKeychain) != kCFBooleanTrue) {
+        state->valid = 0;
+    }
+    return legacy ? state->legacy : state->current;
+}
+
+static int uv_test_delete_labels(int current_status, int legacy_status, int *attempts, int *valid, uv_error *out) {
+    uv_test_delete_state state = { current_status, legacy_status, 0, 1 };
+    int result = uv_delete_keys_with("codex-delete-query-test", out, uv_test_delete_item, &state);
+    *attempts = state.attempts;
+    *valid = state.valid;
+    return result;
 }
 
 static int uv_device_supported(void) {
@@ -598,6 +650,14 @@ func darwinUserVerificationTestSEC1() ([]byte, bool, bool, *darwinUserVerificati
 	}
 	defer C.free(unsafe.Pointer(der))
 	return C.GoBytes(unsafe.Pointer(der), length), hasToken != 0, protectedKey != 0, nil
+}
+
+func darwinUserVerificationTestDeleteLabels(current, legacy int) (int, bool, bool, int) {
+	var attempts, valid C.int
+	var native C.uv_error
+	C.uv_clear_error(&native)
+	result := C.uv_test_delete_labels(C.int(current), C.int(legacy), &attempts, &valid, &native)
+	return int(attempts), valid != 0, result == C.UV_OK, int(native.code)
 }
 
 func (cgoDarwinUserVerificationBackend) DeviceSupported() bool {

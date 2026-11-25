@@ -194,3 +194,50 @@ func TestDarwinUserVerificationRejectsKeyWithoutSecureEnclaveToken(t *testing.T)
 		t.Fatal("native validator accepted a software key without kSecAttrTokenID")
 	}
 }
+
+// Inspect both actual CFDictionary queries without Keychain or biometric access.
+// A failure in either namespace must not prevent attempting the other cleanup.
+func TestDarwinUserVerificationDeleteCleansBothLabelNamespaces(t *testing.T) {
+	const notFound = -25300
+	const authFailed = -25293
+	const interactionNotAllowed = -25308
+	for _, tc := range []struct {
+		name            string
+		current, legacy int
+		success         bool
+		status          int
+	}{
+		{"both missing", notFound, notFound, true, 0},
+		{"current only", 0, notFound, true, 0},
+		{"legacy only", notFound, 0, true, 0},
+		{"both present", 0, 0, true, 0},
+		{"current failure still cleans legacy", authFailed, 0, false, authFailed},
+		{"legacy failure is reported", 0, interactionNotAllowed, false, interactionNotAllowed},
+		{"both failures preserve first error", authFailed, interactionNotAllowed, false, authFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			attempts, valid, success, status := darwinUserVerificationTestDeleteLabels(tc.current, tc.legacy)
+			if attempts != 2 || !valid {
+				t.Fatalf("delete queries: attempts=%d valid=%t, want two separate namespace queries", attempts, valid)
+			}
+			if success != tc.success || status != tc.status {
+				t.Fatalf("delete result: success=%t status=%d, want %t/%d", success, status, tc.success, tc.status)
+			}
+		})
+	}
+}
+
+// Only a fresh, test-owned namespace is queried; no key or biometric enrollment
+// is created. Both real Security.framework deletion queries must be idempotent.
+func TestDarwinUserVerificationDeleteMissingLabelIsIdempotent(t *testing.T) {
+	label := "com.openai.codex.user-verification.delete-test." + filepath.Base(filepath.Dir(t.TempDir()))
+	backend := cgoDarwinUserVerificationBackend{}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := backend.DeleteKeys(label); err != nil {
+			if err.kind == "unavailable" && err.reason == string(UserVerificationUnavailableProviderUnavailable) && err.message == "this binary is missing the required keychain entitlements" {
+				t.Skipf("native deletion requires a binary with Keychain entitlements: %v", err)
+			}
+			t.Fatalf("DeleteKeys(missing test namespace), attempt %d: %+v", attempt, err)
+		}
+	}
+}
