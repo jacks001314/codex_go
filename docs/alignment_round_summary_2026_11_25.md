@@ -20,6 +20,7 @@
 | `46ea8874a` `77084e84d` | bwrap 探针 drain 截止时间改成当前时间 +50ms（原来的 `time.Now()` 会直接 deadline），并记录全量跑出的临时路径产物 | 修复 drain 用例 50/50 失败 |
 | `9727927c4` `3d361033e` `4f76a3c3a` `8057cf9f1` | Windows 测试环境修整：no-network 环境用例的 homedir 缓存隔离、mxc 运行日志先关闭再加载、子 agent 结束前 `CloseAgent`；并把 #61945 的台账证据改成「能力已在 store 的 fork API，缺的是 host 协议面与拒绝守卫」 | 消除 TempDir 清理竞态、让阻塞证据可执行 |
 | `f25809c92` | `TestSubagentSpawnServiceTierLikeRust` 在 `CloseAgent` 之后等 `WaitForTurnWorkers` 再返回：只关 agent 仍会让子 agent 的 turn worker 在 TempDir 清理时继续写盘 | 该用例 3/20 偶发失败 → 30/30 通过 |
+| `ac76dda16` | 补入 macOS 节点验证过的 darwin PTY 测试：真实 controlling PTY 的 SIGTSTP/SIGCONT、TIOCGPGRP 前台门控、CPR（`ESC[6n`）输入不会落进 composer，以及 darwin 撤销绑定保留 Ctrl-Z 给挂起 | #63520 的 darwin 侧证据进仓库 |
 | `b2c815beb` | 采用带 `RequestCursorPosition` 的 `ResumeMsg`，并记录 inline viewport realign 未移植 | #63520 残差 |
 | `d30ba1b79` | Seatbelt 只对 depth-one 系统别名（`/tmp`、`/var/tmp`）做归一：scratch 排除、PROTECTED_WRITE、protected ancestor 与 symlink-home 覆盖判断；嵌套可变软链仍需显式 opt-in | 关闭 macOS 默认 TMPDIR 下的 3 个 sandbox 失败 |
 | `6ce6cb67b` | #61909/#61916 item-boundary 采样中断与 remote compaction summary 保留（subagent-align 实现）：工具取消与采样取消分离、保留已完成前缀、aborted 工具输出、follow-up 串行、mail 排队；默认关闭 | #61909、#61916 |
