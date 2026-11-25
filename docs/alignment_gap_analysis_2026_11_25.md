@@ -261,6 +261,8 @@ macOS 节点（darwin-align，macOS 12.4 / darwin-amd64 / Go 1.27.1 / CGO=1）�
 
 macOS 还有一个本轮发现、尚未合并的 doctor 缺口：`doctor/desktop_darwin.go` 的 `desktopBundleMetadata` 把 `Contents/Info.plist` 当 XML 文本读，用 `<key>…</key>` 之后最近的 `<string>` 取值。Rust 3f65e9f1 并不自己解析 plist，而是执行 `/usr/bin/plutil -convert json -o -`（5 秒超时、`kill_on_drop`、stderr 丢弃、stdout 上限 64KiB），再按 JSON 键精确取值，`CFBundleIdentifier` 不等于 `com.openai.codex` 时返回「不是 Codex」而不是错误，`version = CFBundleShortVersionString ?? CFBundleVersion`，`CFBundleVersion` 必须能解析成数字。因此 Go 在二进制 plist、XML 实体转义、以及 key 与 string 之间夹其它元素这三种情况下会读错或读不到。对照源码已放进 `deliverables/darwin-align-rust-reference/`（含 README 的最小改法），由 macOS 节点实现并用 `plutil -convert binary1` 造 fixture 验证后由 lead 合并。
 
+同一条线路上还有一处更关键的 Keychain 命名空间差异（macOS 节点核对 Rust 源码后发现，正在修）：Rust 的 `provider.rs::key_query` 用 `ItemSearchOptions::label(...)`、`create_key` 用 `GenerateKeyOptions::set_label(...)`，两者落到 `kSecAttrLabel`；而 Go 的 `appserver/user_verification_macos_cgo.go` 在 lookup、私有属性与 delete query 三处都用 `kSecAttrApplicationLabel`。也就是说 Rust 创建的 Secure Enclave key 与 Go 创建的根本不在同一命名空间，互相都找不到，这会让“Go 侧 verify”在真机上静默走不到 Rust 生成的密钥。对齐方向是写入只用 `kSecAttrLabel`（与 Rust 一致），查询可先用 `kSecAttrLabel` 再回退旧属性，删除两种属性都清；若不做回退则必须明确记录“旧 Go 条目视为不存在”。
+
 macOS 节点仍报告的另外三处 sandbox 失败（`TestNativeSeatbeltEnforcesWorkspaceAndMetadata` exit 21、两个 symlink 测试在非 canonical TMPDIR 下失败）正在请该节点判定是产品缺口还是测试自身的路径规范化问题，未擅自改 sandbox 生产代码。
 
 ## Linux 节点交付（#63520 Ctrl-Z suspend 已合并）
