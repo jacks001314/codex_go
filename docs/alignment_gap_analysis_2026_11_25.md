@@ -168,6 +168,7 @@ Go 已经实现了 thread ownership 的“第一次观察者获胜”，但 agen
 - `parity.json` 仍停留在 `67f0994b`，没有推进到目标 `3f65e9f1`。
 - 4 个 open domain：`alignment-control`、`sqlite-runtime-version`、`sdk-cancellation`、`cross-platform-release`。
 - 4 个 open contract：`mcp-network-policy-derivation`、`usage-analytics-turn-trigger`、`sidebar-chooser-files-and-paths`、`sidebar-document-preview`。
+  本轮复核：两个 sidebar contract 列出的全部 verifier 在这台 Windows 上都通过（`go test ./tui/tea ./app -run 'TestSidebarChooser|TestMiddleLabel|TestFilenameLabel|TestDocumentLabel|TestRemoteTUI|TestEmbeddedSidebar|TestSidebarProtocol|TestSidebarPreview'`），它们仍未关闭的原因不是 chooser/文档逻辑，而是 #61919 的图片预览能力缺失（Rust 侧 sidebar 会按 PNG/JPEG/GIF/WebP 打开图片并带格式与尺寸标签、无终端图形时降级）。因此这两条 contract 应等 #61919 落地后一起复核，不能凭 test-pass 直接改成 complete。
 - SDK 证据只有 2 次 run，要求 3 次；原生 SQLite 只有 `windows/amd64`，要求 6 个平台。
 - GitHub Actions 仍受账户计费问题影响，macOS/Linux 原生 runner 无法产出证据。
 - `sdk-cancellation` 仍记录 Rust `bbbf396839` 的 PowerShell 子进程泄漏；Go 侧进程树取消更安全，不应为了对齐而回退。
