@@ -38,9 +38,14 @@
 | `go test ./doctor -count=1` | ok 3.5s（走非 darwin 分支） |
 | `go test ./sandbox -run TestDrainBwrapProbeStderrKeepsLauncherOutput -count=20` | ok，1.0s |
 
-已知环境性失败（与改动无关）：`plugin` 的 `TestMarketplaceUpgradeReusesInstalledGitObjectsLikeRust`、
-`TestAutomaticGitUsesTrustedRepositoryAndCleansUp`（Windows 长路径 / `$GIT_DIR too big`）；
-`mcp` 的 `TestDesktopSocketMCP*`（Windows AF_UNIX）；`appserver` 的两个 plugin git 用例（长路径）。
+跑全量 `go test ./...`（136 个包 ok，7 个包有失败）时确认：把 `TMP`/`TEMP`/`GOTMPDIR` 指向本工作区
+（路径里含 `.syntropy-run-...` 这种带连字符与点的目录）会制造一批**假失败**——Cursor 工程名解码、arg0 alias home
+判断都依赖路径形态。改用 `C:\qaxtmp` 这类无连字符短路径后，`./config ./cli ./appserverdaemon ./gitutil ./review ./plugin`
+全部转绿，`./appserver` 只剩一个 Windows TempDir 清理竞态（`TestSubagentSpawnServiceTierLikeRust`，已在测试结束前
+`CloseAgent` 关闭子 agent 修掉）。建议后续统一用短且无连字符的临时根。
+
+仍存在的真实环境性失败：`plugin` 的 `TestMarketplaceUpgradeReusesInstalledGitObjectsLikeRust`
+（Windows 长路径）、`mcp` 的 `TestDesktopSocketMCP*`（Windows AF_UNIX）。这两项需要长路径开关或 Unix 域套接字支持。
 
 ## 节点原生证据
 
