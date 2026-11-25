@@ -167,20 +167,21 @@ Go 已经实现了 thread ownership 的“第一次观察者获胜”，但 agen
 
 ## 依赖校验风险：charm.land/glamour/v2 v2.0.1 的 sumdb 与镜像内容分叉
 
-这是本轮两个节点都撞到、且必须记录的一条外部风险，与代码对齐无关：
+这是本轮两个节点都撞到、且必须记录的一条外部风险，与代码对齐无关。下面的数字是 lead 在 Windows 上重新实测的，
+与两个节点先前的说法有出入，以这里为准：
 
-- sum.golang.org 的 lookup 记录：`charm.land/glamour/v2 v2.0.1 h1:xl+r00A4aJWU0z8fgwKd9fQQ4rsphqGUzuEiXZP5n+c=`。
-- 本机（Windows，GOSUMDB=off）从 proxy.golang.org 与 goproxy.cn 抓同一个 zip，都是 139064 字节、
-  sha256 `C4A98F4E576CCE274B8724FF6A8E71D8B2C022A1BC4B468E82725063D8F1C039`，算出的 h1 是仓库 go.sum 里的
-  `Vx2F81a4SBR5/IqAkDyeZ3mfuT7u+9AYxeXQ+J1n2Wc=`；zip 内部路径是 `charm.land/glamour/v2@v2.0.1/`，go.mod 声明的也是该模块路径。
-- 也就是说该版本被重新发布过：sumdb 记的是旧字节，镜像现在给的是新字节。开启 sumdb 的新环境会因此失败，
-  用仓库现有 go.sum 才能构建。
-- Linux 节点（linux-align）下载到的是 sumdb 那一份（h1 为 `xl+r00A4…`），与本机相反，因此该节点首次编译 TUI 时
-  直接 checksum mismatch。这不是节点配置错误，而是同一版本在不同侧内容不一致的表现。
+- sum.golang.org 的记录：`charm.land/glamour/v2 v2.0.1 h1:xl+r00A4aJWU0z8fgwKd9fQQ4rsphqGUzuEiXZP5n+c=`。
+- 用**全新 module cache**（`GOMODCACHE=C:\qaxtmp\modcache2`）+ `GOPROXY=goproxy.cn` + `GOSUMDB=sum.golang.org`
+  下载，`go mod download -json` 返回 `Sum` 就是 `xl+r00A4…`，zip 139,064 字节；用该 zip 重新计算 h1 得到同一个值，
+  说明 sumdb 与当前 proxy 是一致的。
+- 本机从 2026-11-07 起就有的缓存是另一份：zip 3,793,168 字节，解出的 239 个文件共 4,660,169 字节（含
+  `styles/gallery/*.png` 几张几百 KB 的图），其 h1 才是仓库 go.sum 里的 `Vx2F81a4SBR5/IqAkDyeZ3mfuT7u+9AYxeXQ+J1n2Wc=`。
+- 结论：该版本被重新发布过，新一版把 gallery 图片换成了占位文件。仓库的 `Vx2F81a4…` 是对**旧**制品的锁定，
+  只在本机这份缓存上成立；全新 clone 或冷缓存会 `checksum mismatch`。
 
-处置：仓库 go.sum 保持 `Vx2F81a4…`（本机能构建、CI 也依赖它）；任何节点都不要把这个值改掉。需要在本机跑测试的节点
-应在隔离副本里改 go.sum 或使用本地 vendor，结果只作为实验证据，不回写项目。等上游澄清该版本是否被重打 tag 后再决定是否
-把这条依赖升级到新版本。
+处置：本轮不改 `go.sum`。本机换成 `xl+r00A4…` 时会立刻因为缓存里仍是旧制品而失败，而清缓存（`go clean -modcache`
+或删掉该模块目录）属于会改变构建输入的操作，我没有在这个环境里做。要把仓库切到当前上游制品，需要先在有旧缓存的
+机器上刷新 module cache，再改 go.sum；这件事留给用户决定。任何节点仍不要单方面改这个值。
 
 
 ## 第三轮追加（#61900、probe 竞态、Seatbelt 规则顺序、macOS Keychain/plist）

@@ -76,7 +76,8 @@
 
 ## 风险
 
-1. `charm.land/glamour/v2 v2.0.1`：sumdb 记录 `xl+r00A4…`，两个公共 proxy 实际给的是 `Vx2F81a4…`（139064 字节，
-   sha256 `C4A98F4E…C039`）。该版本被重新发布过，开启 sumdb 的环境会失败；仓库保留 `Vx2F81a4…`，节点不得修改。
+1. `charm.land/glamour/v2 v2.0.1` 被上游重新发布过：sumdb 与当前 proxy 一致给出 `xl+r00A4…`（139,064 字节 zip），
+   而仓库 go.sum 锁的 `Vx2F81a4…` 对应 2026-11-07 缓存里的旧制品（3,793,168 字节 zip，含 gallery 图片）。
+   本机靠旧缓存能构建，全新 clone 或冷缓存会 checksum mismatch。切到新制品需要先刷新 module cache 再改 go.sum，未在本轮执行。
 2. macOS 无 Touch ID 硬件，Secure Enclave 端到端签名仍缺真机证据；该机 arm64 未测，且存在 13.0→12.0 链接警告。
 3. 六个原生平台的 SQLite 矩阵只观测到 3 个 amd64 单元；GitHub Actions 仍受账户计费限制。
