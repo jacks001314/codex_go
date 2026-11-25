@@ -104,7 +104,7 @@ Rust 在 `core/src/agent/host/service_tier.rs` 中做异步 host 读取和 accep
 
 ### P1：subagent item-boundary interrupt 与 remote compaction summary
 
-Go 没有 item-boundary 中断 hook，也没有在子 agent 中断时保留 remote compaction summary 的路径。对应 `#61909`、`#61916`。
+已补齐（`6ce6cb67b`）。Go 原来没有可挂在真实 active turn 上的中断槽位，只能取消工具或整轮硬中断。现在 `turn.SamplingInterrupt` 绑定单个 turn：注册按 turn id 校验，工具取消与采样取消分离，没有有效注册时原子地退回旧的硬中断；停止发生在 item 边界，已完成的输出前缀保留，未执行的 function/custom/search 调用补对应 wire shape 的 aborted 输出，并清空上游 response id 以免 resume 重新带出被丢弃的 item。remote compaction 注册到 checkpoint 安装之后才发布 interrupted terminal，中途压缩的 usage 估计不会被压缩前的高水位覆盖。开关 `multi_agent_v2.interrupt_at_item_boundary` 默认关闭，仅在 v2 且存在存储的 parent 关系时生效。
 
 ### P1：插件 eval archive 的 scoped signing key
 
@@ -207,7 +207,7 @@ Go 已经实现了 thread ownership 的“第一次观察者获胜”，但 agen
 3. Code Mode `OpenSession` / `SubscribeToToolCalls` 与 heartbeat（`#61385`）。
 4. realtime handoff 持久化与 acceptance barrier（`#62288`）。
 5. rollout trace recorder（`#61896`）。
-6. 异步 host service-tier（`#60075`）和 subagent boundary interrupt（`#61909/#61916`）。
+6. 异步 host service-tier（`#60075`）。subagent boundary interrupt 已在后续轮次补齐（`#61909/#61916`）。
 7. 侧栏图片预览与文档 preview 的剩余图片路径（`#61919`）。
 8. 插件 eval archive 的 scoped signing key（`#63528`）。
 
@@ -244,7 +244,7 @@ go test ./parity -count=1
 
 原生节点协同：`linux-align`（Linux 节点）在实现 #63520 Ctrl-Z suspend（SIGTSTP/SIGCONT、controlling terminal 守卫、恢复后光标重探、事件流暂停）与 #61900 proc-mount preflight fallback；`darwin-align`（macOS 节点）在补 darwin+cgo 的 provider 选择断言（具体 backend 类型、无硬件探测）并真机取证 LAContext readiness。两者交付后由 lead 合并进本仓库并统一复跑。
 
-仍未动、且 Go 侧缺底层抽象的项：#61896 rollout trace 写出器（Go 只有配置与 reducer）、#61385 Code Mode typed session/tool-call stream（Go host 只有请求/响应帧）、#61909/#61916 subagent item-boundary interrupt、#61945 host fork 的 `InheritedSessionId`、#61946 Guardian nested approval 的 enclosing tool context、#60075 host service-tier provider。这些需要先补抽象再谈对齐，不适合与平台验证并行仓促合并。
+仍未动、且 Go 侧缺底层抽象的项：#61896 rollout trace 写出器（Go 只有配置与 reducer）、#61385 Code Mode typed session/tool-call stream（Go host 只有请求/响应帧）、#61945 host fork 的 `InheritedSessionId`、#61946 Guardian nested approval 的 enclosing tool context、#60075 host service-tier provider（#61909/#61916 已在后续轮次合并）。这些需要先补抽象再谈对齐，不适合与平台验证并行仓促合并。
 
 ## 第二轮追加（macOS 节点交付 + 认证检查修正）
 
@@ -271,7 +271,7 @@ macOS 还有一个本轮发现、尚未合并的 doctor 缺口：`doctor/desktop
 
 同一条线路上还有一处更关键的 Keychain 命名空间差异（macOS 节点核对 Rust 源码后发现，正在修）：Rust 的 `provider.rs::key_query` 用 `ItemSearchOptions::label(...)`、`create_key` 用 `GenerateKeyOptions::set_label(...)`，两者落到 `kSecAttrLabel`；而 Go 的 `appserver/user_verification_macos_cgo.go` 在 lookup、私有属性与 delete query 三处都用 `kSecAttrApplicationLabel`。也就是说 Rust 创建的 Secure Enclave key 与 Go 创建的根本不在同一命名空间，互相都找不到，这会让“Go 侧 verify”在真机上静默走不到 Rust 生成的密钥。对齐方向是写入只用 `kSecAttrLabel`（与 Rust 一致），查询可先用 `kSecAttrLabel` 再回退旧属性，删除两种属性都清；若不做回退则必须明确记录“旧 Go 条目视为不存在”。
 
-macOS 节点仍报告的另外三处 sandbox 失败（`TestNativeSeatbeltEnforcesWorkspaceAndMetadata` exit 21、两个 symlink 测试在非 canonical TMPDIR 下失败）正在请该节点判定是产品缺口还是测试自身的路径规范化问题，未擅自改 sandbox 生产代码。
+macOS 节点报告的另外三处 sandbox 失败已定性为产品缺口并修掉（`d30ba1b79`）：Seatbelt 匹配的是 `/tmp`、`/var/tmp` 的 canonical 拼写，raw `/tmp` 的 deny 保护不到同一 inode 经 `/private/tmp` 的授权，所以 scratch 排除、`PROTECTED_WRITE`、protected ancestor 与 symlink-home 覆盖判断现在都只归一 depth-one 系统别名；嵌套可变 writable 软链仍要求显式 opt-in，空 trusted home 也不会退化成信任 cwd。节点用默认 `TMPDIR`（`os.TempDir=/tmp`）跑 `CGO_ENABLED=1 go test ./sandbox` 0.985s 通过，两个 native 子例实际执行而非 SKIP。
 
 ## Linux 节点交付（#63520 Ctrl-Z suspend 已合并）
 

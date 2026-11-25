@@ -49855,10 +49855,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "blocked_precondition",
+   "status": "complete",
    "evidence": [
-    "Item-boundary interrupts need the subagent sampling interrupt architecture; Go has no equivalent boundary hook.",
-    "plan: update/plan_2026_11_16.md batch 74"
+    "Go now has a SamplingInterrupt slot bound to one active turn: registration is checked against the turn id, tool cancellation is separate from sampling cancellation, and a stop keeps the completed output prefix, answers retained function/custom/search calls with aborted wire-shaped output and clears the upstream response id. Without a live registration the request falls back to the previous hard abort. Gated on multi_agent_v2.interrupt_at_item_boundary, MultiAgentVersion v2 and a stored parent relation; off by default. Tests: go test ./turn ./appserver ./exec ./config -run '^TestSamplingInterrupt' -count=1; full go test ./turn ./agent ./state ./exec ./config and ./appserver pass on Windows."
    ]
   },
   {
@@ -49907,10 +49906,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "blocked_precondition",
+   "status": "complete",
    "evidence": [
-    "Depends on #61909: preserving remote compaction summaries on child interrupt needs the interrupt hook.",
-    "plan: update/plan_2026_11_16.md batch 74"
+    "Remote compaction registers against the checkpoint install and runs on the turn context, so an interrupt cannot truncate the summary; a pending stop skips the post-compact hook and further sampling, keeps the persisted prefix and publishes the interrupted terminal only after the summary is installed. appserver mid/post compaction and the exec pre-restore and mid-turn paths are covered by TestSamplingInterrupt. Full ./appserver passes on Windows."
    ]
   },
   {

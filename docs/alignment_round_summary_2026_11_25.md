@@ -17,9 +17,14 @@
 | `74491bfd8` | Seatbelt 把 scratch 排除、root unlink 与 PROTECTED_WRITE deny 统一延后到所有 allow 之后 | 修复 /private/tmp 下 .git 被重新放开 |
 | `54cc20024` | bwrap 探针先抽干 stderr 再判定（对齐 Rust 读到 WouldBlock） | 修复偶发把坏 launcher 判成可用 |
 | `cbafa765b` | #61900 proc-mount 预检与 legacy fallback（Linux 节点实现） | #61900 |
+| `46ea8874a` `77084e84d` | bwrap 探针 drain 截止时间改成当前时间 +50ms（原来的 `time.Now()` 会直接 deadline），并记录全量跑出的临时路径产物 | 修复 drain 用例 50/50 失败 |
+| `9727927c4` `3d361033e` `4f76a3c3a` | 三处 Windows 测试环境修整：no-network 环境用例的 homedir 缓存隔离、mxc 运行日志先关闭再加载、子 agent 结束前 `CloseAgent` | 消除 TempDir 清理竞态 |
+| `b2c815beb` | 采用带 `RequestCursorPosition` 的 `ResumeMsg`，并记录 inline viewport realign 未移植 | #63520 残差 |
+| `d30ba1b79` | Seatbelt 只对 depth-one 系统别名（`/tmp`、`/var/tmp`）做归一：scratch 排除、PROTECTED_WRITE、protected ancestor 与 symlink-home 覆盖判断；嵌套可变软链仍需显式 opt-in | 关闭 macOS 默认 TMPDIR 下的 3 个 sandbox 失败 |
+| `6ce6cb67b` | #61909/#61916 item-boundary 采样中断与 remote compaction summary 保留（subagent-align 实现）：工具取消与采样取消分离、保留已完成前缀、aborted 工具输出、follow-up 串行、mail 排队；默认关闭 | #61909、#61916 |
 | `9eb91f2d8` `6b310f1fe` `decb18014` `cb8bee7f0` `0684cf0aa` `6976db562` | 缺口文档与台账修订：开项计数、sidebar contract 的阻塞原因、linux/darwin 原生 SQLite 证据、parity 门结论、macOS Info.plist 差异、glamour 校验分叉风险 | — |
 
-台账现状：3,671 complete / 51 equivalent / 845 not_applicable / 11 partial / 17 blocked_precondition；
+台账现状：3,674 complete / 51 equivalent / 845 not_applicable / 11 partial / 14 blocked_precondition；
 4 个 domain、4 个 contract 仍 open；`certificationReady: false`。
 
 ## 本机验证结果（Windows，CGO_ENABLED=0）
@@ -32,7 +37,9 @@
 | `go test ./tui/... -count=1` | 全部 ok |
 | `go test ./sandbox/... -count=1` | 全部 ok |
 | `go test ./tui/tea -count=1` | ok 42.5s |
-| `go test ./appserver -count=1` | 228.9s，仅 2 个 Windows 长路径 git 用例失败（环境） |
+| `go test ./appserver -count=1`（`CODEX_RUST_ROOT` 指向 3f65e9f1） | ok 480.2s，整包通过，含 `TestPrecomputedExportArtifactsMatchTargetRustCommit` |
+| `go test ./turn ./agent ./state ./exec ./config -count=1` | 全部 ok（state 31.3s） |
+| `go test ./turn ./appserver ./exec ./config -run '^TestSamplingInterrupt' -count=1` | 全部 ok |
 | `GOOS=linux` / `GOOS=darwin` `go vet ./tui/tea ./doctor` | 通过（unix 实现可编译） |
 | `go vet ./sandbox`、`GOOS=linux go vet ./sandbox/linuxsandbox` | 均通过（含 #61900 新代码） |
 | `go test ./doctor -count=1` | ok 3.5s（走非 darwin 分支） |
@@ -57,8 +64,8 @@
 | 项 | 状态 | 负责 |
 | --- | --- | --- |
 | #61900 proc-mount 预检与 legacy fallback | 已完成并合并（残差：节点无真实 0.12 proc-denial 环境） | linux-align |
-| darwin run-plan 断言复核、Seatbelt 三处失败定性、`doctor/desktop_darwin.go` 的 plutil 改法 | 已给对照源码与最小改法，等节点回报 | darwin-align |
-| #61909 item-boundary interrupt / #61916 remote compaction summary | 已派给新 Agent，参考资料 `.refs/rust-3f65e9f1/subagent/` | subagent-align |
+| darwin run-plan 断言复核、Keychain label、`plutil` 读 Info.plist、Seatbelt 系统别名 | 已合并（`1ac73af00` `9f6dce5a6` `74491bfd8` `d30ba1b79`）；macOS 节点报告 `CGO_ENABLED=1 go test ./sandbox` 0.985s 通过 | darwin-align 已完成 |
+| #61909 item-boundary interrupt / #61916 remote compaction summary | 已合并（`6ce6cb67b`），Windows 本机整包验证通过 | subagent-align 已完成 |
 | #61898 proxy supervisor / mount cleanup 交接 | 仅出方案：Go 是进程内 `unix.Exec`，需 re-exec 进程隔离 | 未排期 |
 | #61896 rollout trace 写出器、#61385 Code Mode typed stream、#60075 host service-tier、#61945 `InheritedSessionId`、#61946 Guardian nested approval、#61919 侧栏图片预览 | Go 侧缺对应抽象，需先补底层 | 未排期 |
 
