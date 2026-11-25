@@ -25,7 +25,9 @@ func (m *Model) handleJobControl(message bubbletea.Msg) (bool, bubbletea.Cmd) {
 		return true, nil
 	case bubbletea.ResumeMsg:
 		m.configureAlternateScrollForSurface()
-		return true, nil
+		// RestoreTerminal reinitializes input and rendering, but Bubble Tea
+		// does not re-query the cursor after the shell has used the terminal.
+		return true, bubbletea.RequestCursorPosition
 	}
 	return false, nil
 }
