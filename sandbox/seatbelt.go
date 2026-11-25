@@ -152,6 +152,12 @@ func buildSeatbeltPolicyWithManagedNetwork(cwd string, profile *PermissionProfil
 		// broader root (a scratch alias such as /private/tmp) would otherwise reopen
 		// metadata an earlier root denied.
 		for _, excluded := range scratchExclusions {
+			// Seatbelt matches canonical system aliases; a raw /tmp deny does
+			// not protect the same inode granted through /private/tmp.
+			excluded, err = normalizeSeatbeltTopLevelAlias(excluded)
+			if err != nil {
+				return "", nil, err
+			}
 			name := fmt.Sprintf("SCRATCH_EXCLUDED_%d", len(parameters))
 			parameters = append(parameters, seatbeltParameter{Name: name, Value: excluded})
 			deferredWriteDenies = append(deferredWriteDenies, fmt.Sprintf(`(deny file-write* (subpath (param "%s")))`, name))
@@ -178,7 +184,11 @@ func buildSeatbeltPolicyWithManagedNetwork(cwd string, profile *PermissionProfil
 			deferredWriteDenies = append(deferredWriteDenies, fmt.Sprintf(`(deny file-write-unlink (require-all (literal (param "%s")) (vnode-type DIRECTORY)))`, name))
 			for _, protected := range append(append([]string(nil), root.ReadOnlySubpaths...), protectedMetadataPaths(root.Root, root.ProtectedMetadataNames)...) {
 				protectedName := fmt.Sprintf("PROTECTED_WRITE_%d", len(parameters))
-				parameters = append(parameters, seatbeltParameter{Name: protectedName, Value: cleanSeatbeltPath(protected)})
+				normalizedProtected, err := normalizeSeatbeltTopLevelAlias(protected)
+				if err != nil {
+					return "", nil, err
+				}
+				parameters = append(parameters, seatbeltParameter{Name: protectedName, Value: normalizedProtected})
 				deferredWriteDenies = append(deferredWriteDenies, fmt.Sprintf(`(deny file-write* (subpath (param "%s")))`, protectedName))
 			}
 		}
@@ -230,7 +240,11 @@ func buildSeatbeltPolicyWithManagedNetwork(cwd string, profile *PermissionProfil
 	// no broader allowance can reopen the rename operation.
 	for index, ancestor := range seatbeltProtectedAncestors(resolved.WritableRoots) {
 		name := fmt.Sprintf("PROTECTED_ANCESTOR_%d", index)
-		parameters = append(parameters, seatbeltParameter{Name: name, Value: ancestor})
+		normalizedAncestor, err := normalizeSeatbeltTopLevelAlias(ancestor)
+		if err != nil {
+			return "", nil, err
+		}
+		parameters = append(parameters, seatbeltParameter{Name: name, Value: normalizedAncestor})
 		lines = append(lines, fmt.Sprintf(`(deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal (param "%s"))))`, name))
 	}
 	// Rust #46500: these fcntls mutate files through read-only descriptors,
@@ -339,6 +353,10 @@ func seatbeltProtectedAncestors(roots []sandboxpath.WritableRoot) []string {
 	ancestors := []string{}
 	for _, root := range roots {
 		rootPath := cleanSeatbeltPath(root.Root)
+		comparisonRoot, err := normalizeSeatbeltTopLevelAlias(rootPath)
+		if err != nil {
+			continue
+		}
 		for _, protected := range root.ReadOnlySubpaths {
 			logical := cleanSeatbeltPath(protected)
 			paths := []string{logical}
@@ -347,7 +365,13 @@ func seatbeltProtectedAncestors(roots []sandboxpath.WritableRoot) []string {
 			}
 			for _, protectedPath := range paths {
 				ancestor := parentSeatbeltPath(protectedPath)
-				for ancestor != "" && seatbeltSubpathWithin(ancestor, rootPath) {
+				for ancestor != "" {
+					// Compare in the system-alias namespace without resolving any
+					// mutable nested component. Keep the logical deny path as well.
+					comparisonAncestor, err := normalizeSeatbeltTopLevelAlias(ancestor)
+					if err != nil || !seatbeltSubpathWithin(comparisonAncestor, comparisonRoot) {
+						break
+					}
 					if !seen[ancestor] {
 						seen[ancestor] = true
 						ancestors = append(ancestors, ancestor)
@@ -445,12 +469,20 @@ func normalizeSeatbeltWritableRoot(root string, allowedSymlinkedCodexHome string
 // opted-in home. Both the configured spelling and its resolved target count,
 // mirroring Rust's two starts_with checks.
 func seatbeltAllowedSymlinkHomeCovers(root string, home string) bool {
-	home = cleanSeatbeltPath(home)
-	if home == "" {
+	// An unset opt-in must not become "." and implicitly trust the working directory.
+	if strings.TrimSpace(home) == "" || strings.TrimSpace(root) == "" {
 		return false
 	}
-	root = cleanSeatbeltPath(root)
-	if root == "" {
+	// The configured home may already be canonical while the writable root
+	// still starts with /tmp or /var. Resolve only that system alias before
+	// testing coverage; nested writable links still need the explicit opt-in.
+	var err error
+	home, err = normalizeSeatbeltTopLevelAlias(home)
+	if err != nil || home == "" {
+		return false
+	}
+	root, err = normalizeSeatbeltTopLevelAlias(root)
+	if err != nil || root == "" {
 		return false
 	}
 	if seatbeltSubpathWithin(root, home) {

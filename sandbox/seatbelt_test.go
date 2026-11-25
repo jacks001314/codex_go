@@ -315,7 +315,11 @@ func TestBuildSeatbeltPolicyAllowsTrustedCodexHomeSymlinksLikeRust(t *testing.T)
 	if err != nil {
 		t.Fatalf("buildSeatbeltPolicy(allowed home) error = %v", err)
 	}
-	if !seatbeltWritableRootParametersContain(parameters, target) {
+	expectedTarget, targetErr := filepath.EvalSymlinks(target)
+	if targetErr != nil {
+		t.Fatal(targetErr)
+	}
+	if !seatbeltWritableRootParametersContain(parameters, expectedTarget) {
 		t.Fatalf("writable root parameter = %#v, want resolved target %q", parameters, target)
 	}
 	if seatbeltWritableRootParametersContain(parameters, link) {
@@ -398,9 +402,13 @@ func TestBuildSeatbeltPolicyProtectsResolvedSymlinkAncestorsLikeRust(t *testing.
 
 	ancestors := seatbeltProtectedAncestors(policy.GetWritableRootsWithCWD(root))
 	contains := func(want string) bool {
-		want = cleanSeatbeltPath(want)
+		normalizedWant, err := normalizeSeatbeltTopLevelAlias(want)
+		if err != nil {
+			t.Fatal(err)
+		}
 		for _, ancestor := range ancestors {
-			if ancestor == want {
+			normalized, normalizeErr := normalizeSeatbeltTopLevelAlias(ancestor)
+			if normalizeErr == nil && normalized == normalizedWant {
 				return true
 			}
 		}
@@ -413,8 +421,12 @@ func TestBuildSeatbeltPolicyProtectsResolvedSymlinkAncestorsLikeRust(t *testing.
 	if !contains(filepath.Join(root, "real")) {
 		t.Fatalf("resolved target ancestors = %#v, want %q", ancestors, filepath.Join(root, "real"))
 	}
+	expectedTarget, targetErr := filepath.EvalSymlinks(target)
+	if targetErr != nil {
+		t.Fatal(targetErr)
+	}
 	resolved, err := filepath.EvalSymlinks(logical)
-	if err != nil || cleanSeatbeltPath(resolved) != cleanSeatbeltPath(target) {
+	if err != nil || cleanSeatbeltPath(resolved) != cleanSeatbeltPath(expectedTarget) {
 		t.Fatalf("symlink resolution = %q, %v", resolved, err)
 	}
 	if _, _, err := buildSeatbeltPolicy(root, &profile, nil, ""); err != nil {

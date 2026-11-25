@@ -10,8 +10,54 @@ import (
 )
 
 func TestNativeSeatbeltEnforcesWorkspaceAndMetadata(t *testing.T) {
-	workspace := t.TempDir()
-	outside := t.TempDir()
+	base := nativeSeatbeltFixtureOutsideScratch(t)
+	outside := filepath.Join(base, "outside")
+	if err := os.Mkdir(outside, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("outside_scratch", func(t *testing.T) {
+		workspace := filepath.Join(base, "workspace")
+		if err := os.Mkdir(workspace, 0700); err != nil {
+			t.Fatal(err)
+		}
+		assertNativeSeatbeltWrites(t, workspace, outside)
+	})
+	// Also exercise the deferred metadata denies against broader tmp grants.
+	t.Run("scratch_metadata", func(t *testing.T) {
+		assertNativeSeatbeltWrites(t, t.TempDir(), outside)
+	})
+}
+
+func nativeSeatbeltFixtureOutsideScratch(t *testing.T) string {
+	t.Helper()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd, err = filepath.EvalSymlinks(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, grant := range []string{"/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", os.TempDir()} {
+		grant, err = normalizeSeatbeltTopLevelAlias(grant)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if seatbeltSubpathWithin(cwd, grant) {
+			t.Skipf("source directory %s is under default writable scratch/TMPDIR %s; native denial fixture needs a project checkout outside these grants", cwd, grant)
+		}
+	}
+	base, err := os.MkdirTemp(cwd, ".codex-seatbelt-native-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(base) })
+	return base
+}
+
+func assertNativeSeatbeltWrites(t *testing.T, workspace, outside string) {
+	t.Helper()
+	t.Logf("workspace=%s outside=%s TMPDIR=%q os.TempDir=%s", workspace, outside, os.Getenv("TMPDIR"), os.TempDir())
 	metadata := filepath.Join(workspace, ".git")
 	if err := os.Mkdir(metadata, 0o755); err != nil {
 		t.Fatalf("create protected metadata directory: %v", err)

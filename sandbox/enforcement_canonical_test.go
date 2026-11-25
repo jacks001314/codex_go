@@ -43,9 +43,13 @@ func TestEnforcementKeepsCanonicalReadOnlySubtree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	expectedDocs, err := normalizeSeatbeltTopLevelAlias(docs)
+	if err != nil {
+		t.Fatal(err)
+	}
 	found := false
 	for _, param := range params {
-		if strings.HasPrefix(param.Name, "PROTECTED_WRITE_") && param.Value == cleanSeatbeltPath(docs) {
+		if strings.HasPrefix(param.Name, "PROTECTED_WRITE_") && param.Value == expectedDocs {
 			found = true
 		}
 	}
