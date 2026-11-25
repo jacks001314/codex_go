@@ -1321,11 +1321,15 @@ func TestRunIncludesAdditionalInstructionsAndInputItems(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if !strings.HasPrefix(agent.request.Instructions, "## Skills\n- imagegen") {
-		t.Fatalf("instructions = %q", agent.request.Instructions)
+	if !strings.Contains(agent.request.Instructions, "You are a coding agent running in the Codex CLI") ||
+		strings.Contains(agent.request.Instructions, "## Skills") {
+		t.Fatal("base instructions were replaced or polluted by additional instructions")
+	}
+	if !agentRequestInputItemsContainText(agent.request, "## Skills\n- imagegen") {
+		t.Fatalf("additional developer instructions missing from input items")
 	}
 	if !agentRequestInputItemsContainText(agent.request, "<name>imagegen</name>") {
-		t.Fatalf("input items = %#v", agent.request.InputItems)
+		t.Fatalf("selected skill item missing from input items")
 	}
 }
 

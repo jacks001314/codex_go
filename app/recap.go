@@ -108,8 +108,12 @@ func interactiveLocalStructuredGenerator(root *cli.RootOptions, runner *codexexe
 		if threadSource == "" {
 			threadSource = "thread_title"
 		}
+		// Rust start_temporary_thread passes an empty tool allowlist, so the
+		// hidden structured turn never advertises a tool to the model.
+		emptyTools := []string{}
 		result, err := runner.RunContext(ctx, &codexexec.Request{
-			Root: turnRoot,
+			Root:         turnRoot,
+			AllowedTools: &emptyTools,
 			Exec: cli.ExecOptions{
 				Prompt:           prompt,
 				Shared:           turnRoot.Shared,

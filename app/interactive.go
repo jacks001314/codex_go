@@ -2442,10 +2442,10 @@ func pickerMetricsAuthMode(resolved *auth.ResolvedAuth) string {
 
 func interactiveOnListModels(root *cli.RootOptions, hasChatGPTAccount bool, owner *config.EmbeddedNetworkPolicy) func(cwd string, provider string, includeHidden bool) ([]codextui.ModelPickerOption, error) {
 	var (
-		mu          sync.Mutex
-		cacheCWD    string
+		mu            sync.Mutex
+		cacheCWD      string
 		cacheProvider string
-		cached      *interactiveModelListSource
+		cached        *interactiveModelListSource
 	)
 	return func(cwd string, provider string, includeHidden bool) ([]codextui.ModelPickerOption, error) {
 		cwd = strings.TrimSpace(cwd)
@@ -2503,10 +2503,18 @@ func newInteractiveModelListSource(root *cli.RootOptions, hasChatGPTAccount bool
 	if err != nil {
 		return nil, fmt.Errorf("resolve model catalog auth: %w", err)
 	}
-	if resolved == nil {
+	// A configured provider can authenticate with its own static token or auth
+	// command. In that case the model picker must not require an unrelated
+	// account credential from the shared auth store.
+	providerHasAuth := resolved != nil || providerInfo.HasProviderAPIKey() || providerInfo.HasCommandAuth()
+	if !providerHasAuth {
 		return nil, errors.New("resolve model catalog auth: no credential")
 	}
-	runtimeProvider := modelpkg.CreateRuntimeProviderForID(providerID, *providerInfo, &resolved.Auth)
+	var authSnapshot *auth.AuthDotJSON
+	if resolved != nil {
+		authSnapshot = &resolved.Auth
+	}
+	runtimeProvider := modelpkg.CreateRuntimeProviderForID(providerID, *providerInfo, authSnapshot)
 	apiProvider, err := runtimeProvider.APIProvider()
 	if err != nil {
 		return nil, fmt.Errorf("resolve model provider API: %w", err)
@@ -2525,7 +2533,7 @@ func newInteractiveModelListSource(root *cli.RootOptions, hasChatGPTAccount bool
 		ModelCatalog:                    base,
 		Endpoint:                        endpoint,
 		UseRemoteCatalogAsSourceOfTruth: hasChatGPTAccount,
-		HasAuth:                         true,
+		HasAuth:                         providerHasAuth,
 		MetricsAuthMode:                 pickerMetricsAuthMode(resolved),
 	})
 	if manager == nil {
@@ -2534,7 +2542,7 @@ func newInteractiveModelListSource(root *cli.RootOptions, hasChatGPTAccount bool
 	return &interactiveModelListSource{
 		manager:    manager,
 		values:     loaded.Values,
-		apiKeyAuth: modelpkg.AuthUsesAPIKey(&resolved.Auth),
+		apiKeyAuth: resolved != nil && modelpkg.AuthUsesAPIKey(&resolved.Auth),
 	}, nil
 }
 

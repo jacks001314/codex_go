@@ -97,7 +97,11 @@ func responsesRequestDiagnosticFields(request *AgentRequest, apiRequest *respons
 	if apiRequest != nil {
 		fields["model"] = apiRequest.Model
 		fields["store"] = apiRequest.Store
-		fields["tool_count"] = len(apiRequest.Tools)
+		toolCount := 0
+		if apiRequest.Tools != nil {
+			toolCount = len(*apiRequest.Tools)
+		}
+		fields["tool_count"] = toolCount
 		if encoded, err := json.Marshal(apiRequest); err == nil {
 			fields["request_body_bytes"] = len(encoded)
 			fields["request_body"] = json.RawMessage(encoded)

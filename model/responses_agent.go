@@ -464,12 +464,14 @@ type responsesAgentRequest struct {
 	// Rust #49675: keep the routing fields first. encoding/json serializes
 	// struct fields in declaration order, and gateways may inspect a request
 	// body incrementally before buffering a potentially multi-megabyte input.
-	Model              string                       `json:"model"`
-	Stream             bool                         `json:"stream"`
-	ServiceTier        string                       `json:"service_tier,omitempty"`
-	Instructions       string                       `json:"instructions,omitempty"`
-	Input              []any                        `json:"input"`
-	Tools              []any                        `json:"tools,omitempty"`
+	Model        string `json:"model"`
+	Stream       bool   `json:"stream"`
+	ServiceTier  string `json:"service_tier,omitempty"`
+	Instructions string `json:"instructions,omitempty"`
+	Input        []any  `json:"input"`
+	// Tools mirrors Rust's Option<ResponsesApiTools>: the Responses API always
+	// sends the field, so an empty allowlist serializes as `tools: []`.
+	Tools              *[]any                       `json:"tools,omitempty"`
 	ToolChoice         string                       `json:"tool_choice,omitempty"`
 	ParallelToolCalls  bool                         `json:"parallel_tool_calls"`
 	Reasoning          *responsesReasoning          `json:"reasoning,omitempty"`
@@ -1268,8 +1270,8 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	if clientMetadata := websocketClientMetadata(apiRequest.ClientMetadata, request.Trace); len(clientMetadata) > 0 {
 		payload["client_metadata"] = clientMetadata
 	}
-	if len(apiRequest.Tools) > 0 {
-		payload["tools"] = apiRequest.Tools
+	if apiRequest.Tools != nil {
+		payload["tools"] = *apiRequest.Tools
 	}
 	if apiRequest.Reasoning != nil {
 		payload["reasoning"] = apiRequest.Reasoning
@@ -2219,8 +2221,8 @@ func websocketResponseCreatePayload(apiRequest *responsesAgentRequest, previousR
 	if clientMetadata := websocketClientMetadata(apiRequest.ClientMetadata, trace); len(clientMetadata) > 0 {
 		payload["client_metadata"] = clientMetadata
 	}
-	if len(apiRequest.Tools) > 0 {
-		payload["tools"] = apiRequest.Tools
+	if apiRequest.Tools != nil {
+		payload["tools"] = *apiRequest.Tools
 	}
 	if apiRequest.Reasoning != nil {
 		payload["reasoning"] = apiRequest.Reasoning
@@ -2755,7 +2757,7 @@ func (r *ResponsesAgentRunner) buildResponsesAgentRequest(request *AgentRequest,
 		Model:                modelID,
 		Instructions:         instructions,
 		Input:                inputItems,
-		Tools:                tools,
+		Tools:                responsesToolsField(tools, incrementalLayout),
 		ToolChoice:           "auto",
 		Stream:               stream,
 		Store:                request.Store,
@@ -2966,6 +2968,17 @@ func responsesTextParamForOutputSchema(schema any) *responsesTextParam {
 		return nil
 	}
 	return responsesTextParamForRequest(schema, "", nil, nil)
+}
+
+// responsesToolsField mirrors Rust's Option<ResponsesApiTools>. The Responses
+// API always carries the tools field, so an empty allowlist serializes as
+// `tools: []`; a Responses Lite window omits it once no hosted tool remains.
+func responsesToolsField(tools []any, incrementalLayout bool) *[]any {
+	if incrementalLayout && len(tools) == 0 {
+		return nil
+	}
+	value := append([]any{}, tools...)
+	return &value
 }
 
 func (r *ResponsesAgentRunner) withHostedToolsForRequest(tools []any, info *ModelInfo) []any {

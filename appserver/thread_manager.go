@@ -63,6 +63,15 @@ type ThreadManager struct {
 	// so the runtime can arm its idle lifecycle without re-entering the lock.
 	retainedHook func(string)
 
+	// guardianV3Ready, guardianV3TurnEnded and guardianV3Stopped follow the
+	// Guardian v3 host (Rust guardian-v3 thread and turn lifecycle contributors,
+	// #62135/#62372). The runtime installs them only when the host is enabled;
+	// a retained thread starts its root worker, a finished turn wakes the
+	// intake, and a released thread stops the root.
+	guardianV3Ready     func(*session.Record)
+	guardianV3TurnEnded func(string)
+	guardianV3Stopped   func(string)
+
 	// providerRoutes retains the model provider route each live thread started
 	// with, so managed policy changes can be detected against it (Rust #44944
 	// keeps the thread's resolved Config for the same purpose).
@@ -201,6 +210,48 @@ func (m *ThreadManager) StatusManager() *ThreadStatusManager {
 	return m.status
 }
 
+// notifyGuardianV3Stopped tells the host that these threads left the process.
+// The runtime maps each thread onto its root and ignores non-roots.
+func (m *ThreadManager) notifyGuardianV3Stopped(threadIDs []session.ThreadID) {
+	hook := m.guardianV3StoppedHook()
+	if hook == nil {
+		return
+	}
+	for _, threadID := range threadIDs {
+		hook(string(threadID))
+	}
+}
+
+func (m *ThreadManager) guardianV3TurnEndedHook() func(string) {
+	if m == nil {
+		return nil
+	}
+	m.liveThreadsMu.Lock()
+	defer m.liveThreadsMu.Unlock()
+	return m.guardianV3TurnEnded
+}
+
+func (m *ThreadManager) guardianV3StoppedHook() func(string) {
+	if m == nil {
+		return nil
+	}
+	m.liveThreadsMu.Lock()
+	defer m.liveThreadsMu.Unlock()
+	return m.guardianV3Stopped
+}
+
+// SetGuardianV3Lifecycle installs the Guardian v3 host callbacks.
+func (m *ThreadManager) SetGuardianV3Lifecycle(ready func(*session.Record), turnEnded func(string), stopped func(string)) {
+	if m == nil {
+		return
+	}
+	m.liveThreadsMu.Lock()
+	m.guardianV3Ready = ready
+	m.guardianV3TurnEnded = turnEnded
+	m.guardianV3Stopped = stopped
+	m.liveThreadsMu.Unlock()
+}
+
 func (m *ThreadManager) RetainLiveThread(store *session.Store, record *session.Record) error {
 	if m == nil || record == nil {
 		return nil
@@ -218,9 +269,13 @@ func (m *ThreadManager) RetainLiveThread(store *session.Store, record *session.R
 	defer func() { _ = guard.Discard() }()
 	m.liveThreads[record.ID] = &managedLiveThread{persistence: guard.Commit()}
 	hook := m.retainedHook
+	guardianReady := m.guardianV3Ready
 	m.liveThreadsMu.Unlock()
 	if hook != nil {
 		hook(string(record.ID))
+	}
+	if guardianReady != nil {
+		guardianReady(record)
 	}
 	return nil
 }
@@ -285,9 +340,13 @@ func (retention *LiveThreadRetention) Commit() {
 	}
 	manager.liveThreads[threadID] = &managedLiveThread{persistence: retention.guard.Commit()}
 	hook := manager.retainedHook
+	guardianReady := manager.guardianV3Ready
 	manager.liveThreadsMu.Unlock()
 	if hook != nil {
 		hook(string(threadID))
+	}
+	if guardianReady != nil {
+		guardianReady(retention.record)
 	}
 }
 
@@ -380,6 +439,7 @@ func (m *ThreadManager) ReleaseLiveThreads(threadIDs []session.ThreadID) {
 	for i := len(liveThreads) - 1; i >= 0; i-- {
 		_ = liveThreads[i].Close()
 	}
+	m.notifyGuardianV3Stopped(threadIDs)
 }
 
 func (m *ThreadManager) CloseLiveThreads() error {
@@ -413,6 +473,7 @@ func (m *ThreadManager) CloseLiveThreads() error {
 			closeErr = err
 		}
 	}
+	m.notifyGuardianV3Stopped(threadIDs)
 	return closeErr
 }
 
@@ -1044,6 +1105,9 @@ func (m *ThreadManager) ConsumeTurn(threadID string, turnID string, clearDiff bo
 		delete(m.diffs, activeTurnDiffKey(threadID, active.TurnID))
 	}
 	m.turnsMu.Unlock()
+	if hook := m.guardianV3TurnEndedHook(); hook != nil {
+		hook(threadID)
+	}
 	return active, true
 }
 
@@ -1065,6 +1129,9 @@ func (m *ThreadManager) ConsumeTurnTracked(threadID string, turnID string, clear
 	}
 	m.turnWG.Add(1)
 	m.turnsMu.Unlock()
+	if hook := m.guardianV3TurnEndedHook(); hook != nil {
+		hook(threadID)
+	}
 	return active, true
 }
 
@@ -1084,6 +1151,9 @@ func (m *ThreadManager) ConsumeTurnIf(threadID string, turnID string, clearDiff 
 	delete(m.active, threadID)
 	if clearDiff {
 		delete(m.diffs, activeTurnDiffKey(threadID, active.TurnID))
+	}
+	if hook := m.guardianV3TurnEndedHook(); hook != nil {
+		hook(threadID)
 	}
 	return active, true
 }

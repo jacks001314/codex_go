@@ -710,7 +710,46 @@ func (r *Runtime) modelVisibleSpecsForRequest(effectiveToolMode string) []tool.S
 	if codemode.HasExecTool(visibleSpecs) {
 		visibleSpecs = augmentCodeModeWinnerSpecs(visibleSpecs, r.router.CodeModeToolSpecs())
 	}
-	return visibleSpecs
+	return filterAllowedToolSpecs(visibleSpecs, r.allowedTools)
+}
+
+// filterAllowedToolSpecs applies an explicit thread or turn allowlist after
+// the tool mode has resolved the visible surface (Rust #45711 restricts the
+// finalized tool plan, so direct-mode promotion still sees the code-mode
+// executors rather than a registry that was already pruned).
+func filterAllowedToolSpecs(specs []tool.Spec, allowed *[]string) []tool.Spec {
+	if allowed == nil {
+		return specs
+	}
+	if len(*allowed) == 0 {
+		return nil
+	}
+	out := make([]tool.Spec, 0, len(specs))
+	for _, spec := range specs {
+		if toolSpecAllowed(spec.Name, *allowed) {
+			out = append(out, spec)
+		}
+	}
+	return out
+}
+
+func toolSpecAllowed(name tool.ToolName, allowed []string) bool {
+	for _, entry := range allowed {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if entry == name.Key() || entry == name.Name {
+			return true
+		}
+		if (name.Namespace == "" || name.Namespace == "functions") && entry == "functions."+name.Name {
+			return true
+		}
+		if name.Namespace != "" && entry == name.Namespace {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Runtime) applyCodeModeMessagesForModel(modelID string) {

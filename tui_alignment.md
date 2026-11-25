@@ -97,6 +97,69 @@ flattened `multi_agent_v1__*` function tools and always advertised
   suite at `H4`: `startup`, `slash-help`, `slash-status` now report
   `requests match`; `prompt-basic` is down to the two open items below.
 
+## Landed in this session (2026-11-24, tags `fix1`/`fix2`)
+
+Provider under test: `qax` (Responses wire, `deepseek-v4-flash`), driven by
+`tui_harness.py` with a logging proxy in front so both CLIs talk to the same
+endpoint.
+
+1. **Hidden structured title turn sends `tools: []`.** Rust starts the title
+   turn with an empty allowlist (`temporary_structured_request`), so the request
+   carries `"tools": []`. Go advertised `request_user_input`, `exec_command`
+   and `shell_command` on that turn. The allowlist now travels
+   `exec.Request.AllowedTools` -> `turn.RuntimeOptions.AllowedTools` and is
+   applied to the finalized model-visible specs
+   (`turn.filterAllowedToolSpecs`), which is the stage where direct-mode
+   promotion re-exposes `exec_command`. Hosted tools (`web_search`,
+   `image_generation`) are filtered and `DisableHostedImageGeneration` follows
+   the allowlist. `app/recap.go` passes `AllowedTools: &[]string{}`.
+   Tests: `TestRunResponsesRequestHonorsAllowedToolsLikeRust`.
+2. **`tools` is always serialized on the Responses API.**
+   `responsesAgentRequest.Tools` is now `*[]any`; the Responses path always
+   emits the field (empty allowlist -> `tools: []`), while a Responses Lite
+   window omits it once no hosted tool remains, matching Rust's
+   `Option<ResponsesApiTools>`.
+3. **Additional instructions are a developer message, not the base prompt.**
+   `exec.baseInstructionsForRequest` falls back to `model.BaseInstructions`
+   when config has none, and `AdditionalInstructions` is prepended as its own
+   developer input item, matching Rust's base / additional / permissions /
+   environment / user order. Tests:
+   `TestRunIncludesAdditionalInstructionsAndInputItems`.
+4. **Model picker accepts provider bearer tokens.** The interactive model list
+   source no longer requires a resolved account credential when the provider
+   carries its own auth (`experimental_bearer_token`); `/model` now shows the
+   picker instead of "Could not load models". Tests:
+   `TestInteractiveModelListSourceAcceptsProviderBearerTokenWithoutAccountAuthLikeRust`.
+
+### Verification
+
+- `go test ./exec ./turn ./model -count=1` green; targeted `./app` tests green
+  (`TestInteractiveLocalGoalCallbacksMaterializeOversizedObjective` fails on an
+  unrelated goal-draft editing path).
+- `scripts\build.ps1` rebuilt `bin\codex.exe` (codex-cli 1.1.1).
+- `tui_harness.py --scenario prompt-basic --scenario slash-model --tag fix2`
+  and `--scenario prompt-basic --scenario slash-status --tag fix3`:
+  the title request no longer differs on tools (`slash-status` reports 0
+  differences). `prompt-basic` keeps 9: main-turn `request-tools`,
+  `request-input_types`, `user-agent` and `x-codex-turn-metadata` on both
+  requests, SSE `event_types` (reasoning delta segmentation) and
+  `rollout-events`. `slash-model` keeps 1: `request-count`.
+
+### New findings from `fix2`
+
+- **Main-turn tool surface** - Rust advertises `mcp__codex_tui` and
+  `mcp__node_repl` (TUI built-in MCP servers) plus `multi_agent_v1`; Go
+  advertises `skills__list`/`skills__read` and `tool_search` instead. Go
+  exposes skills twice (instructions plus an in-process skills MCP server) and
+  Rust has no such tools in this configuration.
+- **Input item grouping** - Rust folds `<permissions instructions>` into one of
+  its four developer/user context items; Go emits a fifth, standalone developer
+  item. Content already matches (read-only, approval never).
+- **`slash-model` refetches the catalog** - opening the picker in Go issues
+  `GET /v1/models?client_version=0.0.0` (65 KB) through the proxy; Rust shows
+  the app-server catalog and sends no request. The Go picker should prefer the
+  cached catalog and refresh only when the cache policy requires it.
+
 ## Open items
 
 1. **Automatic thread title request (model-visible)** - Rust issues a second

@@ -401,6 +401,12 @@ type RuntimeRouter struct {
 	threadModelsMu   sync.Mutex
 	startupModelsKey string
 	threadModels     map[string]model.ModelsManager
+	// guardianV3Host owns the per-root Guardian routing workers (Rust
+	// guardian-v3 host.rs). It is nil until the runtime installs the host.
+	guardianV3Host *GuardianV3Host
+	// guardianV3Sampler, when set, replaces the model-backed routing sampler
+	// (tests and embedders).
+	guardianV3Sampler GuardianRoutingSampler
 	// guardianModels holds the catalog belonging to the host-selected Guardian
 	// provider (Rust #62588 shared Guardian catalog). It never reuses the
 	// actor's cache, so provider catalogs cannot leak between the routes.
@@ -1373,6 +1379,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 	router.captureStartupModelProviderRoute()
 	router.configureOAuthStorageTelemetry()
 	threads.SetThreadRetainedHook(router.scheduleThreadIdleUnload)
+	router.installGuardianV3Host()
 	return router
 }
 
@@ -3212,6 +3219,7 @@ func (r *RuntimeRouter) BeginDraining() {
 
 func (r *RuntimeRouter) close() error {
 	r.cancelServerRequestReplays()
+	r.closeGuardianV3Host()
 	// Rust #59725: graceful shutdown waits for outstanding host outcome handoffs
 	// before thread-stop hooks and service teardown run.
 	r.waitAgentTurnOutcomes()

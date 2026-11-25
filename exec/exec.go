@@ -64,6 +64,9 @@ type Request struct {
 	CollaborationMode      map[string]any
 	AdditionalInstructions string
 	AdditionalInputItems   []any
+	// AllowedTools, when non-nil, restricts the model-visible tools. An empty
+	// list disables every tool, as used by the hidden structured title turn.
+	AllowedTools *[]string
 	// InternalEventHandler receives the complete in-process event before its
 	// public JSON representation is encoded. Local UI consumers use this to
 	// retain non-wire details such as file-change diffs while the SDK JSON shape
@@ -356,9 +359,6 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if err != nil {
 		return nil, err
 	}
-	if extra := strings.TrimSpace(req.AdditionalInstructions); extra != "" {
-		instructions = strings.Join(nonEmptyStrings([]string{extra, instructions}), "\n\n")
-	}
 	prompt, resumeContext, err := r.promptForRequestWithResume(req, cfg, resumeRecord, stdin, stderr)
 	if err != nil {
 		return nil, err
@@ -553,7 +553,15 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if len(overrideItems) > 0 {
 		req.AdditionalInputItems = append(append([]any(nil), req.AdditionalInputItems...), overrideItems...)
 	}
-	inputItems := append([]any(nil), execStartupItems...)
+	inputItems := make([]any, 0, len(execStartupItems)+len(historyInputItems)+len(req.AdditionalInputItems)+1)
+	// Additional instructions are developer messages, not the base prompt.
+	// Keeping them separate preserves the model's base instructions and matches
+	// Rust's order: base, additional developer instructions, permissions,
+	// environment context, then the user turn.
+	if item := developerMessageInputItem(req.AdditionalInstructions); item != nil {
+		inputItems = append(inputItems, item)
+	}
+	inputItems = append(inputItems, execStartupItems...)
 	inputItems = append(inputItems, historyInputItems...)
 	// Configuration updates follow the accepted input in the request, matching
 	// the app-server ordering.
@@ -694,7 +702,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		ImageGeneration:                   imageGenerationOptions,
 		ViewImage:                         execViewImageOptions(requestCWD(req), &modelInfo, cfg.FeatureSettings()),
 		HostedTools:                       hostedTools,
-		DisableHostedImageGeneration:      req.Exec.Subcommand == "review",
+		DisableHostedImageGeneration:      req.Exec.Subcommand == "review" || !execAllowlistPermitsHostedTool(req.AllowedTools, turn.HostedImageGenerationToolType),
 		ToolOutputTokenLimit:              cfg.ToolOutputTokenLimit(),
 		UnifiedExecEnabled:                features.Enabled(cfg.FeatureSettings(), "unified_exec"),
 		ExecPermissionApprovals:           features.Enabled(cfg.FeatureSettings(), "exec_permission_approvals"),
@@ -1710,6 +1718,7 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 	}
 	return turn.NewRuntime(&turn.RuntimeOptions{
 		Agent:                        agent,
+		AllowedTools:                 req.AllowedTools,
 		Router:                       router,
 		ToolRegistrationMetrics:      r.otelMetricsSink(),
 		Hooks:                        r.Hooks,
@@ -2080,6 +2089,20 @@ func (r *Runner) imageGenerationOptionsForRun(cfg *config.Config, resolvedAuth *
 		InputItems: append([]any(nil), inputItems...),
 		GIFEnabled: features.Enabled(cfg.FeatureSettings(), "image_generation_animation"),
 	}, nil
+}
+
+// execAllowlistPermitsHostedTool reports whether an explicit tool allowlist keeps
+// a hosted tool. A nil allowlist leaves every tool available.
+func execAllowlistPermitsHostedTool(allowed *[]string, toolType string) bool {
+	if allowed == nil {
+		return true
+	}
+	for _, name := range *allowed {
+		if strings.EqualFold(strings.TrimSpace(name), toolType) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Runner) hostedToolsForRun(cfg *config.Config, resolvedAuth *auth.ResolvedAuth, providerID string, modelID string, forceLiveWebSearch bool, permissions *config.SandboxPermissionProfileResolution, standaloneWebSearch *turn.WebSearchOptions, standaloneImageGeneration *turn.ImageGenerationOptions) ([]any, error) {
@@ -3148,7 +3171,16 @@ func baseInstructionsForRequest(req *Request, cfg *config.Config) (string, error
 	if req != nil && req.Exec.Subcommand == "review" {
 		return review.ReviewPrompt, nil
 	}
-	return baseInstructionsForConfig(cfg, requestCWD(req))
+	instructions, err := baseInstructionsForConfig(cfg, requestCWD(req))
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(instructions) == "" {
+		// Rust falls back to ModelInfo::base_instructions. The generic embedded
+		// prompt is the exact fallback for models without a catalog override.
+		return model.BaseInstructions, nil
+	}
+	return instructions, nil
 }
 
 // execPromptCacheKey applies the run's prompt-cache-key policy (#55587). An
