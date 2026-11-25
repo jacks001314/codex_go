@@ -12,33 +12,48 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"codex_go/session"
 )
 
-// The default router installs the native provider on a cgo-enabled macOS build;
-// this node has no Touch ID hardware, so the probe is exercised but not
-// asserted to be true.
+// Provider selection must be testable without probing Touch ID, accessing the
+// Keychain, or displaying authentication UI.
 func TestDarwinUserVerificationNativeProviderSelection(t *testing.T) {
-	router := NewRuntimeRouter(RuntimeServices{})
-	provider := router.services.UserVerificationProvider
-	if provider != nil {
-		t.Fatalf("RuntimeServices.UserVerificationProvider = %T, want nil so the platform default applies", provider)
+	home := t.TempDir()
+	for name, selected := range map[string]UserVerificationProvider{
+		"factory":              newUserVerificationPlatformProvider(),
+		"nil service fallback": (&userVerificationService{}).platformProvider(),
+		"default router":       NewDefaultRuntimeRouter(session.NewStore(home), home).services.UserVerificationProvider,
+	} {
+		t.Run(name, func(t *testing.T) {
+			native, ok := selected.(*darwinUserVerificationProvider)
+			if !ok {
+				t.Fatalf("platform provider = %T, want *darwinUserVerificationProvider", selected)
+			}
+			if _, ok := native.backend.(cgoDarwinUserVerificationBackend); !ok {
+				t.Fatalf("native backend = %T, want cgoDarwinUserVerificationBackend", native.backend)
+			}
+			if _, ok := selected.(userVerificationDeviceSupport); !ok {
+				t.Fatalf("native provider does not implement DeviceSupported: %T", selected)
+			}
+		})
 	}
-	selected := (&userVerificationService{provider: nil}).platformProvider()
-	native, ok := selected.(*darwinUserVerificationProvider)
-	if !ok {
-		t.Fatalf("platform provider = %T, want *darwinUserVerificationProvider", selected)
+}
+
+// Readiness is a non-interactive probe, not an end-to-end Secure Enclave test.
+// Report missing prerequisites explicitly instead of silently discarding errors.
+func TestDarwinUserVerificationNativeBiometricReadiness(t *testing.T) {
+	backend := cgoDarwinUserVerificationBackend{}
+	supported := backend.DeviceSupported()
+	err := backend.BiometricsAvailable()
+	t.Logf("DeviceSupported=%t; BiometricsAvailable=%v", supported, err)
+	if err != nil {
+		t.Logf("native error kind=%s reason=%s message=%q", err.kind, err.reason, err.message)
 	}
-	if native.backend == nil {
-		t.Fatal("native provider has no backend")
+	if !supported || err != nil {
+		t.Skipf("native biometric verification unavailable: DeviceSupported=%t; error=%+v; requires Touch ID hardware, enrolled biometrics, and an available local authentication session", supported, err)
 	}
-	support, ok := selected.(userVerificationDeviceSupport)
-	if !ok {
-		t.Fatalf("native provider does not implement DeviceSupported: %T", selected)
-	}
-	// Probing hardware and biometric readiness must not panic or prompt on a
-	// headless Intel Mac.
-	_ = support.DeviceSupported()
-	_ = native.backend.BiometricsAvailable()
+	t.Log("biometric readiness only; credential creation and interactive signing were not exercised")
 }
 
 // TestDarwinUserVerificationMissingCredentialIsReported covers the native

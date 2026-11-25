@@ -1,0 +1,2 @@
+provider C probe: DeviceSupported=0 BiometricsAvailable=0 domain=1 code=-6
+LAContext: canEvaluatePolicy=0 biometryType=0 error.domain=com.apple.LocalAuthentication error.code=-6 error.description=Biometry is not available.

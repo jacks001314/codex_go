@@ -1,0 +1,19 @@
+$ uname -a
+Darwin localhost 21.5.0 Darwin Kernel Version 21.5.0: Tue Apr 26 21:08:22 PDT 2022; root:xnu-8020.121.3~4/RELEASE_X86_64 x86_64
+$ sw_vers
+ProductName:	macOS
+ProductVersion:	12.4
+BuildVersion:	21F79
+$ go version
+go version go1.27.1 darwin/amd64
+$ go env GOOS GOARCH CGO_ENABLED CC
+darwin
+amd64
+1
+clang
+$ xcrun --show-sdk-path
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
+$ sqlite3 --version
+3.37.0 2021-12-09 01:34:53 9ff244ce0739f8ee52a3e9671adb4ee54c83c640b02e3f9d185fd2f9a179aapl
+$ file /tmp/darwin-align-codex
+/tmp/darwin-align-codex: Mach-O 64-bit executable x86_64

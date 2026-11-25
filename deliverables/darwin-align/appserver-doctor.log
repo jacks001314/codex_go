@@ -1,0 +1,6 @@
+# codex_go/doctor.test
+ld: warning: object file (/tmp/go-link-338440442/go.o) was built for newer macOS version (13.0) than being linked (12.0)
+# codex_go/appserver.test
+ld: warning: object file (/tmp/go-link-1287458457/go.o) was built for newer macOS version (13.0) than being linked (12.0)
+ok  	codex_go/appserver	3.154s
+ok  	codex_go/doctor	1.041s

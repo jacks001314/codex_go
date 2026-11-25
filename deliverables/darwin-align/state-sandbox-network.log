@@ -1,0 +1,73 @@
+go: downloading modernc.org/sqlite v1.62.0
+go: downloading github.com/google/pprof v0.0.0-20261016150608-1facf8f91b50
+go: downloading modernc.org/libc v1.80.1
+go: downloading github.com/dustin/go-humanize v1.1.0
+go: downloading github.com/ncruces/go-strftime v1.1.0
+go: downloading modernc.org/memory v1.12.1
+# codex_go/state.test
+ld: warning: object file (/tmp/go-link-624170970/go.o) was built for newer macOS version (13.0) than being linked (12.0)
+ok  	codex_go/state	65.620s
+--- FAIL: TestBuildCommandRunPlanRejectsSandboxedProfilesWithoutBackend (0.00s)
+    run_test.go:51: plan = &{Command:[/usr/bin/sandbox-exec -DSCRATCH_0=/private/tmp -DSCRATCH_1=/private/var/tmp -DSCRATCH_2=/tmp -DSCRATCH_3=/var/tmp -DSCRATCH_EXCLUDED_4=/tmp/.git -DSCRATCH_EXCLUDED_5=/tmp/.agents -DSCRATCH_EXCLUDED_6=/tmp/.codex -DSCRATCH_EXCLUDED_7=/tmp/.gcode -DSCRATCH_EXCLUDED_8=/tmp/.aws -DWRITABLE_ROOT_9=/private/tmp -DPROTECTED_WRITE_10=/tmp/.git -DPROTECTED_WRITE_11=/tmp/.agents -DPROTECTED_WRITE_12=/tmp/.codex -DPROTECTED_WRITE_13=/tmp/.gcode -DPROTECTED_WRITE_14=/tmp/.aws -DDAEMON_SOCKET_15=/private/tmp/codex-daemon-0 -DDAEMON_SOCKET_ANCESTOR_16=/private/tmp -DDAEMON_SOCKET_ANCESTOR_17=/private -DDAEMON_SOCKET_ANCESTOR_18=/ -p (version 1)
+        (allow default)
+        (deny file-write*)
+        (allow file-write-data (literal "/dev/null"))
+        (allow file-read* file-test-existence file-write* (subpath (param "SCRATCH_0")))
+        (allow file-read* file-test-existence file-write* (subpath (param "SCRATCH_1")))
+        (allow file-read* file-test-existence file-write* (subpath (param "SCRATCH_2")))
+        (allow file-read* file-test-existence file-write* (subpath (param "SCRATCH_3")))
+        (deny file-write* (subpath (param "SCRATCH_EXCLUDED_4")))
+        (deny file-write* (subpath (param "SCRATCH_EXCLUDED_5")))
+        (deny file-write* (subpath (param "SCRATCH_EXCLUDED_6")))
+        (deny file-write* (subpath (param "SCRATCH_EXCLUDED_7")))
+        (deny file-write* (subpath (param "SCRATCH_EXCLUDED_8")))
+        (allow file-write* (subpath (param "WRITABLE_ROOT_9")))
+        (deny file-write-unlink (require-all (literal (param "WRITABLE_ROOT_9")) (vnode-type DIRECTORY)))
+        (deny file-write* (subpath (param "PROTECTED_WRITE_10")))
+        (deny file-write* (subpath (param "PROTECTED_WRITE_11")))
+        (deny file-write* (subpath (param "PROTECTED_WRITE_12")))
+        (deny file-write* (subpath (param "PROTECTED_WRITE_13")))
+        (deny file-write* (subpath (param "PROTECTED_WRITE_14")))
+        (deny mach-lookup (xpc-service-name-prefix ""))
+        (deny network*)
+        (deny system-socket)
+        (deny file-read* file-write* (literal (param "DAEMON_SOCKET_15")))
+        (deny file-read* file-write* (subpath (param "DAEMON_SOCKET_15")))
+        (deny network-outbound (remote unix-socket (subpath (param "DAEMON_SOCKET_15"))))
+        (deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal (param "DAEMON_SOCKET_ANCESTOR_16"))))
+        (deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal (param "DAEMON_SOCKET_ANCESTOR_17"))))
+        (deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal (param "DAEMON_SOCKET_ANCESTOR_18"))))
+        (deny system-fcntl (fcntl-command 80 110))
+        (deny file-ioctl (ioctl-command 2147578994))
+         /usr/bin/env CODEX_SANDBOX=seatbelt go version] CWD: CommandCWD: WorkspaceRoots:[] SandboxType:macosSeatbelt PermissionProfileID::workspace PermissionProfile:0xc56fd422080 PermissionProfileJSON: CodexLinuxSandboxExe: UseLegacyLandlock:false AllowNetworkForProxy:false ManagedNetworkJSON: TransparentTCP:false LinuxSandboxPIDNamespace:isolate RequiresPlatformSandbox:false UnsupportedReason:}
+--- FAIL: TestBuildCommandRunPlanAppliesSandboxStateReadableRootsAsReadOnly (0.00s)
+    run_test.go:137: non-linux plan = &{Command:[/usr/bin/sandbox-exec -DSCRATCH_0=/private/tmp -DSCRATCH_1=/private/var/tmp -DSCRATCH_2=/tmp -DSCRATCH_3=/var/tmp -DDAEMON_SOCKET_4=/private/tmp/codex-daemon-0 -DDAEMON_SOCKET_ANCESTOR_5=/private/tmp -DDAEMON_SOCKET_ANCESTOR_6=/private -DDAEMON_SOCKET_ANCESTOR_7=/ -p (version 1)
+        (allow default)
+        (deny file-write*)
+        (allow file-write-data (literal "/dev/null"))
+        (allow file-read* file-test-existence file-write* (subpath (param "SCRATCH_0")))
+        (allow file-read* file-test-existence file-write* (subpath (param "SCRATCH_1")))
+        (allow file-read* file-test-existence file-write* (subpath (param "SCRATCH_2")))
+        (allow file-read* file-test-existence file-write* (subpath (param "SCRATCH_3")))
+        (deny mach-lookup (xpc-service-name-prefix ""))
+        (allow mach-lookup (global-name "com.apple.TrustEvaluationAgent"))
+        (deny file-read* file-write* (literal (param "DAEMON_SOCKET_4")))
+        (deny file-read* file-write* (subpath (param "DAEMON_SOCKET_4")))
+        (deny network-outbound (remote unix-socket (subpath (param "DAEMON_SOCKET_4"))))
+        (deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal (param "DAEMON_SOCKET_ANCESTOR_5"))))
+        (deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal (param "DAEMON_SOCKET_ANCESTOR_6"))))
+        (deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal (param "DAEMON_SOCKET_ANCESTOR_7"))))
+        (deny system-fcntl (fcntl-command 80 110))
+        (deny file-ioctl (ioctl-command 2147578994))
+         /usr/bin/env CODEX_SANDBOX=seatbelt go version] CWD:/tmp/TestBuildCommandRunPlanAppliesSandboxStateReadableRootsAsReadOnl805532477/003 CommandCWD: WorkspaceRoots:[] SandboxType:macosSeatbelt PermissionProfileID:sandbox-state PermissionProfile:0xc56fd422900 PermissionProfileJSON:{"type":"managed","file_system":{"type":"restricted","entries":[{"path":{"type":"special","path":"","pattern":"","value":{"kind":"minimal","subpath":null}},"access":"read"},{"path":{"type":"path","path":"/tmp/TestBuildCommandRunPlanAppliesSandboxStateReadableRootsAsReadOnl805532477/001/docs","pattern":"","value":{"kind":"","subpath":null}},"access":"read"}]},"network":"enabled"} CodexLinuxSandboxExe:/tmp/TestBuildCommandRunPlanAppliesSandboxStateReadableRootsAsReadOnl805532477/002/custom-codex-linux-sandbox UseLegacyLandlock:true AllowNetworkForProxy:false ManagedNetworkJSON: TransparentTCP:false LinuxSandboxPIDNamespace:isolate RequiresPlatformSandbox:false UnsupportedReason:}
+--- FAIL: TestNativeSeatbeltEnforcesWorkspaceAndMetadata (0.06s)
+    seatbelt_darwin_test.go:49: run native seatbelt command: exit status 21
+--- FAIL: TestBuildSeatbeltPolicyAllowsTrustedCodexHomeSymlinksLikeRust (0.00s)
+    seatbelt_test.go:276: buildSeatbeltPolicy(allowed home) error = writable root /tmp/TestBuildSeatbeltPolicyAllowsTrustedCodexHomeSymlinksLikeRust1366445042/001/visualizations contains symlink component /tmp/TestBuildSeatbeltPolicyAllowsTrustedCodexHomeSymlinksLikeRust1366445042/001/visualizations; symlinked writable roots are not supported.
+        If this writable root is at or beneath CODEX_HOME and you trust its symlink targets, set `allow_symlinked_codex_home = true` at the top level of `$CODEX_HOME/config.toml` (normally `~/.codex/config.toml`) on the execution host, then restart Codex or its executor. This opt-out trusts targets outside CODEX_HOME and targets changed between commands. It does not apply to other writable roots.
+--- FAIL: TestBuildSeatbeltPolicyProtectsResolvedSymlinkAncestorsLikeRust (0.00s)
+    seatbelt_test.go:374: resolved target ancestors = []string{"/tmp/TestBuildSeatbeltPolicyProtectsResolvedSymlinkAncestorsLikeRust3678535780/001"}, want "/tmp/TestBuildSeatbeltPolicyProtectsResolvedSymlinkAncestorsLikeRust3678535780/001/real"
+FAIL
+FAIL	codex_go/sandbox	4.686s
+ok  	codex_go/network	34.874s
+FAIL

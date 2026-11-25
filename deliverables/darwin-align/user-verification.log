@@ -1,0 +1,3 @@
+# codex_go/appserver.test
+ld: warning: object file (/tmp/go-link-1730642882/go.o) was built for newer macOS version (13.0) than being linked (12.0)
+ok  	codex_go/appserver	2.022s

@@ -1,0 +1,17 @@
+# codex_go/appserver.test
+ld: warning: object file (/tmp/go-link-4092768245/go.o) was built for newer macOS version (13.0) than being linked (12.0)
+=== RUN   TestDarwinUserVerificationNativeProviderSelection
+=== RUN   TestDarwinUserVerificationNativeProviderSelection/factory
+=== RUN   TestDarwinUserVerificationNativeProviderSelection/nil_service_fallback
+=== RUN   TestDarwinUserVerificationNativeProviderSelection/default_router
+--- PASS: TestDarwinUserVerificationNativeProviderSelection (0.04s)
+    --- PASS: TestDarwinUserVerificationNativeProviderSelection/factory (0.00s)
+    --- PASS: TestDarwinUserVerificationNativeProviderSelection/nil_service_fallback (0.00s)
+    --- PASS: TestDarwinUserVerificationNativeProviderSelection/default_router (0.00s)
+=== RUN   TestDarwinUserVerificationNativeBiometricReadiness
+    user_verification_macos_cgo_test.go:49: DeviceSupported=false; BiometricsAvailable=biometric authentication is not available right now
+    user_verification_macos_cgo_test.go:51: native error kind=unavailable reason=biometricsUnavailable message="biometric authentication is not available right now"
+    user_verification_macos_cgo_test.go:54: native biometric verification unavailable: DeviceSupported=false; error=biometric authentication is not available right now; requires Touch ID hardware, enrolled biometrics, and an available local authentication session
+--- SKIP: TestDarwinUserVerificationNativeBiometricReadiness (0.01s)
+PASS
+ok  	codex_go/appserver	1.422s

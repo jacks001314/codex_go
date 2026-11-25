@@ -47,6 +47,20 @@ func TestBuildCommandRunPlanRejectsSandboxedProfilesWithoutBackend(t *testing.T)
 		}
 		return
 	}
+	if runtime.GOOS == "darwin" {
+		// macOS enforces the profile through sandbox-exec, so the plan carries a
+		// wrapped Seatbelt command instead of an unsupported reason.
+		if plan.RequiresPlatformSandbox || plan.SandboxType != SandboxTypeMacosSeatbelt {
+			t.Fatalf("darwin plan = %+v", plan)
+		}
+		if len(plan.Command) == 0 || plan.Command[0] != macOSSeatbeltExecutable {
+			t.Fatalf("darwin command = %#v, want the Seatbelt launcher", plan.Command)
+		}
+		if plan.UnsupportedReason != "" {
+			t.Fatalf("darwin unsupported reason = %q, want none", plan.UnsupportedReason)
+		}
+		return
+	}
 	if !plan.RequiresPlatformSandbox || !strings.Contains(plan.UnsupportedReason, `permission profile ":workspace"`) {
 		t.Fatalf("plan = %+v", plan)
 	}
@@ -130,6 +144,20 @@ func TestBuildCommandRunPlanAppliesSandboxStateReadableRootsAsReadOnly(t *testin
 	if runtime.GOOS == "windows" {
 		if plan.RequiresPlatformSandbox || len(plan.Command) == 0 || plan.Command[0] != "go" {
 			t.Fatalf("windows plan = %+v", plan)
+		}
+		return
+	}
+	if runtime.GOOS == "darwin" {
+		// The Seatbelt launcher receives the readable roots as read-only policy
+		// entries; the sandbox state CWD still decides the working directory.
+		if plan.RequiresPlatformSandbox || plan.SandboxType != SandboxTypeMacosSeatbelt {
+			t.Fatalf("darwin plan = %+v", plan)
+		}
+		if len(plan.Command) == 0 || plan.Command[0] != macOSSeatbeltExecutable {
+			t.Fatalf("darwin command = %#v, want the Seatbelt launcher", plan.Command)
+		}
+		if plan.UnsupportedReason != "" {
+			t.Fatalf("darwin unsupported reason = %q, want none", plan.UnsupportedReason)
 		}
 		return
 	}

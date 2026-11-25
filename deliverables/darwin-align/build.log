@@ -1,0 +1,2 @@
+# codex_go/cmd/codex
+ld: warning: object file (/tmp/go-link-515904788/go.o) was built for newer macOS version (13.0) than being linked (12.0)

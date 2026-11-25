@@ -1,0 +1,6 @@
+=== RUN   TestBuildSeatbeltPolicyAllowsTrustedCodexHomeSymlinksLikeRust
+--- PASS: TestBuildSeatbeltPolicyAllowsTrustedCodexHomeSymlinksLikeRust (0.00s)
+=== RUN   TestBuildSeatbeltPolicyProtectsResolvedSymlinkAncestorsLikeRust
+--- PASS: TestBuildSeatbeltPolicyProtectsResolvedSymlinkAncestorsLikeRust (0.00s)
+PASS
+ok  	codex_go/sandbox	0.661s

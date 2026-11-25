@@ -1,0 +1,113 @@
+[
+  {
+    "name": "user-verification",
+    "command": [
+      "go",
+      "test",
+      "./appserver",
+      "-run",
+      "UserVerification",
+      "-count=1"
+    ],
+    "env": {
+      "CGO_ENABLED": "1",
+      "GOPROXY": "https://goproxy.cn,direct"
+    },
+    "exit_code": 0,
+    "elapsed_seconds": 98.531
+  },
+  {
+    "name": "appserver-doctor",
+    "command": [
+      "go",
+      "test",
+      "./appserver",
+      "./doctor",
+      "-run",
+      "UserVerification|Desktop|Platform",
+      "-count=1"
+    ],
+    "env": {
+      "CGO_ENABLED": "1",
+      "GOPROXY": "https://goproxy.cn,direct"
+    },
+    "exit_code": 0,
+    "elapsed_seconds": 11.246
+  },
+  {
+    "name": "native-selection-readiness",
+    "command": [
+      "go",
+      "test",
+      "./appserver",
+      "-run",
+      "TestDarwinUserVerificationNative(ProviderSelection|BiometricReadiness)$",
+      "-count=1",
+      "-v"
+    ],
+    "env": {
+      "CGO_ENABLED": "1",
+      "GOPROXY": "https://goproxy.cn,direct"
+    },
+    "exit_code": 0,
+    "elapsed_seconds": 8.443
+  },
+  {
+    "name": "sqlite",
+    "command": [
+      "go",
+      "test",
+      "./state",
+      "-run",
+      "TestNativeSQLiteArtifactPlatform",
+      "-count=1",
+      "-v"
+    ],
+    "env": {
+      "CGO_ENABLED": "1",
+      "GOPROXY": "https://goproxy.cn,direct",
+      "CODEX_EXPECT_GOOS": "darwin",
+      "CODEX_EXPECT_GOARCH": "amd64"
+    },
+    "exit_code": 0,
+    "elapsed_seconds": 4.723
+  },
+  {
+    "name": "build",
+    "command": [
+      "go",
+      "build",
+      "-o",
+      "/tmp/darwin-align-codex",
+      "./cmd/codex"
+    ],
+    "env": {
+      "CGO_ENABLED": "1",
+      "GOPROXY": "https://goproxy.cn,direct",
+      "GOOS": "darwin",
+      "GOARCH": "amd64"
+    },
+    "exit_code": 0,
+    "elapsed_seconds": 68.014
+  },
+  {
+    "name": "nocgo",
+    "command": [
+      "go",
+      "test",
+      "./appserver",
+      "-run",
+      "UserVerificationUnsupportedPlatformProviderSelection",
+      "-count=1",
+      "-v"
+    ],
+    "env": {
+      "CGO_ENABLED": "0",
+      "GOPROXY": "https://goproxy.cn,direct",
+      "GOOS": "darwin",
+      "GOARCH": "amd64"
+    },
+    "exit_code": 0,
+    "elapsed_seconds": 70.641
+  }
+]

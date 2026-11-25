@@ -1,0 +1,4 @@
+=== RUN   TestUserVerificationUnsupportedPlatformProviderSelection
+--- PASS: TestUserVerificationUnsupportedPlatformProviderSelection (0.00s)
+PASS
+ok  	codex_go/appserver	1.358s
