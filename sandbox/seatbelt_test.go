@@ -28,6 +28,46 @@ func TestBuildSeatbeltPolicyWorkspaceWriteAndNetwork(t *testing.T) {
 	}
 }
 
+// Seatbelt applies the last matching rule, so a workspace that lives inside a
+// scratch alias (/private/tmp) must still keep its protected metadata denied
+// after the broader scratch root is allowed (the macOS node caught
+// /private/tmp/.../.git being reopened this way).
+func TestSeatbeltPolicyKeepsWriteDeniesAfterScratchAllowances(t *testing.T) {
+	profile := WorkspaceWritePermissionProfile()
+	policy, _, err := buildSeatbeltPolicy("/private/tmp/workspace", &profile, nil, "")
+	if err != nil {
+		t.Fatalf("buildSeatbeltPolicy: %v", err)
+	}
+	lines := strings.Split(policy, "\n")
+	lastAllowance := -1
+	for index, line := range lines {
+		if strings.Contains(line, "(allow file-write* (") {
+			lastAllowance = index
+		}
+	}
+	if lastAllowance < 0 {
+		t.Fatalf("policy has no write allowance:\n%s", policy)
+	}
+	sawProtected := false
+	for index, line := range lines {
+		protected := strings.Contains(line, "PROTECTED_WRITE_")
+		excluded := strings.Contains(line, "SCRATCH_EXCLUDED_")
+		unlink := strings.Contains(line, "file-write-unlink")
+		if !protected && !excluded && !unlink {
+			continue
+		}
+		if protected {
+			sawProtected = true
+		}
+		if index < lastAllowance {
+			t.Fatalf("write denial at line %d precedes the last allowance at line %d:\n%s", index, lastAllowance, policy)
+		}
+	}
+	if !sawProtected {
+		t.Fatalf("policy lost the protected write denial:\n%s", policy)
+	}
+}
+
 // Mirrors Rust #45548: the prepared managed-network context controls the
 // Unix-socket policy, and explicit extra grants are still preserved. Relative
 // entries are ignored rather than resolved against the host CWD.

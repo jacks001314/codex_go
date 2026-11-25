@@ -129,6 +129,9 @@ func buildSeatbeltPolicyWithManagedNetwork(cwd string, profile *PermissionProfil
 		}
 	}
 
+	// deferredWriteDenies holds every deny that must outrank the write
+	// allowances above it (Rust appends root anchor denies after the allows).
+	var deferredWriteDenies []string
 	if !resolved.HasFullDiskWriteAccess {
 		lines = append(lines, "(deny file-write*)", `(allow file-write-data (literal "/dev/null"))`)
 		// macOS #40961: ordinary sandboxed processes keep system scratch
@@ -144,10 +147,14 @@ func buildSeatbeltPolicyWithManagedNetwork(cwd string, profile *PermissionProfil
 		// so they respect unreadable paths, read-only paths, and protected
 		// metadata. Scratch reads stay governed by the global deny-read policy,
 		// which Rust applies to the exclusion set as well.
+		// Seatbelt keeps the last matching rule, so every exclusion and protected
+		// path must be emitted after all write allowances. A later allowance for a
+		// broader root (a scratch alias such as /private/tmp) would otherwise reopen
+		// metadata an earlier root denied.
 		for _, excluded := range scratchExclusions {
 			name := fmt.Sprintf("SCRATCH_EXCLUDED_%d", len(parameters))
 			parameters = append(parameters, seatbeltParameter{Name: name, Value: excluded})
-			lines = append(lines, fmt.Sprintf(`(deny file-write* (subpath (param "%s")))`, name))
+			deferredWriteDenies = append(deferredWriteDenies, fmt.Sprintf(`(deny file-write* (subpath (param "%s")))`, name))
 		}
 		normalizedHome, err := normalizeSeatbeltAllowedHome(allowedSymlinkedCodexHome)
 		if err != nil {
@@ -168,13 +175,14 @@ func buildSeatbeltPolicyWithManagedNetwork(cwd string, profile *PermissionProfil
 			lines = append(lines, fmt.Sprintf(`(allow file-write* (%s (param "%s")))`, match, name))
 			// Rust #39599: a sandboxed process must not replace the writable
 			// root whose identity a later policy will reuse.
-			lines = append(lines, fmt.Sprintf(`(deny file-write-unlink (require-all (literal (param "%s")) (vnode-type DIRECTORY)))`, name))
+			deferredWriteDenies = append(deferredWriteDenies, fmt.Sprintf(`(deny file-write-unlink (require-all (literal (param "%s")) (vnode-type DIRECTORY)))`, name))
 			for _, protected := range append(append([]string(nil), root.ReadOnlySubpaths...), protectedMetadataPaths(root.Root, root.ProtectedMetadataNames)...) {
 				protectedName := fmt.Sprintf("PROTECTED_WRITE_%d", len(parameters))
 				parameters = append(parameters, seatbeltParameter{Name: protectedName, Value: cleanSeatbeltPath(protected)})
-				lines = append(lines, fmt.Sprintf(`(deny file-write* (subpath (param "%s")))`, protectedName))
+				deferredWriteDenies = append(deferredWriteDenies, fmt.Sprintf(`(deny file-write* (subpath (param "%s")))`, protectedName))
 			}
 		}
+		lines = append(lines, deferredWriteDenies...)
 	}
 
 	// Rust #46583: deny XPC service lookups so sandboxed commands cannot reach
