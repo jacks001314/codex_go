@@ -24,10 +24,11 @@
 | `ac76dda16` | 补入 macOS 节点验证过的 darwin PTY 测试：真实 controlling PTY 的 SIGTSTP/SIGCONT、TIOCGPGRP 前台门控、CPR（`ESC[6n`）输入不会落进 composer，以及 darwin 撤销绑定保留 Ctrl-Z 给挂起 | #63520 的 darwin 侧证据进仓库 |
 | `b2c815beb` | 采用带 `RequestCursorPosition` 的 `ResumeMsg`，并记录 inline viewport realign 未移植 | #63520 残差 |
 | `d30ba1b79` | Seatbelt 只对 depth-one 系统别名（`/tmp`、`/var/tmp`）做归一：scratch 排除、PROTECTED_WRITE、protected ancestor 与 symlink-home 覆盖判断；嵌套可变软链仍需显式 opt-in | 关闭 macOS 默认 TMPDIR 下的 3 个 sandbox 失败 |
+| `edad19ca4` | #61946 nested Guardian approval 携带 enclosing tool context（subagent-align 实现）：只从 host live invocation 取身份，要求 `guardian_nested_approval_context` 开启、同线程同 turn 且非 Node REPL `js` preflight；不信任 provider 身份、不改被审的 inner action；按 call ID 唯一匹配并保留原始 arguments，失败重组恢复原 prompt/input items/图片 ledger；state 侧受 tool entry 与 elastic 预算约束、普通 transcript 与截图优先。同时按同样方式修掉 `TestSubagentSpawnServiceTierValidationLikeRust` 的 TempDir 清理竞态 | #61946 |
 | `6ce6cb67b` | #61909/#61916 item-boundary 采样中断与 remote compaction summary 保留（subagent-align 实现）：工具取消与采样取消分离、保留已完成前缀、aborted 工具输出、follow-up 串行、mail 排队；默认关闭 | #61909、#61916 |
 | `9eb91f2d8` `6b310f1fe` `decb18014` `cb8bee7f0` `0684cf0aa` `6976db562` | 缺口文档与台账修订：开项计数、sidebar contract 的阻塞原因、linux/darwin 原生 SQLite 证据、parity 门结论、macOS Info.plist 差异、glamour 校验分叉风险 | — |
 
-台账现状：3,674 complete / 51 equivalent / 845 not_applicable / 11 partial / 14 blocked_precondition；
+台账现状：3,675 complete / 51 equivalent / 845 not_applicable / 11 partial / 13 blocked_precondition；
 4 个 domain、4 个 contract 仍 open；`certificationReady: false`。
 
 ## 本机验证结果（Windows，CGO_ENABLED=0）
@@ -72,6 +73,7 @@
 | #61900 proc-mount 预检与 legacy fallback | 已完成并合并（残差：节点无真实 0.12 proc-denial 环境） | linux-align |
 | darwin run-plan 断言复核、Keychain label、`plutil` 读 Info.plist、Seatbelt 系统别名 | 已合并（`1ac73af00` `9f6dce5a6` `74491bfd8` `d30ba1b79`）；macOS 节点报告 `CGO_ENABLED=1 go test ./sandbox` 0.985s 通过 | darwin-align 已完成 |
 | #61909 item-boundary interrupt / #61916 remote compaction summary | 已合并（`6ce6cb67b`），Windows 本机整包验证通过 | subagent-align 已完成 |
+| #61946 nested Guardian approval 的 enclosing tool context | 已合并（`edad19ca4`），Windows 本机 `go test ./appserver ./state` 与 `go vet` 通过 | subagent-align 已完成 |
 | #61898 proxy supervisor / mount cleanup 交接 | 仅出方案：Go 是进程内 `unix.Exec`，需 re-exec 进程隔离 | 未排期 |
 | #61896 rollout trace 写出器、#61385 Code Mode typed stream、#60075 host service-tier、#61945 `InheritedSessionId`、#61946 Guardian nested approval、#61919 侧栏图片预览 | Go 侧缺对应抽象，需先补底层 | 未排期 |
 
