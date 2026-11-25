@@ -143,9 +143,10 @@ func probeSystemBwrapUserNamespaces(bwrapPath string, timeout time.Duration) boo
 	return !isUserNamespaceFailure(captured)
 }
 
-// bwrapProbeDrainGrace bounds the fallback used on platforms where a pipe read
-// deadline is unavailable. Linux, where the probe actually runs, drains without
-// sleeping.
+// bwrapProbeDrainGrace bounds how long the reader may keep polling for bytes the
+// launcher already wrote before the probe takes its snapshot. The deadline must be
+// in the future: Go returns ErrDeadlineExceeded without reading when the deadline
+// has already passed, which would drop the buffered failure line.
 const bwrapProbeDrainGrace = 50 * time.Millisecond
 
 // drainBwrapProbeStderr returns everything the launcher already wrote without
@@ -155,9 +156,10 @@ const bwrapProbeDrainGrace = 50 * time.Millisecond
 // launcher wrote before exiting can be missed and a broken launcher reported as
 // usable.
 func drainBwrapProbeStderr(readEnd *os.File, readerDone <-chan struct{}, snapshot *bwrapStderrSnapshot) string {
-	if err := readEnd.SetReadDeadline(time.Now()); err == nil {
-		// A deadline in the past makes the next read fail only once the pipe holds
-		// no more data, so the reader stops exactly like Rust stops at WouldBlock.
+	if err := readEnd.SetReadDeadline(time.Now().Add(bwrapProbeDrainGrace)); err == nil {
+		// A deadline slightly in the future lets the reader take the bytes already in
+		// the pipe, then stop once the pipe stays empty, like Rust stopping at
+		// WouldBlock.
 		<-readerDone
 		_ = readEnd.SetReadDeadline(time.Time{})
 		_ = readEnd.Close()

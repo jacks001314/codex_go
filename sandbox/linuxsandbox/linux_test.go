@@ -944,6 +944,14 @@ func TestLinuxBwrapTwoHalfManagedGrantEndToEnd(t *testing.T) {
 	// The round trip needs a real endpoint to answer, so the test runs one on
 	// loopback and lets the host bridge dial it.
 	proxyEndpoint := linuxSandboxE2EStartProxyUpstream(t)
+	_, portText, err := net.SplitHostPort(proxyEndpoint)
+	if err != nil {
+		t.Fatalf("parse proxy endpoint: %v", err)
+	}
+	proxyPort, err := strconv.ParseUint(portText, 10, 16)
+	if err != nil {
+		t.Fatalf("parse proxy port: %v", err)
+	}
 	// AF_VSOCK device coverage: the host must be able to open the device,
 	// otherwise a sandbox denial would be indistinguishable from a missing
 	// driver.
@@ -993,10 +1001,13 @@ func TestLinuxBwrapTwoHalfManagedGrantEndToEnd(t *testing.T) {
 		allowProxy         bool
 		managedNetworkJSON string
 		want               map[string]syscall.Errno
+		proxyErr           syscall.Errno
 	}{
 		{name: "vm", profileJSON: restrictedProfileJSON, want: vmWant},
-		{name: "proxy", profileJSON: restrictedProfileJSON, allowProxy: true, managedNetworkJSON: `{}`, want: proxyDeniedWant},
-		{name: "proxy-grant", profileJSON: restrictedProfileJSON, allowProxy: true, managedNetworkJSON: `{"dangerouslyAllowAllUnixSockets":true}`, want: proxyGrantedWant},
+		// An empty context must not turn an environment URL into a port grant.
+		{name: "proxy-without-port-grant", profileJSON: restrictedProfileJSON, allowProxy: true, managedNetworkJSON: `{}`, want: proxyDeniedWant, proxyErr: syscall.ECONNREFUSED},
+		{name: "proxy", profileJSON: restrictedProfileJSON, allowProxy: true, managedNetworkJSON: fmt.Sprintf(`{"loopbackPorts":[%d]}`, proxyPort), want: proxyDeniedWant},
+		{name: "proxy-grant", profileJSON: restrictedProfileJSON, allowProxy: true, managedNetworkJSON: fmt.Sprintf(`{"loopbackPorts":[%d],"dangerouslyAllowAllUnixSockets":true}`, proxyPort), want: proxyGrantedWant},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1033,8 +1044,8 @@ func TestLinuxBwrapTwoHalfManagedGrantEndToEnd(t *testing.T) {
 			if !tc.allowProxy {
 				return
 			}
-			if code := probes["proxy_roundtrip"]; code != 0 {
-				t.Fatalf("a request through the managed proxy chain failed with errno %d:\n%s", code, out)
+			if code := probes["proxy_roundtrip"]; code != tc.proxyErr {
+				t.Fatalf("managed proxy roundtrip errno = %d, want %d:\n%s", code, tc.proxyErr, out)
 			}
 		})
 	}

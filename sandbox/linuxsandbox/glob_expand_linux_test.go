@@ -5,6 +5,7 @@ package linuxsandbox
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"codex_go/sandbox/sandboxpath"
@@ -62,7 +63,20 @@ func TestExpandUnreadableGlobsWalksInProcessLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("depth-limited expansion error = %v", err)
 	}
+	// Rust applies max_depth from each pattern static search root, not cwd.
+	// Each explicit directory pattern therefore keeps its immediate file.
+	if !reflect.DeepEqual(shallow, paths) {
+		t.Fatalf("depth-limited paths = %#v, want each pattern root immediate match %#v", shallow, paths)
+	}
+	// A recursive pattern instead shares scanRoot, so depth 1 excludes children.
+	shallow, err = ExpandUnreadableGlobsInEnvironment(
+		[]string{filepath.Join(scanRoot, "**", "*.key")}, scanRoot,
+		sandboxpath.FilesystemPolicy{}, &depth, map[string]string{"PATH": ""}, "",
+	)
+	if err != nil {
+		t.Fatalf("recursive depth-limited expansion error = %v", err)
+	}
 	if len(shallow) != 1 || shallow[0] != filepath.Join(scanRoot, "top.key") {
-		t.Fatalf("depth-limited paths = %#v, want the top-level match", shallow)
+		t.Fatalf("recursive depth-limited paths = %#v, want the top-level match", shallow)
 	}
 }
