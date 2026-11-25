@@ -44,7 +44,7 @@
 | `go test ./appserver -count=1`（`CODEX_RUST_ROOT` 指向 3f65e9f1） | ok 480.2s，整包通过，含 `TestPrecomputedExportArtifactsMatchTargetRustCommit` |
 | `go test ./turn ./agent ./state ./exec ./config -count=1` | 全部 ok（state 31.3s） |
 | `go test ./turn ./appserver ./exec ./config -run '^TestSamplingInterrupt' -count=1` | 全部 ok |
-| `go test ./... -count=1` | 141 个包 ok，2 个包失败；失败均为并发负载下的时序敏感用例（见下） |
+| `go test ./... -count=1`（合并 sidebar / Guardian / glamour 后复跑） | 142 个包 ok，2 个包失败（`execserver`、`mcp`），均为并发负载下的 stdio 时序敏感用例（见下） |
 | `GOOS=linux` / `GOOS=darwin` `go vet ./tui/tea ./doctor` | 通过（unix 实现可编译） |
 | `go vet ./sandbox`、`GOOS=linux go vet ./sandbox/linuxsandbox` | 均通过（含 #61900 新代码） |
 | `go test ./doctor -count=1` | ok 3.5s（走非 darwin 分支） |
@@ -56,7 +56,7 @@
 全部转绿，`./appserver` 只剩一个 Windows TempDir 清理竞态（`TestSubagentSpawnServiceTierLikeRust`，已在测试结束前
 `CloseAgent` 关闭子 agent 修掉）。建议后续统一用短且无连字符的临时根。
 
-全量 `go test ./...` 的另一类失败是**并发负载下的时序敏感**，不是产品回归：`appserver` 的 `TestEnvironmentObserveConnectionAttemptsCancelledOnceWhenReplacedLikeRust/replace` 单独跑 20/20 通过、`go test ./appserver` 整包也通过，只在 141 个包并行时偶发把 attempt 记成 `failure`（reload 晚于客户端自身超时）；`mcp` 的 `TestMCPDiscoverLocalStdioHandshakeRecoveryLikeRust/legacy-slow-initialize` 是 2 秒自设 deadline 被抢占。`TestSubagentSpawnServiceTierLikeRust` 的 TempDir 竞态已用 `f25809c92` 修掉（3/20 → 30/30）。
+全量 `go test ./...` 的失败都是**并发负载下的时序敏感**，不是产品回归，逐个单独复跑都能过：`appserver` 的 `TestEnvironmentObserveConnectionAttemptsCancelledOnceWhenReplacedLikeRust/replace`（单独 20/20 通过，只在整机并行时把 attempt 记成 `failure`）、`execserver` 的 `TestStdioTransportPushesOrderedProcessNotificationsLikeRust`、`TestProcessReadMaxBytesIncludesFirstOversizedChunkAndNormalExitHasNoFailureLikeRust`、`TestStdioProcessReadWaitsForOutput`（都会拉起真实 `cmd.exe` 子进程，包内单独跑 `ok 37.3s`，整机并行时被饿到超时），以及 `mcp` 的 `TestMCPDiscoverLocalStdioHandshakeRecoveryLikeRust/legacy-slow-initialize`（自设 2 秒 deadline）。`TestSubagentSpawnServiceTierLikeRust` 与 `TestSubagentSpawnServiceTierValidationLikeRust` 的 TempDir 竞态属于真问题，已分别用 `f25809c92`、`edad19ca4` 修掉（3/20、1/10 → 30/30、25/25）。
 
 仍存在的真实环境性失败：`plugin` 的 `TestMarketplaceUpgradeReusesInstalledGitObjectsLikeRust`
 （Windows 长路径）、`mcp` 的 `TestDesktopSocketMCP*`（Windows AF_UNIX）。这两项需要长路径开关或 Unix 域套接字支持。
