@@ -72,21 +72,21 @@ type remoteAppServerTUIClient struct {
 	endpoint *appserverdaemon.RemoteAppServerEndpoint
 	// execClient marks the one-shot `codex exec --remote` connection: Rust
 	// connects as "codex_exec" with required_human_approval = false.
-	execClient      bool
-	root            *cli.RootOptions
-	state           *codextui.State
-	messages        chan<- bubbletea.Msg
-	brokers         remoteTUIBrokers
-	dial            remoteAppServerDialFunc
-	unixDial        remoteAppServerUnixDialFunc
-	transport       remoteAppServerTransport
-	nextRequestID   int64
-	codexHome       string
-	platformFamily  string
-	platformOS      string
+	execClient     bool
+	root           *cli.RootOptions
+	state          *codextui.State
+	messages       chan<- bubbletea.Msg
+	brokers        remoteTUIBrokers
+	dial           remoteAppServerDialFunc
+	unixDial       remoteAppServerUnixDialFunc
+	transport      remoteAppServerTransport
+	nextRequestID  int64
+	codexHome      string
+	platformFamily string
+	platformOS     string
 	// serverVersion is the connected app server's version from initialize
 	// (Rust #63553 startup_catalog_provider gates provider/list on 0.169).
-	serverVersion string
+	serverVersion   string
 	turnCompleted   bool
 	turnInterrupted bool
 	// turnFailed records the completed turn's failed status so the final
@@ -3251,6 +3251,8 @@ func remoteTUIThreadMessagesFromThread(thread *appserver.Thread, projection reas
 	resume := codextea.NewResumeTranscriptBuilder(thread.CWD, interactiveResumeTranscriptWidth)
 	inReviewMode := false
 	for _, turn := range thread.Turns {
+		var generated []codextui.Message
+		generatedIDs := map[string]int{}
 		// Rust ThreadEventStore::snapshot hides a delegated voice turn's private
 		// reasoning/commentary before the widget replays it; a resumed thread
 		// loads its persisted items through the same path.
@@ -3303,9 +3305,20 @@ func remoteTUIThreadMessagesFromThread(thread *appserver.Thread, projection reas
 			messages = append(messages, resume.Flush()...)
 			message, ok := remoteTUIMessageFromThreadItemInTurn(item, projection, showRawReasoning, turn.Status)
 			if ok {
-				messages = append(messages, message)
+				if itemType == "imagegeneration" && message.ImagePath != "" {
+					if index, ok := generatedIDs[item.ID]; ok {
+						generated[index] = message
+					} else {
+						generatedIDs[item.ID] = len(generated)
+						generated = append(generated, message)
+					}
+				} else {
+					messages = append(messages, message)
+				}
 			}
 		}
+		messages = append(messages, resume.Flush()...)
+		messages = append(messages, generated...)
 		// Rust #43558: restore the saved completion metadata after each
 		// completed turn's items. Replay never falls back to the local clock.
 		if footer, ok := remoteTUICompletionFooterMessage(turn); ok {

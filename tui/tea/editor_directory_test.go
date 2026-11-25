@@ -30,7 +30,7 @@ func TestEditorDirectoryAcceptsProtectedHome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EditorDirectory() error = %v", err)
 	}
-	if want := filepath.Join(codexHome, "editor"); dir != want {
+	if want := filepath.Join(canonicalEditorTestHome(t, codexHome), "editor"); dir != want {
 		t.Fatalf("editor directory = %q, want %q", dir, want)
 	}
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
@@ -57,7 +57,7 @@ func TestEditorDirectoryFullDiskWriteSkipsRejection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EditorDirectory() error = %v", err)
 	}
-	if want := filepath.Join(codexHome, "editor"); dir != want {
+	if want := filepath.Join(canonicalEditorTestHome(t, codexHome), "editor"); dir != want {
 		t.Fatalf("editor directory = %q, want %q", dir, want)
 	}
 }
@@ -72,7 +72,7 @@ func TestEditorDirectoryFallsBackToNextHome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EditorDirectory() error = %v", err)
 	}
-	if want := filepath.Join(protectedHome, "editor"); dir != want {
+	if want := filepath.Join(canonicalEditorTestHome(t, protectedHome), "editor"); dir != want {
 		t.Fatalf("editor directory = %q, want fallback %q", dir, want)
 	}
 }
@@ -110,7 +110,16 @@ func TestEditorDirectoryReadOnlyPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EditorDirectory() error = %v", err)
 	}
-	if want := filepath.Join(codexHome, "editor"); dir != want {
+	if want := filepath.Join(canonicalEditorTestHome(t, codexHome), "editor"); dir != want {
 		t.Fatalf("editor directory = %q, want %q", dir, want)
 	}
+}
+
+func canonicalEditorTestHome(t *testing.T, home string) string {
+	t.Helper()
+	canonical, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical
 }

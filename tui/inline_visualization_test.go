@@ -22,6 +22,10 @@ func TestRewriteInlineVisualizationsStreamingFallbackAndCodeFence(t *testing.T) 
 
 func TestRewriteInlineVisualizationsMaterializesSandboxedViewer(t *testing.T) {
 	home := t.TempDir()
+	home, canonicalErr := filepath.EvalSymlinks(home)
+	if canonicalErr != nil {
+		t.Fatal(canonicalErr)
+	}
 	threadDir := filepath.Join(home, "visualizations", "2026", "07", "21", "thread")
 	if err := os.MkdirAll(threadDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -60,6 +64,10 @@ func TestRewriteInlineVisualizationsRejectsUnsafeArtifacts(t *testing.T) {
 
 func TestRewriteInlineVisualizationsMaterializesViewerInDedicatedCache(t *testing.T) {
 	home := t.TempDir()
+	home, canonicalErr := filepath.EvalSymlinks(home)
+	if canonicalErr != nil {
+		t.Fatal(canonicalErr)
+	}
 	threadDir := filepath.Join(home, "visualizations", "2026", "07", "21", "thread")
 	viewerDir := filepath.Join(home, "visualization-viewers", "thread")
 	if err := os.MkdirAll(threadDir, 0o700); err != nil {

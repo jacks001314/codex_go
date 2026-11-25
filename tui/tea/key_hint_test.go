@@ -23,7 +23,7 @@ func TestKeyBindingLabelsAndPlainTextBoundary(t *testing.T) {
 	}
 	// Rust #46680 renders a compact shortcut: modifiers in control/shift/alt
 	// order, joined with a bare `+`.
-	if got := AltKey('x').Label(); got != "alt+x" {
+	if got := AltKey('x').Label(); got != tui.ModifierLabelPrefix(tui.AltKeyLabel())+"x" {
 		t.Fatalf("alt label = %q", got)
 	}
 	// Rust #49804: control (and shift) render through the platform modifier

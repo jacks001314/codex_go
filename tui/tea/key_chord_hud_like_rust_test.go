@@ -35,10 +35,10 @@ func TestPendingKeyChordGuideRevealsAfterDelayLikeRust(t *testing.T) {
 
 	now = now.Add(keyChordRevealDelay)
 	hud := model.renderKeyChordHUD()
-	if !strings.Contains(hud, "ctrl+x") {
+	if !strings.Contains(hud, codextui.ModifierLabelPrefix(codextui.ControlKeyLabel())+"x") {
 		t.Fatalf("guide title missing:\n%s", hud)
 	}
-	if !strings.Contains(hud, "ctrl+s · Submit") || !strings.Contains(hud, "ctrl+t · Open Transcript") {
+	if !strings.Contains(hud, codextui.ModifierLabelPrefix(codextui.ControlKeyLabel())+"s · Submit") || !strings.Contains(hud, codextui.ModifierLabelPrefix(codextui.ControlKeyLabel())+"t · Open Transcript") {
 		t.Fatalf("guide completions missing:\n%s", hud)
 	}
 	if !strings.Contains(hud, keyChordHUDCancel) {
@@ -71,7 +71,7 @@ func TestPendingKeyChordGuideSupportsCustomPrefixAndCompactLayout(t *testing.T) 
 	model.Update(key(keymsg.KeyCtrlK))
 	now = now.Add(keyChordRevealDelay)
 	hud := model.renderKeyChordHUD()
-	if !strings.Contains(hud, "ctrl+k") || !strings.Contains(hud, keyChordHUDCancel) {
+	if !strings.Contains(hud, codextui.ModifierLabelPrefix(codextui.ControlKeyLabel())+"k") || !strings.Contains(hud, keyChordHUDCancel) {
 		t.Fatalf("compact guide = %q", hud)
 	}
 	if strings.Count(hud, "\n")+1 > model.height {
@@ -124,7 +124,7 @@ func TestPendingLeaderChordGuideGroupsWorkspaceActionsLikeRust(t *testing.T) {
 	now = now.Add(keyChordRevealDelay)
 	hud := model.renderKeyChordHUD()
 	for _, want := range []string{
-		"ctrl+x · Conversation",
+		codextui.ModifierLabelPrefix(codextui.ControlKeyLabel()) + "x · Conversation",
 		"Panes",
 		"Main composer",
 		"Open in sidebar",
@@ -164,7 +164,7 @@ func TestPendingLeaderChordGuideUsesSidebarOriginLikeRust(t *testing.T) {
 	model.sidebarChooserFocused = true
 	now = now.Add(keyChordRevealDelay)
 	hud := model.renderKeyChordHUD()
-	for _, want := range []string{"ctrl+x · Sidebar", "Hide pane", "Pane left"} {
+	for _, want := range []string{codextui.ModifierLabelPrefix(codextui.ControlKeyLabel()) + "x · Sidebar", "Hide pane", "Pane left"} {
 		if !strings.Contains(hud, want) {
 			t.Fatalf("sidebar leader guide missing %q:\n%s", want, hud)
 		}

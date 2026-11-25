@@ -2653,6 +2653,7 @@ type Model struct {
 	misalignmentReview        *misalignmentReview
 	misalignmentReviewSerial  uint64
 	currentTurnID             string
+	pendingGeneratedImages    map[string][]pendingGeneratedImage
 	// userTurnPendingStart mirrors Rust input_queue.user_turn_pending_start:
 	// a user turn was dispatched but its turn/started has not arrived yet, so
 	// the server has no active turn to steer (chatwidget/input_queue.rs:35,
@@ -6261,6 +6262,7 @@ func (m *Model) viewString() string {
 	if inset := m.conversationInset; inset != nil && m.conversationInsetApplies() {
 		return m.renderConversationInset(*inset)
 	}
+	defer m.publishTranscriptImages()
 	m.transcriptContentTopRow = -1
 	m.sidebarTabStripTop = -1
 	m.composerTopRow = -1
@@ -9227,6 +9229,9 @@ func (m *Model) captureTurnElapsed() {
 }
 
 func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
+	if message.Err != nil || message.Failed {
+		m.flushGeneratedImages(m.currentTurnID)
+	}
 	questionDrafts := m.takeQuestionDrafts()
 	m.clearSafetyBuffering()
 	// Rust on_task_complete clears the pending start flag (turn_runtime.rs:199).
@@ -9293,6 +9298,7 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 	if strings.TrimSpace(message.AssistantMessage) != "" {
 		m.mergeAssistantFinal(message.AssistantMessage)
 	}
+	m.flushGeneratedImages(m.currentTurnID)
 	m.flushDeferredSubAgentActivity()
 	// The turn ended without the deferred policy error, so no recourse applies.
 	m.clearSafetyRecourse()
@@ -9341,6 +9347,9 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 }
 
 func (m *Model) applyTurnInterrupted(message TurnInterruptedMsg) {
+	if m != nil {
+		m.flushGeneratedImages(m.currentTurnID)
+	}
 	if m == nil {
 		return
 	}
@@ -9452,6 +9461,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		// Rust #48352: the working tip's clock starts with the turn, and the
 		// frame that paints it must be requested up front (Rust's
 		// `frame_requester.schedule_frame_in(remaining)`).
+		m.resetPendingGeneratedImages()
 		m.currentTurnID = strings.TrimSpace(firstNonEmpty(event.TurnID, event.InternalTurnID))
 		// Rust on_task_started clears user_turn_pending_start (turn_runtime.rs:93);
 		// the server now has an active turn, so later input can steer it.
@@ -9535,6 +9545,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 	case "item.plan.delta":
 		m.applyProposedPlanDelta(event.Delta)
 	case "turn.completed":
+		m.flushGeneratedImages(firstNonEmpty(event.TurnID, m.currentTurnID))
 		// Rust sidebar_agent_status::observe keeps explicit outcomes visible in
 		// the chooser when a watched subagent's turn finishes.
 		completedPhase := sidebarAgentCompleted
@@ -9588,6 +9599,9 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		m.setStatus("idle")
 		m.turnTips.observeTurnCompleted(firstNonEmpty(event.ThreadID, m.State.ThreadID), strings.TrimSpace(event.TurnID), true, m.turnFinalAnswerSeen)
 	case "turn.failed", "error":
+		if event.Type == "turn.failed" {
+			m.flushGeneratedImages(firstNonEmpty(event.TurnID, m.currentTurnID))
+		}
 		questionDrafts = m.takeQuestionDrafts()
 		m.clearSafetyBuffering()
 		message := "Unknown error"
@@ -10279,7 +10293,7 @@ func (m *Model) applyImageGenerationItem(item *protocol.ThreadItem) {
 	status := firstNonEmpty(strings.TrimSpace(item.Status), metadataString(item.Metadata, "status"))
 	revisedPrompt := firstNonEmpty(strings.TrimSpace(item.RevisedPrompt), metadataString(item.Metadata, "revisedPrompt"), metadataString(item.Metadata, "revised_prompt"))
 	savedPath := firstNonEmpty(strings.TrimSpace(item.SavedPath), metadataString(item.Metadata, "savedPath"), metadataString(item.Metadata, "saved_path"))
-	m.applyHistoryCell(historycell.NewImageGenerationCall(item.ID, status, revisedPrompt, savedPath))
+	m.recordGeneratedImage(item.ID, historycell.NewImageGenerationCall(item.ID, status, revisedPrompt, savedPath))
 }
 
 // applyImageViewItem mirrors Rust's ThreadItem::ImageView cell: the local

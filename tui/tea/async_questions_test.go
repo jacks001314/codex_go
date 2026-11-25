@@ -282,7 +282,7 @@ func TestAsyncQuestionHintsFollowResolvedShortcutLikeRust(t *testing.T) {
 	}
 	model = NewModel(codextui.NewState(nil), Options{Width: 120, Height: 40, KeymapConfig: config})
 	model = feedAsyncQuestions(t, model, "question-1", []any{map[string]any{"title": "Which database?"}})
-	if view := model.viewString(); !strings.Contains(view, "alt+↑ to answer") {
+	if view := model.viewString(); !strings.Contains(view, codextui.ModifierLabelPrefix(codextui.AltKeyLabel())+"↑ to answer") {
 		t.Fatalf("configured question hint missing:\n%s", view)
 	}
 

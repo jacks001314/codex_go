@@ -3409,7 +3409,9 @@
     "tui/src/line_truncation.rs",
     "tui/src/app/sidebar.rs",
     "tui/src/app/sidebar_files.rs",
-    "tui/src/markdown_render/local_links.rs"
+    "tui/src/markdown_render/local_links.rs",
+    "tui/src/sidebar_image.rs",
+    "tui/src/chatwidget/tool_lifecycle.rs"
    ],
    "goPaths": [
     "tui/tea/sidebar_chooser.go",
@@ -3420,11 +3422,17 @@
     "app/sidebar_file_promote_like_rust_test.go",
     "app/sidebar_files_refresh.go",
     "app/sidebar_files_refresh_like_rust_test.go",
-    "app/interactive.go"
+    "app/interactive.go",
+    "tui/sidebar_image/sidebar_image.go",
+    "tui/sidebar_image/sidebar_image_test.go",
+    "tui/tea/sidebar_image.go",
+    "tui/tea/sidebar_image_like_rust_test.go",
+    "tui/tea/generated_images.go",
+    "app/sidebar_image_like_rust_test.go"
    ],
    "phase": "P3",
    "status": "partial",
-   "verifier": "TestSidebarChooserFilesGroupLikeRust;TestSidebarChooserNarrowFileRowsLikeRust;TestSidebarChooserMarkdownFilesHeaderLikeRust;TestSidebarChooserFileRowsInertWithoutPreviewLikeRust;TestSidebarChooserWheelScrollsFilesLikeRust;TestSidebarChooserFilePathViewLikeRust;TestSidebarChooserKeepsFileSelectionWhenInventoryChangesLikeRust;TestMiddleLabelKeepsBothEndsLikeRust;TestFilenameLabelKeepsExtensionLikeRust;TestDocumentLabelJoinsPartsTowardRootLikeRust;TestDocumentLabelKeepsDirectorySuffixWhenNarrowLikeRust;TestSidebarChooserListsTranscriptLinksLikeRust;TestSidebarChooserMergesHostFilesLikeRust;TestSidebarChooserPromotesPatchFilesLikeRust;TestRemoteTUIPromotesCompletedPatchToSidebarFilesLikeRust;TestRemoteTUIPromotesGeneratedImageLikeRust;TestSidebarChooserChainsSidebarFilePagesLikeRust;TestEmbeddedSidebarFilesHostPagesTheStoreLikeRust;TestEmbeddedSidebarFilesHostChainsPagesLikeRust;TestSidebarProtocolPromotionEntriesLikeRust;TestSidebarPreviewUnavailableForRemoteLikeRust"
+   "verifier": "TestSidebarChooserFilesGroupLikeRust;TestSidebarChooserNarrowFileRowsLikeRust;TestSidebarChooserMarkdownFilesHeaderLikeRust;TestSidebarChooserFileRowsInertWithoutPreviewLikeRust;TestSidebarChooserWheelScrollsFilesLikeRust;TestSidebarChooserFilePathViewLikeRust;TestSidebarChooserKeepsFileSelectionWhenInventoryChangesLikeRust;TestMiddleLabelKeepsBothEndsLikeRust;TestFilenameLabelKeepsExtensionLikeRust;TestDocumentLabelJoinsPartsTowardRootLikeRust;TestDocumentLabelKeepsDirectorySuffixWhenNarrowLikeRust;TestSidebarChooserListsTranscriptLinksLikeRust;TestSidebarChooserMergesHostFilesLikeRust;TestSidebarChooserPromotesPatchFilesLikeRust;TestRemoteTUIPromotesCompletedPatchToSidebarFilesLikeRust;TestRemoteTUIPromotesGeneratedImageLikeRust;TestSidebarChooserChainsSidebarFilePagesLikeRust;TestEmbeddedSidebarFilesHostPagesTheStoreLikeRust;TestEmbeddedSidebarFilesHostChainsPagesLikeRust;TestSidebarProtocolPromotionEntriesLikeRust;TestSidebarPreviewUnavailableForRemoteLikeRust;TestSidebarImageDecodeAndFitLikeRust;TestSidebarImageRejectsOversizedRasterBeforeDecodeLikeRust;TestSidebarImageWebPDecodeLikeRust;TestSidebarImagePreviewAndTerminalFallbackLikeRust;TestGeneratedImagesFollowAnswerAndDeduplicateLikeRust;TestGeneratedImageImmediateBranchesLikeRust;TestGeneratedImageFlushesOnFailedAndInterruptedTurnsLikeRust;TestEmbeddedSidebarImageBytesAndPermissionsLikeRust;TestSidebarImageDecodeFallsBackToTextLikeRust;TestRemoteSidebarImageUsesAuthorizedServerBytesLikeRust;TestRestoredGeneratedImageFollowsAnswerLikeRust"
   },
   {
    "id": "sidebar-document-preview",
@@ -3433,7 +3441,9 @@
     "tui/src/app/sidebar_document.rs",
     "tui/src/transcript_view/document.rs",
     "tui/src/sidebar_tab_strip.rs",
-    "tui/src/app/sidebar.rs"
+    "tui/src/app/sidebar.rs",
+    "tui/src/sidebar_image.rs",
+    "tui/src/chatwidget/tool_lifecycle.rs"
    ],
    "goPaths": [
     "app/sidebar_document.go",
@@ -3443,11 +3453,17 @@
     "app/remote_tui.go",
     "tui/tea/sidebar_document.go",
     "tui/tea/sidebar_document_like_rust_test.go",
-    "tui/tea/sidebar_chooser.go"
+    "tui/tea/sidebar_chooser.go",
+    "tui/sidebar_image/sidebar_image.go",
+    "tui/sidebar_image/sidebar_image_test.go",
+    "tui/tea/sidebar_image.go",
+    "tui/tea/sidebar_image_like_rust_test.go",
+    "tui/tea/generated_images.go",
+    "app/sidebar_image_like_rust_test.go"
    ],
    "phase": "P3",
    "status": "partial",
-   "verifier": "TestSidebarChooserOpensDocumentTabLikeRust;TestSidebarDocumentCodeGutterLikeRust;TestSidebarDocumentTabTitlesLikeRust;TestSidebarDocumentEscReturnsToChooserLikeRust;TestSidebarDocumentTabPaintsInStripLikeRust;TestSidebarChooserPreviewUnavailableIgnoresAcceptLikeRust;TestSidebarDocumentPaintsInWorkspaceLikeRust;TestSidebarDocumentTabStepLikeRust;TestEmbeddedSidebarDocumentHostReadsWorkspaceLikeRust;TestEmbeddedSidebarDocumentHostLimitsLikeRust;TestEmbeddedSidebarDocumentHostRejectsNonTextLikeRust;TestSidebarDocumentViewOfLocationLikeRust;TestSidebarDocumentLinkCycleAndFollowLikeRust;TestSidebarDocumentEscClearsHighlightLikeRust;TestSidebarDocumentLinkPathResolutionLikeRust;TestSidebarDocumentHoverAndClickOpenLinkLikeRust;TestSidebarDocumentRecordsOpenedFilesLikeRust;TestSidebarDocumentFindScansAndNavigatesLikeRust;TestSidebarDocumentDragSelectionCopiesLikeRust"
+   "verifier": "TestSidebarChooserOpensDocumentTabLikeRust;TestSidebarDocumentCodeGutterLikeRust;TestSidebarDocumentTabTitlesLikeRust;TestSidebarDocumentEscReturnsToChooserLikeRust;TestSidebarDocumentTabPaintsInStripLikeRust;TestSidebarChooserPreviewUnavailableIgnoresAcceptLikeRust;TestSidebarDocumentPaintsInWorkspaceLikeRust;TestSidebarDocumentTabStepLikeRust;TestEmbeddedSidebarDocumentHostReadsWorkspaceLikeRust;TestEmbeddedSidebarDocumentHostLimitsLikeRust;TestEmbeddedSidebarDocumentHostRejectsNonTextLikeRust;TestSidebarDocumentViewOfLocationLikeRust;TestSidebarDocumentLinkCycleAndFollowLikeRust;TestSidebarDocumentEscClearsHighlightLikeRust;TestSidebarDocumentLinkPathResolutionLikeRust;TestSidebarDocumentHoverAndClickOpenLinkLikeRust;TestSidebarDocumentRecordsOpenedFilesLikeRust;TestSidebarDocumentFindScansAndNavigatesLikeRust;TestSidebarDocumentDragSelectionCopiesLikeRust;TestSidebarImageDecodeAndFitLikeRust;TestSidebarImageRejectsOversizedRasterBeforeDecodeLikeRust;TestSidebarImageWebPDecodeLikeRust;TestSidebarImagePreviewAndTerminalFallbackLikeRust;TestGeneratedImagesFollowAnswerAndDeduplicateLikeRust;TestGeneratedImageImmediateBranchesLikeRust;TestGeneratedImageFlushesOnFailedAndInterruptedTurnsLikeRust;TestEmbeddedSidebarImageBytesAndPermissionsLikeRust;TestSidebarImageDecodeFallsBackToTextLikeRust;TestRemoteSidebarImageUsesAuthorizedServerBytesLikeRust;TestRestoredGeneratedImageFollowsAnswerLikeRust"
   },
   {
    "id": "sandbox-network-credential-startup",

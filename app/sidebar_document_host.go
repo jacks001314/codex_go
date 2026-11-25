@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"codex_go/appserverdaemon"
 	"codex_go/sandbox"
+	"codex_go/tui/sidebar_image"
 	codextea "codex_go/tui/tea"
 )
 
@@ -83,7 +85,19 @@ func newEmbeddedSidebarDocumentHost(cwd func() string, permissions sidebarPrevie
 				return document
 			}
 		}
-		text, err := readLocalDocumentText(resolved)
+		limit := int64(sidebar_image.MaxBytes)
+		if permissions != nil {
+			limit = embeddedSidebarPreviewLimit
+		}
+		file, err := os.Open(filepath.FromSlash(resolved))
+		var data []byte
+		if err == nil {
+			data, err = io.ReadAll(io.LimitReader(file, limit+1))
+			_ = file.Close()
+			if int64(len(data)) > limit {
+				err = errPreviewTooLarge
+			}
+		}
 		if err != nil {
 			document.loaded("", err)
 			return document
@@ -94,7 +108,7 @@ func newEmbeddedSidebarDocumentHost(cwd func() string, permissions sidebarPrevie
 			document.loaded("", errPreviewOutsideWorkspace)
 			return document
 		}
-		document.loaded(text, nil)
+		document.loadedBytes(data)
 		return document
 	}}
 }
@@ -138,17 +152,17 @@ func validateEmbeddedPreviewRead(path string, cwd string, profile *sandbox.Permi
 	}
 	entries := profile.RuntimeFileSystemEntries()
 	context := sandbox.DenyReadContext{CWD: cwd, WorkspaceRoots: roots}
-	if !sandbox.CanReadPathWithContext(entries, canonical, context) {
+	if !sandbox.CanReadPathWithContext(entries, canonical, context) || !sandbox.CanReadPathWithContext(entries, path, context) {
 		return errPreviewReadDenied
 	}
-	if profile.DeniesReadPath(canonical) {
+	if profile.DeniesReadPath(canonical) || profile.DeniesReadPath(path) {
 		return errPreviewReadDenied
 	}
 	matcher, err := sandbox.NewPreparedReadDenials(entries, context)
 	if err != nil {
 		return err
 	}
-	if matcher != nil && matcher.IsReadDenied(canonical) {
+	if matcher != nil && (matcher.IsReadDenied(canonical) || matcher.IsReadDenied(path)) {
 		return errPreviewReadDenied
 	}
 	return nil
@@ -186,6 +200,7 @@ func sidebarDocumentViewOf(document *sidebarDocument) codextea.SidebarDocumentVi
 	}
 	view := codextea.SidebarDocumentView{
 		Path:       document.path,
+		Image:      document.image,
 		Text:       document.text,
 		Code:       document.code,
 		Language:   document.language,

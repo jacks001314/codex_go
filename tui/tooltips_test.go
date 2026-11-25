@@ -71,7 +71,7 @@ func TestDesktopAppTooltipCopyMatchesRust(t *testing.T) {
 // primary binding instead of a placeholder.
 func TestResolvedTooltipsRenderRustSnapshotLabels(t *testing.T) {
 	resolved := ResolvedTooltips(NewKeymapConfig())
-	alt := AltKeyLabel()
+	alt := ModifierLabelPrefix(AltKeyLabel())
 	// Rust #49804: control renders as the platform label (^ on Linux, \u2303 on
 	// macOS), so the Rust snapshot labels are composed from the shared table.
 	ctrl := ModifierLabelPrefix(ControlKeyLabel())
@@ -83,7 +83,7 @@ func TestResolvedTooltipsRenderRustSnapshotLabels(t *testing.T) {
 		"Press `` f3 `` to search this conversation.",
 		"Press `` " + ctrl + "g `` to edit your current draft in an external editor.",
 		"Press `` " + ctrl + "r `` to search previously entered prompts.",
-		"Press `` " + alt + "+. `` to increase reasoning effort or `` " + alt + "+, `` to decrease it.",
+		"Press `` " + alt + ". `` to increase reasoning effort or `` " + alt + ", `` to decrease it.",
 		"Use `` " + ctrl + "x p `` to open presets.",
 		"In the agent command center, use `` a `` to archive the selected thread.",
 	}

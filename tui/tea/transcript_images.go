@@ -396,7 +396,7 @@ func (r *transcriptImageRuntime) afterWrite() {
 }
 
 func (r *transcriptImageRuntime) targetsLocked() []drawnTranscriptImage {
-	if !r.surface || r.height <= 0 || r.width <= 0 || len(r.plans) == 0 {
+	if !r.surface || r.height <= 0 || r.width <= 0 || (len(r.plans) == 0 && len(r.overlays) == 0) {
 		return nil
 	}
 	targets := make([]drawnTranscriptImage, 0, len(r.plans))
@@ -546,7 +546,7 @@ func (m *Model) transcriptImagesSurfaceActive() bool {
 	if m.modal != nil && m.modal.sessionPicker != nil {
 		return false
 	}
-	return m.transcriptImageProtocol() != ""
+	return m.transcriptImageProtocol() != "" || m.sidebarImageProtocol() != "" && m.sidebarDocumentVisible()
 }
 
 // publishTranscriptImages hands the current layout to the output runtime. View
@@ -588,7 +588,11 @@ func (m *Model) publishTranscriptImages() {
 	// Rust #58261: the composer thumbnail strip is part of the same frame, so
 	// it is published and cleared with the transcript graphics.
 	m.composerImageOverlays = m.publishComposerImageOverlays()
-	m.transcriptImages.setOverlays(m.composerImageOverlays)
+	overlays := append([]transcriptImageOverlay(nil), m.composerImageOverlays...)
+	if overlay := m.sidebarImageOverlay(); overlay != nil {
+		overlays = append(overlays, *overlay)
+	}
+	m.transcriptImages.setOverlays(overlays)
 }
 
 func (m *Model) hideTranscriptImages() {

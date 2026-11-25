@@ -65,7 +65,11 @@ func TestLinkedWorktreeRowsGroupTogetherWhenEnabled(t *testing.T) {
 		t.Fatalf("linked checkouts should share a project group: %#v vs %#v",
 			grouped.projectGroupAt(0), grouped.projectGroupAt(1))
 	}
-	wantHeading := filepath.Join(primary, "pkg")
+	canonicalPrimary, err := filepath.EvalSymlinks(primary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantHeading := filepath.Join(canonicalPrimary, "pkg")
 	if got := grouped.projectGroupAt(1).heading; got != wantHeading {
 		t.Fatalf("group heading = %q, want the primary checkout's directory %q", got, wantHeading)
 	}

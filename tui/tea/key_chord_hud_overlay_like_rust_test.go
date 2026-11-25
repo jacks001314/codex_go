@@ -35,7 +35,7 @@ func TestKeyChordHUDOverlaysWithoutMovingComposerLikeRust(t *testing.T) {
 
 	row := -1
 	for index, line := range afterLines {
-		if strings.Contains(line, "ctrl+x · Conversation") {
+		if strings.Contains(line, codextui.ModifierLabelPrefix(codextui.ControlKeyLabel())+"x · Conversation") {
 			row = index
 			break
 		}
@@ -48,7 +48,7 @@ func TestKeyChordHUDOverlaysWithoutMovingComposerLikeRust(t *testing.T) {
 	}
 	// The panel is half the frame wide and right-aligned with a two-column
 	// margin, so the title starts past the frame's midpoint.
-	column := strings.Index(afterLines[row], "ctrl+x · Conversation")
+	column := strings.Index(afterLines[row], codextui.ModifierLabelPrefix(codextui.ControlKeyLabel())+"x · Conversation")
 	if codextui.DisplayWidth(afterLines[row][:column]) < 58 {
 		t.Fatalf("guide title starts at column %d, want the right half", codextui.DisplayWidth(afterLines[row][:column]))
 	}
@@ -77,7 +77,7 @@ func TestKeyChordHUDOverlaysFullScreenSurfaceLikeRust(t *testing.T) {
 	if got, want := strings.Count(composed, "\n"), strings.Count(view, "\n"); got != want {
 		t.Fatalf("overlay changed the surface height: %d rows, want %d", got+1, want+1)
 	}
-	if !strings.Contains(composed, "ctrl+x · Conversation") {
+	if !strings.Contains(composed, codextui.ModifierLabelPrefix(codextui.ControlKeyLabel())+"x · Conversation") {
 		t.Fatalf("guide missing from the overlaid surface:\n%s", composed)
 	}
 	if !strings.Contains(composed, keyChordHUDCancel) {

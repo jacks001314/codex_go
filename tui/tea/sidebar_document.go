@@ -15,6 +15,7 @@ import (
 	"codex_go/tui/keymsg"
 	"codex_go/tui/markdown"
 	mousemsg "codex_go/tui/mousemsg"
+	"codex_go/tui/sidebar_image"
 )
 
 // Rust parity: codex-rs/tui/src/app/sidebar_document.rs (#61888/#61889/#61890).
@@ -45,6 +46,7 @@ type SidebarDocumentTarget struct {
 // SidebarDocumentView is one loaded preview. Err is the read failure the pane
 // shows; an empty Err with Code false and Text set renders Markdown.
 type SidebarDocumentView struct {
+	Image      *sidebar_image.Image
 	Path       string
 	Err        string
 	Text       string
@@ -454,7 +456,7 @@ func sidebarDocumentWebLinkSpans(lines []string) []sidebarDocumentWebLinkSpan {
 // carries, in document order (Rust `document_links`). Source previews have no
 // reader links, so they select nothing.
 func (m *Model) sidebarDocumentLinks(tab *sidebarDocumentTab) []markdown.SidebarFileLink {
-	if tab == nil || tab.Loading || tab.View.Err != "" || tab.View.Code {
+	if tab == nil || tab.Loading || tab.View.Err != "" || tab.View.Code || tab.View.Image != nil {
 		return nil
 	}
 	return markdown.SidebarFileLinks(tab.View.Text)
@@ -1000,6 +1002,9 @@ func (m *Model) buildSidebarDocumentLines(tab *sidebarDocumentTab, width int) []
 	if view.Err != "" {
 		return sidebarDocumentOpenErrorLines(tab, view, width)
 	}
+	if view.Image != nil {
+		return []string{view.Image.Label}
+	}
 	if view.Code {
 		return m.sidebarDocumentCodeLines(view, width)
 	}
@@ -1339,6 +1344,13 @@ func (m *Model) renderSidebarDocument(width int, height int) string {
 		rows[1] = " " + codextui.TruncateToWidth(m.sidebarDocumentDimText(sidebarDocumentSnapshotHint), bodyWidth)
 		top = 2
 		contentHeight--
+	}
+	if tab.View.Image != nil && !tab.Loading && tab.View.Err == "" {
+		m.renderSidebarImage(rows, top, contentHeight, bodyWidth, tab)
+		for index, line := range footerRows {
+			rows[height-len(footerRows)+index] = " " + line
+		}
+		return strings.Join(rows, "\n")
 	}
 	lines := m.sidebarDocumentLines(tab, bodyWidth)
 	tab.Scroll = clampModalInt(tab.Scroll, 0, max(len(lines)-contentHeight, 0))

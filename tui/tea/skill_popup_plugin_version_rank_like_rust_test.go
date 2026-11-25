@@ -77,7 +77,11 @@ func TestPluginSkillKeyMatchesThroughSymlinkedCacheLikeRust(t *testing.T) {
 		t.Skipf("symlinked plugin cache unavailable: %v", err)
 	}
 	roots := skillPluginCacheRoots(linkedHome)
-	canonicalSkill := filepath.Join(realCache, "marketplace", "plugin", "2.0.0", "skills", "alpha", "SKILL.md")
+	canonicalCache, err := filepath.EvalSymlinks(realCache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalSkill := filepath.Join(canonicalCache, "marketplace", "plugin", "2.0.0", "skills", "alpha", "SKILL.md")
 	key, ok := skillPluginKey(canonicalSkill, roots)
 	if !ok || key != "plugin-skill://marketplace/plugin/*/skills/alpha/SKILL.md" {
 		t.Fatalf("canonical path under a symlinked cache = %q, %v", key, ok)

@@ -30,7 +30,7 @@ func TestQueuedMessageEditHintUsesPrimaryShortcutLikeRust(t *testing.T) {
 		want     string
 	}{
 		{name: "default", bindings: nil, want: "shift+← edit last queued message"},
-		{name: "configured order", bindings: []string{"alt-up", "shift-left"}, want: "alt+↑ edit last queued message"},
+		{name: "configured order", bindings: []string{"alt-up", "shift-left"}, want: codextui.ModifierLabelPrefix(codextui.AltKeyLabel()) + "↑ edit last queued message"},
 		{name: "custom chord", bindings: []string{"ctrl-x up", "shift-left"}, want: "ctrl+x ↑ edit last queued message"},
 	}
 	for _, tc := range tests {

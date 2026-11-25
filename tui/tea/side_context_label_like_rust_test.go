@@ -89,7 +89,7 @@ func TestSideContextLabelHidesToggleWithoutBindingLikeRust(t *testing.T) {
 	if err := model.keymapConfig.Set("global", "toggle_side_conversation", nil); err != nil {
 		t.Fatalf("clear toggle binding: %v", err)
 	}
-	if got := model.sideContextLabel(); got != "Side from main thread \u00b7 ctrl+c to close" {
+	if got := model.sideContextLabel(); got != "Side from main thread \u00b7 "+codextui.ModifierLabelPrefix(codextui.ControlKeyLabel())+"c to close" {
 		t.Fatalf("side context label without a toggle binding = %q", got)
 	}
 

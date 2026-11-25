@@ -8,6 +8,7 @@ import (
 	"github.com/rivo/uniseg"
 
 	"codex_go/tui/markdown"
+	"codex_go/tui/sidebar_image"
 )
 
 // Rust parity: codex-rs/tui/src/app/sidebar_document.rs `Document::loaded` and
@@ -46,6 +47,7 @@ type sidebarDocument struct {
 	readErr    string
 	code       bool
 	language   string
+	image      *sidebar_image.Image
 	text       string
 	lineStarts []int
 	target     *sidebarDocumentTarget
@@ -140,12 +142,12 @@ func openSidebarDocument(ctx context.Context, client *remoteAppServerTUIClient, 
 		return document
 	}
 	document.path = resolved
-	text, err := readRemoteDocumentText(ctx, client, source, target, resolved)
+	data, err := readRemotePreviewFile(ctx, client, source, target, resolved)
 	if err != nil {
 		document.loaded("", err)
 		return document
 	}
-	document.loaded(text, nil)
+	document.loadedBytes(data)
 	return document
 }
 
@@ -253,4 +255,29 @@ func sidebarGraphemeStart(line string, offset int) int {
 		return start
 	}
 	return start
+}
+
+// loadedBytes prefers supported image content, then falls back to text. A text
+// file named .png remains readable; malformed binary preserves the decode error.
+func (d *sidebarDocument) loadedBytes(data []byte) {
+	if d.location == nil && sidebar_image.SupportsPath(d.path) {
+		preview, err := sidebar_image.Decode(data)
+		if err == nil {
+			d.loaded("", nil)
+			d.code = false
+			d.lineStarts = nil
+			d.target = nil
+			d.image = preview
+			return
+		}
+		text, textErr := documentTextFromBytes(data)
+		if textErr != nil {
+			d.loaded("", err)
+			return
+		}
+		d.loaded(text, nil)
+		return
+	}
+	text, err := documentTextFromBytes(data)
+	d.loaded(text, err)
 }
