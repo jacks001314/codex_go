@@ -50074,8 +50074,8 @@
    ],
    "status": "blocked_precondition",
    "evidence": [
-    "Host extension data path for host-started forks is not ported.",
-    "plan: update/plan_2026_11_16.md batch 74"
+    "The capability exists in Go but not on the host protocol surface. session.Store honours an explicit ForkOptions.SessionID for plain and prepared forks while keeping the thread id distinct and the persisted session id on resume; TestPreparedForkInheritsRootSessionIDLikeRust and store_test.go's custom-session case cover it.",
+    "Missing piece: appserver ThreadStartParams exposes no inherited-session field, so a host SDK cannot supply one, and Go never had Rust's guard that rejects it for resumed threads and native children. Porting #61945 needs that host/protocol surface plus the matching rejection guard."
    ]
   },
   {
