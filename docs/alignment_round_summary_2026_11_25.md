@@ -26,7 +26,7 @@
 
 | 命令 | 结果 |
 | --- | --- |
-| `go test ./parity -count=1`（`CODEX_RUST_ROOT=...\codex\codex-rs`） | ok 38.4s，整包通过 |
+| `go test ./parity -count=1`（`CODEX_RUST_ROOT=...\codex\codex-rs`） | ok 105.3s，整包通过（含 ContractVerifierAudit / CrossPlatformBuilds / GoVet 三项） |
 | `go vet ./...` | VET=0 |
 | `go build ./cmd/codex` | 退出 0，产物 125,462,016 字节 |
 | `go test ./tui/... -count=1` | 全部 ok |
@@ -34,6 +34,9 @@
 | `go test ./tui/tea -count=1` | ok 42.5s |
 | `go test ./appserver -count=1` | 228.9s，仅 2 个 Windows 长路径 git 用例失败（环境） |
 | `GOOS=linux` / `GOOS=darwin` `go vet ./tui/tea ./doctor` | 通过（unix 实现可编译） |
+| `go vet ./sandbox`、`GOOS=linux go vet ./sandbox/linuxsandbox` | 均通过（含 #61900 新代码） |
+| `go test ./doctor -count=1` | ok 3.5s（走非 darwin 分支） |
+| `go test ./sandbox -run TestDrainBwrapProbeStderrKeepsLauncherOutput -count=20` | ok，1.0s |
 
 已知环境性失败（与改动无关）：`plugin` 的 `TestMarketplaceUpgradeReusesInstalledGitObjectsLikeRust`、
 `TestAutomaticGitUsesTrustedRepositoryAndCleansUp`（Windows 长路径 / `$GIT_DIR too big`）；
