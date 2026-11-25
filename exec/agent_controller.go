@@ -24,15 +24,16 @@ import (
 const execDefaultAgentWait = 30 * time.Second
 
 type execSubagentContext struct {
-	ThreadID       string
-	SessionID      string
-	ParentThreadID string
-	Nickname       string
-	Role           string
-	AgentPath      string
-	Depth          int
-	Version        agent.MultiAgentVersion
-	Controller     agent.ToolController
+	ThreadID          string
+	SessionID         string
+	ParentThreadID    string
+	Nickname          string
+	Role              string
+	AgentPath         string
+	Depth             int
+	Version           agent.MultiAgentVersion
+	Controller        agent.ToolController
+	SamplingInterrupt *turn.SamplingInterrupt
 }
 
 type execMultiAgentTools struct {
@@ -350,6 +351,7 @@ func (r *Runner) multiAgentToolsForRun(ctx context.Context, req *Request, cfg *c
 		rootController := newExecAgentController(r, ctx, req, threadID, maxAgents).(*execAgentController)
 		rootController.setActiveTurn(turnID)
 		rootController.multiAgentVersion = version
+		rootController.interruptAtItemBoundary = v2Config.InterruptAtItemBoundary
 		rootController.modelsManager = modelsManager
 		rootController.featureSettings = cfg.FeatureSettings()
 		rootController.parentModel = execMultiAgentModelForRun(req, cfg, modelsManager)
@@ -482,18 +484,19 @@ func closeExecMultiAgentTools(options *execMultiAgentTools) {
 }
 
 type execAgentController struct {
-	root              *execAgentController
-	runner            *Runner
-	ctx               context.Context
-	base              Request
-	parentID          string
-	scopePath         string
-	maxAgents         int
-	depth             int
-	maxDepth          int
-	parentModel       string
-	multiAgentVersion agent.MultiAgentVersion
-	modelsManager     model.ModelsManager
+	root                    *execAgentController
+	runner                  *Runner
+	ctx                     context.Context
+	base                    Request
+	parentID                string
+	scopePath               string
+	maxAgents               int
+	depth                   int
+	maxDepth                int
+	parentModel             string
+	multiAgentVersion       agent.MultiAgentVersion
+	interruptAtItemBoundary bool
+	modelsManager           model.ModelsManager
 	// featureSettings resolves service-tier policy for a spawn override
 	// (Rust #63376 `features.service_tier_enabled`).
 	featureSettings map[string]bool
@@ -522,18 +525,19 @@ type execAgentController struct {
 }
 
 type execAgentTask struct {
-	id              string
-	taskName        string
-	path            string
-	nickname        string
-	role            string
-	depth           int
-	status          agent.AgentMessageStatus
-	cancel          context.CancelFunc
-	generation      uint64
-	activeTurnID    string
-	pendingMessages []execAgentCommunication
-	pendingFollowup []execAgentCommunication
+	id                string
+	taskName          string
+	path              string
+	nickname          string
+	role              string
+	depth             int
+	status            agent.AgentMessageStatus
+	cancel            context.CancelFunc
+	samplingInterrupt *turn.SamplingInterrupt
+	generation        uint64
+	activeTurnID      string
+	pendingMessages   []execAgentCommunication
+	pendingFollowup   []execAgentCommunication
 	// serviceTier is the child's per-spawn tier override, re-applied when an
 	// evicted child resumes (Rust #63376).
 	serviceTier string
@@ -591,6 +595,9 @@ func (c *execAgentController) setActiveTurn(turnID string) {
 	if c != s {
 		if task = s.taskLocked(c.parentID); task != nil {
 			task.activeTurnID = strings.TrimSpace(turnID)
+			if task.samplingInterrupt != nil {
+				task.samplingInterrupt.BindTurn(turnID)
+			}
 			pending = append(pending, task.pendingMessages...)
 			pending = append(pending, task.pendingFollowup...)
 			task.pendingMessages = nil
@@ -786,6 +793,16 @@ func (c *execAgentController) SendInput(ctx context.Context, args *agent.SendInp
 	}
 	s := c.shared()
 	s.mu.Lock()
+	interrupt := task.samplingInterrupt
+	s.mu.Unlock()
+	if interrupt.Requested() {
+		select {
+		case <-interrupt.Finished():
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	s.mu.Lock()
 	if task.status.Kind == agent.AgentMessageStatusRunning || task.status.Kind == agent.AgentMessageStatusPendingInit {
 		if !args.Interrupt {
 			s.mu.Unlock()
@@ -919,6 +936,11 @@ func (c *execAgentController) startTask(task *execAgentTask, args *agent.SpawnAg
 	task.generation++
 	generation := task.generation
 	task.cancel = cancel
+	var samplingInterrupt *turn.SamplingInterrupt
+	if s.interruptAtItemBoundary && s.multiAgentVersion == agent.VersionV2 {
+		samplingInterrupt = turn.NewSamplingInterrupt("")
+	}
+	task.samplingInterrupt = samplingInterrupt
 	task.status = agent.AgentMessageStatus{Kind: agent.AgentMessageStatusRunning}
 	pending := append([]execAgentCommunication(nil), task.pendingMessages...)
 	task.pendingMessages = nil
@@ -928,6 +950,7 @@ func (c *execAgentController) startTask(task *execAgentTask, args *agent.SpawnAg
 
 	go func() {
 		defer s.wg.Done()
+		defer samplingInterrupt.Finish()
 		childReq := cloneExecAgentRequest(&s.base)
 		childReq.Input = nil
 		childReq.AdditionalInputItems = append([]any(nil), args.Items...)
@@ -977,7 +1000,7 @@ func (c *execAgentController) startTask(task *execAgentTask, args *agent.SpawnAg
 			ThreadID: task.id, SessionID: s.parentID, ParentThreadID: c.parentID,
 			Nickname: task.nickname, Role: task.role, AgentPath: task.path,
 			Depth: task.depth, Version: s.multiAgentVersion,
-			Controller: childController,
+			Controller: childController, SamplingInterrupt: samplingInterrupt,
 		}
 		childRunner := s.runner.cloneForSubagent()
 		if childRunner == nil {
@@ -992,6 +1015,8 @@ func (c *execAgentController) startTask(task *execAgentTask, args *agent.SpawnAg
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				status.Kind = agent.AgentMessageStatusInterrupted
 			}
+		} else if samplingInterrupt.Requested() {
+			status.Kind = agent.AgentMessageStatusInterrupted
 		} else if result != nil {
 			status.Message = result.LastMessage
 		}
@@ -1255,6 +1280,12 @@ func (c *execAgentController) SendMessage(ctx context.Context, args *agent.SendM
 		return fmt.Errorf("agent %s is shut down", args.Target)
 	}
 	communication := c.communication(task.path, args.Message, false, args.Plaintext)
+	if task.samplingInterrupt.Requested() {
+		task.pendingMessages = append(task.pendingMessages, communication)
+		s.mu.Unlock()
+		return nil
+	}
+
 	if (task.status.Kind == agent.AgentMessageStatusRunning || task.status.Kind == agent.AgentMessageStatusPendingInit) && strings.TrimSpace(task.activeTurnID) != "" {
 		threadID, turnID, mailbox := task.id, task.activeTurnID, s.steerMailbox
 		s.mu.Unlock()
@@ -1318,6 +1349,24 @@ func (c *execAgentController) FollowupTask(ctx context.Context, args *agent.Foll
 	if task == nil {
 		s.mu.Unlock()
 		return fmt.Errorf("agent %s not found", args.Target)
+	}
+	if task.samplingInterrupt.Requested() && task.activeTurnID != "" {
+		interrupt := task.samplingInterrupt
+		copyArgs := *args
+		s.mu.Unlock()
+		interrupt.EnqueueFollowup(func() {
+			if err := c.FollowupTask(context.Background(), &copyArgs); err != nil {
+				c.notifyMailboxFor(task.path, fmt.Sprintf("Follow-up to %s failed: %v", task.path, err))
+				return
+			}
+			s.mu.Lock()
+			next := task.samplingInterrupt
+			s.mu.Unlock()
+			if next != nil && next != interrupt {
+				<-next.Finished()
+			}
+		})
+		return nil
 	}
 	switch task.status.Kind {
 	case agent.AgentMessageStatusRunning, agent.AgentMessageStatusPendingInit:
@@ -1404,6 +1453,11 @@ func (c *execAgentController) InterruptAgent(ctx context.Context, args *agent.In
 		return nil, fmt.Errorf("agent %s not found", strings.TrimSpace(args.Target))
 	}
 	previous := task.status
+	if task.samplingInterrupt.Request() {
+		s.mu.Unlock()
+		c.notifyMailbox("Wait completed.")
+		return &agent.InterruptAgentResult{PreviousStatus: agent.V2AgentStatusValue(previous)}, nil
+	}
 	task.generation++
 	if task.cancel != nil {
 		task.cancel()

@@ -3281,6 +3281,7 @@ func (r *RuntimeRouter) close() error {
 		} else {
 			r.finishTurnInterruptedAnalytics(active.ThreadID, active.TurnID, active.StartedAtMS, analytics, turnAbortReasonInterrupted)
 		}
+		active.SamplingInterrupt.Finish()
 	}
 	waitCtx, cancelWait := context.WithTimeout(context.Background(), 5*time.Second)
 	waitErr := r.threads.WaitForTurnWorkers(waitCtx)
@@ -9413,6 +9414,7 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 		return nil, err
 	}
 	params.Input = turn.ResolveTurnUserInputs(params.Input)
+	r.waitSamplingTerminal(params.ThreadID)
 	r.turnAdmissionMu.Lock()
 	defer r.turnAdmissionMu.Unlock()
 	// Rust #49262: the accepted input is traced on `codex.turn_input`, which
@@ -11220,6 +11222,7 @@ func (r *RuntimeRouter) interruptRuntimeTurn(threadID string, turnID string, req
 			// Rust #49475: abort callbacks complete before the terminal event.
 			r.runInterruptHook(active)
 			r.finishReviewRuntimeInterrupted(threadID, turnID, active.StartedAtMS, analytics)
+			active.SamplingInterrupt.Finish()
 			return &turn.TurnInterruptResponse{}, nil
 		}
 	}
@@ -11241,6 +11244,7 @@ func (r *RuntimeRouter) interruptRuntimeTurn(threadID string, turnID string, req
 			abortReason := firstNonEmpty(strings.TrimSpace(reason), turnAbortReasonInterrupted)
 			go func() {
 				defer r.threads.TurnWorkerDone()
+				defer active.SamplingInterrupt.Finish()
 				r.finishTurnInterruptedAnalytics(threadID, turnID, active.StartedAtMS, analytics, abortReason)
 			}()
 		}

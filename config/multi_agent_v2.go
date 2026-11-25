@@ -32,6 +32,7 @@ type MultiAgentV2Config struct {
 	// default, so a caller cannot select a tier for one child unless configured.
 	ExposeSpawnAgentServiceTier bool
 	WaitAgentEnabled            bool
+	InterruptAtItemBoundary     bool
 	// DisableNativeTools mirrors `features.multi_agent_v2.disable_native_tools`
 	// (#53617): hide the native collaboration tools while keeping the V2 runtime
 	// and its instructions enabled for host-provided tools.
@@ -150,6 +151,7 @@ func (c *Config) MultiAgentV2Config(agentsMax int) (*MultiAgentV2Config, error) 
 		"hide_spawn_agent_metadata":          &out.HideSpawnAgentMetadata,
 		"expose_spawn_agent_model_overrides": &out.ExposeSpawnAgentModelOverrides,
 		"expose_spawn_agent_service_tier":    &out.ExposeSpawnAgentServiceTier,
+		"interrupt_at_item_boundary":         &out.InterruptAtItemBoundary,
 		"wait_agent_enabled":                 &out.WaitAgentEnabled,
 		"disable_native_tools":               &out.DisableNativeTools,
 		"disable_direct_message":             &out.DisableDirectMessage,

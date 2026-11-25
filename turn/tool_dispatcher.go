@@ -776,7 +776,7 @@ func (d *ToolDispatcher) ExecuteToolItemsWithBatch(ctx context.Context, items []
 		guard := d.beginDirectTiming(invocations[0], startedAt)
 		if err := d.router.WaitUntilReady(ctx, invocations[0]); err != nil {
 			d.finishDirectTiming(guard, nil)
-			if result, ok := d.readinessFailureResult(invocations[0], err); ok {
+			if result, ok := d.readinessFailureResultForContext(ctx, invocations[0], err); ok {
 				d.releasePreparedDirectCalls()
 				return []ToolExecutionResult{*result}, nil
 			}
@@ -833,7 +833,7 @@ func (d *ToolDispatcher) executeToolInvocations(ctx context.Context, invocations
 		guard := d.beginDirectTiming(invocation, startedAt)
 		if err := d.router.WaitUntilReady(ctx, invocation); err != nil {
 			d.finishDirectTiming(guard, nil)
-			if result, ok := d.readinessFailureResult(invocation, err); ok {
+			if result, ok := d.readinessFailureResultForContext(ctx, invocation, err); ok {
 				readinessErrMu.Lock()
 				results[index] = *result
 				readinessErrMu.Unlock()
@@ -1156,7 +1156,22 @@ func (d *ToolDispatcher) AbortToolItems(items []model.AgentItem, message string)
 	return results
 }
 
+func (d *ToolDispatcher) readinessFailureResultForContext(ctx context.Context, invocation *tool.Invocation, err error) (*ToolExecutionResult, bool) {
+	if ctx.Value(itemBoundaryToolsKey{}) == true && errors.Is(err, context.Canceled) {
+		return d.abortedInvocationResult(invocation, "aborted before handler start: agent interrupted"), true
+	}
+	return d.readinessFailureResult(invocation, err)
+}
+
 func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *tool.Invocation) (*ToolExecutionResult, error) {
+	result, err := d.executeToolInvocationInner(ctx, invocation)
+	if err != nil && ctx.Value(itemBoundaryToolsKey{}) == true && ctx.Err() != nil {
+		return d.abortedInvocationResult(invocation, "aborted: agent interrupted"), nil
+	}
+	return result, err
+}
+
+func (d *ToolDispatcher) executeToolInvocationInner(ctx context.Context, invocation *tool.Invocation) (*ToolExecutionResult, error) {
 	// Rust #61578/#61582 rechecks the shared budget before a handler starts,
 	// after readiness and admission have waited.
 	if d.checkWorkBudget != nil {

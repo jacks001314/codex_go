@@ -3688,6 +3688,7 @@ func (r *RuntimeRouter) interruptTurnForGuardianCircuitBreaker(threadID, turnID,
 		// Rust #49475: abort callbacks complete before the terminal event.
 		r.runInterruptHook(active)
 		r.finishTurnInterruptedAnalyticsWithError(threadID, turnID, active.StartedAtMS, analyticsContextFromActiveRuntimeTurn(active), turnAbortReasonInterrupted, appErr)
+		active.SamplingInterrupt.Finish()
 		r.deliverGuardianInterruptionToParent(threadID, reason)
 		return
 	}

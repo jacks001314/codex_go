@@ -821,6 +821,7 @@ func (c *runtimeAgentController) SendInput(ctx context.Context, args *agent.Send
 	if err != nil {
 		return nil, err
 	}
+	c.router.waitSamplingTerminal(target)
 	if active := c.router.activeRuntimeTurnSnapshot(target); active != nil {
 		if !args.Interrupt {
 			return nil, fmt.Errorf("agent %s already has an active turn", target)
@@ -1215,6 +1216,10 @@ func (c *runtimeAgentController) SendMessage(ctx context.Context, args *agent.Se
 	}
 	args.ResolvedThreadID, args.ResolvedPath = threadID, path
 	item := runtimeAgentCommunicationInputItem(c.scopePath, path, args.Message, false, args.Plaintext)
+	if active := c.router.threads.ActiveTurn(threadID); active != nil && active.SamplingInterrupt.Requested() {
+		c.router.enqueueRuntimeAgentMessage(threadID, item)
+		return nil
+	}
 	if active := c.router.activeRuntimeTurnSnapshot(threadID); active != nil {
 		if err := c.router.requireSteerMailbox().Enqueue(&turn.SteerEnqueueParams{ThreadID: threadID, TurnID: active.ID, InputItems: []any{item}}); err != nil {
 			return err
@@ -1240,6 +1245,19 @@ func (c *runtimeAgentController) FollowupTask(ctx context.Context, args *agent.F
 		return fmt.Errorf("follow-up tasks can't target the root agent")
 	}
 	args.ResolvedThreadID, args.ResolvedPath = threadID, path
+	if active := c.router.threads.ActiveTurn(threadID); active != nil && active.SamplingInterrupt.Requested() {
+		copyArgs := *args
+		active.SamplingInterrupt.EnqueueFollowup(func() {
+			if err := c.FollowupTask(context.Background(), &copyArgs); err != nil {
+				c.router.notifyRuntimeAgentActivity(c.rootID, fmt.Sprintf("Follow-up to %s failed: %v", path, err))
+				return
+			}
+			if next := c.router.threads.ActiveTurn(threadID); next != nil && next.SamplingInterrupt != nil {
+				<-next.SamplingInterrupt.Finished()
+			}
+		})
+		return nil
+	}
 	item := runtimeAgentCommunicationInputItem(c.scopePath, path, args.Message, true, args.Plaintext)
 	if active := c.router.activeRuntimeTurnSnapshot(threadID); active != nil {
 		return c.router.requireSteerMailbox().Enqueue(&turn.SteerEnqueueParams{ThreadID: threadID, TurnID: active.ID, InputItems: []any{item}})
@@ -1332,8 +1350,11 @@ func (c *runtimeAgentController) InterruptAgent(ctx context.Context, args *agent
 	args.ResolvedThreadID, args.ResolvedPath = threadID, path
 	previous := c.status(threadID)
 	if active := c.router.activeRuntimeTurnSnapshot(threadID); active != nil {
-		if _, err := c.router.handleTurnInterrupt(requestWithInternalParams(MethodTurnInterrupt, turn.TurnInterruptParams{ThreadID: threadID, TurnID: active.ID})); err != nil {
-			return nil, err
+		graceful := c.router.requestAgentSamplingInterrupt(threadID, active.ID)
+		if !graceful {
+			if _, err := c.router.handleTurnInterrupt(requestWithInternalParams(MethodTurnInterrupt, turn.TurnInterruptParams{ThreadID: threadID, TurnID: active.ID})); err != nil {
+				return nil, err
+			}
 		}
 	}
 	c.router.notifyRuntimeAgentActivity(c.rootID, "Wait completed.")

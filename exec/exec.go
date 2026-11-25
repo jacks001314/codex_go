@@ -505,6 +505,12 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		streamCollector.Warning(warning)
 	}
 	emitStartupBwrapWarning(req, permissionProfile, streamCollector)
+	if interrupt := execSamplingInterrupt(req); interrupt != nil {
+		interrupt.BindTurn(turnID)
+		if scoped, ok := req.subagent.Controller.(*execAgentController); ok && scoped != nil {
+			scoped.setActiveTurn(turnID)
+		}
+	}
 	if req.OnTurnStarted != nil {
 		req.OnTurnStarted(threadID, turnID)
 	}
@@ -519,12 +525,17 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	}
 	if resumeContext != nil && resumeContext.Record != nil {
 		var err error
-		compactedThisTurn, err = r.compactResumeBeforeTurn(ctx, resumeContext, threadID, turnID, modelID, providerID, cyberAccessProgram, cfg, agent, eventSink)
+		compactedThisTurn, err = r.compactResumeBeforeTurn(ctx, resumeContext, threadID, turnID, modelID, providerID, cyberAccessProgram, cfg, agent, eventSink, execSamplingInterrupt(req))
 		if err != nil {
 			_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
 			_ = eventSink.Emit(protocol.TurnFailed(err.Error()))
 			return nil, err
 		}
+	}
+	if execSamplingInterrupt(req).Requested() {
+		_ = r.persistInterruptedSession(threadID, turnID, context.Canceled)
+		_ = eventSink.Emit(protocol.TurnFailedWithKind(context.Canceled.Error(), execInProcessErrorKind(context.Canceled)))
+		return nil, context.Canceled
 	}
 	liveItems := r.openExecLiveThreadItems(req, threadID, turnID)
 	if liveItems != nil {
@@ -746,6 +757,12 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if err := eventSink.Err(); err != nil {
 		return nil, err
 	}
+	if turnResult.SamplingInterrupted && turnResult.Response == nil {
+		// The checkpoint is already durable; no post-compaction sample ran.
+		_ = r.persistInterruptedSession(threadID, turnID, context.Canceled)
+		_ = eventSink.Emit(protocol.TurnFailedWithKind(context.Canceled.Error(), execInProcessErrorKind(context.Canceled)))
+		return nil, context.Canceled
+	}
 	r.emitTurnMetrics(turnResult, threadID, modelID, false, runConfig.ToolRouter)
 	r.emitTurnE2EDuration(turnStartedAt)
 	lastMessage, hasLastMessage := finalMessageForRequest(req, turnResult)
@@ -758,6 +775,11 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		liveItems.Close()
 	}
 
+	if turnResult.SamplingInterrupted {
+		_ = r.persistInterruptedSession(threadID, turnID, context.Canceled)
+		_ = eventSink.Emit(protocol.TurnFailedWithKind(context.Canceled.Error(), execInProcessErrorKind(context.Canceled)))
+		return nil, context.Canceled
+	}
 	if req.Exec.LastMessageFile != "" {
 		if boundLastMessage != nil {
 			writeBoundLastMessageFile(stderr, boundLastMessage, req.Exec.LastMessageFile, lastMessage, hasLastMessage)
@@ -1737,6 +1759,7 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		// Rust #57864: interrupt upstream when a Responses Lite turn is cancelled.
 		InterruptOnCancel: run.Config != nil && features.Enabled(run.Config.FeatureSettings(), "interrupt_on_cancel"),
 	}).Run(ctx, &turn.AgentLoopRequest{
+		SamplingInterrupt:       execSamplingInterrupt(req),
 		Prompt:                  run.Prompt,
 		Instructions:            run.Instructions,
 		InputItems:              append([]any(nil), run.InputItems...),
@@ -5822,6 +5845,13 @@ func (r *Runner) execMidTurnSamplingCompaction(cfg *config.Config, modelID strin
 		}
 		eventSink.EmitInternal(protocol.Compacting())
 		defer func() { eventSink.EmitInternal(protocol.Compacted()) }()
+		interrupt := execSamplingInterrupt(req)
+		if interrupt != nil {
+			if _, err := interrupt.Register(ctx.Context, turnID, nil); err != nil {
+				return nil, err
+			}
+			defer interrupt.Unregister()
+		}
 		compacted, err := compact.CompactRemotely(context.Background(), request, &compact.RemoteOptions{
 			Runner:          remoteRunner,
 			MaxSummaryChars: 4000,
@@ -6055,7 +6085,7 @@ func cloneExecAnyMap(values map[string]any) map[string]any {
 	return out
 }
 
-func (r *Runner) compactResumeBeforeTurn(ctx context.Context, resumeContext *execResumeContext, threadID string, turnID string, modelID string, providerID string, cyberAccessProgram string, cfg *config.Config, agent model.AgentRunner, sink *execEventSink) (bool, error) {
+func (r *Runner) compactResumeBeforeTurn(ctx context.Context, resumeContext *execResumeContext, threadID string, turnID string, modelID string, providerID string, cyberAccessProgram string, cfg *config.Config, agent model.AgentRunner, sink *execEventSink, interrupts ...*turn.SamplingInterrupt) (bool, error) {
 	if resumeContext == nil || resumeContext.Record == nil {
 		return false, nil
 	}
@@ -6086,6 +6116,12 @@ func (r *Runner) compactResumeBeforeTurn(ctx context.Context, resumeContext *exe
 	var remoteRunner compact.RemoteRunner
 	if execProviderSupportsRemoteCompaction(cfg, providerID) {
 		remoteRunner = &execAgentCompactRunner{agent: agent, model: modelID, providerID: providerID, cyberAccessProgram: cyberAccessProgram}
+	}
+	if len(interrupts) > 0 && interrupts[0] != nil {
+		if _, err := interrupts[0].Register(ctx, turnID, nil); err != nil {
+			return false, err
+		}
+		defer interrupts[0].Unregister()
 	}
 	compacted, err := compact.CompactRemotely(ctx, request, &compact.RemoteOptions{
 		Runner:          remoteRunner,
@@ -8159,4 +8195,11 @@ func firstLine(value string) string {
 		return strings.TrimSpace(value[:index])
 	}
 	return value
+}
+
+func execSamplingInterrupt(req *Request) *turn.SamplingInterrupt {
+	if req == nil || req.subagent == nil {
+		return nil
+	}
+	return req.subagent.SamplingInterrupt
 }

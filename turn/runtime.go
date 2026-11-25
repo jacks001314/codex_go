@@ -426,6 +426,18 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 	if request.ExecutedToolCallMetadataEnabled || request.ConnectorResultBodyPassthroughEnabled {
 		executedToolCalls = r.executedToolCalls
 	}
+	if r.router == nil && request.SamplingInterrupt != nil {
+		loopRequest := *request
+		loopRequest.Tools = MergeHostedTools(MergeHostedTools(request.Tools, r.hostedTools), request.HostedTools)
+		loopRequest.UnifiedImageBudget = r.unifiedImageBudget
+		loopRequest.SafeImageDecoder = r.safeImageDecoder
+		loopRequest.IncludeUsageAttribution = r.includeUsageAttribution
+		return NewAgentLoop(&AgentLoopOptions{
+			Agent: r.agent, SteerMailbox: r.steerMailbox, Now: r.now,
+			ExecutedToolCalls: executedToolCalls, ToolRegistrationMetrics: r.toolRegistrationMetrics,
+			MaxTurns: r.maxTurns, DeferMailboxPreemption: r.deferMailboxPreemption,
+		}).Run(ctx, &loopRequest)
+	}
 	if r.router == nil {
 		inputItems := append([]any(nil), request.InputItems...)
 		clientMetadata := cloneStringMap(request.ClientMetadata)

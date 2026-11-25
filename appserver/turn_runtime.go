@@ -65,15 +65,16 @@ import (
 )
 
 type activeRuntimeTurn struct {
-	PlanIdentities *planItemIdentities
-	ThreadID       string
-	TurnID         string
-	Cancel         context.CancelFunc
-	StartedAtMS    int64
-	Params         *turn.TurnStartParams
-	ConnectionID   string
-	RunConfig      *appTurnRunConfig
-	SteerCount     int
+	SamplingInterrupt *turn.SamplingInterrupt
+	PlanIdentities    *planItemIdentities
+	ThreadID          string
+	TurnID            string
+	Cancel            context.CancelFunc
+	StartedAtMS       int64
+	Params            *turn.TurnStartParams
+	ConnectionID      string
+	RunConfig         *appTurnRunConfig
+	SteerCount        int
 	// Dictation aggregates accepted user-input provenance for this turn
 	// (Rust #61215): any true wins, unknown blocks a false report.
 	Dictation turnDictationState
@@ -1828,6 +1829,20 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	}
 	threadID := params.ThreadID
 	turnID := record.ID
+	var samplingInterrupt *turn.SamplingInterrupt
+	if active := r.threads.ActiveTurn(threadID); active != nil && active.TurnID == turnID {
+		samplingInterrupt = active.SamplingInterrupt
+	}
+	if samplingInterrupt != nil {
+		defer func() {
+			// Hard abort has a separate terminal worker that releases the latch.
+			if ctx.Err() == nil {
+				r.clearActiveRuntimeTurn(threadID, turnID)
+				samplingInterrupt.Finish()
+			}
+		}()
+	}
+
 	// Rust #62437 admits the deferred worktree scan here: the turn reached the
 	// runtime, so its Git status is worth observing.
 	r.admitTurnGitEnrichment(threadID, turnID)
@@ -2082,6 +2097,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		responseProcessMode = cfg.ResponseProcessMode()
 	}
 	agentRequest := &turn.AgentLoopRequest{
+		SamplingInterrupt:            samplingInterrupt,
 		Prompt:                       agentPrompt,
 		Timing:                       timingState,
 		CriticalPathTiming:           criticalPathTiming,
@@ -2181,7 +2197,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	// the same turn with the transcript this turn already produced, instead of
 	// being dropped when the turn completes.
 	var finishTurn func()
-	for err == nil && ctx.Err() == nil && result.SamplingError == nil {
+	for err == nil && ctx.Err() == nil && result.SamplingError == nil && !samplingInterrupt.Requested() {
 		if hook := r.turnFinishHook; hook != nil {
 			hook(threadID, turnID)
 		}
@@ -2356,7 +2372,14 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	if usage := tokenUsageFromAgentLoopResult(result); usage != nil {
 		usage.ModelContextWindow = positiveInt64Ptr(r.effectiveModelContextWindowForModel(runConfig.Model, params))
 		lastUsage := lastAgentResponseUsage(result)
-		status, tokenInfo, statusErr := r.persistCompactTokenStatus(threadID, runConfig.Model, params, result.Usage, lastUsage, result.ReasoningIncluded)
+		var status *compact.TokenStatus
+		var tokenInfo *TokenUsage
+		var statusErr error
+		if result.SamplingInterrupted && result.Compactions > 0 {
+			status, tokenInfo, statusErr = r.persistInterruptedCompactionUsage(threadID, result.Usage)
+		} else {
+			status, tokenInfo, statusErr = r.persistCompactTokenStatus(threadID, runConfig.Model, params, result.Usage, lastUsage, result.ReasoningIncluded)
+		}
 		if tokenInfo != nil {
 			usage.Total = tokenInfo.Total
 			usage.Last = tokenInfo.Last
@@ -2378,7 +2401,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, result.SamplingError, nil)
 			return
 		}
-		if statusErr == nil && status != nil {
+		if statusErr == nil && status != nil && !result.SamplingInterrupted {
 			_ = r.persistAutoCompactFallbackOutcome(threadID, turnID, result, status, tokenBudgetDelivery)
 			fallbackRecorded, fallbackErr := r.recordAutoCompactFallbackPrompt(threadID, turnID, status)
 			if !fallbackRecorded && fallbackErr == nil {
@@ -2433,6 +2456,11 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		// UsageAccountingFailed).
 		r.clearActiveRuntimeTurn(threadID, turnID)
 		r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, result.SamplingError, nil)
+		return
+	}
+	if result.SamplingInterrupted {
+		r.runInterruptHook(r.threads.ActiveTurn(threadID))
+		r.finishTurnInterruptedAnalytics(threadID, turnID, startedAtMS, &turnCompletionAnalyticsContext{ConnectionID: connectionID, Params: params, RunConfig: runConfig, Result: result, Timing: timingState}, turnAbortReasonInterrupted)
 		return
 	}
 	if r.hostBudgetExhaustedFor(threadID) {
@@ -4371,7 +4399,11 @@ func (r *RuntimeRouter) registerActiveRuntimeTurn(threadID string, turnID string
 	if r.diagnosticsGauges != nil {
 		defer r.diagnosticsGauges.track("app.turns.active")()
 	}
-	return r.threads.RegisterTurn(threadID, turnID, cancel, startedAtMS, params)
+	if err := r.threads.RegisterTurn(threadID, turnID, cancel, startedAtMS, params); err != nil {
+		return err
+	}
+	r.initializeSamplingInterrupt(threadID, turnID, params)
+	return nil
 }
 
 func (r *RuntimeRouter) registerTrackedActiveRuntimeTurn(threadID string, turnID string, cancel context.CancelFunc, startedAtMS int64, params *turn.TurnStartParams) error {
@@ -4384,6 +4416,7 @@ func (r *RuntimeRouter) registerTrackedActiveRuntimeTurn(threadID string, turnID
 	if err := r.threads.RegisterTrackedTurn(threadID, turnID, cancel, startedAtMS, params); err != nil {
 		return err
 	}
+	r.initializeSamplingInterrupt(threadID, turnID, params)
 	r.refreshTurnDiffDisplayRoots(threadID, turnID)
 	return nil
 }
@@ -4444,6 +4477,9 @@ func (r *RuntimeRouter) activeRuntimeTurnIsReview(threadID string, turnID string
 func (r *RuntimeRouter) consumeCompletedRuntimeTurn(threadID string, turnID string) bool {
 	if r == nil {
 		return false
+	}
+	if active := r.threads.ActiveTurn(threadID); active != nil && active.TurnID == turnID && active.SamplingInterrupt != nil {
+		return true
 	}
 	if _, ok := r.threads.ConsumeTurn(threadID, turnID, false); !ok {
 		return false
@@ -7953,6 +7989,16 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 			FallbackToLocal:      !params.RemoteOnly,
 			FileAudioDurations:   r.compactFileAudioDurations(params.ThreadID),
 		}
+		var interrupt *turn.SamplingInterrupt
+		if active := r.activeRuntimeTurnStateSnapshot(params.ThreadID, params.TurnID); active != nil {
+			interrupt = active.SamplingInterrupt
+		}
+		if interrupt != nil {
+			if _, registerErr := interrupt.Register(ctx, params.TurnID, nil); registerErr != nil {
+				return nil, nil, registerErr
+			}
+			defer interrupt.Unregister()
+		}
 		compacted, err = compact.CompactRemotely(ctx, request, remoteOptions)
 		if err != nil {
 			// The file may disappear after the preflight, or the store may defer
@@ -8010,7 +8056,7 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	if strings.TrimSpace(compacted.CompactionModelHash) == "" {
 		compacted.CompactionModelHash = r.modelCompHash(firstNonEmpty(strings.TrimSpace(params.Model), strings.TrimSpace(record.Metadata.Model)))
 	}
-	if err := r.runPostCompactHooks(ctx, hookCtx); err != nil {
+	if err := r.runPostCompactHooksUnlessInterrupted(ctx, hookCtx, params.ThreadID, params.TurnID); err != nil {
 		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, compacted, err, startedAt, time.Now().UTC(), activeContextTokensBefore)
 		return nil, nil, err
 	}

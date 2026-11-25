@@ -137,6 +137,8 @@ type AgentStepSettings struct {
 }
 
 type AgentLoopRequest struct {
+	// SamplingInterrupt is installed only for an opted-in V2 child.
+	SamplingInterrupt       *SamplingInterrupt
 	Prompt                  string
 	Instructions            string
 	Model                   string
@@ -376,16 +378,17 @@ func bridgeModelRequestHook(hook ModelRequestHook, threadID, turnID, cwd string)
 }
 
 type AgentLoopResult struct {
-	Response          *model.AgentResponse
-	Responses         []*model.AgentResponse
-	ToolExecutions    []ToolExecutionResult
-	InputItems        []any
-	SteerInputItems   []any
-	InitialInputCount int
-	Usage             model.AgentUsage
-	Iterations        int
-	TimingProfile     *Profile
-	SamplingFollowUps int
+	SamplingInterrupted bool
+	Response            *model.AgentResponse
+	Responses           []*model.AgentResponse
+	ToolExecutions      []ToolExecutionResult
+	InputItems          []any
+	SteerInputItems     []any
+	InitialInputCount   int
+	Usage               model.AgentUsage
+	Iterations          int
+	TimingProfile       *Profile
+	SamplingFollowUps   int
 	// SettledResponses counts the completed responses whose bill the sampling
 	// settlement already posted (Rust #61958's posted charge). The caller must
 	// not charge those responses again when the turn ends without a retained
@@ -495,6 +498,10 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 	previousResponseID := strings.TrimSpace(request.PreviousResponseID)
 	clientMetadata := transformClientMetadata(request.ClientMetadata, request.ClientMetadataTransform)
 	for iteration := 0; ; iteration++ {
+		if request.SamplingInterrupt.Requested() {
+			result.SamplingInterrupted = true
+			return result, nil
+		}
 		// Rust session/turn.rs accepts mailbox delivery for the current turn
 		// whenever a sampling request reported needs_follow_up: the turn is
 		// continuing, so mail queued after a terminal-looking item is consumed by
@@ -695,7 +702,25 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 				sampledThrough = &value
 			}
 		}
-		response, err := l.agent.Run(stepCtx, &model.AgentRequest{
+		sampleCtx := stepCtx
+		toolCtx := stepCtx
+		streamHandler := combineResponsesStreamHandlers(request.StreamHandler, timingStreamHandler(timing, l.now))
+		var boundary *sampledItemBoundary
+		var cancelSample context.CancelFunc
+		if request.SamplingInterrupt != nil {
+			sampleCtx, cancelSample = context.WithCancel(stepCtx)
+			boundary = &sampledItemBoundary{stop: request.SamplingInterrupt, cancel: cancelSample}
+			var registerErr error
+			toolCtx, registerErr = request.SamplingInterrupt.Register(stepCtx, request.TurnID, boundary.interrupt)
+			if registerErr != nil {
+				cancelSample()
+				endSamplingRequestSpan()
+				return nil, registerErr
+			}
+			streamHandler = boundary.handler(streamHandler)
+			toolCtx = context.WithValue(toolCtx, itemBoundaryToolsKey{}, true)
+		}
+		response, err := l.agent.Run(sampleCtx, &model.AgentRequest{
 			Prompt:                       prompt,
 			Instructions:                 instructions,
 			InputItems:                   inputItems,
@@ -754,7 +779,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			AttestationProvider:          request.AttestationProvider,
 			OutputSchema:                 request.OutputSchema,
 			DisableHostedImageGeneration: request.DisableHostedImageGeneration,
-			StreamHandler:                combineResponsesStreamHandlers(request.StreamHandler, timingStreamHandler(timing, l.now)),
+			StreamHandler:                streamHandler,
 			OnWireInputBounded: func(original, bounded []any) {
 				if l.executedToolCalls != nil {
 					l.executedToolCalls.InvalidateWireInventoryLoss(original, bounded)
@@ -778,6 +803,13 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 				result.InputItems = append(result.InputItems, item)
 			},
 		})
+		if cancelSample != nil {
+			cancelSample()
+		}
+		if request.SamplingInterrupt.Requested() {
+			response = boundary.retain(response)
+			err = nil
+		}
 		sampling.CloseAt(l.now())
 		if response != nil && sampledThrough != nil {
 			value := *sampledThrough
@@ -974,6 +1006,14 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 				return result, nil
 			}
 		}
+		if request.SamplingInterrupt.Requested() {
+			l.abortInterruptedToolItems(result, toolItems)
+			result.SamplingInterrupted = true
+			profile := timing.CompleteProfile(l.now())
+			result.TimingProfile = &profile
+			endSamplingRequestSpan()
+			return result, nil
+		}
 		// Rust #61577: after_complete_response settles usage and synchronous
 		// post-hooks before releasing the response's tool calls. Go already
 		// holds the completed response here, so the follow-up (usage
@@ -1057,9 +1097,19 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 					previousResponseID = compacted.PreviousResponseID
 				}
 				result.Compactions++
+				if request.SamplingInterrupt.Requested() {
+					result.SamplingInterrupted = true
+					endSamplingRequestSpan()
+					return result, nil
+				}
 				endSamplingRequestSpan()
 				continue
 			}
+		}
+		if len(toolItems) == 0 && request.SamplingInterrupt.Unregister() {
+			result.SamplingInterrupted = true
+			endSamplingRequestSpan()
+			return result, nil
 		}
 		if len(toolItems) == 0 && request.SamplingFollowUp != nil {
 			followUp := request.SamplingFollowUp(&SamplingFollowUpContext{Response: response, Usage: result.Usage, Iteration: iteration, HasToolCalls: len(toolItems) > 0})
@@ -1123,7 +1173,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		toolBlockingSpan := startTurnPhaseSpan(ctx, request, samplingSpan, ToolBlockingPhaseSpanName, TurnPhaseToolBlocking, request.ThreadID, request.TurnID)
 		batch := l.dispatcher.BatchTiming()
 		toolBlocking := timing.BeginToolBlocking(l.now(), batch)
-		executions, err := l.dispatcher.ExecuteToolItemsWithBatch(stepCtx, toolItems, batch)
+		executions, err := l.dispatcher.ExecuteToolItemsWithBatch(toolCtx, toolItems, batch)
 		toolBlocking.CloseAt(l.now())
 		if toolBlockingSpan != nil {
 			toolBlockingSpan.End()
@@ -1140,6 +1190,10 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			if len(executions[i].InputItems) > 0 {
 				result.InputItems = append(result.InputItems, executions[i].InputItems...)
 			}
+		}
+		if request.SamplingInterrupt.Unregister() {
+			result.SamplingInterrupted = true
+			return result, nil
 		}
 		if request.SamplingFollowUp != nil && !toolFollowUpSettled {
 			followUp := request.SamplingFollowUp(&SamplingFollowUpContext{Response: response, Usage: result.Usage, Iteration: iteration, HasToolCalls: true})
