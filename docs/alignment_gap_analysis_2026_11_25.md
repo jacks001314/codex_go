@@ -165,6 +165,24 @@ Go 已经实现了 thread ownership 的“第一次观察者获胜”，但 agen
 - GitHub Actions 仍受账户计费问题影响，macOS/Linux 原生 runner 无法产出证据。
 - `sdk-cancellation` 仍记录 Rust `bbbf396839` 的 PowerShell 子进程泄漏；Go 侧进程树取消更安全，不应为了对齐而回退。
 
+## 依赖校验风险：charm.land/glamour/v2 v2.0.1 的 sumdb 与镜像内容分叉
+
+这是本轮两个节点都撞到、且必须记录的一条外部风险，与代码对齐无关：
+
+- sum.golang.org 的 lookup 记录：`charm.land/glamour/v2 v2.0.1 h1:xl+r00A4aJWU0z8fgwKd9fQQ4rsphqGUzuEiXZP5n+c=`。
+- 本机（Windows，GOSUMDB=off）从 proxy.golang.org 与 goproxy.cn 抓同一个 zip，都是 139064 字节、
+  sha256 `C4A98F4E576CCE274B8724FF6A8E71D8B2C022A1BC4B468E82725063D8F1C039`，算出的 h1 是仓库 go.sum 里的
+  `Vx2F81a4SBR5/IqAkDyeZ3mfuT7u+9AYxeXQ+J1n2Wc=`；zip 内部路径是 `charm.land/glamour/v2@v2.0.1/`，go.mod 声明的也是该模块路径。
+- 也就是说该版本被重新发布过：sumdb 记的是旧字节，镜像现在给的是新字节。开启 sumdb 的新环境会因此失败，
+  用仓库现有 go.sum 才能构建。
+- Linux 节点（linux-align）下载到的是 sumdb 那一份（h1 为 `xl+r00A4…`），与本机相反，因此该节点首次编译 TUI 时
+  直接 checksum mismatch。这不是节点配置错误，而是同一版本在不同侧内容不一致的表现。
+
+处置：仓库 go.sum 保持 `Vx2F81a4…`（本机能构建、CI 也依赖它）；任何节点都不要把这个值改掉。需要在本机跑测试的节点
+应在隔离副本里改 go.sum 或使用本地 vendor，结果只作为实验证据，不回写项目。等上游澄清该版本是否被重打 tag 后再决定是否
+把这条依赖升级到新版本。
+
+
 ## 建议顺序
 
 第一波先处理台账与低成本缺口：
