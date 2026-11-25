@@ -2,7 +2,7 @@
 
 ## 结论
 
-当前 Go 仓库 HEAD 为 `e524c8d69`，Rust 目标为 `3f65e9f1`，两边工作树均无未提交改动。按 `parity/commits.json` 的 4,595 个上游提交计算，已关闭 4,563 个（3,667 complete、51 equivalent、845 not applicable），关闭率约 99.3%；剩余 12 个 partial、20 个 blocked_precondition。另有 4 个 domain、4 个 contract 未关闭，`certificationReady` 仍为 false。
+本轮开始时 Go 仓库 HEAD 为 `e524c8d69`，Rust 目标为 `3f65e9f1`。按 `parity/commits.json` 的 4,595 个上游提交计算，分析时已关闭 4,563 个（3,667 complete、51 equivalent、845 not applicable），剩余 12 个 partial、20 个 blocked_precondition；本轮又关闭了 #40625、#60905、#63528、#63520 四项并按证据重算，当前为 3,671 complete / 51 equivalent / 845 not applicable / 11 partial / 17 blocked_precondition（本轮改动见各提交与末节记录）。另有 4 个 domain、4 个 contract 未关闭，`certificationReady` 仍为 false。
 
 真正影响功能的缺口已经不多，但比较集中：
 
