@@ -18,7 +18,8 @@
 | `54cc20024` | bwrap 探针先抽干 stderr 再判定（对齐 Rust 读到 WouldBlock） | 修复偶发把坏 launcher 判成可用 |
 | `cbafa765b` | #61900 proc-mount 预检与 legacy fallback（Linux 节点实现） | #61900 |
 | `46ea8874a` `77084e84d` | bwrap 探针 drain 截止时间改成当前时间 +50ms（原来的 `time.Now()` 会直接 deadline），并记录全量跑出的临时路径产物 | 修复 drain 用例 50/50 失败 |
-| `9727927c4` `3d361033e` `4f76a3c3a` | 三处 Windows 测试环境修整：no-network 环境用例的 homedir 缓存隔离、mxc 运行日志先关闭再加载、子 agent 结束前 `CloseAgent` | 消除 TempDir 清理竞态 |
+| `9727927c4` `3d361033e` `4f76a3c3a` `8057cf9f1` | Windows 测试环境修整：no-network 环境用例的 homedir 缓存隔离、mxc 运行日志先关闭再加载、子 agent 结束前 `CloseAgent`；并把 #61945 的台账证据改成「能力已在 store 的 fork API，缺的是 host 协议面与拒绝守卫」 | 消除 TempDir 清理竞态、让阻塞证据可执行 |
+| `f25809c92` | `TestSubagentSpawnServiceTierLikeRust` 在 `CloseAgent` 之后等 `WaitForTurnWorkers` 再返回：只关 agent 仍会让子 agent 的 turn worker 在 TempDir 清理时继续写盘 | 该用例 3/20 偶发失败 → 30/30 通过 |
 | `b2c815beb` | 采用带 `RequestCursorPosition` 的 `ResumeMsg`，并记录 inline viewport realign 未移植 | #63520 残差 |
 | `d30ba1b79` | Seatbelt 只对 depth-one 系统别名（`/tmp`、`/var/tmp`）做归一：scratch 排除、PROTECTED_WRITE、protected ancestor 与 symlink-home 覆盖判断；嵌套可变软链仍需显式 opt-in | 关闭 macOS 默认 TMPDIR 下的 3 个 sandbox 失败 |
 | `6ce6cb67b` | #61909/#61916 item-boundary 采样中断与 remote compaction summary 保留（subagent-align 实现）：工具取消与采样取消分离、保留已完成前缀、aborted 工具输出、follow-up 串行、mail 排队；默认关闭 | #61909、#61916 |
@@ -40,6 +41,7 @@
 | `go test ./appserver -count=1`（`CODEX_RUST_ROOT` 指向 3f65e9f1） | ok 480.2s，整包通过，含 `TestPrecomputedExportArtifactsMatchTargetRustCommit` |
 | `go test ./turn ./agent ./state ./exec ./config -count=1` | 全部 ok（state 31.3s） |
 | `go test ./turn ./appserver ./exec ./config -run '^TestSamplingInterrupt' -count=1` | 全部 ok |
+| `go test ./... -count=1` | 141 个包 ok，2 个包失败；失败均为并发负载下的时序敏感用例（见下） |
 | `GOOS=linux` / `GOOS=darwin` `go vet ./tui/tea ./doctor` | 通过（unix 实现可编译） |
 | `go vet ./sandbox`、`GOOS=linux go vet ./sandbox/linuxsandbox` | 均通过（含 #61900 新代码） |
 | `go test ./doctor -count=1` | ok 3.5s（走非 darwin 分支） |
@@ -50,6 +52,8 @@
 判断都依赖路径形态。改用 `C:\qaxtmp` 这类无连字符短路径后，`./config ./cli ./appserverdaemon ./gitutil ./review ./plugin`
 全部转绿，`./appserver` 只剩一个 Windows TempDir 清理竞态（`TestSubagentSpawnServiceTierLikeRust`，已在测试结束前
 `CloseAgent` 关闭子 agent 修掉）。建议后续统一用短且无连字符的临时根。
+
+全量 `go test ./...` 的另一类失败是**并发负载下的时序敏感**，不是产品回归：`appserver` 的 `TestEnvironmentObserveConnectionAttemptsCancelledOnceWhenReplacedLikeRust/replace` 单独跑 20/20 通过、`go test ./appserver` 整包也通过，只在 141 个包并行时偶发把 attempt 记成 `failure`（reload 晚于客户端自身超时）；`mcp` 的 `TestMCPDiscoverLocalStdioHandshakeRecoveryLikeRust/legacy-slow-initialize` 是 2 秒自设 deadline 被抢占。`TestSubagentSpawnServiceTierLikeRust` 的 TempDir 竞态已用 `f25809c92` 修掉（3/20 → 30/30）。
 
 仍存在的真实环境性失败：`plugin` 的 `TestMarketplaceUpgradeReusesInstalledGitObjectsLikeRust`
 （Windows 长路径）、`mcp` 的 `TestDesktopSocketMCP*`（Windows AF_UNIX）。这两项需要长路径开关或 Unix 域套接字支持。
