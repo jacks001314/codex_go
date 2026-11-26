@@ -384,6 +384,7 @@ func (t *TranscriptComponent) NoteReplayedAssistantMessages(messages []codextui.
 		t.noteReplayedCloudItem("", itemID, strings.TrimSpace(message.Text) != "", false)
 	}
 }
+
 // NoteOlderAssistantMessages records replies spliced in from an older history
 // page. They take negative positions, so they always sort before anything the
 // view observed live (Rust #62403 older_response_order).
@@ -584,7 +585,7 @@ func interruptedAgentMessageKey(turnID string, itemID string) string {
 }
 
 // insertFinalMessageSeparatorIfNeeded inserts a separator between tool calls and assistant message.
-func (t *TranscriptComponent) insertFinalMessageSeparatorIfNeeded(state *codextui.State, width int) {
+func (t *TranscriptComponent) insertFinalMessageSeparatorIfNeeded(state *codextui.State, width int, turnID string) {
 	if t == nil || state == nil || !t.needsFinalMessageSeparator {
 		return
 	}
@@ -598,6 +599,11 @@ func (t *TranscriptComponent) insertFinalMessageSeparatorIfNeeded(state *codextu
 	// timestamp is available.
 	cell := historycell.NewFinalMessageSeparator(nil, nil).WithCompletedAt(time.Now())
 	state.AddHistoryLines(cell.DisplayLines(width), cell.RawLines())
+	// The separator reports this turn's boundary; pagination anchors a split
+	// turn's generated image on it (Rust FinalMessageSeparator::turn_id).
+	if index := len(state.Messages) - 1; index >= 0 && strings.TrimSpace(turnID) != "" {
+		state.Messages[index].TurnID = strings.TrimSpace(turnID)
+	}
 	t.needsFinalMessageSeparator = false
 }
 
@@ -606,7 +612,7 @@ func (t *TranscriptComponent) insertFinalMessageSeparatorIfNeeded(state *codextu
 // completion falls back to the local clock when no saved timestamp exists.
 // elapsedSeconds comes from the protocol turn duration and is only shown when
 // it exceeds sixty seconds.
-func (t *TranscriptComponent) appendCompletionFooter(state *codextui.State, width int, elapsedSeconds *int64, completedAt time.Time) {
+func (t *TranscriptComponent) appendCompletionFooter(state *codextui.State, width int, elapsedSeconds *int64, completedAt time.Time, turnID string) {
 	if t == nil || state == nil {
 		return
 	}

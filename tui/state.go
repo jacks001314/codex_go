@@ -88,6 +88,12 @@ type Message struct {
 	// history page places at that turn's boundary (Rust #60554
 	// history_pagination); side conversations drop these rows.
 	InterruptionNotice bool
+	// TurnID marks the turn whose boundary this history row reports: the
+	// final-message separator, the completion footer and the restored
+	// interruption notice. History pagination uses it to put a generated image
+	// that was split onto an older page next to its own answer (Rust
+	// history_pagination::split_image_insertion).
+	TurnID string
 	// StartupTip marks the retained startup tooltip row. Fullscreen rendering
 	// hides it while raw output and terminal scrollback keep the copy
 	// (Rust #48513).

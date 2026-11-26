@@ -3346,7 +3346,7 @@ func remoteTUIThreadMessagesFromOlderTurns(turns []appserver.Turn, projection re
 		turn := turns[index]
 		messages = append(messages, remoteTUIThreadMessagesFromThread(&appserver.Thread{Turns: []appserver.Turn{turn}}, projection, showRawReasoning)...)
 		if turn.Status == appserver.TurnStatusInterrupted {
-			messages = append(messages, interruptionNoticeMessage())
+			messages = append(messages, interruptionNoticeMessage(turn.ID))
 		}
 	}
 	return messages

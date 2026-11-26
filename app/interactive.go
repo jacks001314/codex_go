@@ -4970,9 +4970,24 @@ func interactiveSessionHistoryWindow(store *session.Store, threadID session.Thre
 // interactiveSessionHistoryPage loads one page of stored items, newest first in
 // the store and returned in transcript order, with the cursor that addresses
 // the page before it.
+// interactiveHistoryPageResult is one older page plus the split-turn rows the
+// reader has to place next to a turn whose answer lives in the loaded window.
+type interactiveHistoryPageResult struct {
+	Messages    []codextui.Message
+	Next        string
+	HasOlder    bool
+	SplitTurnID string
+	SplitImages []codextui.Message
+}
+
 func interactiveSessionHistoryPage(store *session.Store, threadID session.ThreadID, cursor string, cwd string) ([]codextui.Message, string, bool, error) {
+	page, err := interactiveSessionHistoryPageSplit(store, threadID, cursor, cwd)
+	return page.Messages, page.Next, page.HasOlder, err
+}
+
+func interactiveSessionHistoryPageSplit(store *session.Store, threadID session.ThreadID, cursor string, cwd string) (interactiveHistoryPageResult, error) {
 	if store == nil {
-		return nil, "", false, nil
+		return interactiveHistoryPageResult{}, nil
 	}
 	page, err := store.ListItems(threadID, session.ListItemsOptions{
 		PageSize:      interactiveResumeInitialItemBudget,
@@ -4980,7 +4995,7 @@ func interactiveSessionHistoryPage(store *session.Store, threadID session.Thread
 		Cursor:        cursor,
 	})
 	if err != nil {
-		return nil, "", false, err
+		return interactiveHistoryPageResult{}, err
 	}
 	items := make([]session.Item, 0, len(page.Items))
 	for index := len(page.Items) - 1; index >= 0; index-- {
@@ -4991,13 +5006,21 @@ func interactiveSessionHistoryPage(store *session.Store, threadID session.Thread
 	// project_older_history_cells); the initial window renders through
 	// replay, which has no older-page boundaries to place.
 	var messages []codextui.Message
+	var splitTurnID string
+	var splitImages []codextui.Message
 	if strings.TrimSpace(cursor) == "" {
 		messages = interactiveSessionMessagesFromItems(items, cwd, reasoningProjectionChatWidget, false)
 	} else {
-		messages = interactivePageMessagesWithTurnBoundaries(store, threadID, items, cwd)
+		messages, splitTurnID, splitImages = interactivePageMessagesSplit(store, threadID, items, cwd)
 	}
 	next := strings.TrimSpace(page.NextCursor)
-	return messages, next, next != "", nil
+	return interactiveHistoryPageResult{
+		Messages:    messages,
+		Next:        next,
+		HasOlder:    next != "",
+		SplitTurnID: splitTurnID,
+		SplitImages: splitImages,
+	}, nil
 }
 
 // interactiveSessionHistoryWindowFromRecord cuts the newest item page from a
@@ -5052,13 +5075,14 @@ func interactiveSessionHistoryPageItems(items []session.Item, pageSize int) ([]s
 // interruptionNoticeMessage is the neutral row Rust's
 // history_cell::new_interruption_notice renders at an interrupted turn's
 // boundary: a dim marker line, never a retry suggestion.
-func interruptionNoticeMessage() codextui.Message {
+func interruptionNoticeMessage(turnID string) codextui.Message {
 	text := "\x1b[2m" + chatwidget.ConversationInterruptedNotice + "\x1b[0m"
 	return codextui.Message{
 		Role:               codextui.RoleHistory,
 		Text:               text,
 		RawText:            text,
 		InterruptionNotice: true,
+		TurnID:             strings.TrimSpace(turnID),
 	}
 }
 
@@ -5210,34 +5234,84 @@ func interactiveHistoryPageGroups(items []session.Item, itemTurnIDs map[uint64]s
 // transcript order and restores the interruption notice at the boundary of
 // each interrupted turn the page completes.
 func interactivePageMessagesWithTurnBoundaries(store *session.Store, threadID session.ThreadID, items []session.Item, cwd string) []codextui.Message {
+	messages, _, _ := interactivePageMessagesSplit(store, threadID, items, cwd)
+	return messages
+}
+
+// interactivePageMessagesSplit renders one older page and reports a turn the
+// page only begins. Rust #61919 keeps that turn's generated image with its
+// answer: the page hands the image rows to the reader, which inserts them before
+// the turn's boundary row in the loaded window
+// (history_pagination::split_image_insertion).
+func interactivePageMessagesSplit(store *session.Store, threadID session.ThreadID, items []session.Item, cwd string) (messages []codextui.Message, splitTurnID string, splitImages []codextui.Message) {
 	if len(items) == 0 {
-		return nil
+		return nil, "", nil
 	}
 	history := interactiveHistoryFor(store, threadID)
 	turns := history.turns
 	if len(turns) == 0 {
-		return interactiveSessionMessagesFromItems(items, cwd, reasoningProjectionChatWidget, false)
+		return interactiveSessionMessagesFromItems(items, cwd, reasoningProjectionChatWidget, false), "", nil
 	}
 	groups := interactiveHistoryPageGroups(items, history.itemTurnIDs, turns)
-	messages := make([]codextui.Message, 0, len(items)+2)
+	// Rust's split turn: the page's last item belongs to a completed or
+	// interrupted turn whose stored last item lives on a newer page, so this
+	// page only begins that turn. Such a turn gets no group of its own here; its
+	// rows fall into the unclaimed tail.
+	splitTurn := -1
+	pageLastItem := strings.TrimSpace(items[len(items)-1].ID)
+	pageLastTurnID := strings.TrimSpace(history.itemTurnIDs[items[len(items)-1].CreatedAtOrdinal])
+	if pageLastTurnID == "" {
+		pageLastTurnID = strings.TrimSpace(session.ItemTurnID(&items[len(items)-1], len(items)-1))
+	}
+	for index := range turns {
+		if turns[index].id != pageLastTurnID || turns[index].lastItemID == "" || turns[index].lastItemID == pageLastItem {
+			continue
+		}
+		if turns[index].status == "completed" || turns[index].status == interactiveTurnStatusInterrupted {
+			splitTurn = index
+			splitTurnID = turns[index].id
+		}
+		break
+	}
+	messages = make([]codextui.Message, 0, len(items)+2)
 	for _, group := range groups {
-		messages = append(messages, interactiveSessionMessagesFromItems(items[group.start:group.end], cwd, reasoningProjectionChatWidget, false)...)
-		if group.turn >= 0 && turns[group.turn].status == interactiveTurnStatusInterrupted {
-			messages = append(messages, interruptionNoticeMessage())
+		groupMessages := interactiveSessionMessagesFromItems(items[group.start:group.end], cwd, reasoningProjectionChatWidget, false)
+		if splitTurn >= 0 && group.turn < 0 {
+			kept := make([]codextui.Message, 0, len(groupMessages))
+			for _, message := range groupMessages {
+				if message.ImageGenerated && strings.TrimSpace(message.ImagePath) != "" {
+					splitImages = append(splitImages, message)
+					continue
+				}
+				kept = append(kept, message)
+			}
+			groupMessages = kept
+		}
+		messages = append(messages, groupMessages...)
+		if group.turn >= 0 && turns[group.turn].status == interactiveTurnStatusInterrupted && group.turn != splitTurn {
+			// The notice belongs to the page holding the interrupted turn's last
+			// item, so a split turn publishes it with the newer page.
+			messages = append(messages, interruptionNoticeMessage(turns[group.turn].id))
 		}
 	}
-	return messages
+	return messages, splitTurnID, splitImages
 }
 
 // interactiveOlderHistoryLoader serves the TUI's older-history requests from
 // the embedded session store (Rust app/history_pagination.rs).
 func interactiveOlderHistoryLoader(store *session.Store, cwd string) codextea.OlderHistoryLoadFunc {
 	return func(threadID string, cursor string) (codextea.OlderHistoryPage, error) {
-		messages, next, hasOlder, err := interactiveSessionHistoryPage(store, session.ThreadID(strings.TrimSpace(threadID)), cursor, cwd)
+		page, err := interactiveSessionHistoryPageSplit(store, session.ThreadID(strings.TrimSpace(threadID)), cursor, cwd)
 		if err != nil {
 			return codextea.OlderHistoryPage{}, err
 		}
-		return codextea.OlderHistoryPage{Messages: messages, Cursor: next, HasOlder: hasOlder}, nil
+		return codextea.OlderHistoryPage{
+			Messages:    page.Messages,
+			Cursor:      page.Next,
+			HasOlder:    page.HasOlder,
+			SplitTurnID: page.SplitTurnID,
+			SplitImages: page.SplitImages,
+		}, nil
 	}
 }
 
@@ -5278,7 +5352,17 @@ func interactiveSessionMessageFromItem(item session.Item, projection reasoningPr
 		}
 		// Rust #60555 summarizes image generation by its call label; the
 		// revised prompt and saved path stay in the expanded transcript.
-		return codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text, ToolActivity: true}, true
+		message := codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text, ToolActivity: true}
+		// A completed, saved image is turn output: the owned transcript previews
+		// it after the answer, and a page split must carry it to that boundary
+		// instead of leaving it above the turn (Rust #61919).
+		if strings.EqualFold(strings.TrimSpace(item.Status), "completed") {
+			if saved := interactiveSessionItemDataString(item, "savedPath", "saved_path"); saved != "" {
+				message.ImagePath = saved
+				message.ImageGenerated = true
+			}
+		}
+		return message, true
 	case itemType == "agentmessage" || itemType == "assistantmessage" || role == "assistant":
 		text := strings.TrimSpace(item.Text)
 		return codextui.Message{

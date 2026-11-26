@@ -29,6 +29,14 @@ type OlderHistoryPage struct {
 	Cursor string
 	// HasOlder reports that Cursor still has pages behind it.
 	HasOlder bool
+	// SplitTurnID names a turn the page only begins: its boundary row (a final
+	// message separator, completion footer or interruption notice carrying this
+	// TurnID) already sits in the loaded window (Rust
+	// history_pagination::split_image_insertion).
+	SplitTurnID string
+	// SplitImages are that turn's generated-image rows. They belong directly
+	// before its boundary row rather than at the top of the prepended page.
+	SplitImages []codextui.Message
 }
 
 // olderHistoryLoadedMsg carries the async result of one page fetch.
@@ -106,21 +114,63 @@ func (m *Model) applyOlderHistoryPage(threadID string, page OlderHistoryPage, er
 	if m.backtrack.HasSelection() && strings.TrimSpace(m.backtrack.BaseThreadID) == m.currentThreadID() {
 		m.backtrack.NthUserMessage += tuiapp.UserCount(inserted)
 	}
+	if anchor := m.splitTurnAnchorIndex(page.SplitTurnID, insertAt); anchor >= 0 && len(page.SplitImages) > 0 {
+		// Rust places the split turn's images directly before its boundary row,
+		// after any image rows already sitting there. Everything else on the page
+		// stays a normal older page.
+		m.State.InsertMessages(insertAt, inserted)
+		m.Transcript.NoteOlderAssistantMessages(inserted)
+		m.registerCollabTranscriptRows(inserted)
+		m.refreshTranscript()
+		m.adjustAfterOlderPage(inlineFollowing, inlineOffset, inlineRows, overlayFollowing, overlayOffset, overlayRows)
+		m.State.InsertMessages(anchor+len(inserted), page.SplitImages)
+		m.refreshTranscript()
+		return
+	}
+	inserted = append(inserted, page.SplitImages...)
 	m.State.InsertMessages(insertAt, inserted)
 	// Rust #62403: replies from an older page sort before everything the
 	// view observed live.
 	m.Transcript.NoteOlderAssistantMessages(inserted)
 	m.registerCollabTranscriptRows(inserted)
 	m.refreshTranscript()
+	m.adjustAfterOlderPage(inlineFollowing, inlineOffset, inlineRows, overlayFollowing, overlayOffset, overlayRows)
+}
+
+// splitTurnAnchorIndex finds where a split turn's boundary row will sit after the
+// page is prepended at insertAt. It returns -1 when the loaded window has no row
+// for that turn, which keeps the images on the page itself.
+func (m *Model) splitTurnAnchorIndex(turnID string, insertAt int) int {
+	turnID = strings.TrimSpace(turnID)
+	if m == nil || m.State == nil || turnID == "" {
+		return -1
+	}
+	for index := len(m.State.Messages) - 1; index >= 0; index-- {
+		message := m.State.Messages[index]
+		if strings.TrimSpace(message.TurnID) != turnID {
+			continue
+		}
+		start := index
+		for start > 0 && m.State.Messages[start-1].ImageGenerated {
+			start--
+		}
+		return start
+	}
+	return -1
+}
+
+// adjustAfterOlderPage keeps the reader on the rows that were visible when the
+// page landed. Insertions below the reading position leave the offsets alone.
+func (m *Model) adjustAfterOlderPage(inlineFollowing bool, inlineOffset, inlineRows int, overlayFollowing bool, overlayOffset, overlayRows int) {
 	if !inlineFollowing {
-		inserted := len(m.transcript.lines) - inlineRows
-		m.transcript.YOffset = min(inlineOffset+inserted, m.transcript.maxYOffset())
+		added := len(m.transcript.lines) - inlineRows
+		m.transcript.YOffset = min(inlineOffset+added, m.transcript.maxYOffset())
 	}
 	if m.overlay != nil && m.overlayTranscript {
 		m.syncTranscriptOverlay()
 		if !overlayFollowing {
-			inserted := contentLineCount(m.overlay.Content()) - overlayRows
-			m.overlay.SetYOffset(overlayOffset + inserted)
+			added := contentLineCount(m.overlay.Content()) - overlayRows
+			m.overlay.SetYOffset(overlayOffset + added)
 		}
 	}
 }

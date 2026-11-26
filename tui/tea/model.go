@@ -9323,7 +9323,7 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 			elapsedSeconds = &value
 		}
 	}
-	m.Transcript.appendCompletionFooter(m.State, m.width, elapsedSeconds, time.Now())
+	m.Transcript.appendCompletionFooter(m.State, m.width, elapsedSeconds, time.Now(), m.currentTurnID)
 	// Rust #54114: a live completion is reported as done until acknowledged.
 	m.programStatusAfterTurn = codextui.ProgramStatus{State: codextui.ProgramStatusDone}
 	m.setStatus("idle")
@@ -14855,7 +14855,7 @@ func (m *Model) insertFinalMessageSeparatorIfNeeded() {
 	if m == nil || m.State == nil {
 		return
 	}
-	m.Transcript.insertFinalMessageSeparatorIfNeeded(m.State, m.width)
+	m.Transcript.insertFinalMessageSeparatorIfNeeded(m.State, m.width, m.currentTurnID)
 }
 
 func (m *Model) addBottomLine(line string) {
