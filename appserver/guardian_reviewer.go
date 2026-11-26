@@ -1517,6 +1517,14 @@ func (r *modelGuardianReviewer) reviewOutcome(ctx context.Context, threadID, tur
 	}
 	reviewCtx, cancel := guardianReviewContext(ctx, timeout)
 	defer cancel()
+	// Rust #62309: the attached reviewer pins the authorization its preparation
+	// began with, so a verdict issued after that authorization changed is stale
+	// even when the transcript itself is unchanged.
+	pinnedAuthorization, pinnedAuthorizationSet := state.ServingAuthorization{}, false
+	if r.servingAuthorization != nil {
+		pinnedAuthorization = r.servingAuthorization(threadID, turnID)
+		pinnedAuthorizationSet = true
+	}
 	plan := r.planForTurn(reviewCtx, threadID, turnID)
 	reviewOrigin := guardianReviewOriginFromContext(reviewCtx)
 	plan = guardianReviewPlanWithOrigin(plan, reviewOrigin)
@@ -1621,6 +1629,11 @@ func (r *modelGuardianReviewer) reviewOutcome(ctx context.Context, threadID, tur
 reviewAttempt:
 	attempts++
 	attribution.AttemptCount = attempts
+	if attempts > 1 && r.servingAuthorization != nil {
+		// Rust #62309 retries take a new reservation under the current
+		// authorization, so a retry pins what is live when it starts.
+		pinnedAuthorization = r.servingAuthorization(threadID, turnID)
+	}
 	var transcript []string
 	var transcriptEntries []state.GuardianTranscriptEntry
 	var transcriptOmissionNote string
@@ -2105,7 +2118,8 @@ reviewAttempt:
 		session.markPriorReview()
 	}
 	var staleAuthorization bool
-	if err == nil && r.guardianReviewContextChanged(threadID, turnID, transcript, budgetCompareEntries, transcriptOmissionNote, rootAuthorization, omittedCallID) {
+	if err == nil && (r.guardianReviewContextChanged(threadID, turnID, transcript, budgetCompareEntries, transcriptOmissionNote, rootAuthorization, omittedCallID) ||
+		r.guardianServingAuthorizationChanged(threadID, turnID, pinnedAuthorization, pinnedAuthorizationSet)) {
 		// Rust #59225: revalidate both verdicts. Parent input can grant
 		// authorization while a denial is in flight, and a stale denial must not
 		// be published or counted toward the turn's denial limit.
@@ -2271,7 +2285,8 @@ reviewAttempt:
 			return finishAborted()
 		}
 		if secondAssessment != nil {
-			if r.guardianReviewContextChanged(threadID, turnID, transcript, budgetCompareEntries, transcriptOmissionNote, rootAuthorization, omittedCallID) {
+			if r.guardianReviewContextChanged(threadID, turnID, transcript, budgetCompareEntries, transcriptOmissionNote, rootAuthorization, omittedCallID) ||
+				r.guardianServingAuthorizationChanged(threadID, turnID, pinnedAuthorization, pinnedAuthorizationSet) {
 				// A follow-up assessed against changed parent authorization is not a
 				// valid replacement for the completed denial (Rust #59225).
 				discardReviewSession = true
@@ -4301,6 +4316,17 @@ func waitGuardianReviewRetry(ctx context.Context, delay time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+// guardianServingAuthorizationChanged reports that the authorization the review
+// started under no longer describes the live turn. Rust #62309 checks it before
+// and after the verdict, so a tightening that lands during preparation cannot be
+// covered by the verdict that preparation produced.
+func (r *modelGuardianReviewer) guardianServingAuthorizationChanged(threadID, turnID string, pinned state.ServingAuthorization, pinnedSet bool) bool {
+	if r == nil || r.servingAuthorization == nil || !pinnedSet {
+		return false
+	}
+	return !reflect.DeepEqual(r.servingAuthorization(threadID, turnID), pinned)
 }
 
 // guardianReviewContextChanged mirrors Rust #53797's widened invalidation
