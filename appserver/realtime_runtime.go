@@ -44,6 +44,9 @@ func (r *RuntimeRouter) startRealtimeConversationAsync(params realtime.StartPara
 				// Rust #62299: a reattached call restores speech that a previous
 				// call saved at hangup, before any newly captured speech.
 				r.restoreRealtimeSessionEndSpeech(params.ThreadID)
+				// Rust #62288: durable frames the previous transport recorded but no
+				// input consumed stay available ahead of newly captured speech.
+				r.recoverRealtimeUnconsumedFrames(params.ThreadID)
 				r.notifyRealtime(notifications)
 				return
 			}
@@ -764,14 +767,26 @@ func (r *RuntimeRouter) handleRealtimeEvent(threadID string, event realtime.Even
 	eventLock := r.realtimeEventLock(threadID)
 	eventLock.Lock()
 	defer eventLock.Unlock()
+	// Rust #62288: a thread whose transcript write could not be confirmed must
+	// reload before another input can advance its history.
+	if r.realtimeHistoryRecoveryRequired(threadID) {
+		if event.Type == "handoff.requested" {
+			r.releaseRealtimeHandoff(threadID, strings.TrimSpace(firstNonEmpty(event.HandoffID, event.ItemID)))
+		}
+		return
+	}
 	// Rust #58221: a completed transcript travels with its event so it reaches
 	// history before a later handoff can consume the same speech.
 	if len(event.CompletedTranscript) > 0 {
-		text, frames := realtimeDelegationAttribution("", event.CompletedTranscript)
+		// Rust #62288: durable speech restored at reconnect renders ahead of the
+		// newly captured rows so model input cannot be reordered.
+		entries := r.prepareRealtimeRecordedEntries(threadID, event.CompletedTranscript)
+		text, frames := realtimeDelegationAttribution("", entries)
 		if text != "" {
-			if _, err := r.recordRealtimeTranscriptMessage(threadID, text, realtimeTranscriptChunkKind, "transcript_delta", event.RealtimeSessionID, realtimeAttributedSources(event, frames)); err != nil {
+			if err := r.sealRealtimeTranscriptChunk(threadID, text, "transcript_delta", event.RealtimeSessionID, realtimeAttributedSources(event, frames)); err != nil {
 				return
 			}
+			r.consumeRealtimeRecoveredFrames(threadID)
 		}
 	}
 	// Rust #50531: the terminal realtime transcript is written straight into
@@ -794,7 +809,7 @@ func (r *RuntimeRouter) handleRealtimeEvent(threadID string, event realtime.Even
 	}
 	// Rust #58221 removed the active-transcript byte budget; V3 handoffs carry
 	// every retained utterance in conversation order.
-	delegation, frames := realtimeDelegationAttribution(event.InputTranscript, event.ActiveTranscript)
+	delegation, frames := realtimeDelegationAttribution(event.InputTranscript, r.prepareRealtimeRecordedEntries(threadID, event.ActiveTranscript))
 	if delegation == "" {
 		// Rust #62288: a definite rejection releases the claim so the same
 		// speech is still available for the next input.
@@ -808,7 +823,10 @@ func (r *RuntimeRouter) handleRealtimeEvent(threadID string, event realtime.Even
 	}
 	if err := r.routeRealtimeHandoffTurn(threadID, event, delegation, frames); err != nil {
 		r.releaseRealtimeHandoff(threadID, handoffID)
+		return
 	}
+	// The receiving turn now owns this speech, so restored frames are spent.
+	r.consumeRealtimeRecoveredFrames(threadID)
 }
 
 // reserveRealtimeHandoff claims the live transcript for one handoff. Threads
@@ -958,6 +976,45 @@ func (r *RuntimeRouter) restoreRealtimeSessionEndSpeech(threadID string) {
 	r.requireRealtime().SeedRealtimeSessionEndSpeech(threadID, text, observedAt)
 }
 
+// recoverRealtimeUnconsumedFrames restores durable speech that a previous
+// transport recorded and no input consumed (Rust #62288 V3 reconnect ordering).
+// Only frame history replays; a V2 call keeps its own bounded transcript tail.
+func (r *RuntimeRouter) recoverRealtimeUnconsumedFrames(threadID string) {
+	if r == nil || r.services.StateRuntime == nil || r.services.Realtime == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	realtimeManager := r.requireRealtime()
+	sessionID := strings.TrimSpace(realtimeManager.ActiveRealtimeSessionID(threadID))
+	if sessionID == "" {
+		return
+	}
+	ctx := context.Background()
+	persisted, err := r.services.StateRuntime.LoadThreadRealtimeSession(ctx, threadID, sessionID)
+	if err != nil || persisted == nil || len(persisted.Items) == 0 {
+		return
+	}
+	items := make([]realtime.RealtimeItem, 0, len(persisted.Items))
+	hasFrames := false
+	for _, entry := range persisted.Items {
+		var item realtime.RealtimeItem
+		if err := item.UnmarshalRolloutJSON(entry.ItemJSON); err != nil {
+			continue
+		}
+		if item.Content.Kind == realtime.RealtimeItemKindFrame {
+			hasFrames = true
+		}
+		items = append(items, item)
+	}
+	if !hasFrames {
+		return
+	}
+	realtimeManager.RecoverRealtimeSession(threadID, sessionID, items)
+}
+
 // realtimeSessionEndReceipt finds the newest session-end speech in one
 // persisted call. Newly captured speech and the closing marker can follow the
 // receipt, so the scan walks backward to the newest receipt.
@@ -1006,14 +1063,19 @@ func (r *RuntimeRouter) recordRealtimeTranscriptTail(threadID string, event real
 	_, _ = r.recordRealtimeTranscriptMessage(threadID, text, realtimeTranscriptTailKind, "transcript_tail_flush", event.RealtimeSessionID, nil)
 }
 
-// recordRealtimeTranscriptMessage persists one realtime transcript message. A
-// running turn absorbs the message; when the thread is idle the message is
-// recorded under its own completed history turn, which keeps the transcript
-// visible to the next text turn immediately.
-func (r *RuntimeRouter) recordRealtimeTranscriptMessage(threadID string, text string, kind string, source string, sessionID string, sourceEventIDs []string) (*session.Item, error) {
-	if !r.hasRuntimeThreadStore() || text == "" {
-		return nil, nil
-	}
+// realtimeTranscriptRecord is one built, not yet appended transcript message.
+// Building it once lets an uncertain write retry the same identity instead of
+// saving the input twice (Rust #62288 retries with the same input).
+type realtimeTranscriptRecord struct {
+	item          session.Item
+	turnID        string
+	recordingTurn bool
+	now           time.Time
+}
+
+// buildRealtimeTranscriptRecord prepares one transcript message and, when no
+// model turn owns the thread, the fresh completed turn it is filed under.
+func (r *RuntimeRouter) buildRealtimeTranscriptRecord(threadID string, text string, kind string, source string, sessionID string, sourceEventIDs []string) (realtimeTranscriptRecord, error) {
 	now := runtimeRouterNow(r).UTC()
 	turnID := ""
 	if active := r.activeRuntimeTurnSnapshot(threadID); active != nil {
@@ -1047,30 +1109,128 @@ func (r *RuntimeRouter) recordRealtimeTranscriptMessage(threadID string, text st
 	if kind == realtimeTranscriptChunkKind {
 		item.Data = attachRealtimeProvenanceMember(nil, "realtime_session_input", r.realtimeSessionInputProvenance(threadID, item.ID, sessionID, sourceEventIDs, now))
 	}
+	return realtimeTranscriptRecord{item: item, turnID: turnID, recordingTurn: recordingTurn, now: now}, nil
+}
+
+// appendRealtimeTranscriptRecord writes one prepared transcript message and
+// publishes its item notifications.
+func (r *RuntimeRouter) appendRealtimeTranscriptRecord(threadID string, record realtimeTranscriptRecord) (*session.Item, error) {
+	item := record.item
+	if hook := r.realtimeTranscriptAppendHook; hook != nil {
+		if err := hook(threadID, item.ID); err != nil {
+			if record.recordingTurn {
+				_ = r.appendRuntimeTurnComplete(threadID, record.turnID, record.turnID, record.now, 0)
+			}
+			return nil, err
+		}
+	}
 	if _, err := r.runtimeAppendItem(session.ThreadID(threadID), item); err != nil {
-		if recordingTurn {
-			_ = r.appendRuntimeTurnComplete(threadID, turnID, turnID, now, 0)
+		if record.recordingTurn {
+			_ = r.appendRuntimeTurnComplete(threadID, record.turnID, record.turnID, record.now, 0)
 		}
 		return nil, err
 	}
-	_ = r.appendRuntimeRollout(threadID, []session.Item{item}, now)
+	_ = r.appendRuntimeRollout(threadID, []session.Item{item}, record.now)
 	threadItem := threadItemPayload(BuildThreadItem(item))
 	r.notify(NotificationItemStarted, &ItemStartedNotification{
 		Item:        threadItem,
 		ThreadID:    threadID,
-		TurnID:      turnID,
-		StartedAtMS: now.UnixMilli(),
+		TurnID:      record.turnID,
+		StartedAtMS: record.now.UnixMilli(),
 	})
 	r.notify(NotificationItemCompleted, &ItemCompletedNotification{
 		Item:          threadItem,
 		ThreadID:      threadID,
-		TurnID:        turnID,
-		CompletedAtMS: now.UnixMilli(),
+		TurnID:        record.turnID,
+		CompletedAtMS: record.now.UnixMilli(),
 	})
-	if recordingTurn {
-		_ = r.appendRuntimeTurnComplete(threadID, turnID, turnID, now, 0)
+	if record.recordingTurn {
+		_ = r.appendRuntimeTurnComplete(threadID, record.turnID, record.turnID, record.now, 0)
 	}
 	return &item, nil
+}
+
+// recordRealtimeTranscriptMessage persists one realtime transcript message. A
+// running turn absorbs the message; when the thread is idle the message is
+// recorded under its own completed history turn, which keeps the transcript
+// visible to the next text turn immediately.
+func (r *RuntimeRouter) recordRealtimeTranscriptMessage(threadID string, text string, kind string, source string, sessionID string, sourceEventIDs []string) (*session.Item, error) {
+	if !r.hasRuntimeThreadStore() || text == "" {
+		return nil, nil
+	}
+	record, err := r.buildRealtimeTranscriptRecord(threadID, text, kind, source, sessionID, sourceEventIDs)
+	if err != nil {
+		return nil, err
+	}
+	return r.appendRealtimeTranscriptRecord(threadID, record)
+}
+
+// realtimeTranscriptRecordPersisted reports whether an uncertain append already
+// landed, so a retry does not save the same input twice.
+func (r *RuntimeRouter) realtimeTranscriptRecordPersisted(threadID string, itemID string) bool {
+	if r == nil || !r.hasRuntimeThreadStore() {
+		return false
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), false, false)
+	if err != nil || record == nil {
+		return false
+	}
+	for index := range record.Items {
+		if record.Items[index].ID == itemID {
+			return true
+		}
+	}
+	return false
+}
+
+// sealRealtimeTranscriptChunk records one completed chunk before a handoff can
+// expose the same speech to the model (Rust #62288 acceptance barrier). An
+// uncertain write is retried with the same input; when it still cannot be
+// confirmed the thread requires history recovery and later input is refused.
+func (r *RuntimeRouter) sealRealtimeTranscriptChunk(threadID string, text string, source string, sessionID string, sourceEventIDs []string) error {
+	if !r.hasRuntimeThreadStore() || text == "" {
+		return nil
+	}
+	record, err := r.buildRealtimeTranscriptRecord(threadID, text, realtimeTranscriptChunkKind, source, sessionID, sourceEventIDs)
+	if err != nil {
+		r.reportRealtimeHistoryRecoveryRequired(threadID)
+		return err
+	}
+	_, firstErr := r.appendRealtimeTranscriptRecord(threadID, record)
+	if firstErr == nil {
+		return nil
+	}
+	// The append is uncertain: the store may have landed it before failing.
+	// Confirm the exact identity, then retry that identity once.
+	if r.realtimeTranscriptRecordPersisted(threadID, record.item.ID) {
+		return nil
+	}
+	if _, retryErr := r.appendRealtimeTranscriptRecord(threadID, record); retryErr == nil {
+		return nil
+	}
+	if r.realtimeTranscriptRecordPersisted(threadID, record.item.ID) {
+		return nil
+	}
+	r.reportRealtimeHistoryRecoveryRequired(threadID)
+	return firstErr
+}
+
+// prepareRealtimeRecordedEntries prefixes durable speech restored at reconnect
+// so it precedes newly captured speech (Rust #62288 prepare_recorded_chunk).
+func (r *RuntimeRouter) prepareRealtimeRecordedEntries(threadID string, entries []realtime.TranscriptEntry) []realtime.TranscriptEntry {
+	if r == nil || r.services.Realtime == nil {
+		return entries
+	}
+	return r.requireRealtime().PrepareRealtimeRecordedEntries(threadID, entries)
+}
+
+// consumeRealtimeRecoveredFrames drops restored speech once an input durably
+// recorded it.
+func (r *RuntimeRouter) consumeRealtimeRecoveredFrames(threadID string) {
+	if r == nil || r.services.Realtime == nil {
+		return
+	}
+	r.requireRealtime().ConsumeRealtimeRecoveredFrames(threadID)
 }
 
 // realtimeAttributedSources reports the frames a saved receipt actually carries.

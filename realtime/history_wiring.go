@@ -249,6 +249,52 @@ func (m *Manager) SeedRealtimeSessionEndSpeech(threadID, text string, observedAt
 	return m.historyFor(threadID).SeedSessionEndSpeech(text, observedAtMS)
 }
 
+// RecoverRealtimeSession restores durable, unconsumed speech from persisted
+// history when a transport reattaches (Rust #62288 recover_session). The
+// restored frames render ahead of newly captured speech until an input records
+// them.
+func (m *Manager) RecoverRealtimeSession(threadID, sessionID string, items []RealtimeItem) RealtimeSessionRecoveryStatus {
+	if m == nil {
+		return RealtimeSessionRecoveryClosed
+	}
+	return m.historyFor(threadID).RecoverSession(sessionID, items)
+}
+
+// PrepareRealtimeRecordedEntries prefixes durable recovered speech so model
+// input cannot be reordered across a reconnect.
+func (m *Manager) PrepareRealtimeRecordedEntries(threadID string, entries []TranscriptEntry) []TranscriptEntry {
+	if m == nil {
+		return entries
+	}
+	return m.historyFor(threadID).PrepareRecordedEntries(entries)
+}
+
+// ConsumeRealtimeRecoveredFrames drains restored speech after its input was
+// durably recorded.
+func (m *Manager) ConsumeRealtimeRecoveredFrames(threadID string) int {
+	if m == nil {
+		return 0
+	}
+	return m.historyFor(threadID).ConsumeRecoveredFrames()
+}
+
+// RealtimeHandoffCommitted reports whether recovered history already accepted
+// this handoff id.
+func (m *Manager) RealtimeHandoffCommitted(threadID, handoffID string) bool {
+	if m == nil {
+		return false
+	}
+	return m.historyFor(threadID).HandoffCommitted(handoffID)
+}
+
+// RealtimeRecoveredFrameIDs lists durable speech still waiting for an input.
+func (m *Manager) RealtimeRecoveredFrameIDs(threadID string) []string {
+	if m == nil {
+		return nil
+	}
+	return m.historyFor(threadID).RecoveredFrameIDs()
+}
+
 // BindTurnSession records which realtime session produced a turn. The app-server
 // calls it when the backing turn starts.
 func (m *Manager) BindTurnSession(threadID, turnID string) {

@@ -1064,8 +1064,21 @@ type RealtimeHistoryState struct {
 	// turnConsumedUserSpeech records that a receiving turn already took the
 	// user speech of this session, so closing the call has nothing pending.
 	turnConsumedUserSpeech bool
-	failed                 bool
-	newID                  func() string
+	// recoveredFrames holds durable speech restored when a transport reattaches
+	// that no input has consumed yet (Rust #62288 recover_session). It renders
+	// ahead of newly captured speech and drains once an input records it.
+	recoveredFrames []RealtimeItem
+	// recoveredFrameIDs indexes recoveredFrames by id so consumption and
+	// consumption reports do not need to re-scan content.
+	recoveredFrameIDs map[string]bool
+	// committedHandoffs records handoff ids a recovered history already accepted;
+	// a replay of one cannot claim the same speech twice.
+	committedHandoffs map[string]bool
+	// preserveTranscript freezes durable transcripts in persisted order until the
+	// next input consumes them (Rust preserve_transcript).
+	preserveTranscript bool
+	failed             bool
+	newID              func() string
 }
 
 // SetIDGenerator overrides item identifier generation, primarily for tests.
@@ -1170,6 +1183,10 @@ func (s *RealtimeHistoryState) BindTurnSession(turnID string) {
 	for id, reserved := range s.reservedHandoffs {
 		if reserved == sessionID {
 			delete(s.reservedHandoffs, id)
+			if s.committedHandoffs == nil {
+				s.committedHandoffs = map[string]bool{}
+			}
+			s.committedHandoffs[id] = true
 			consumedClaim = true
 		}
 	}
@@ -1235,6 +1252,11 @@ func (s *RealtimeHistoryState) ReserveHandoff(id string) bool {
 	if _, held := s.reservedHandoffs[id]; held {
 		return false
 	}
+	// A recovered history already consumed this handoff's speech, so replaying
+	// it must not claim anything (Rust committed_handoff_ids).
+	if s.committedHandoffs[strings.TrimSpace(id)] {
+		return false
+	}
 	if len(s.reservedHandoffs) > 0 {
 		return false
 	}
@@ -1266,6 +1288,182 @@ func (s *RealtimeHistoryState) HandoffReserved(id string) bool {
 	defer s.mu.Unlock()
 	_, held := s.reservedHandoffs[id]
 	return held
+}
+
+// HandoffCommitted reports whether recovered history already accepted this
+// handoff, so a replay cannot consume the same speech twice (Rust
+// committed_handoff_ids).
+func (s *RealtimeHistoryState) HandoffCommitted(id string) bool {
+	if s == nil || strings.TrimSpace(id) == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.committedHandoffs[strings.TrimSpace(id)]
+}
+
+// RealtimeSessionRecoveryStatus is the persisted lifecycle of a logical call
+// restored when a transport reattaches (Rust RecoveredSessionStatus).
+type RealtimeSessionRecoveryStatus string
+
+const (
+	// RealtimeSessionRecoveryOpen means the call still accepts new input.
+	RealtimeSessionRecoveryOpen RealtimeSessionRecoveryStatus = "open"
+	// RealtimeSessionRecoveryEnding means the call already saved its session-end
+	// speech and is closing.
+	RealtimeSessionRecoveryEnding RealtimeSessionRecoveryStatus = "ending"
+	// RealtimeSessionRecoveryClosed means the call recorded its closing marker.
+	RealtimeSessionRecoveryClosed RealtimeSessionRecoveryStatus = "closed"
+)
+
+// RecoverSession restores a logical call from persisted history (Rust #62288
+// RecoverSession). Inputs that already reached a turn or a saved chunk are
+// consumed; every other durable frame stays available, in persisted order, so a
+// reattached transport cannot lose or reorder speech the model has not seen.
+func (s *RealtimeHistoryState) RecoverSession(sessionID string, items []RealtimeItem) RealtimeSessionRecoveryStatus {
+	if s == nil {
+		return RealtimeSessionRecoveryClosed
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	consumed := make(map[string]struct{})
+	status := RealtimeSessionRecoveryOpen
+	for _, item := range items {
+		if item.ObservedAtMS != nil {
+			s.observationClock.observe(*item.ObservedAtMS)
+		}
+		switch item.Content.Kind {
+		case RealtimeItemKindTurnInputAccepted:
+			if s.committedHandoffs == nil {
+				s.committedHandoffs = map[string]bool{}
+			}
+			if id := strings.TrimSpace(item.Content.HandoffID); id != "" {
+				s.committedHandoffs[id] = true
+			}
+			consumeRealtimeSources(consumed, item.Content.SourceEvents)
+		case RealtimeItemKindSessionInput:
+			consumeRealtimeSources(consumed, item.Content.SourceEvents)
+			if item.Content.InputReason == RealtimeSessionInputReasonSessionEnd {
+				status = RealtimeSessionRecoveryEnding
+			}
+		case RealtimeItemKindSessionEndInput:
+			consumeRealtimeSources(consumed, item.Content.SourceEvents)
+		case RealtimeItemKindSessionClosed:
+			status = RealtimeSessionRecoveryClosed
+		}
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	// A closed call replays no speech and leaves the open session the caller
+	// already started in place; only a live call adopts the recovered identity.
+	if status != RealtimeSessionRecoveryClosed && sessionID != "" {
+		s.activeSessionID = sessionID
+	}
+	// A reattached transport starts fresh live segments; persisted speech stays
+	// frozen in its recorded order until the next input consumes it.
+	s.segments = activeTranscriptSegments{}
+	s.streamingAgent = nil
+	s.preserveTranscript = true
+	s.recoveredFrames = nil
+	s.recoveredFrameIDs = nil
+	if status == RealtimeSessionRecoveryClosed {
+		return status
+	}
+	for _, item := range items {
+		if item.Content.Kind != RealtimeItemKindFrame {
+			continue
+		}
+		if _, done := consumed[strings.TrimSpace(item.ID)]; done {
+			continue
+		}
+		s.recoveredFrames = append(s.recoveredFrames, item)
+		if s.recoveredFrameIDs == nil {
+			s.recoveredFrameIDs = map[string]bool{}
+		}
+		s.recoveredFrameIDs[item.ID] = true
+	}
+	return status
+}
+
+func consumeRealtimeSources(consumed map[string]struct{}, sources []string) {
+	for _, source := range sources {
+		source = strings.TrimSpace(source)
+		if source == "" {
+			continue
+		}
+		consumed[source] = struct{}{}
+	}
+}
+
+// RecoveredFrameIDs lists the durable frames still waiting for an input, in
+// persisted order.
+func (s *RealtimeHistoryState) RecoveredFrameIDs() []string {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.recoveredFrames) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(s.recoveredFrames))
+	for _, item := range s.recoveredFrames {
+		ids = append(ids, item.ID)
+	}
+	return ids
+}
+
+// PrepareRecordedEntries puts durable recovered speech ahead of newly captured
+// entries so a reconnect cannot reverse model input order (Rust #62288
+// prepare_recorded_chunk). Recovered rows keep their frame identity, so
+// attribution names them exactly as they were persisted.
+func (s *RealtimeHistoryState) PrepareRecordedEntries(entries []TranscriptEntry) []TranscriptEntry {
+	if s == nil {
+		return entries
+	}
+	s.mu.Lock()
+	recovered := append([]RealtimeItem(nil), s.recoveredFrames...)
+	s.mu.Unlock()
+	if len(recovered) == 0 {
+		return entries
+	}
+	combined := make([]TranscriptEntry, 0, len(recovered)+len(entries))
+	for _, item := range recovered {
+		if strings.TrimSpace(item.Content.Text) == "" {
+			continue
+		}
+		combined = append(combined, TranscriptEntry{
+			Role: string(item.Content.Role),
+			Text: item.Content.Text,
+			ID:   item.ID,
+		})
+	}
+	return append(combined, entries...)
+}
+
+// ConsumeRecoveredFrames drains restored speech once an input durably recorded
+// it (Rust consume_recorded_chunk/finish_handoff). It reports how many frames
+// were released.
+func (s *RealtimeHistoryState) ConsumeRecoveredFrames() int {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := len(s.recoveredFrames)
+	s.recoveredFrames = nil
+	s.recoveredFrameIDs = nil
+	return count
+}
+
+// PreserveTranscript reports whether durable transcripts are frozen until the
+// next input consumes them (Rust preserve_transcript).
+func (s *RealtimeHistoryState) PreserveTranscript() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.preserveTranscript
 }
 
 // MarkFailed records that the session produced an error, which decides the

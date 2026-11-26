@@ -442,6 +442,10 @@ type RuntimeRouter struct {
 	// closing steer admission (Rust #58877). Tests use it to submit a steer that
 	// races turn completion; production leaves it nil.
 	turnFinishHook func(threadID string, turnID string)
+	// realtimeTranscriptAppendHook fails one transcript append so tests can
+	// exercise the uncertain-write retry and its recovery escalation
+	// (Rust #62288 retries the same input). Production leaves it nil.
+	realtimeTranscriptAppendHook func(threadID string, itemID string) error
 	// turnLifecycleMu guards the host lifecycle contributors that observe
 	// completed turn items. The embedded app-server registers extensions here;
 	// calls run after the lock is released.
