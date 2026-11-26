@@ -51195,11 +51195,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "blocked_precondition",
+   "status": "equivalent",
    "evidence": [
-    "Precondition: Rust's reusable per-agent reviewer conversations are ActorReviewer slots holding one isolated verdict Conversation per acting agent, started through ThreadManager with a board-only extension registry, a ToolPolicy allowlist of the live retrieval tools plus exec/wait, Guardian review provenance and reviewer headers, then reused only when the prepared context still matches and the disposition is Reusable.",
-    "Go has no Guardian v3 reviewer runtime to hang this on: approval review runs one synchronous reviewer per turn in appserver/guardian_reviewer.go, there is no per-actor reviewer slot, no ThreadManager-started isolated reviewer thread, and no housekeeper that would reserve one. The board-level pieces it would bind (agentboard.GuardianRetrievalBinding) are ready.",
-    "Blocked on the Guardian v3 host runtime that #62135's housekeeper also needs; re-audit once that host exists."
+    "Go keeps one reusable reviewer conversation per acting thread (modelGuardianReviewer.sessionFor, appserver/guardian_reviewer.go), so the root agent and every subagent thread own an independent chain that never continues another agent's response. A new conversation starts with empty history, and a review holds the session mutex for the whole model call, which is Rust's one-reservation-per-actor rule (ext/guardian-v3/src/actor.rs, #62134).",
+    "Retention follows Rust's dispositions: a completed verdict keeps the conversation (guardianSessionRunner.completeReview, SessionDisposition::Reusable), a failed or invalidated attempt is never the next base (rollbackReviewHistory, the reviewer pool's SessionDisposition::Rollback), and an explicit discard drops the chain (discardReviewHistory, Discard). Reuse requires matching settings: rebinding the host Guardian provider (useGuardianAgent) or a Node REPL policy change resets every per-agent conversation, and a parent history reset starts a fresh trunk. A stopped or unloaded thread retires its conversation (DropThreadSession, forgetGuardianReviewerSession).",
+    "Rust hosts the reviewer as a ThreadManager-started thread with a board-only extension registry and retires that thread on a non-reusable disposition; Go hosts the reviewer as a model conversation bound to the acting thread's live retrieval functions, so there is no separate reviewer thread to start or retire, and the equivalent guarantee is that neither the failed attempt nor a mismatched configuration can be reused. Legacy subagents without a board identity exist only in Rust's v3 actor slots; Go has no actor slot to exclude because every review already runs in the owning thread's conversation.",
+    "Verified on Windows amd64 with CGO_ENABLED=0: go test ./appserver ./agentboard ./state -run Guardian -count=1 PASS (17.193s / 1.301s / 0.644s) and go vet ./appserver clean. New test file appserver/guardian_actor_reviewer_like_rust_test.go pins per-agent independence plus reuse after a completed verdict, the failed attempt never becoming the next base, and provider rebinding starting an empty chain; existing tests cover cursor rollback on cancellation and conversation retirement on thread unload."
    ]
   },
   {
