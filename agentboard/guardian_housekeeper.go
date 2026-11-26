@@ -103,7 +103,9 @@ type GuardianHousekeeper struct {
 	batchTimeout time.Duration
 	// maxInputBytes caps one serialized routing request; zero means no cap.
 	maxInputBytes int
-	stopped       bool
+	// batchSink, when set, owns the conversation history this pass samples.
+	batchSink GuardianRoutingBatchSink
+	stopped   bool
 }
 
 // NewGuardianHousekeeper binds one routing pass to a Guardian board, its root
@@ -127,6 +129,20 @@ type GuardianHousekeeperOptions struct {
 	// that field is zero, so a host that only knows the model window can pass
 	// its policy directly.
 	InputBudget utils.TruncationPolicy
+	// BatchSink, when set, is told whether a routing batch reached the board.
+	// A sampler that keeps a tool-free conversation across batches retains a
+	// batch's history only after every board write and the routing watermark
+	// advanced (Rust #61799), and forgets it when the pass failed.
+	BatchSink GuardianRoutingBatchSink
+}
+
+// GuardianRoutingBatchSink reports the outcome of one routed batch to the
+// sampler that produced it. CommitRoutingBatch runs after the batch's board
+// writes succeeded and the routing watermark advanced; AbandonRoutingBatch runs
+// when the pass failed before that point.
+type GuardianRoutingBatchSink interface {
+	CommitRoutingBatch()
+	AbandonRoutingBatch(err error)
 }
 
 // guardianRoutingInputBytes resolves the routing input cap from a model
@@ -163,7 +179,26 @@ func NewGuardianHousekeeperWithOptions(board AgentMessageBoard, owner string, de
 		decide:        decide,
 		batchTimeout:  options.BatchTimeout,
 		maxInputBytes: maxInputBytes,
+		batchSink:     options.BatchSink,
 	}, nil
+}
+
+// CommitBatch tells the sampler this batch is durable: its board writes
+// succeeded and the caller advanced the routing watermark.
+func (h *GuardianHousekeeper) CommitBatch() {
+	if h == nil || h.batchSink == nil {
+		return
+	}
+	h.batchSink.CommitRoutingBatch()
+}
+
+// AbandonBatch tells the sampler the batch never reached the board, so its
+// in-flight history must not become reusable context.
+func (h *GuardianHousekeeper) AbandonBatch(err error) {
+	if h == nil || h.batchSink == nil {
+		return
+	}
+	h.batchSink.AbandonRoutingBatch(err)
 }
 
 // MaxInputBytes is the resolved serialized-input cap for one routing request
@@ -197,6 +232,9 @@ func (h *GuardianHousekeeper) RouteNext(ctx context.Context, sources []GuardianR
 	count, err := h.routeNext(ctx, sources)
 	if err != nil {
 		h.stopped = true
+		// The batch never finished, so a sampler that samples this pass must
+		// forget its in-flight history (Rust #61799).
+		h.AbandonBatch(err)
 	}
 	return count, err
 }

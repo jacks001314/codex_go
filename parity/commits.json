@@ -49442,10 +49442,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "blocked_precondition",
+   "status": "equivalent",
    "evidence": [
-    "Guardian inference provider selection exists (appserver/guardian_inference.go, Rust #62588 parity), and the housekeeper reaches it through guardianV3ModelSampler.",
-    "Still missing (Rust #61798): a dedicated housekeeper client that keeps one tool-free conversation across routing batches with transient retry, Retry-After exhaustion, HTTP fallback, credential renewal and command-token rotation."
+    "Go now owns a dedicated tool-free routing client: guardianV3HousekeeperSampler (appserver/guardian_v3_housekeeper_sampler.go) keeps one GuardianSamplerConversation per root, rebuilds the tool-free instructions per request instead of retaining them, renews the credential by re-resolving the Guardian inference runner on every batch, refuses a batch that cannot fit beside the fixed instructions, and cancels an in-flight response as soon as the owning account revision changes (agentboard.GuardianSamplerAccountWatch fed from the router's authRevision/authChanged).",
+    "Rust #61798 builds these on its own transport (WebSocket reuse, HTTP fallback, bounded retries with Retry-After exhaustion, auth recovery). Go routes every model call through the shared model runner, which already provides the connection reuse, fallback, retry and credential recovery for all callers, so the dedicated client is the conversation and account layer above it rather than a second HTTP stack. Persistence of completed routing replies is explicit: CommitRoutingBatch retains them, AbandonRoutingBatch drops them, and a request that failed inference never becomes reusable history.",
+    "Verified on Windows amd64 with CGO_ENABLED=0: go test ./appserver -run Guardian -count=1 PASS 17.247s and go test ./agentboard -count=1 PASS 2.220s; go vet ./appserver ./agentboard and go build ./... clean. New tests appserver/guardian_v3_housekeeper_sampler_like_rust_test.go cover retained batch history with per-batch relocation of the runner, abandoned and failed batches never entering the history, whole-batch eviction under the input budget, and account-change cancellation. The whole appserver package also passes with a raised deadline: go test ./appserver -count=1 -timeout 1800s PASS 578.570s (the default 600s test deadline expires first on this machine)."
    ]
   },
   {
@@ -49455,10 +49456,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "blocked_precondition",
+   "status": "equivalent",
    "evidence": [
-    "Go routes housekeeping through the Guardian inference sampler rather than a separate review-session thread, which is the shape #61799 asks for.",
-    "Still missing (Rust #61799): the retained batch history and whole-batch eviction under context-window pressure, committing sampled history only after all board writes succeed and the cursor advances, and cancelling routing when the account changes while letting accepted appends finish."
+    "Housekeeping now routes through that dedicated sampler: RuntimeRouter.guardianV3RootOptions builds one sampler per root, hands its Sample method to NewGuardianRoutingDecider and hands the sampler itself to the housekeeper as the batch sink (appserver/guardian_v3_lifecycle.go). The housekeeper reports the outcome, so retained history follows the board instead of the prompt.",
+    "Rust #61799's ordering is preserved: GuardianHousekeeper.RouteNext abandons the sampled batch on any routing failure, and GuardianRootWorker.RouteCapture commits only after every destination append succeeded and the routing watermark advanced (agentboard/guardian_housekeeper.go, agentboard/guardian_capture_queue.go). Whole-batch eviction lives in GuardianSamplerConversation and is exercised through the sampler; a routing error stops the worker as before, and an interrupted pass leaves no committed history behind.",
+    "Bound difference: Rust sizes the retained history by the model input window; Go uses the configured tool-output token budget as the input limit when one exists and otherwise keeps every completed batch with full token accounting, because the host has no window figure for the Guardian route at this point. Account changes cancel routing through the router's authRevision watch, which fires exactly when the credential that started the pass is replaced.",
+    "Verified on Windows amd64 with CGO_ENABLED=0: go test ./agentboard -count=1 PASS 2.220s and go test ./appserver -run Guardian -count=1 PASS 17.247s, plus go vet and go build. New tests agentboard/guardian_batch_sink_like_rust_test.go prove the root worker commits exactly one sampled batch after the watermark advanced and abandons a failed pass with the routing error."
    ]
   },
   {

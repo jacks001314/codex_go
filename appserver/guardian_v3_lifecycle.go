@@ -79,7 +79,7 @@ func (r *RuntimeRouter) guardianV3RootOptions(cfg *config.Config, root string, s
 	if err != nil {
 		return GuardianV3RootOptions{}, err
 	}
-	decider, err := r.guardianV3Decider(cfg)
+	decider, sink, err := r.guardianV3Decider(cfg)
 	if err != nil {
 		return GuardianV3RootOptions{}, err
 	}
@@ -93,53 +93,82 @@ func (r *RuntimeRouter) guardianV3RootOptions(cfg *config.Config, root string, s
 		},
 		Housekeeper: agentboard.GuardianHousekeeperOptions{
 			BatchTimeout: cfg.GuardianV3HousekeeperBatchTimeout(),
+			BatchSink:    sink,
 		},
 		Decider: decider,
 	}, nil
 }
 
 // guardianV3Decider builds the routing decider from the configured guidance and
-// the host sampler.
-func (r *RuntimeRouter) guardianV3Decider(cfg *config.Config) (agentboard.GuardianRoutingDecider, error) {
+// the host sampler. A sampler that retains a tool-free conversation also
+// receives the batch outcome, so its history follows the board's durable state.
+func (r *RuntimeRouter) guardianV3Decider(cfg *config.Config) (agentboard.GuardianRoutingDecider, agentboard.GuardianRoutingBatchSink, error) {
 	sampler := r.guardianV3Sampler
+	var sink agentboard.GuardianRoutingBatchSink
 	if sampler == nil {
-		sampler = r.guardianV3ModelSampler(cfg)
+		housekeeperSampler, err := r.guardianV3HousekeeperSampler(cfg)
+		if err != nil {
+			return nil, nil, err
+		}
+		if housekeeperSampler != nil {
+			sampler = housekeeperSampler.Sample
+			sink = housekeeperSampler
+		}
 	}
 	if sampler == nil {
-		return nil, errors.New("Guardian routing has no sampler")
+		return nil, nil, errors.New("Guardian routing has no sampler")
 	}
 	instructions, _ := cfg.GuardianV3RoutingInstructions()
-	return NewGuardianRoutingDecider(sampler, GuardianV3DeciderOptions{RoutingInstructions: instructions})
+	decider, err := NewGuardianRoutingDecider(sampler, GuardianV3DeciderOptions{RoutingInstructions: instructions})
+	if err != nil {
+		return nil, nil, err
+	}
+	return decider, sink, nil
 }
 
-// guardianV3ModelSampler runs one tool-free routing request on the Guardian
-// inference route.
-func (r *RuntimeRouter) guardianV3ModelSampler(cfg *config.Config) GuardianRoutingSampler {
+// guardianV3HousekeeperSampler builds one root's dedicated routing sampler: a
+// tool-free conversation over the Guardian inference route that retains
+// completed batches, evicts whole batches under input pressure, renews the
+// credential per batch and cancels a pass when the owning account changes
+// (Rust #61798/#61799).
+func (r *RuntimeRouter) guardianV3HousekeeperSampler(cfg *config.Config) (*guardianV3HousekeeperSampler, error) {
 	if r == nil || cfg == nil {
-		return nil
+		return nil, nil
 	}
-	provider, _ := r.guardianInferenceProvider()
-	return func(ctx context.Context, instructions string, input string) (string, error) {
+	if _, ok := r.guardianInferenceProvider(); !ok {
+		return nil, nil
+	}
+	options := GuardianV3HousekeeperSamplerOptions{AccountWatch: r.guardianV3AccountWatch()}
+	if limit := cfg.ToolOutputTokenLimit(); limit != nil && *limit > 0 {
+		options.InputLimit = *limit
+	}
+	return newGuardianV3HousekeeperSampler(func() (model.AgentRunner, string, error) {
 		runner, err := r.guardianInferenceAgent(cfg)
 		if err != nil {
-			return "", err
+			return nil, "", err
 		}
-		if runner == nil {
-			return "", errors.New("Guardian routing sampler is unavailable")
-		}
-		response, err := runner.Run(ctx, &model.AgentRequest{
-			Instructions: instructions,
-			Prompt:       input,
-			ProviderID:   provider.ID,
-		})
-		if err != nil {
-			return "", err
-		}
-		if response == nil {
-			return "", errors.New("Guardian routing sampler returned no response")
-		}
-		return response.Message, nil
+		provider, _ := r.guardianInferenceProvider()
+		return runner, provider.ID, nil
+	}, options), nil
+}
+
+// guardianV3AccountWatch cancels a routing pass when the credential revision
+// that started it is replaced. A router without a credential tracker keeps no
+// owner, so routing is never cancelled for an account change.
+func (r *RuntimeRouter) guardianV3AccountWatch() agentboard.GuardianSamplerAccountWatch {
+	if r == nil {
+		return agentboard.GuardianSamplerAccountWatch{}
 	}
+	revision, err := r.authRevisionSnapshot(context.Background())
+	if err != nil {
+		return agentboard.GuardianSamplerAccountWatch{}
+	}
+	changes := r.authChangedChannel()
+	current := func() bool {
+		now, err := r.authRevisionSnapshot(context.Background())
+		return err == nil && now == revision
+	}
+	return agentboard.NewGuardianSamplerAccountWatch(current, changes)
 }
 
 // guardianV3TurnEnded wakes the root that owns a finished turn, so the turn's

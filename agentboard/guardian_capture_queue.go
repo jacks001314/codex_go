@@ -425,17 +425,24 @@ func (w *GuardianRootWorker) RouteCapture(ctx context.Context, capture *Guardian
 		return err
 	}
 	for index := 0; index < len(sources); {
+		// A failed batch abandons its sampler history inside RouteNext.
 		routed, err := w.housekeeper.RouteNext(ctx, sources[index:])
 		if err != nil {
 			return err
 		}
 		if routed <= 0 || routed > len(sources)-index {
-			return fmt.Errorf("housekeeper routed %d of %d evidence records", routed, len(sources)-index)
+			err := fmt.Errorf("housekeeper routed %d of %d evidence records", routed, len(sources)-index)
+			w.housekeeper.AbandonBatch(err)
+			return err
 		}
 		index += routed
 		if err := capture.RoutedThrough(capture.snapshot.Sources[index-1].End); err != nil {
+			w.housekeeper.AbandonBatch(err)
 			return err
 		}
+		// Board writes and the routing watermark are both durable now, so the
+		// sampler may retain this batch's history for the next request.
+		w.housekeeper.CommitBatch()
 	}
 	return capture.Finish()
 }
