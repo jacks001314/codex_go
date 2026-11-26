@@ -16,6 +16,7 @@ import (
 	"codex_go/features"
 	"codex_go/model"
 	"codex_go/session"
+	"codex_go/utils"
 )
 
 const guardianV3StopTimeout = 5 * time.Second
@@ -91,12 +92,26 @@ func (r *RuntimeRouter) guardianV3RootOptions(cfg *config.Config, root string, s
 		Board: func(ctx context.Context) (agentboard.AgentMessageBoard, error) {
 			return agentboard.NewGuardianLocalBoard(sqliteConfig, root).ReadWrite().Open(ctx, host)
 		},
-		Housekeeper: agentboard.GuardianHousekeeperOptions{
-			BatchTimeout: cfg.GuardianV3HousekeeperBatchTimeout(),
-			BatchSink:    sink,
-		},
-		Decider: decider,
+		Housekeeper: guardianV3HousekeeperOptions(cfg, sink),
+		Decider:     decider,
 	}, nil
+}
+
+// guardianV3HousekeeperOptions carries the routing batch budget: the configured
+// batch deadline, the sampler that retains each committed batch, and the model's
+// tool-output budget as the batch-size cap (Rust #62372 sizes a routing batch by
+// the model input window; the host's model budget is the equivalent figure it
+// can resolve here).
+func guardianV3HousekeeperOptions(cfg *config.Config, sink agentboard.GuardianRoutingBatchSink) agentboard.GuardianHousekeeperOptions {
+	options := agentboard.GuardianHousekeeperOptions{BatchSink: sink}
+	if cfg == nil {
+		return options
+	}
+	options.BatchTimeout = cfg.GuardianV3HousekeeperBatchTimeout()
+	if limit := cfg.ToolOutputTokenLimit(); limit != nil && *limit > 0 {
+		options.InputBudget = utils.TokensPolicy(*limit)
+	}
+	return options
 }
 
 // guardianV3Decider builds the routing decider from the configured guidance and
