@@ -2,12 +2,18 @@
 
 package windowssandbox
 
+import "io"
+
 func CreateProcessAsUserWithToken(req ProcessSpawnRequest) (*CreatedProcess, error) {
 	return nil, unsupported("process.create_process_as_user")
 }
 
 func SpawnProcessWithPipesWithToken(req PipeSpawnRequest) (*PipeSpawnHandles, error) {
 	return nil, unsupported("process.spawn_process_with_pipes")
+}
+
+func WritePipeHandle(handle uintptr, data io.Reader) error {
+	return unsupported("process.write_pipe_handle")
 }
 
 func ReadHandleLoop(handle uintptr, onChunk func([]byte)) (<-chan struct{}, error) {

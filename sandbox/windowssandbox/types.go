@@ -3,6 +3,7 @@ package windowssandbox
 import (
 	"errors"
 	"fmt"
+	"io"
 	"runtime"
 	"strings"
 
@@ -43,17 +44,21 @@ const (
 )
 
 type CaptureRequest struct {
-	PermissionProfileID              string
-	PermissionProfile                *coresandbox.PermissionProfile
-	WorkspaceRoots                   []string
-	CodexHome                        string
-	Command                          []string
-	CWD                              string
-	Env                              map[string]string
-	TimeoutMS                        *int64
-	Cancellation                     CancellationToken
-	TTY                              bool
-	StdinOpen                        bool
+	PermissionProfileID string
+	PermissionProfile   *coresandbox.PermissionProfile
+	WorkspaceRoots      []string
+	CodexHome           string
+	Command             []string
+	CWD                 string
+	Env                 map[string]string
+	TimeoutMS           *int64
+	Cancellation        CancellationToken
+	TTY                 bool
+	StdinOpen           bool
+	// Stdin is the data source for a capture that keeps the child's stdin open.
+	// A nil reader means the launcher's own stdin (the wrapper forwards its own
+	// stdin to the sandboxed helper).
+	Stdin                            io.Reader
 	ProxyEnforced                    bool
 	ProxySettingsMode                ProxySettingsMode
 	ReadRootsOverride                []string

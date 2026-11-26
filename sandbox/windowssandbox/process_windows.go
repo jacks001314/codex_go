@@ -4,6 +4,7 @@ package windowssandbox
 
 import (
 	"fmt"
+	"io"
 	"runtime"
 	"time"
 	"unsafe"
@@ -449,4 +450,28 @@ func logCreateProcessFailure(req ProcessSpawnRequest, commandLine string, envBlo
 		startupFlags,
 		creationFlags,
 	))
+}
+
+// WritePipeHandle copies data into the child's stdin pipe and then closes it.
+// The sandboxed filesystem helper reads one newline-delimited request and exits,
+// so the launcher closes the pipe as soon as the reader is exhausted.
+func WritePipeHandle(handle uintptr, data io.Reader) error {
+	if handle == 0 {
+		return fmt.Errorf("stdin pipe handle is closed")
+	}
+	h := windows.Handle(handle)
+	defer windows.CloseHandle(h)
+	buf := make([]byte, 32*1024)
+	for {
+		n, readErr := data.Read(buf)
+		if n > 0 {
+			var written uint32
+			if err := windows.WriteFile(h, buf[:n], &written, nil); err != nil {
+				return err
+			}
+		}
+		if readErr != nil {
+			return nil
+		}
+	}
 }

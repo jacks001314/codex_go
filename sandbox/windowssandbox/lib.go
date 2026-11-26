@@ -2,6 +2,8 @@ package windowssandbox
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"runtime"
 	"strings"
 
@@ -81,12 +83,16 @@ func RunWindowsSandboxCaptureWithFilesystemOverrides(req *CaptureRequest) (*Capt
 	if err != nil {
 		return nil, err
 	}
+	stdinMode := StdinModeClosed
+	if req.StdinOpen {
+		stdinMode = StdinModeOpen
+	}
 	handles, err := SpawnProcessWithPipesWithToken(PipeSpawnRequest{
 		Token:       security.Token,
 		Command:     req.Command,
 		CWD:         req.CWD,
 		Env:         context.Env,
-		StdinMode:   StdinModeClosed,
+		StdinMode:   stdinMode,
 		StderrMode:  StderrModeSeparate,
 		LogsBaseDir: context.LogsBaseDir,
 		Desktop:     desktop,
@@ -95,6 +101,19 @@ func RunWindowsSandboxCaptureWithFilesystemOverrides(req *CaptureRequest) (*Capt
 		return nil, err
 	}
 	defer handles.Close()
+	stdinDone := make(chan struct{})
+	if req.StdinOpen {
+		// The sandboxed helper reads its request from stdin, so ownership of the
+		// write end moves to the pump before the handles are closed.
+		writeHandle := handles.StdinWrite
+		handles.StdinWrite = 0
+		go func() {
+			defer close(stdinDone)
+			_ = WritePipeHandle(writeHandle, req.stdinReader())
+		}()
+	} else {
+		close(stdinDone)
+	}
 
 	var stdout []byte
 	stdoutDone, err := ReadHandleLoop(handles.StdoutRead, func(chunk []byte) {
@@ -127,6 +146,7 @@ func RunWindowsSandboxCaptureWithFilesystemOverrides(req *CaptureRequest) (*Capt
 	}
 	<-stdoutDone
 	<-stderrDone
+	<-stdinDone
 	handles.StdoutRead = 0
 	handles.StderrRead = 0
 	if timedOut {
@@ -187,4 +207,12 @@ func RunWindowsSandboxLegacyPreflight(req *LegacyPreflightRequest) error {
 		nil,
 		LegacyAclSIDs{WriteRootSIDs: writeRootSIDs},
 	)
+}
+
+// stdinReader returns the data source for an open capture stdin.
+func (r *CaptureRequest) stdinReader() io.Reader {
+	if r != nil && r.Stdin != nil {
+		return r.Stdin
+	}
+	return os.Stdin
 }

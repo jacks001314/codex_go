@@ -33,6 +33,7 @@ const (
 	writeRootsJSONFlag                   = "--write-roots-json"
 	workspaceRootFlag                    = "--workspace-root"
 	emptyWorkspaceRootsFlag              = "--empty-workspace-roots"
+	stdinOpenFlag                        = "--stdin-open"
 )
 
 type WindowsSandboxLevel string
@@ -62,6 +63,9 @@ type WindowsSandboxCommandArgsRequest struct {
 	CodexHome                        string
 	PrivateDesktopName               string
 	PreparePrivateDesktop            bool
+	// StdinOpen keeps the sandboxed child's stdin piped and forwards this
+	// process's stdin to it, which a filesystem helper needs for its request.
+	StdinOpen bool
 }
 
 type WindowsSandboxWrapperRequest struct {
@@ -127,6 +131,9 @@ func CreateWindowsSandboxCommandArgsForPermissionProfile(req WindowsSandboxComma
 		return nil, err
 	} else if name != "" {
 		args = append(args, privateDesktopNameFlag, name)
+	}
+	if req.StdinOpen {
+		args = append(args, stdinOpenFlag)
 	}
 	if req.ProxyEnforced {
 		args = append(args, proxyEnforcedFlag)
@@ -250,6 +257,8 @@ func ParseWindowsSandboxWrapperArgs(args []string) (*WindowsSandboxWrapperReques
 				return nil, err
 			}
 			req.PrivateDesktopName, i = value, next
+		case stdinOpenFlag:
+			req.StdinOpen = true
 		case proxyEnforcedFlag:
 			req.ProxyEnforced = true
 		case preserveProxySettingsFlag:
@@ -384,13 +393,17 @@ func RunWindowsSandboxWrapperRequest(req *WindowsSandboxWrapperRequest, stdin io
 	case WindowsSandboxLevelDisabled:
 		return runWrapperCommandDirect(req, stdin, stdout, stderr)
 	case WindowsSandboxLevelRestrictedToken:
-		result, err := RunWindowsSandboxCaptureWithFilesystemOverrides(wrapperCaptureRequest(req))
+		capture := wrapperCaptureRequest(req)
+		capture.Stdin = stdin
+		result, err := RunWindowsSandboxCaptureWithFilesystemOverrides(capture)
 		if err != nil {
 			return 1, err
 		}
 		return writeCaptureResult(result, stdout, stderr)
 	case WindowsSandboxLevelElevated:
-		result, err := RunWindowsSandboxCaptureForPermissionProfileElevated(&ElevatedSandboxProfileCaptureRequest{Capture: *wrapperCaptureRequest(req)})
+		elevated := wrapperCaptureRequest(req)
+		elevated.Stdin = stdin
+		result, err := RunWindowsSandboxCaptureForPermissionProfileElevated(&ElevatedSandboxProfileCaptureRequest{Capture: *elevated})
 		if err != nil {
 			return 1, err
 		}
@@ -407,6 +420,7 @@ func wrapperCaptureRequest(req *WindowsSandboxWrapperRequest) *CaptureRequest {
 		CodexHome:                        req.CodexHome,
 		Command:                          cloneStrings(req.Command),
 		CWD:                              req.CommandCWD,
+		StdinOpen:                        req.StdinOpen,
 		Env:                              cloneEnv(req.Env),
 		ProxyEnforced:                    req.ProxyEnforced,
 		ProxySettingsMode:                req.ProxySettingsMode,

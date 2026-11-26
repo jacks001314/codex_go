@@ -220,7 +220,7 @@ func runSandboxedFSOperation(ctx *FileSystemSandboxContext, operation string, pa
 	}
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Dir = fsHelperLaunchRoot(cwd)
-	cmd.Env = envPairs(env)
+	cmd.Env = fsHelperLauncherEnv(env)
 	// Rust #48483: the helper is piped, so it must not allocate a console window
 	// when the exec server itself has no console.
 	envutil.SuppressConsoleWindow(cmd)
@@ -332,6 +332,9 @@ func prepareFSSandboxForOperation(ctx *FileSystemSandboxContext, operation strin
 		return true, nil, "", "", nil, requestError(-32602, fmt.Sprintf("current directory is not absolute: %s", cwd))
 	}
 	convention := fsSandboxPathConvention(cwd)
+	// Rust #58195 omits the sandbox context for an operation the policy does not
+	// restrict, so older executors do not sandbox it; a context that survives is
+	// then always prepared with SandboxablePreference::Require below.
 	if operation != "" && !fsOperationRequiresSandbox(operation, profile, convention) {
 		return false, profile, profileJSON, "", nil, nil
 	}
@@ -467,6 +470,9 @@ func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 		// Rust #44658: filesystem helpers run through short-lived wrappers, so
 		// the executor keeps the desktop alive and hands over its name.
 		PreparePrivateDesktop: true,
+		// The helper reads its request from stdin, so the wrapper must keep the
+		// sandboxed child's stdin piped and forward this process's stdin.
+		StdinOpen: true,
 	})
 	if err != nil {
 		return nil, nil, requestError(-32602, fmt.Sprintf("failed to prepare fs sandbox: %v", err))
@@ -749,4 +755,33 @@ func terminateFSHelper(cmd *exec.Cmd) {
 	}
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
+}
+
+// fsHelperLauncherEnv builds the environment for the launcher process that runs
+// the helper. On Windows that process is the sandbox wrapper, which resolves the
+// executor profile to build the restricted token and ACLs, so it needs the
+// profile variables; the sandboxed helper itself still receives only the
+// allowlisted map (fsHelperEnvironmentFrom). Rust does the same split: the
+// launcher runs in the executor's environment and the helper gets the filtered
+// one.
+func fsHelperLauncherEnv(env map[string]string) []string {
+	pairs := envPairs(env)
+	if runtime.GOOS != "windows" {
+		return pairs
+	}
+	seen := map[string]bool{}
+	for _, pair := range pairs {
+		if name, _, ok := strings.Cut(pair, "="); ok {
+			seen[strings.ToUpper(name)] = true
+		}
+	}
+	for _, key := range []string{"USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "SystemDrive", "SystemRoot", "LOCALAPPDATA"} {
+		if seen[strings.ToUpper(key)] {
+			continue
+		}
+		if value := os.Getenv(key); value != "" {
+			pairs = append(pairs, key+"="+value)
+		}
+	}
+	return pairs
 }
