@@ -186,6 +186,56 @@ func (r *RuntimeRouter) guardianV3AccountWatch() agentboard.GuardianSamplerAccou
 	return agentboard.NewGuardianSamplerAccountWatch(current, changes)
 }
 
+// guardianV3EvidenceBudget is the model budget one delivered evidence batch may
+// use. It follows the configured tool-output token limit and otherwise keeps the
+// model catalog's default so a delivery never truncates an original away.
+func (r *RuntimeRouter) guardianV3EvidenceBudget() utils.TruncationPolicy {
+	if r != nil {
+		if cfg := r.effectiveConfigForSessionTelemetry(); cfg != nil {
+			if limit := cfg.ToolOutputTokenLimit(); limit != nil && *limit > 0 {
+				return utils.TokensPolicy(*limit)
+			}
+		}
+	}
+	return utils.TokensPolicy(10000)
+}
+
+// guardianV3ReviewerEvidence drains one actor's Guardian inbox into the verdict
+// that is about to run (Rust #62136 Conversation::deliver). A thread without a
+// live Guardian root, or one whose queue is already drained, reports nothing.
+func (r *RuntimeRouter) guardianV3ReviewerEvidence(ctx context.Context, threadID string, delivered int) ([]agentboard.GuardianEvidenceItem, int, error) {
+	if r == nil || r.guardianV3Host == nil {
+		return nil, delivered, nil
+	}
+	root := r.guardianV3RootForThread(threadID)
+	if root == "" {
+		return nil, delivered, nil
+	}
+	state, ok := r.guardianV3Host.Root(root)
+	if !ok {
+		return nil, delivered, nil
+	}
+	board := state.Board()
+	delivery := state.Delivery()
+	if board == nil || delivery == nil {
+		return nil, delivered, nil
+	}
+	inbox := delivery.Inbox(threadID)
+	if inbox == nil || inbox.Len() <= delivered {
+		return nil, delivered, nil
+	}
+	through := inbox.Len()
+	items := make([]agentboard.GuardianEvidenceItem, 0, through-delivered)
+	err := inbox.Deliver(ctx, threadID, board, &delivered, through, r.guardianV3EvidenceBudget(), func(_ context.Context, item agentboard.GuardianEvidenceItem) error {
+		items = append(items, item)
+		return nil
+	})
+	if err != nil {
+		return nil, delivered, err
+	}
+	return items, delivered, nil
+}
+
 // guardianV3TurnEnded wakes the root that owns a finished turn, so the turn's
 // originals route once the coalesced wake fires.
 func (r *RuntimeRouter) guardianV3TurnEnded(threadID string) {

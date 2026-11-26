@@ -188,6 +188,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithAgents(agent model.AgentRunner
 		modelReviewer.servingAuthorization = r.guardianServingAuthorization
 		modelReviewer.allowsInitialCUACall = r.guardianAllowsInitialCUACallForTurn
 		modelReviewer.nodeReplEvidence = r.guardianReviewNodeReplEvidence
+		modelReviewer.evidenceDelivery = r.guardianV3ReviewerEvidence
 		modelReviewer.syncImageContextWindow = func(threadID, modelID string) (int64, bool) {
 			window := r.effectiveModelContextWindowForModel(modelID, &turn.TurnStartParams{ThreadID: threadID})
 			if window <= 0 {

@@ -45,11 +45,12 @@ type GuardianV3Host struct {
 // guardianV3Root is one live root: the intake the capture loop fills and the
 // worker that routes it.
 type guardianV3Root struct {
-	root   string
-	board  agentboard.AgentMessageBoard
-	queue  *agentboard.GuardianCaptureQueue
-	cancel context.CancelFunc
-	done   chan struct{}
+	root     string
+	board    agentboard.AgentMessageBoard
+	delivery *agentboard.GuardianLiveDelivery
+	queue    *agentboard.GuardianCaptureQueue
+	cancel   context.CancelFunc
+	done     chan struct{}
 
 	mu  sync.Mutex
 	err error
@@ -107,7 +108,7 @@ func (h *GuardianV3Host) EnsureRoot(ctx context.Context, options GuardianV3RootO
 	}
 
 	workerCtx, cancel := context.WithCancel(context.Background())
-	live := &guardianV3Root{root: root, board: board, queue: queue, cancel: cancel, done: make(chan struct{})}
+	live := &guardianV3Root{root: root, board: board, delivery: delivery, queue: queue, cancel: cancel, done: make(chan struct{})}
 
 	h.mu.Lock()
 	if existing, ok := h.roots[root]; ok {
@@ -222,6 +223,22 @@ func (r *guardianV3Root) Root() string {
 		return ""
 	}
 	return r.root
+}
+
+// Board is the root's evidence board, the board a reviewer inbox reads from.
+func (r *guardianV3Root) Board() agentboard.AgentMessageBoard {
+	if r == nil {
+		return nil
+	}
+	return r.board
+}
+
+// Delivery is the root's live delivery, which owns every actor inbox.
+func (r *guardianV3Root) Delivery() *agentboard.GuardianLiveDelivery {
+	if r == nil {
+		return nil
+	}
+	return r.delivery
 }
 
 // Position reports the last routed durable position.

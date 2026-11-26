@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"bytes"
+	"codex_go/agentboard"
 	"context"
 	"encoding/json"
 	"errors"
@@ -198,7 +199,14 @@ type modelGuardianReviewer struct {
 	// (#54278) instead of replaying every retained response.
 	reviewedEvidenceMu sync.Mutex
 	reviewedEvidence   map[string]uint64
-	maxToolCallLag     int
+	// evidenceDelivery drains the reviewing actor's Guardian v3 inbox into this
+	// verdict (Rust #62136 Conversation::deliver). It receives the number of
+	// queued originals this reviewer conversation already admitted and returns
+	// the newly admitted items plus the advanced cursor.
+	evidenceDelivery func(ctx context.Context, threadID string, delivered int) ([]agentboard.GuardianEvidenceItem, int, error)
+	evidenceMu       sync.Mutex
+	evidenceAdmitted map[string]int
+	maxToolCallLag   int
 	// maxToolCallLagFor, when set, resolves the bound for the review's turn
 	// (configured value -> model catalog default -> Rust's default).
 	maxToolCallLagFor func(threadID, turnID string) int
@@ -1024,6 +1032,24 @@ func (r *guardianSessionRunner) SeedForReview(request *model.AgentRequest) {
 	}
 }
 
+// guardianAppendDeliveredEvidence renders the originals a Guardian inbox
+// admitted for this request. Rust injects them into the reviewer's retained
+// thread; Go's reviewer is a model conversation, so the same items travel with
+// the request that follows the delivery.
+func guardianDeliveredEvidenceLines(items []agentboard.GuardianEvidenceItem) []string {
+	lines := make([]string, 0, len(items)*2)
+	for _, item := range items {
+		label := strings.Trim(strings.TrimSpace(item.Namespace)+"."+strings.TrimSpace(item.Name), ". ")
+		if label != "" {
+			lines = append(lines, "guardian evidence ("+label+"):")
+		} else {
+			lines = append(lines, "guardian evidence:")
+		}
+		lines = append(lines, item.Text)
+	}
+	return lines
+}
+
 // guardianReviewContext applies the configured overall review budget. A
 // non-positive timeout means unlimited: the review keeps the caller's
 // cancellation and the independent transport timeouts (Rust #56371).
@@ -1150,6 +1176,42 @@ func (r *modelGuardianReviewer) DropThreadSession(threadID string) {
 	r.sessionsMu.Lock()
 	delete(r.sessions, key)
 	r.sessionsMu.Unlock()
+	// Rust #62136: a replacement reviewer replays the inbox, so the retired
+	// conversation's delivery cursor goes with it.
+	r.evidenceMu.Lock()
+	if r.evidenceAdmitted != nil {
+		delete(r.evidenceAdmitted, key)
+	}
+	r.evidenceMu.Unlock()
+}
+
+// deliverGuardianEvidence drains the actor's Guardian inbox into this verdict
+// before the conversation is reserved for it, so an idle reviewer still receives
+// originals routed to it (Rust #62136). Each queued original reaches one
+// reviewer conversation once; a delivery failure degrades to a review without
+// the new evidence instead of failing the approval.
+func (r *modelGuardianReviewer) deliverGuardianEvidence(ctx context.Context, threadID string) []agentboard.GuardianEvidenceItem {
+	if r == nil || r.evidenceDelivery == nil {
+		return nil
+	}
+	key := strings.TrimSpace(threadID)
+	if key == "" {
+		return nil
+	}
+	r.evidenceMu.Lock()
+	delivered := r.evidenceAdmitted[key]
+	r.evidenceMu.Unlock()
+	items, through, err := r.evidenceDelivery(ctx, key, delivered)
+	if err != nil || through <= delivered {
+		return nil
+	}
+	r.evidenceMu.Lock()
+	if r.evidenceAdmitted == nil {
+		r.evidenceAdmitted = map[string]int{}
+	}
+	r.evidenceAdmitted[key] = through
+	r.evidenceMu.Unlock()
+	return items
 }
 
 // guardianThreadReviewerSession is implemented by reviewers that own reusable
@@ -1552,6 +1614,10 @@ func (r *modelGuardianReviewer) reviewOutcome(ctx context.Context, threadID, tur
 	attempts := 0
 	var assessment *state.Assessment
 	var response *model.AgentResponse
+	// Rust #62136: drain the actor's Guardian inbox before the reviewer
+	// conversation is reserved for this verdict, so evidence routed to an idle
+	// reviewer is part of the request that decides.
+	deliveredEvidence := r.deliverGuardianEvidence(ctx, threadID)
 reviewAttempt:
 	attempts++
 	attribution.AttemptCount = attempts
@@ -1587,6 +1653,11 @@ reviewAttempt:
 		// copy becomes an omission placeholder at the same position.
 		transcriptEntries = state.GuardianTranscriptWithoutProposedCall(transcriptEntries, omittedCallID)
 		transcript = state.RenderGuardianTranscript(transcriptEntries, transcriptFormat)
+	}
+	if len(deliveredEvidence) > 0 {
+		// Delivered originals are host-attributed evidence for this request; the
+		// inbox already admitted them within the reviewer's model budget.
+		transcript = append(transcript, guardianDeliveredEvidenceLines(deliveredEvidence)...)
 	}
 	nodeReplAutoReviewRequired := false
 	if r.nodeReplAutoReviewRequired != nil {

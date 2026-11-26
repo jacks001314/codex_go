@@ -1,8 +1,8 @@
 {
  "certificationBlockers": [
-  "Per-commit certification of the 4595 upstream commits in bd19459358f534ed1cae464ec13d56600aeb45f2..3f65e9f13165d85d1b1fbe20ce06c55758f927b9 is in progress; parity/commits.json records every commit with its audit status (3683 complete, 56 equivalent, 845 not applicable, 0 implementation_pending, 0 audit_pending, 0 regression_pending, 9 partial, 2 blocked_precondition)",
+  "Per-commit certification of the 4595 upstream commits in bd19459358f534ed1cae464ec13d56600aeb45f2..3f65e9f13165d85d1b1fbe20ce06c55758f927b9 is in progress; parity/commits.json records every commit with its audit status (3683 complete, 57 equivalent, 845 not applicable, 0 implementation_pending, 0 audit_pending, 0 regression_pending, 8 partial, 2 blocked_precondition)",
   "2 commits are blocked on architecture: #43624 (Add macOS user verification with Secure Enclave signing), #61896 (Bound rollout trace capture with configurable storage limits)",
-  "9 commits are partial and keep the candidate open: #60929, #61138, #61276, #61898, #61919, #62136, #62288, #62309, #62571; each entry's evidence records the residual it was judged against",
+  "8 commits are partial and keep the candidate open: #60929, #61138, #61276, #61898, #61919, #62288, #62309, #62571; each entry's evidence records the residual it was judged against",
   "4 domains remain open in parity/domains.json: alignment-control, sqlite-runtime-version, sdk-cancellation, cross-platform-release",
   "4 contracts remain open in parity/contracts/manifest.json: mcp-network-policy-derivation, usage-analytics-turn-trigger, sidebar-chooser-files-and-paths, sidebar-document-preview",
   "4 commits (#59632, #59633, #59638, #59642) are identified by subject rather than by upstream sha: the recorded prefix has no upstream object, so the 40-hex digest comes from the byte-identical subject in the local Rust mirror (a rebased history line, not an upstream object). They are auditable via `git cat-file -e <sha>` in the mirror but must not be read as GitHub-compare entries; see update/ledger_prefix_resolution_2026_11_08.json"
