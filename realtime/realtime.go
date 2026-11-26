@@ -2145,6 +2145,11 @@ type Event struct {
 type TranscriptEntry struct {
 	Role string `json:"role"`
 	Text string `json:"text"`
+	// ID is the realtime frame this utterance came from, when the wire named
+	// one. A handoff attributes only the frames its rendered transcript carries
+	// (Rust #62288 RealtimeDelegation::from_events), so the id travels with the
+	// entry instead of being recovered from the whole event.
+	ID string `json:"id,omitempty"`
 }
 
 func NotificationFromEvent(threadID string, event Event) (Notification, bool) {

@@ -755,20 +755,20 @@ func (s *realtimeTransportSession) updateTranscript(event Event) (Event, string,
 			s.updateOutputAudioState(event.Audio)
 		}
 	case "input_transcript.delta":
-		s.transcript.appendDelta("user", event.Delta, s.newInputEntry, s.config.Version == VersionV3)
+		s.transcript.appendDelta("user", event.Delta, s.newInputEntry, s.config.Version == VersionV3, event.ItemID)
 		if event.Delta != "" || s.config.Version != VersionV3 {
 			s.newInputEntry = false
 		}
 	case "output_transcript.delta":
-		s.transcript.appendDelta("assistant", event.Delta, s.newOutputEntry, s.config.Version == VersionV3)
+		s.transcript.appendDelta("assistant", event.Delta, s.newOutputEntry, s.config.Version == VersionV3, event.ItemID)
 		if event.Delta != "" || s.config.Version != VersionV3 {
 			s.newOutputEntry = false
 		}
 	case "input_transcript.done":
-		s.transcript.applyDone("user", event.Text, s.newInputEntry, s.config.Version == VersionV3)
+		s.transcript.applyDone("user", event.Text, s.newInputEntry, s.config.Version == VersionV3, event.ItemID)
 		s.newInputEntry = s.config.Version == VersionV3
 	case "output_transcript.done":
-		s.transcript.applyDone("assistant", event.Text, s.newOutputEntry, s.config.Version == VersionV3)
+		s.transcript.applyDone("assistant", event.Text, s.newOutputEntry, s.config.Version == VersionV3, event.ItemID)
 		s.newOutputEntry = s.config.Version == VersionV3
 	case "response.created":
 		s.newOutputEntry = true
@@ -884,18 +884,21 @@ func (t *activeRealtimeTranscript) findEntry(role string, frameless bool) *Trans
 	return &t.entries[len(t.entries)-1]
 }
 
-func (t *activeRealtimeTranscript) appendDelta(role string, delta string, forceNew bool, frameless bool) {
+func (t *activeRealtimeTranscript) appendDelta(role string, delta string, forceNew bool, frameless bool, id string) {
 	if delta == "" {
 		return
 	}
 	if entry := t.findEntry(role, frameless); !forceNew && entry != nil {
 		entry.Text += delta
+		if entry.ID == "" {
+			entry.ID = id
+		}
 		return
 	}
-	t.entries = append(t.entries, TranscriptEntry{Role: role, Text: delta})
+	t.entries = append(t.entries, TranscriptEntry{Role: role, Text: delta, ID: id})
 }
 
-func (t *activeRealtimeTranscript) applyDone(role string, text string, forceNew bool, frameless bool) {
+func (t *activeRealtimeTranscript) applyDone(role string, text string, forceNew bool, frameless bool, id string) {
 	if text == "" {
 		return
 	}
@@ -905,9 +908,12 @@ func (t *activeRealtimeTranscript) applyDone(role string, text string, forceNew 
 		if !frameless || strings.HasPrefix(text, entry.Text) {
 			entry.Text = text
 		}
+		if entry.ID == "" {
+			entry.ID = id
+		}
 		return
 	}
-	t.entries = append(t.entries, TranscriptEntry{Role: role, Text: text})
+	t.entries = append(t.entries, TranscriptEntry{Role: role, Text: text, ID: id})
 }
 
 func (t *activeRealtimeTranscript) appendHandoffInput(input string) {

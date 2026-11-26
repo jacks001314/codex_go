@@ -767,9 +767,9 @@ func (r *RuntimeRouter) handleRealtimeEvent(threadID string, event realtime.Even
 	// Rust #58221: a completed transcript travels with its event so it reaches
 	// history before a later handoff can consume the same speech.
 	if len(event.CompletedTranscript) > 0 {
-		text := wrapRealtimeDelegation("", formatRealtimeTranscript(event.CompletedTranscript))
+		text, frames := realtimeDelegationAttribution("", event.CompletedTranscript)
 		if text != "" {
-			if _, err := r.recordRealtimeTranscriptMessage(threadID, text, realtimeTranscriptChunkKind, "transcript_delta", event.RealtimeSessionID, realtimeEventSourceIDs(event)); err != nil {
+			if _, err := r.recordRealtimeTranscriptMessage(threadID, text, realtimeTranscriptChunkKind, "transcript_delta", event.RealtimeSessionID, realtimeAttributedSources(event, frames)); err != nil {
 				return
 			}
 		}
@@ -794,8 +794,7 @@ func (r *RuntimeRouter) handleRealtimeEvent(threadID string, event realtime.Even
 	}
 	// Rust #58221 removed the active-transcript byte budget; V3 handoffs carry
 	// every retained utterance in conversation order.
-	transcriptDelta := formatRealtimeTranscript(event.ActiveTranscript)
-	delegation := wrapRealtimeDelegation(event.InputTranscript, transcriptDelta)
+	delegation, frames := realtimeDelegationAttribution(event.InputTranscript, event.ActiveTranscript)
 	if delegation == "" {
 		// Rust #62288: a definite rejection releases the claim so the same
 		// speech is still available for the next input.
@@ -807,7 +806,7 @@ func (r *RuntimeRouter) handleRealtimeEvent(threadID string, event realtime.Even
 	if !r.reserveRealtimeHandoff(threadID, handoffID) {
 		return
 	}
-	if err := r.routeRealtimeHandoffTurn(threadID, event, delegation); err != nil {
+	if err := r.routeRealtimeHandoffTurn(threadID, event, delegation, frames); err != nil {
 		r.releaseRealtimeHandoff(threadID, handoffID)
 	}
 }
@@ -833,20 +832,20 @@ func (r *RuntimeRouter) releaseRealtimeHandoff(threadID, handoffID string) {
 }
 
 // routeRealtimeHandoffTurn starts or steers the turn that receives a handoff.
-func (r *RuntimeRouter) routeRealtimeHandoffTurn(threadID string, event realtime.Event, delegation string) error {
+func (r *RuntimeRouter) routeRealtimeHandoffTurn(threadID string, event realtime.Event, delegation string, frames []string) error {
 	if active := r.activeRuntimeTurnSnapshot(threadID); active != nil {
 		_, err := r.handleTurnSteer(requestWithInternalParams(MethodTurnSteer, turn.TurnSteerParams{
 			ThreadID:                  threadID,
 			ExpectedTurnID:            active.ID,
 			Prompt:                    delegation,
-			RealtimeHandoffProvenance: r.realtimeHandoffProvenance(threadID, event, realtime.RealtimeHandoffModeSteer),
+			RealtimeHandoffProvenance: r.realtimeHandoffProvenance(threadID, event, realtime.RealtimeHandoffModeSteer, frames),
 		}))
 		return err
 	}
 	_, err := r.handleTurnStart(requestWithInternalParams(MethodTurnStart, turn.TurnStartParams{
 		ThreadID:                  threadID,
 		Prompt:                    delegation,
-		RealtimeHandoffProvenance: r.realtimeHandoffProvenance(threadID, event, realtime.RealtimeHandoffModeStart),
+		RealtimeHandoffProvenance: r.realtimeHandoffProvenance(threadID, event, realtime.RealtimeHandoffModeStart, frames),
 	}))
 	return err
 }
@@ -1074,6 +1073,53 @@ func (r *RuntimeRouter) recordRealtimeTranscriptMessage(threadID string, text st
 	return &item, nil
 }
 
+// realtimeAttributedSources reports the frames a saved receipt actually carries.
+// A handoff or transcript message attributes the transcript frames its rendered
+// body contains, and only falls back to the event's own id when the transcript
+// carried no frame identity (Rust #62288 RealtimeDelegation::from_events).
+func realtimeAttributedSources(event realtime.Event, frames []string) []string {
+	seen := make(map[string]struct{}, len(frames))
+	sources := make([]string, 0, len(frames))
+	for _, frame := range frames {
+		frame = strings.TrimSpace(frame)
+		if frame == "" {
+			continue
+		}
+		if _, duplicate := seen[frame]; duplicate {
+			continue
+		}
+		seen[frame] = struct{}{}
+		sources = append(sources, frame)
+	}
+	if len(sources) > 0 {
+		return sources
+	}
+	return realtimeEventSourceIDs(event)
+}
+
+// realtimeDelegationAttribution renders one handoff delegation and reports the
+// transcript frames it carries. Rendering and attribution share a single pass,
+// so a row that is dropped (empty speech) can never appear in the accepted
+// source list (Rust #62288 RealtimeDelegation::from_events).
+func realtimeDelegationAttribution(input string, entries []realtime.TranscriptEntry) (string, []string) {
+	lines := make([]string, 0, len(entries))
+	frames := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.Text) == "" {
+			continue
+		}
+		lines = append(lines, entry.Role+": "+entry.Text)
+		if id := strings.TrimSpace(entry.ID); id != "" {
+			frames = append(frames, id)
+		}
+	}
+	delegation := wrapRealtimeDelegation(input, strings.Join(lines, "\n"))
+	if delegation == "" {
+		return "", nil
+	}
+	return delegation, frames
+}
+
 // realtimeEventSourceIDs lists the realtime frames one event names, used as
 // provenance for the receipt derived from the message it saves.
 func realtimeEventSourceIDs(event realtime.Event) []string {
@@ -1106,14 +1152,14 @@ func (r *RuntimeRouter) realtimeSessionInputProvenance(threadID string, itemID s
 // realtimeHandoffProvenance describes the accepted handoff that enters a turn,
 // so the turn's user message carries the receipt facts (Rust #62251
 // RealtimeHandoffMetadata).
-func (r *RuntimeRouter) realtimeHandoffProvenance(threadID string, event realtime.Event, mode realtime.RealtimeHandoffMode) map[string]any {
+func (r *RuntimeRouter) realtimeHandoffProvenance(threadID string, event realtime.Event, mode realtime.RealtimeHandoffMode, frames []string) map[string]any {
 	now := runtimeRouterNow(r).UTC()
 	eventID := "realtime-handoff-" + safeIdentifier(firstNonEmpty(strings.TrimSpace(event.HandoffID), strings.TrimSpace(event.ItemID))) + "-" + safeIdentifier(fmt.Sprintf("%d", now.UnixNano()))
 	sessionID := strings.TrimSpace(event.RealtimeSessionID)
 	if sessionID == "" && r.services.Realtime != nil {
 		sessionID = r.requireRealtime().ActiveRealtimeSessionID(threadID)
 	}
-	sources := realtimeEventSourceIDs(event)
+	sources := realtimeAttributedSources(event, frames)
 	if sources == nil {
 		sources = []string{}
 	}
