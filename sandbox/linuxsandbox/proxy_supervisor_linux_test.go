@@ -155,10 +155,7 @@ func TestProxySupervisorNativeLifecycleLikeRust(t *testing.T) {
 				socket := f.socket(t)
 				conn, upstreamClosed := f.openConnection(t, socket)
 				children := proxySupervisorChildren(t, f.command.Process.Pid)
-				if len(children) != 1 {
-					t.Fatalf("launcher children = %v, want one bwrap, no detached bridge", children)
-				}
-				bwrapPID := children[0]
+				bwrapPID, cleanupPID := splitProxySupervisorChildren(t, children)
 				if transport == "transparent" {
 					nested := proxySupervisorChildren(t, bwrapPID)
 					if len(nested) != 1 {
@@ -211,16 +208,26 @@ func TestProxySupervisorNativeLifecycleLikeRust(t *testing.T) {
 					t.Fatal("upstream socket survived launcher")
 				}
 				proxySupervisorEventually(t, func() bool { return !proxySupervisorRunning(bwrapPID) }, "bwrap termination after launcher exit")
+				if cleanupPID != 0 {
+					proxySupervisorEventually(t, func() bool { return !proxySupervisorRunning(cleanupPID) }, "mount cleanup supervisor exit after the workload")
+				}
 				if mode != "launcher-killed" {
 					if _, err := os.Stat(filepath.Dir(socket)); !errors.Is(err, os.ErrNotExist) {
 						t.Fatalf("route cleanup after bwrap wait: %v", err)
 					}
+				} else if cleanupPID != 0 {
+					// Without the supervisor a SIGKILLed launcher can leave an idle
+					// route directory behind; the detached supervisor must remove it.
+					proxySupervisorEventually(t, func() bool {
+						_, err := os.Stat(filepath.Dir(socket))
+						return errors.Is(err, os.ErrNotExist)
+					}, "detached synthetic mount cleanup after launcher SIGKILL")
 				}
 				count, err := os.ReadFile(f.count)
 				if err != nil || string(count) != "once\n" {
 					t.Fatalf("payload executions = %q, %v, want once", count, err)
 				}
-				t.Logf("real %s pid=%d; supervisor=%d; transport=%s mode=%s wait_status=%d; active bridge closed; command once", executable, bwrapPID, f.command.Process.Pid, transport, mode, status)
+				t.Logf("real %s pid=%d; supervisor=%d; mount_cleanup_supervisor=%d; transport=%s mode=%s wait_status=%d; active bridge closed; command once", executable, bwrapPID, f.command.Process.Pid, cleanupPID, transport, mode, status)
 			})
 		}
 	}
@@ -456,6 +463,29 @@ func proxySupervisorChildren(t *testing.T, pid int) []int {
 		}
 	}
 	return result
+}
+
+// splitProxySupervisorChildren separates the real bubblewrap stage from the
+// opt-in synthetic mount cleanup supervisor.  Every other child would mean the
+// launcher detached a bridge process, which the Rust supervisor never does.
+func splitProxySupervisorChildren(t *testing.T, children []int) (bwrapPID, cleanupPID int) {
+	t.Helper()
+	var candidates []int
+	for _, child := range children {
+		cmdline, _ := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", child))
+		if strings.Contains(string(cmdline), mountCleanupSupervisorArg) {
+			if cleanupPID != 0 {
+				t.Fatalf("launcher children = %v, want at most one mount cleanup supervisor", children)
+			}
+			cleanupPID = child
+			continue
+		}
+		candidates = append(candidates, child)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("launcher children = %v, want one bwrap, no detached bridge", children)
+	}
+	return candidates[0], cleanupPID
 }
 
 func assertProxyBridgeFDIsolation(t *testing.T, supervisor, child int) {
