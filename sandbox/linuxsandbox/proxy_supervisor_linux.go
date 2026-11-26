@@ -28,14 +28,15 @@ const proxyBwrapExecArg = "--proxy-bwrap-exec"
 // a separate descriptor table; neither listeners nor active upstream sockets
 // can leak into the sandbox or keep serving after this process dies.
 type hostProxyBridges struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	directory string
-	listeners []net.Listener
-	mu        sync.Mutex
-	closed    bool
-	conns     map[net.Conn]struct{}
-	wg        sync.WaitGroup
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	directory           string
+	listeners           []net.Listener
+	mu                  sync.Mutex
+	closed              bool
+	cleanupBySupervisor bool
+	conns               map[net.Conn]struct{}
+	wg                  sync.WaitGroup
 }
 
 func prepareHostProxyRouteSpec(ctx context.Context, network *linuxManagedNetworkContext) (string, *hostProxyBridges, error) {
@@ -157,7 +158,7 @@ func (b *hostProxyBridges) close() {
 	}
 	b.mu.Unlock()
 	b.wg.Wait()
-	if b.directory != "" {
+	if b.directory != "" && !b.cleanupBySupervisor {
 		// This directory was created by this invocation and is not a user path.
 		_ = os.RemoveAll(b.directory)
 	}
@@ -209,6 +210,18 @@ func runManagedProxySandbox(ctx context.Context, cmd *linuxSandboxCommand) error
 	if err := child.Start(); err != nil {
 		return fmt.Errorf("start supervised bubblewrap stage: %w", err)
 	}
+	var mountCleanup *mountCleanupSupervisor
+	if mountCleanupSupervisorEnabled() && bridges.directory != "" {
+		mountCleanup, err = startMountCleanupSupervisor(child.Process.Pid, []string{bridges.directory})
+		if err != nil {
+			// The supervised stage must not outlive a failed handoff; the route
+			// directory stays with this process because ownership never moved.
+			forwardProxySandboxSignal(child.Process.Pid, syscall.SIGKILL)
+			_ = child.Wait()
+			return fmt.Errorf("start mount cleanup supervisor: %w", err)
+		}
+		bridges.cleanupBySupervisor = true
+	}
 	_ = payload.Close()
 	_ = readyWriter.Close()
 	readDone := make(chan struct{})
@@ -245,6 +258,11 @@ func runManagedProxySandbox(ctx context.Context, cmd *linuxSandboxCommand) error
 			forwardProxySandboxSignal(child.Process.Pid, syscall.SIGKILL)
 			canceled = nil
 		case err := <-waited:
+			if mountCleanup != nil {
+				if cleanupErr := mountCleanup.wait(); cleanupErr != nil {
+					return fmt.Errorf("mount cleanup supervisor: %w", cleanupErr)
+				}
+			}
 			if err == nil {
 				return &linuxSandboxChildExit{}
 			}

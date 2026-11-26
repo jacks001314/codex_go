@@ -151,6 +151,13 @@ func RunHelper(args []string, stdout, stderr io.Writer) int {
 				return 1
 			}
 			return 0
+		case mountCleanupSupervisorArg:
+			err := runMountCleanupSupervisor(args[1:])
+			if err != nil {
+				fmt.Fprintln(stderr, "codex-linux-sandbox mount cleanup supervisor:", err)
+				return 1
+			}
+			return 0
 		case "--proxy-local-bridge":
 			if err := runProxyLocalBridgeHelper(args[1:], os.Stdout); err != nil {
 				fmt.Fprintln(stderr, "codex-linux-sandbox proxy local bridge:", err)
