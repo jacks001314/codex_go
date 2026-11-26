@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -234,6 +235,103 @@ func TestProxySupervisorNativeLifecycleLikeRust(t *testing.T) {
 
 }
 
+// TestProxySupervisorInheritedSIGCHLDIgnoredLikeRust covers a caller that
+// ignores SIGCHLD and then execs the launcher. Rust resets SIGCHLD in its
+// bubblewrap launch path so an inherited SIG_IGN cannot make the kernel reap the
+// supervised stage. Go needs no equivalent: the runtime restores the default
+// SIGCHLD disposition before main runs (observed on go1.26.3 linux/amd64), so the
+// guarantee is that the launcher still reports the command's own exit status.
+// This test locks that behaviour against any future raw fork/exec path.
+func TestProxySupervisorInheritedSIGCHLDIgnoredLikeRust(t *testing.T) {
+	f := newProxySupervisorFixture(t)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Guard the fixture: ignoring SIGCHLD in Go and exec'ing must still leave the
+	// signal ignored, or this case would pass without exercising the reset.
+	probe := exec.Command(executable, "-test.run=^TestProxySupervisorSigchldIgnoredCaller$")
+	probe.Env = append(probe.Env, sigchldIgnoredCallerEnv+"=probe")
+	out, err := probe.Output()
+	if err != nil {
+		t.Fatalf("SIGCHLD ignore probe = %v: %s", err, out)
+	}
+	mask, err := sigchldIgnoredMask(string(out))
+	if err != nil || mask&(1<<16) == 0 {
+		t.Fatalf("SIGCHLD ignore precondition = %q, %v", out, err)
+	}
+	encoded, err := json.Marshal(f.command.Args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := append(append([]string{}, f.command.Env...), sigchldIgnoredCallerEnv+"=exec:"+string(encoded))
+	cmd := exec.Command(executable, "-test.run=^TestProxySupervisorSigchldIgnoredCaller$")
+	cmd.Dir = f.command.Dir
+	cmd.Env = env
+	output, err := os.Create(f.output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = output.Close() })
+	cmd.Stdout, cmd.Stderr = output, output
+	f.command = cmd
+	f.start(t)
+	if err := os.WriteFile(f.release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.command.Wait()
+	status := f.command.ProcessState.Sys().(syscall.WaitStatus)
+	if !status.Exited() || status.ExitStatus() != 23 {
+		body, _ := os.ReadFile(f.output)
+		t.Fatalf("wait status = %v, want exited 23; output %s", status, body)
+	}
+	count, err := os.ReadFile(f.count)
+	if err != nil || string(count) != "once\n" {
+		t.Fatalf("payload executions = %q, %v, want once", count, err)
+	}
+}
+
+const sigchldIgnoredCallerEnv = "CODEX_PROXY_SIGCHLD_CALLER"
+
+// sigchldIgnoredMask reads the ignored-signal mask out of /proc/self/status.
+func sigchldIgnoredMask(status string) (uint64, error) {
+	for _, line := range strings.Split(status, "\n") {
+		value, ok := strings.CutPrefix(line, "SigIgn:")
+		if !ok {
+			continue
+		}
+		return strconv.ParseUint(strings.TrimSpace(value), 16, 64)
+	}
+	return 0, errors.New("missing SigIgn entry")
+}
+
+// TestProxySupervisorSigchldIgnoredCaller ignores SIGCHLD and either reports the
+// inherited disposition or execs the launcher, like a daemon that runs with
+// SIGCHLD=SIG_IGN.
+func TestProxySupervisorSigchldIgnoredCaller(t *testing.T) {
+	mode := os.Getenv(sigchldIgnoredCallerEnv)
+	if mode == "" {
+		return
+	}
+	signal.Ignore(syscall.SIGCHLD)
+	if mode == "probe" {
+		if err := syscall.Exec("/bin/cat", []string{"cat", "/proc/self/status"}, os.Environ()); err != nil {
+			os.Exit(91)
+		}
+		return
+	}
+	var args []string
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(mode, "exec:")), &args); err != nil || len(args) == 0 {
+		os.Exit(90)
+	}
+	if !signal.Ignored(syscall.SIGCHLD) {
+		os.Exit(92)
+	}
+	if err := syscall.Exec(args[0], args, os.Environ()); err != nil {
+		os.Exit(93)
+	}
+}
+
 func TestProxySupervisorHandoffFailuresLikeRust(t *testing.T) {
 	executable, err := os.Executable()
 	if err != nil {
@@ -346,16 +444,17 @@ func TestProxySupervisorNativeCallerExitLikeRust(t *testing.T) {
 	socket := f.socket(t)
 	conn, upstreamClosed := f.openConnection(t, socket)
 	children := proxySupervisorChildren(t, pid)
-	if len(children) != 1 {
-		t.Fatalf("caller-owned bwrap children = %v", children)
-	}
+	bwrapPID, cleanupPID := splitProxySupervisorChildren(t, children)
 	if err := input.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := parent.Wait(); err != nil {
 		t.Fatalf("caller exit = %v", err)
 	}
-	proxySupervisorEventually(t, func() bool { return !proxySupervisorRunning(pid) && !proxySupervisorRunning(children[0]) }, "caller death to stop supervisor and bwrap")
+	proxySupervisorEventually(t, func() bool { return !proxySupervisorRunning(pid) && !proxySupervisorRunning(bwrapPID) }, "caller death to stop supervisor and bwrap")
+	if cleanupPID != 0 {
+		proxySupervisorEventually(t, func() bool { return !proxySupervisorRunning(cleanupPID) }, "caller death to stop the mount cleanup supervisor")
+	}
 	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if _, err := conn.Read(make([]byte, 1)); err == nil {
 		t.Fatal("proxy survived its caller")
@@ -367,7 +466,7 @@ func TestProxySupervisorNativeCallerExitLikeRust(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("upstream survived caller exit")
 	}
-	t.Logf("caller %d exited; supervisor %d and real bwrap %d stopped; active bridge closed", parent.Process.Pid, pid, children[0])
+	t.Logf("caller %d exited; supervisor %d and real bwrap %d stopped; active bridge closed; mount_cleanup_supervisor=%d", parent.Process.Pid, pid, bwrapPID, cleanupPID)
 }
 
 // TestProxySupervisorCallerExitProcess is a test-only executor process. The
