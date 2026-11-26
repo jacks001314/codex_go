@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"testing"
 	"time"
@@ -143,18 +144,41 @@ func TestMountCleanupSupervisorReportsCleanupFailure(t *testing.T) {
 	if err := os.WriteFile(path, []byte("mount"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(parent, 0o500); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
 	supervisor, err := startMountCleanupSupervisor(workload.Process.Pid, []string{path})
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(parent, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
 	_ = workload.Process.Kill()
 	_ = workload.Wait()
 	if err := waitCleanupSupervisor(t, supervisor); err == nil {
 		t.Fatal("cleanup failure was not reported")
+	}
+}
+
+func TestMountCleanupSupervisorRejectsUnmarkedPath(t *testing.T) {
+	workload := mountCleanupWorkload(t)
+	path := filepath.Join(t.TempDir(), "unmarked")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	start, err := linuxProcessStartTime(workload.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workload.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = workload.Wait()
+	err = runMountCleanupSupervisor([]string{"--owner-pid", strconv.Itoa(workload.Process.Pid), "--owner-start", strconv.FormatUint(start, 10), "--path", path})
+	if err == nil {
+		t.Fatal("unmarked path was accepted")
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Fatalf("unmarked path changed: %v", statErr)
 	}
 }
 

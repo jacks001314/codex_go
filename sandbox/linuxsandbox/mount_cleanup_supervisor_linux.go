@@ -9,6 +9,7 @@ package linuxsandbox
 
 import (
 	"bytes"
+	cryptorand "crypto/rand"
 	"errors"
 	"fmt"
 	"os"
@@ -18,11 +19,14 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
 	mountCleanupSupervisorArg = "--mount-cleanup-supervisor"
 	mountCleanupEnableEnv     = "CODEX_MOUNT_CLEANUP_SUPERVISOR"
+	syntheticMountMarkerName  = ".codex-synthetic-mount"
 )
 
 type mountCleanupSupervisor struct {
@@ -32,6 +36,7 @@ type mountCleanupSupervisor struct {
 
 type syntheticMountRegistration struct {
 	path       string
+	marker     string
 	ownerPID   int
 	ownerStart uint64
 }
@@ -63,6 +68,9 @@ func startMountCleanupSupervisor(ownerPID int, paths []string) (*mountCleanupSup
 	args := []string{mountCleanupSupervisorArg, "--owner-pid", strconv.Itoa(ownerPID), "--owner-start", strconv.FormatUint(start, 10)}
 	for _, path := range paths {
 		if clean := filepath.Clean(path); clean != "." && clean != "/" {
+			if err := writeSyntheticMountMarker(clean, ownerPID, start); err != nil {
+				return nil, fmt.Errorf("register synthetic mount %s: %w", clean, err)
+			}
 			args = append(args, "--path", clean)
 		}
 	}
@@ -145,7 +153,11 @@ func runMountCleanupSupervisor(args []string) error {
 	}
 	registrations := make(map[string]syntheticMountRegistration, len(paths))
 	for _, path := range paths {
-		registrations[path] = syntheticMountRegistration{path: path, ownerPID: pid, ownerStart: start}
+		marker, err := verifySyntheticMountMarker(path, pid, start)
+		if err != nil {
+			return fmt.Errorf("refuse unmarked synthetic mount %s: %w", path, err)
+		}
+		registrations[path] = syntheticMountRegistration{path: path, marker: marker, ownerPID: pid, ownerStart: start}
 	}
 	for {
 		current, statErr := linuxProcessStartTime(pid)
@@ -168,11 +180,77 @@ func runMountCleanupSupervisor(args []string) error {
 		if err := os.RemoveAll(registration.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("remove synthetic mount %s: %w", registration.path, err))
 		}
+		if registration.marker != filepath.Join(registration.path, syntheticMountMarkerName) {
+			if err := os.Remove(registration.marker); err != nil && !errors.Is(err, os.ErrNotExist) {
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("remove synthetic mount marker %s: %w", registration.marker, err))
+			}
+		}
 	}
 	if cleanupErr != nil {
 		return cleanupErr
 	}
 	return nil
+}
+
+func writeSyntheticMountMarker(path string, pid int, start uint64) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) {
+		return errors.New("target is not a real file or directory")
+	}
+	var id [16]byte
+	if _, err := cryptorand.Read(id[:]); err != nil {
+		return err
+	}
+	marker := syntheticMountMarkerPath(path, info.IsDir())
+	file, err := os.OpenFile(marker, os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	_, err = fmt.Fprintf(file, "id=%x\npid=%d\nstart=%d\n", id, pid, start)
+	return err
+}
+
+func verifySyntheticMountMarker(path string, pid int, start uint64) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) {
+		return "", errors.New("target is not a real file or directory")
+	}
+	marker := syntheticMountMarkerPath(filepath.Clean(path), info.IsDir())
+	info, err = os.Lstat(marker)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return "", errors.New("marker is not a regular file")
+	}
+	data, err := os.ReadFile(marker)
+	if err != nil {
+		return "", err
+	}
+	fields := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(fields) != 3 || !strings.HasPrefix(fields[0], "id=") || len(strings.TrimPrefix(fields[0], "id=")) != 32 {
+		return "", errors.New("invalid marker id")
+	}
+	gotPID, errPID := strconv.Atoi(strings.TrimPrefix(fields[1], "pid="))
+	gotStart, errStart := strconv.ParseUint(strings.TrimPrefix(fields[2], "start="), 10, 64)
+	if !strings.HasPrefix(fields[1], "pid=") || !strings.HasPrefix(fields[2], "start=") || errPID != nil || errStart != nil || gotPID != pid || gotStart != start {
+		return "", errors.New("marker owner identity mismatch")
+	}
+	return marker, nil
+}
+
+func syntheticMountMarkerPath(path string, directory bool) string {
+	if directory {
+		return filepath.Join(path, syntheticMountMarkerName)
+	}
+	return path + "." + syntheticMountMarkerName
 }
 
 // linuxProcessStartTime reads /proc/<pid>/stat field 22.  It is intentionally
