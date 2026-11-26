@@ -80,6 +80,73 @@ func FindAlternateScrollReport(buffer []byte) (bool, bool) {
 	return false, false
 }
 
+// kittyGraphicsQuery asks the terminal for a single inline RGB pixel without
+// storing or displaying an image (Rust terminal_probe::startup).
+const kittyGraphicsQuery = "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\"
+
+// kittyGraphicsReplyPrefix identifies the reply to image id 31.
+const kittyGraphicsReplyPrefix = "\x1b_Gi=31;"
+
+// FindKittyGraphicsReport scans a startup-probe buffer for a complete reply to
+// the Kitty graphics query. The reply is ESC _ Gi=31;<status> ESC \; only the
+// "OK" status proves the terminal accepted the query (Rust
+// terminal_probe::startup_replay::parse_startup_input).
+func FindKittyGraphicsReport(buffer []byte) (supported bool, found bool) {
+	prefix := []byte(kittyGraphicsReplyPrefix)
+	for start := 0; start+len(prefix) < len(buffer); start++ {
+		if string(buffer[start:start+len(prefix)]) != kittyGraphicsReplyPrefix {
+			continue
+		}
+		cursor := start + len(prefix)
+		payloadStart := cursor
+		for cursor < len(buffer) && buffer[cursor] >= 0x20 && buffer[cursor] <= 0x7e {
+			cursor++
+		}
+		if cursor == payloadStart || cursor+2 > len(buffer) {
+			continue
+		}
+		if buffer[cursor] != 0x1b || buffer[cursor+1] != '\\' {
+			continue
+		}
+		return string(buffer[payloadStart:cursor]) == "OK", true
+	}
+	return false, false
+}
+
+// ProbedKittyGraphicsQuery reports the query the startup probe must send. An
+// empty string means this session does not need the probe.
+func ProbedKittyGraphicsQuery() string {
+	if !ShouldProbeKittyGraphics() {
+		return ""
+	}
+	return kittyGraphicsQuery
+}
+
+// ShouldProbeKittyGraphics mirrors Rust's should_probe_kitty_graphics: only a
+// direct herdr session is asked, because its TERM does not advertise Kitty
+// graphics.
+func ShouldProbeKittyGraphics() bool {
+	return shouldProbeKittyGraphics(startupProbeTerminalInfo, startupProbeLookupEnv)
+}
+
+func shouldProbeKittyGraphics(info func() *shell.TerminalInfo, lookupEnv func(string) (string, bool)) bool {
+	if info != nil {
+		if terminal := info(); terminal != nil && terminal.Multiplexer != nil {
+			return false
+		}
+	}
+	if lookupEnv == nil {
+		return false
+	}
+	for _, key := range []string{"TMUX", "TMUX_PANE", "ZELLIJ", "ZELLIJ_SESSION_NAME", "ZELLIJ_VERSION"} {
+		if value, ok := lookupEnv(key); ok && strings.TrimSpace(value) != "" {
+			return false
+		}
+	}
+	program, _ := lookupEnv("TERM_PROGRAM")
+	return strings.EqualFold(strings.TrimSpace(program), "herdr")
+}
+
 // StartupProbeQueryTerminalIdentity mirrors Rust's `query_identity`: the DA2
 // identity probe runs only for a Unix SSH session outside a multiplexer.
 func StartupProbeQueryTerminalIdentity() bool {

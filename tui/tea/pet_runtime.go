@@ -9,6 +9,7 @@ import (
 	bubbletea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/term"
 
+	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
 	pets "codex_go/tui/pets"
 )
@@ -356,6 +357,14 @@ func (w *petOutputWriter) output() io.Writer {
 
 func (m *Model) petImageSupport() pets.PetImageSupport {
 	if m == nil || m.petEnv == nil {
+		return pets.PetImageSupport{Reason: pets.PetImageUnsupportedTerminal}
+	}
+	// Rust App::preview_image_protocol: the startup probe overrides environment
+	// detection when it asked a herdr session about Kitty graphics.
+	if probed, known := codextui.ProbedKittyGraphics(); known {
+		if probed {
+			return pets.PetImageSupport{Protocol: pets.ImageProtocolKitty}
+		}
 		return pets.PetImageSupport{Reason: pets.PetImageUnsupportedTerminal}
 	}
 	return pets.DetectImageSupportInFullscreen(m.petEnv, m.tmuxImageProbe, m.ownedScreen)

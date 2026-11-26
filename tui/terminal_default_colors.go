@@ -43,11 +43,16 @@ var (
 	// mode 1007, 0 when the terminal starts with alternate scroll disabled, and
 	// 1 when it starts enabled (Rust #61697).
 	terminalAlternateScroll atomic.Int32
+	// terminalProbedKittyGraphics is -1 when the probe did not run, 0 when the
+	// terminal rejected the Kitty graphics query, and 1 when it accepted it
+	// (Rust Tui::probed_kitty_graphics).
+	terminalProbedKittyGraphics atomic.Int32
 )
 
 func init() {
 	terminalAppOverSSH.Store(-1)
 	terminalAlternateScroll.Store(-1)
+	terminalProbedKittyGraphics.Store(-1)
 }
 
 // TerminalAppOverSSH reports whether the startup probe identified Apple
@@ -124,6 +129,43 @@ func SetAlternateScrollFromStartupProbe(value *bool) {
 		return
 	}
 	terminalAlternateScroll.Store(0)
+}
+
+// ProbedKittyGraphics reports the startup probe's Kitty graphics answer. Known
+// true forces Kitty output for the session, known false disables image output,
+// and unknown keeps the environment-based detection (Rust
+// App::preview_image_protocol).
+func ProbedKittyGraphics() (bool, bool) {
+	switch terminalProbedKittyGraphics.Load() {
+	case 0:
+		return false, true
+	case 1:
+		return true, true
+	default:
+		return false, false
+	}
+}
+
+// SetProbedKittyGraphics records the startup probe's Kitty graphics answer. A
+// nil value marks it unknown.
+func SetProbedKittyGraphics(value *bool) {
+	if value == nil {
+		terminalProbedKittyGraphics.Store(-1)
+		return
+	}
+	if *value {
+		terminalProbedKittyGraphics.Store(1)
+		return
+	}
+	terminalProbedKittyGraphics.Store(0)
+}
+
+// SetProbedKittyGraphicsForTest installs an answer and returns a restore
+// function.
+func SetProbedKittyGraphicsForTest(value *bool) func() {
+	previous := terminalProbedKittyGraphics.Load()
+	SetProbedKittyGraphics(value)
+	return func() { terminalProbedKittyGraphics.Store(previous) }
 }
 
 // SetInitialAlternateScrollForTest installs an initial scroll mode and returns
