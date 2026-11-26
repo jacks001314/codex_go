@@ -7856,9 +7856,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "blocked_precondition",
+   "status": "complete",
    "evidence": [
-    "Round 1190 (audit): blocked on native Windows MXC SDK integration, consistent with #55378. The commit adds the codex-mxc-sandbox crate whose native.rs launches requests through Microsoft MXC crates (wxc_common::sandbox_process::SandboxBackend, appcontainer_common::base_container_runner::BaseContainerRunner, learning_mode_windows::SecurityEnvironmentApi) and pins tracelogging for Windows GNU linking. Go sandbox/mxc has no native binding: run_windows.go validates the launcher request and then fails closed with NativeUnavailableMessage = \"native MXC is unavailable on this executor\", and execserver reports the windowsMxc capability false (execserver/windows_mxc_test.go). Precondition: a Go binding or FFI to MXC's native launcher (or an equivalent supported native sandbox SDK)."
+    "sandbox/mxc is a native Windows adapter: prepare_windows.go builds the file-system and network policy, psec_spec.go writes Microsoft's ProcessSecurityEnvironment.fbs layout itself, psec_process_windows.go binds it with PROC_THREAD_ATTRIBUTE_INPUT, and cmd/internal/codexmain dispatches the launcher through mxc.RunMain when argv carries the MXC launcher argument.",
+    "execserver exposes the \"mxc\" Windows sandbox selection alongside disabled/restricted-token/elevated, so the adapter is reachable from the ordinary sandbox path rather than only from tests.",
+    "Verified on this Windows host: CODEX_MXC_SMOKE=1 go test ./sandbox/mxc -run TestNativeLaunchSmoke passed, launching cmd.exe /c exit 7 inside a real process security environment with the exit code preserved and the denied path rejected with \"Access is denied\"; go test ./sandbox/mxc (51 outcomes), go test ./execserver -run MXC and go test ./cmd/internal/codexmain all pass."
    ]
   },
   {
@@ -33526,10 +33528,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "blocked_precondition",
+   "status": "equivalent",
    "evidence": [
-    "plan_2026_10_20.md:183: - `#55378`: blocked on native Windows MXC SDK integration.",
-    "Native Windows MXC SDK integration is absent; Go only reports availability=false (plan_2026_10_20.md)."
+    "Rust replaced its own Windows sandbox launcher with Microsoft's mxc-sdk crate. Go implements the same wire format itself: psec_spec.go reproduces the mxc-sdk ProcessSecurityEnvironment.fbs layout, psec_common.go mirrors its SecurityEnvironmentSupport enum, and psec_process_windows.go binds the environment the way the SDK does.",
+    "The observable behaviour is the same - a real process security environment with the configured read/write, deny and network policy - so the crate migration does not apply on its own. Evidence: the CODEX_MXC_SMOKE=1 native launch above plus the 51 passing sandbox/mxc tests."
    ]
   },
   {
