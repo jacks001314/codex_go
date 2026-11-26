@@ -6127,6 +6127,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		if handled, cmd := m.handleThreadLinkClick(msg); handled {
 			return m, cmd
 		}
+		if handled, cmd := m.handleDocumentLinkClick(msg); handled {
+			return m, cmd
+		}
 		// Rust pointer_down toggles an activity disclosure before it starts a
 		// text selection, so the control wins an unmodified left press.
 		if m.handleTranscriptDisclosureClick(msg) {

@@ -26,13 +26,14 @@ type transcriptMouseSelection struct {
 }
 
 type transcriptMouseSelectionRegion struct {
-	x     int
-	y     int
-	w     int
-	h     int
-	text  []string
-	links map[int][]regionThreadLink
-	hash  string
+	x         int
+	y         int
+	w         int
+	h         int
+	text      []string
+	links     map[int][]regionThreadLink
+	documents map[int][]regionDocumentLink
+	hash      string
 }
 
 func (s *transcriptMouseSelection) clear() {
@@ -82,13 +83,14 @@ func (m *Model) captureTranscriptSelectionRegion(sections []string, transcriptIn
 		}
 	}
 	m.transcriptSelectionRegion = transcriptMouseSelectionRegion{
-		x:     0,
-		y:     y,
-		w:     width,
-		h:     height,
-		text:  text,
-		links: filterRegionLinks(threadLinkRanges(sections[transcriptIndex]), height),
-		hash:  hash,
+		x:         0,
+		y:         y,
+		w:         width,
+		h:         height,
+		text:      text,
+		links:     filterRegionLinks(threadLinkRanges(sections[transcriptIndex]), height),
+		documents: filterRegionDocuments(documentLinkRanges(sections[transcriptIndex]), height),
+		hash:      hash,
 	}
 }
 

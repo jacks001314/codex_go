@@ -966,7 +966,105 @@ func annotateLocalFileLinks(rendered string, links []localFileLink, cwd string) 
 		}
 		lines[i] = line
 	}
+	annotateWrappedLocalFileLinks(lines, links, cwd)
 	return strings.Join(lines, "\n")
+}
+
+// annotateWrappedLocalFileLinks links a display path that the wrapper split
+// across rows. Rust #61880 keeps a link's row ranges through narrow tables and
+// wrapped cells (remap_wrapped_line); the Go annotator reads the painted text,
+// so it re-tiles the display across consecutive rows.
+func annotateWrappedLocalFileLinks(lines []string, links []localFileLink, cwd string) {
+	for index := 0; index < len(lines); index++ {
+		for _, link := range links {
+			if link.Display == "" {
+				continue
+			}
+			fileURL := localLinkFileURL(link.Dest, cwd)
+			if fileURL == "" {
+				continue
+			}
+			last, ok := annotateWrappedLocalFileLink(lines, index, link.Display, fileURL)
+			if !ok {
+				continue
+			}
+			index = last
+			break
+		}
+	}
+}
+
+// annotateWrappedLocalFileLink wraps one wrapped display path, starting on the
+// row that shows its head, and returns the row that shows its tail. The rows
+// must tile the display exactly: every intermediate row is consumed whole, so
+// unrelated text that merely ends with a path fragment stays unlinked.
+func annotateWrappedLocalFileLink(lines []string, start int, display string, fileURL string) (int, bool) {
+	offset, head := wrappedSuffixPrefix(lines[start], display)
+	if offset < 0 || head <= 0 || head >= len(display) {
+		return 0, false
+	}
+	type fragment struct {
+		row        int
+		start, end int
+	}
+	fragments := []fragment{{row: start, start: offset, end: offset + head}}
+	position := head
+	row := start
+	for position < len(display) {
+		row++
+		if row >= len(lines) {
+			return 0, false
+		}
+		content := strings.TrimLeft(lines[row], " \t")
+		if content == "" {
+			return 0, false
+		}
+		indent := len(lines[row]) - len(content)
+		matched := commonPrefixLen(content, display[position:])
+		if matched == 0 {
+			return 0, false
+		}
+		if matched < len(content) && matched < len(display)-position {
+			return 0, false
+		}
+		fragments = append(fragments, fragment{row: row, start: indent, end: indent + matched})
+		position += matched
+	}
+	for _, fragment := range fragments {
+		line := lines[fragment.row]
+		lines[fragment.row] = line[:fragment.start] +
+			osc8FileLink(fileURL, line[fragment.start:fragment.end]) +
+			line[fragment.end:]
+	}
+	return row, true
+}
+
+// wrappedSuffixPrefix returns the longest suffix of line that is a proper prefix
+// of display, as (byte offset, length).
+func wrappedSuffixPrefix(line string, display string) (int, int) {
+	limit := len(display) - 1
+	if len(line) < limit {
+		limit = len(line)
+	}
+	for length := limit; length > 0; length-- {
+		if strings.HasPrefix(display, line[len(line)-length:]) {
+			return len(line) - length, length
+		}
+	}
+	return -1, 0
+}
+
+func commonPrefixLen(left string, right string) int {
+	limit := len(left)
+	if len(right) < limit {
+		limit = len(right)
+	}
+	for index := 0; index < limit; index++ {
+		if left[index] != right[index] {
+			return index
+		}
+	}
+	return limit
 }
 
 // osc8FileLink wraps text in an OSC-8 hyperlink to an absolute file URL.

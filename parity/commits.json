@@ -49700,10 +49700,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "blocked_precondition",
+   "status": "equivalent",
    "evidence": [
-    "Transcript markdown rendering in Go does not preserve document link destinations (only ViewImageHistoryCell exposes hyperlink lines).",
-    "plan: update/plan_2026_11_16.md batch 74"
+    "Transcript document targets are preserved and resolved in the reader. markdown.DocumentLinkTarget mirrors Rust markdown_render::local_links::sidebar_file_link (#61880): only a local `.md` / `.markdown` destination with no location suffix, fragment, query, host-qualified file URL, home-relative or UNC path qualifies, the path stays under 4096 bytes and control-free, and a non-absolute target must not parse as a URL. A POSIX `file://` target keeps literal backslashes (file:///tmp/Guide%5Cnotes.md addresses /tmp/Guide\\notes.md) while the painted label keeps forward slashes.",
+    "The transcript reads the painted link ranges back from the row (tui/tea/document_links.go: regionDocumentLink + documentLinkRanges) and Ctrl-click, the Go carrier for Rust's modifier click, opens the target through openSidebarDocumentAt when the conversation installed a document reader; without a reader the gesture stays with the terminal. A wrapped path is linked on every row that paints part of it (tui/markdown/render.go annotateWrappedLocalFileLinks), so narrow tables and wrapped cells no longer drop the target (Rust remap_wrapped_line).",
+    "Deliberate Go difference: the file:// OSC-8 escape stays in the output for document targets, because this transcript derives its hit-test ranges from the painted text and Go terminals open file links directly. Rust hides the escape and resolves only in-app; Go resolves in-app on Ctrl-click and keeps the terminal link usable. Table widths below the compact minimum still fall back to the key/value record renderer and can drop a header-only table entirely, which is a table-layout difference outside this commit.",
+    "Verified on Windows amd64 with CGO_ENABLED=0: go test ./tui/markdown ./tui/history_cell ./tui -count=1 PASS (0.677s / 0.448s / 13.260s); go test ./tui/tea -count=1 PASS 60.949s; go vet ./tui/... and go build ./... clean. New tests: tui/markdown/document_links_like_rust_test.go (eligibility matrix, POSIX backslash, painted destination), tui/markdown/document_links_table_like_rust_test.go (narrow and wrapped table targets), tui/tea/document_links_like_rust_test.go (reader opens on a .md link, source links stay with the terminal, no reader means no claim).",
+    "Files: tui/markdown/document_links.go, tui/markdown/render.go, tui/tea/document_links.go, tui/tea/transcript_selection.go, tui/tea/model.go."
    ]
   },
   {
