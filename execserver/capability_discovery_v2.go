@@ -1,6 +1,7 @@
 package execserver
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -108,7 +109,7 @@ func discoverV2PluginRoots(cacheRoot string, sandbox *FileSystemSandboxContext) 
 	if err != nil {
 		return nil, []string{"could not resolve plugin cache " + cacheRoot + ": " + err.Error()}
 	}
-	walk, err := walkPath(&FSWalkParams{
+	walk, err := walkPath(context.Background(), &FSWalkParams{
 		Path: cacheURI.String(),
 		Options: FSWalkOptions{
 			MaxDepth: 5, MaxDirectories: maxCapabilityDirectoriesPerRoot,

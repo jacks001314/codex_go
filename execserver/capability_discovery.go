@@ -1,6 +1,7 @@
 package execserver
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -53,7 +54,7 @@ func discoverCapabilityRoot(request CapabilityRootDiscoverRequest) CapabilityRoo
 		NamespaceManifests: []CapabilityTextFile{},
 		Warnings:           []string{},
 	}
-	metadata, err := getMetadata(&FSGetMetadataParams{Path: request.Path, Sandbox: request.Sandbox})
+	metadata, err := getMetadata(context.Background(), &FSGetMetadataParams{Path: request.Path, Sandbox: request.Sandbox})
 	if err != nil {
 		discovery.Error = stringPtr(fmt.Sprintf("failed to inspect capability root %s: %v", request.Path, err))
 		return discovery
@@ -62,7 +63,7 @@ func discoverCapabilityRoot(request CapabilityRootDiscoverRequest) CapabilityRoo
 		discovery.Error = stringPtr(fmt.Sprintf("capability root %s is not a directory", request.Path))
 		return discovery
 	}
-	walk, err := walkPath(&FSWalkParams{
+	walk, err := walkPath(context.Background(), &FSWalkParams{
 		Path: request.Path,
 		Options: FSWalkOptions{
 			MaxDepth:                maxCapabilityScanDepth,
@@ -188,7 +189,7 @@ func readNearestCapabilityAncestorManifest(root string, sandbox *FileSystemSandb
 }
 
 func readOptionalCapabilityTextFile(path string, sandbox *FileSystemSandboxContext, budget *capabilityBundleBudget, warnings *[]string) *CapabilityTextFile {
-	metadata, err := getMetadata(&FSGetMetadataParams{Path: path, Sandbox: sandbox})
+	metadata, err := getMetadata(context.Background(), &FSGetMetadataParams{Path: path, Sandbox: sandbox})
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			*warnings = append(*warnings, fmt.Sprintf("failed to inspect capability file %s: %v", path, err))
@@ -206,7 +207,7 @@ func readOptionalCapabilityTextFile(path string, sandbox *FileSystemSandboxConte
 		*warnings = append(*warnings, fmt.Sprintf("capability root bundle exceeds the %d-byte limit", maxCapabilityBundleBytesPerRoot))
 		return nil
 	}
-	response, err := readFile(&FSReadFileParams{Path: path, Sandbox: sandbox})
+	response, err := readFile(context.Background(), &FSReadFileParams{Path: path, Sandbox: sandbox})
 	if err != nil {
 		*warnings = append(*warnings, fmt.Sprintf("failed to read capability file %s: %v", path, err))
 		return nil

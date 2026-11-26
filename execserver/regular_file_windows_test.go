@@ -3,6 +3,7 @@
 package execserver
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,7 +41,7 @@ func TestFileReadsRejectNamedPipesLikeRust(t *testing.T) {
 
 	readDone := make(chan error, 1)
 	go func() {
-		_, readErr := readFile(&FSReadFileParams{Path: readPath})
+		_, readErr := readFile(context.Background(), &FSReadFileParams{Path: readPath})
 		readDone <- readErr
 	}()
 	select {
@@ -78,7 +79,7 @@ func TestFileReadsRejectSymlinkLikeRust(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	if _, err := readFile(&FSReadFileParams{Path: link}); err == nil || !strings.Contains(err.Error(), "not a") {
+	if _, err := readFile(context.Background(), &FSReadFileParams{Path: link}); err == nil || !strings.Contains(err.Error(), "not a") {
 		t.Fatalf("readFile(symlink) error = %v, want regular-file rejection", err)
 	}
 }

@@ -1903,7 +1903,7 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 			return nil, err
 		}
 		s.applyFSSandboxRuntimeOptions(params.Sandbox)
-		result, err := readFileContext(ctx, &params)
+		result, err := readFile(ctx, &params)
 		return result, mapFSRequestError(err)
 	case MethodFSOpen:
 		var params FSOpenParams
@@ -1945,7 +1945,7 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 			return nil, err
 		}
 		s.applyFSSandboxRuntimeOptions(params.Sandbox)
-		result, err := writeFile(&params)
+		result, err := writeFile(ctx, &params)
 		return result, mapFSRequestError(err)
 	case MethodFSCreateDirectory:
 		var params FSCreateDirectoryParams
@@ -1956,7 +1956,7 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 			return nil, err
 		}
 		s.applyFSSandboxRuntimeOptions(params.Sandbox)
-		result, err := createDirectory(&params)
+		result, err := createDirectory(ctx, &params)
 		return result, mapFSRequestError(err)
 	case MethodFSGetMetadata:
 		var params FSGetMetadataParams
@@ -1967,7 +1967,7 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 			return nil, err
 		}
 		s.applyFSSandboxRuntimeOptions(params.Sandbox)
-		result, err := getMetadata(&params)
+		result, err := getMetadata(ctx, &params)
 		return result, mapFSRequestError(err)
 	case MethodFSGetMetadataBatch:
 		var params FSGetMetadataBatchParams
@@ -1980,7 +1980,7 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 			}
 		}
 		s.applyFSSandboxRuntimeOptions(params.Sandbox)
-		result, err := getMetadataBatch(&params)
+		result, err := getMetadataBatch(ctx, &params)
 		return result, mapFSRequestError(err)
 	case MethodFSWatchMissing:
 		var params FSWatchMissingParams
@@ -2007,7 +2007,7 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 			return nil, err
 		}
 		s.applyFSSandboxRuntimeOptions(params.Sandbox)
-		result, err := canonicalize(&params)
+		result, err := canonicalize(ctx, &params)
 		return result, mapFSRequestError(err)
 	case MethodFSReadDirectory:
 		var params FSReadDirectoryParams
@@ -2018,7 +2018,7 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 			return nil, err
 		}
 		s.applyFSSandboxRuntimeOptions(params.Sandbox)
-		result, err := readDirectory(&params)
+		result, err := readDirectory(ctx, &params)
 		return result, mapFSRequestError(err)
 	case MethodFSWalk:
 		var params FSWalkParams
@@ -2029,7 +2029,7 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 			return nil, err
 		}
 		s.applyFSSandboxRuntimeOptions(params.Sandbox)
-		result, err := walkPath(&params)
+		result, err := walkPath(ctx, &params)
 		return result, mapFSRequestError(err)
 	case MethodFSRemove:
 		var params FSRemoveParams
@@ -2040,7 +2040,7 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 			return nil, err
 		}
 		s.applyFSSandboxRuntimeOptions(params.Sandbox)
-		result, err := removePath(&params)
+		result, err := removePath(ctx, &params)
 		return result, mapFSRequestError(err)
 	case MethodFSCopy:
 		var params FSCopyParams
@@ -2054,7 +2054,7 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 		if err := validateWirePathURI(params.DestinationPath); err != nil {
 			return nil, requestError(-32602, "invalid params: destinationPath must be an absolute file URI: "+err.Error())
 		}
-		result, err := copyPath(&params)
+		result, err := copyPath(ctx, &params)
 		return result, mapFSRequestError(err)
 	case MethodHTTPRequest:
 		var params HTTPRequestParams
@@ -2951,11 +2951,14 @@ func prepareExecProcessWithTransparentTCP(params *ExecParams, allowedSymlinkedCo
 // options, including the startup-only Linux PID namespace policy (Rust #47989).
 func prepareExecProcessWithRuntimeOptions(params *ExecParams, opts execProcessRuntimeOptions) ([]string, string, sandbox.SandboxType, error) {
 	allowedSymlinkedCodexHome := opts.AllowedSymlinkedCodexHome
-	transparentTCP := opts.TransparentTCP
 	command := append([]string(nil), params.Argv...)
-	// Rust #61851: a network policy can request capture without the executor
-	// startup switch, and capture only exists for managed Linux sandboxes.
-	transparentTCP = transparentTCP || params.requestsTransparentTCP()
+	// Rust #61372/#61851 keep the capture request and the executor's trusted
+	// startup switch apart: only the request-derived flag gates the launch and
+	// forces managed-network enforcement, while the startup switch rides on the
+	// sandbox plan and takes effect only for a managed launch
+	// (sandboxing::Linux::prepare). Folding them together here rejected native
+	// launches and stamped --transparent-tcp onto unmanaged commands.
+	transparentTCP := params.requestsTransparentTCP()
 	if transparentTCP && (runtime.GOOS != "linux" || !hasJSONValue(params.Sandbox)) {
 		return nil, "", sandbox.SandboxTypeNone, requestError(-32602, "transparent TCP requires a managed Linux sandbox")
 	}
@@ -3028,7 +3031,7 @@ func prepareExecProcessWithRuntimeOptions(params *ExecParams, opts execProcessRu
 		UseLegacyLandlock:         sandboxContext.UseLegacyLandlock,
 		AllowNetworkForProxy:      enforceManagedNetwork,
 		ManagedNetworkJSON:        managedNetworkJSON,
-		TransparentTCP:            transparentTCP,
+		TransparentTCP:            opts.TransparentTCP,
 		LinuxSandboxPIDNamespace:  sandbox.LinuxSandboxPIDNamespace(opts.LinuxSandboxPIDNamespace),
 		AllowedSymlinkedCodexHome: allowedSymlinkedCodexHome,
 		Command:                   command,
@@ -3054,7 +3057,7 @@ func prepareExecProcessWithRuntimeOptions(params *ExecParams, opts execProcessRu
 			UseLegacyLandlock:    sandboxContext.UseLegacyLandlock,
 			AllowNetworkForProxy: enforceManagedNetwork,
 			ManagedNetworkJSON:   managedNetworkJSON,
-			TransparentTCP:       transparentTCP,
+			TransparentTCP:       opts.TransparentTCP,
 			PIDNamespace:         sandbox.LinuxSandboxPIDNamespace(sandboxContext.linuxSandboxPIDNamespace),
 		})
 		if wrapErr != nil {
@@ -3269,19 +3272,18 @@ func (s *Server) lookup(processID string) *processState {
 	return s.processes[processID]
 }
 
-func readFile(params *FSReadFileParams) (*FSReadFileResponse, error) {
-	return readFileContext(context.Background(), params)
+func readFile(ctx context.Context, params *FSReadFileParams) (*FSReadFileResponse, error) {
+	return readFileContext(ctx, params)
 }
 
 // readFileContext reads a regular file in bounded chunks and checks the request
 // context before each chunk. Rust #49696: a caller that goes away cancels the
 // read between chunks instead of waiting for the whole file, while the 512 MiB
 // limit, the symlink options, and the regular-file validation stay unchanged.
-// In-process callers keep the context-free readFile entry point, because Go's
-// helper APIs carry no cancellation context.
+// In-process callers without a request context pass context.Background().
 func readFileContext(ctx context.Context, params *FSReadFileParams) (*FSReadFileResponse, error) {
 	var sandboxed FSReadFileResponse
-	if ran, err := runSandboxedFSOperation(params.Sandbox, MethodFSReadFile, params, &sandboxed); ran {
+	if ran, err := runSandboxedFSOperation(ctx, params.Sandbox, MethodFSReadFile, params, &sandboxed); ran {
 		if err != nil {
 			return nil, err
 		}
@@ -3629,9 +3631,9 @@ func validateFileHandleID(handleID string) error {
 	return nil
 }
 
-func writeFile(params *FSWriteFileParams) (*FSWriteFileResponse, error) {
+func writeFile(ctx context.Context, params *FSWriteFileParams) (*FSWriteFileResponse, error) {
 	var sandboxed FSWriteFileResponse
-	if ran, err := runSandboxedFSOperation(params.Sandbox, MethodFSWriteFile, params, &sandboxed); ran {
+	if ran, err := runSandboxedFSOperation(ctx, params.Sandbox, MethodFSWriteFile, params, &sandboxed); ran {
 		if err != nil {
 			return nil, err
 		}
@@ -3658,9 +3660,9 @@ func writeFile(params *FSWriteFileParams) (*FSWriteFileResponse, error) {
 	return &FSWriteFileResponse{}, nil
 }
 
-func createDirectory(params *FSCreateDirectoryParams) (*FSCreateDirectoryResponse, error) {
+func createDirectory(ctx context.Context, params *FSCreateDirectoryParams) (*FSCreateDirectoryResponse, error) {
 	var sandboxed FSCreateDirectoryResponse
-	if ran, err := runSandboxedFSOperation(params.Sandbox, MethodFSCreateDirectory, params, &sandboxed); ran {
+	if ran, err := runSandboxedFSOperation(ctx, params.Sandbox, MethodFSCreateDirectory, params, &sandboxed); ran {
 		if err != nil {
 			return nil, err
 		}
@@ -3685,16 +3687,16 @@ func createDirectory(params *FSCreateDirectoryParams) (*FSCreateDirectoryRespons
 	return &FSCreateDirectoryResponse{}, nil
 }
 
-func getMetadata(params *FSGetMetadataParams) (*FSGetMetadataResponse, error) {
-	return getMetadataFollow(params, true)
+func getMetadata(ctx context.Context, params *FSGetMetadataParams) (*FSGetMetadataResponse, error) {
+	return getMetadataFollow(ctx, params, true)
 }
 
 // getMetadataFollow resolves one path's metadata with Rust's
 // GetMetadataOptions.follow_symlinks: when false the link itself is reported
 // (Rust #63266 local_file_system::get_metadata).
-func getMetadataFollow(params *FSGetMetadataParams, followSymlinks bool) (*FSGetMetadataResponse, error) {
+func getMetadataFollow(ctx context.Context, params *FSGetMetadataParams, followSymlinks bool) (*FSGetMetadataResponse, error) {
 	var sandboxed FSGetMetadataResponse
-	if ran, err := runSandboxedFSOperation(params.Sandbox, MethodFSGetMetadata, params, &sandboxed); ran {
+	if ran, err := runSandboxedFSOperation(ctx, params.Sandbox, MethodFSGetMetadata, params, &sandboxed); ran {
 		if err != nil {
 			return nil, err
 		}
@@ -3732,9 +3734,9 @@ func getMetadataFollow(params *FSGetMetadataParams, followSymlinks bool) (*FSGet
 	}, nil
 }
 
-func canonicalize(params *FSCanonicalizeParams) (*FSCanonicalizeResponse, error) {
+func canonicalize(ctx context.Context, params *FSCanonicalizeParams) (*FSCanonicalizeResponse, error) {
 	var sandboxed FSCanonicalizeResponse
-	if ran, err := runSandboxedFSOperation(params.Sandbox, MethodFSCanonicalize, params, &sandboxed); ran {
+	if ran, err := runSandboxedFSOperation(ctx, params.Sandbox, MethodFSCanonicalize, params, &sandboxed); ran {
 		if err != nil {
 			return nil, err
 		}
@@ -3755,9 +3757,9 @@ func canonicalize(params *FSCanonicalizeParams) (*FSCanonicalizeResponse, error)
 	return &FSCanonicalizeResponse{Path: uri.String()}, nil
 }
 
-func readDirectory(params *FSReadDirectoryParams) (*FSReadDirectoryResponse, error) {
+func readDirectory(ctx context.Context, params *FSReadDirectoryParams) (*FSReadDirectoryResponse, error) {
 	var sandboxed FSReadDirectoryResponse
-	if ran, err := runSandboxedFSOperation(params.Sandbox, MethodFSReadDirectory, params, &sandboxed); ran {
+	if ran, err := runSandboxedFSOperation(ctx, params.Sandbox, MethodFSReadDirectory, params, &sandboxed); ran {
 		if err != nil {
 			return nil, err
 		}
@@ -3786,9 +3788,9 @@ func readDirectory(params *FSReadDirectoryParams) (*FSReadDirectoryResponse, err
 	return &FSReadDirectoryResponse{Entries: out}, nil
 }
 
-func removePath(params *FSRemoveParams) (*FSRemoveResponse, error) {
+func removePath(ctx context.Context, params *FSRemoveParams) (*FSRemoveResponse, error) {
 	var sandboxed FSRemoveResponse
-	if ran, err := runSandboxedFSOperation(params.Sandbox, MethodFSRemove, params, &sandboxed); ran {
+	if ran, err := runSandboxedFSOperation(ctx, params.Sandbox, MethodFSRemove, params, &sandboxed); ran {
 		if err != nil {
 			return nil, err
 		}
@@ -3817,9 +3819,9 @@ func removePath(params *FSRemoveParams) (*FSRemoveResponse, error) {
 	return &FSRemoveResponse{}, nil
 }
 
-func copyPath(params *FSCopyParams) (*FSCopyResponse, error) {
+func copyPath(ctx context.Context, params *FSCopyParams) (*FSCopyResponse, error) {
 	var sandboxed FSCopyResponse
-	if ran, err := runSandboxedFSOperation(params.Sandbox, MethodFSCopy, params, &sandboxed); ran {
+	if ran, err := runSandboxedFSOperation(ctx, params.Sandbox, MethodFSCopy, params, &sandboxed); ran {
 		if err != nil {
 			return nil, err
 		}
@@ -3868,9 +3870,9 @@ func copyPath(params *FSCopyParams) (*FSCopyResponse, error) {
 	return &FSCopyResponse{}, nil
 }
 
-func walkPath(params *FSWalkParams) (*FSWalkResponse, error) {
+func walkPath(ctx context.Context, params *FSWalkParams) (*FSWalkResponse, error) {
 	var sandboxed FSWalkResponse
-	if ran, err := runSandboxedFSOperation(params.Sandbox, MethodFSWalk, params, &sandboxed); ran {
+	if ran, err := runSandboxedFSOperation(ctx, params.Sandbox, MethodFSWalk, params, &sandboxed); ran {
 		if err != nil {
 			return nil, err
 		}

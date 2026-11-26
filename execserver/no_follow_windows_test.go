@@ -3,6 +3,7 @@
 package execserver
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"os"
@@ -36,7 +37,7 @@ func TestDriveLetterPathsAreNotReparseRejectedAndJunctionsStayBlocked(t *testing
 	}
 
 	// Drive-letter opens must not be rejected as reparse points.
-	response, err := readFile(&FSReadFileParams{Path: existing, FollowSymlinks: &follow})
+	response, err := readFile(context.Background(), &FSReadFileParams{Path: existing, FollowSymlinks: &follow})
 	if err != nil {
 		t.Fatalf("readFile(drive-letter path %q) error = %v", existing, err)
 	}
@@ -63,14 +64,14 @@ func TestDriveLetterPathsAreNotReparseRejectedAndJunctionsStayBlocked(t *testing
 
 	// A junction must never be traversed: neither for reads, nor for opens, nor
 	// for creation of new files below it.
-	if _, err := readFile(&FSReadFileParams{Path: filepath.Join(junction, "existing.txt"), FollowSymlinks: &follow}); err == nil {
+	if _, err := readFile(context.Background(), &FSReadFileParams{Path: filepath.Join(junction, "existing.txt"), FollowSymlinks: &follow}); err == nil {
 		t.Fatal("readFile through a junction succeeded, want rejection")
 	}
 	server := NewServer()
 	if _, err := server.openFile(&FSOpenParams{HandleID: "junction", Path: filepath.Join(junction, "existing.txt"), FollowSymlinks: &follow}); err == nil {
 		t.Fatal("openFile through a junction succeeded, want rejection")
 	}
-	if _, err := writeFile(&FSWriteFileParams{
+	if _, err := writeFile(context.Background(), &FSWriteFileParams{
 		Path:           filepath.Join(junction, "blocked.txt"),
 		DataBase64:     base64.StdEncoding.EncodeToString([]byte("blocked")),
 		FollowSymlinks: &follow,
@@ -82,7 +83,7 @@ func TestDriveLetterPathsAreNotReparseRejectedAndJunctionsStayBlocked(t *testing
 	}
 
 	// The junction is itself a final-component reparse point.
-	if _, err := readFile(&FSReadFileParams{Path: junction, FollowSymlinks: &follow}); err == nil {
+	if _, err := readFile(context.Background(), &FSReadFileParams{Path: junction, FollowSymlinks: &follow}); err == nil {
 		t.Fatal("readFile(junction) succeeded, want rejection")
 	}
 }

@@ -1569,7 +1569,7 @@ func TestFilesystemRequiredSandboxRejectsReadWhenDisabled(t *testing.T) {
 	if prepErr != nil || !required {
 		t.Fatalf("expected restricted read: required=%v err=%v", required, prepErr)
 	}
-	response, err := readFile(params)
+	response, err := readFile(context.Background(), params)
 	var failure *requestFailure
 	if !errors.As(err, &failure) || failure.code != -32602 || !strings.Contains(failure.message, "filesystem sandbox cannot be enforced") {
 		t.Fatalf("disabled helper must reject restricted read, got response=%v err=%v", response, err)
@@ -1588,7 +1588,7 @@ func TestReadFileRejectsFilesOverRustLimit(t *testing.T) {
 		t.Fatalf("Truncate() error = %v", err)
 	}
 	_ = file.Close()
-	if _, err := readFile(&FSReadFileParams{Path: path}); err == nil || !strings.Contains(err.Error(), "file is too large") {
+	if _, err := readFile(context.Background(), &FSReadFileParams{Path: path}); err == nil || !strings.Contains(err.Error(), "file is too large") {
 		t.Fatalf("readFile(large) error = %v", err)
 	}
 }
@@ -1620,7 +1620,7 @@ func TestStdioFileSystemWalk(t *testing.T) {
 }
 
 func TestWalkPathEmptyDirectoryUsesEmptyArrays(t *testing.T) {
-	response, err := walkPath(&FSWalkParams{Path: t.TempDir(), Options: FSWalkOptions{MaxDepth: 4, MaxDirectories: 10, MaxEntries: 10}})
+	response, err := walkPath(context.Background(), &FSWalkParams{Path: t.TempDir(), Options: FSWalkOptions{MaxDepth: 4, MaxDirectories: 10, MaxEntries: 10}})
 	if err != nil {
 		t.Fatalf("walkPath() error = %v", err)
 	}
@@ -1647,7 +1647,7 @@ func TestWalkPathUsesRustBreadthFirstOrderAndRequiresBounds(t *testing.T) {
 			t.Fatalf("WriteFile(%s) error = %v", path, err)
 		}
 	}
-	response, err := walkPath(&FSWalkParams{Path: dir, Options: FSWalkOptions{MaxDepth: 4, MaxDirectories: 10, MaxEntries: 10}})
+	response, err := walkPath(context.Background(), &FSWalkParams{Path: dir, Options: FSWalkOptions{MaxDepth: 4, MaxDirectories: 10, MaxEntries: 10}})
 	if err != nil {
 		t.Fatalf("walkPath() error = %v", err)
 	}
@@ -1664,14 +1664,14 @@ func TestWalkPathUsesRustBreadthFirstOrderAndRequiresBounds(t *testing.T) {
 			t.Fatalf("walk entry %d = %#v, want path %q", i, response.Entries[i], want)
 		}
 	}
-	if _, err := walkPath(&FSWalkParams{Path: dir}); err == nil || err.Error() != "filesystem walk limits must be greater than zero" {
+	if _, err := walkPath(context.Background(), &FSWalkParams{Path: dir}); err == nil || err.Error() != "filesystem walk limits must be greater than zero" {
 		t.Fatalf("unbounded walk error = %v", err)
 	}
 }
 
 func TestCanonicalizeMissingPathFailsLikeRust(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing")
-	if _, err := canonicalize(&FSCanonicalizeParams{Path: missing}); err == nil {
+	if _, err := canonicalize(context.Background(), &FSCanonicalizeParams{Path: missing}); err == nil {
 		t.Fatal("canonicalize(missing) error = nil")
 	}
 }
@@ -1938,7 +1938,7 @@ func TestCopyPathPreservesSymlink(t *testing.T) {
 	}
 
 	destination := filepath.Join(root, "dst")
-	if _, err := copyPath(&FSCopyParams{SourcePath: source, DestinationPath: destination, Recursive: true}); err != nil {
+	if _, err := copyPath(context.Background(), &FSCopyParams{SourcePath: source, DestinationPath: destination, Recursive: true}); err != nil {
 		t.Fatalf("copyPath(directory) error = %v", err)
 	}
 	copiedLink := filepath.Join(destination, "target-link")
@@ -1958,7 +1958,7 @@ func TestCopyPathPreservesSymlink(t *testing.T) {
 	}
 
 	singleLink := filepath.Join(root, "single-link")
-	if _, err := copyPath(&FSCopyParams{SourcePath: filepath.Join(source, "target-link"), DestinationPath: singleLink}); err != nil {
+	if _, err := copyPath(context.Background(), &FSCopyParams{SourcePath: filepath.Join(source, "target-link"), DestinationPath: singleLink}); err != nil {
 		t.Fatalf("copyPath(symlink) error = %v", err)
 	}
 	info, err = os.Lstat(singleLink)
@@ -1978,7 +1978,7 @@ func TestGetMetadataIncludesCreatedAtOnWindows(t *testing.T) {
 	if err := os.WriteFile(path, []byte("created"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	metadata, err := getMetadata(&FSGetMetadataParams{Path: path})
+	metadata, err := getMetadata(context.Background(), &FSGetMetadataParams{Path: path})
 	if err != nil {
 		t.Fatalf("getMetadata() error = %v", err)
 	}
@@ -2029,7 +2029,7 @@ func TestWriteFileNoFollowRejectsSymlinkTarget(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	disabled := false
-	_, err := writeFile(&FSWriteFileParams{
+	_, err := writeFile(context.Background(), &FSWriteFileParams{
 		Path:           filepath.Join(dir, "linked", "secret.txt"),
 		DataBase64:     base64.StdEncoding.EncodeToString([]byte("evil")),
 		FollowSymlinks: &disabled,
@@ -2051,19 +2051,19 @@ func TestRemovePathDefaultsRecursiveAndForce(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "nested", "file.txt"), []byte("data"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	if _, err := removePath(&FSRemoveParams{Path: directory}); err != nil {
+	if _, err := removePath(context.Background(), &FSRemoveParams{Path: directory}); err != nil {
 		t.Fatalf("removePath(default recursive) error = %v", err)
 	}
 	if _, err := os.Stat(directory); !os.IsNotExist(err) {
 		t.Fatalf("Stat(directory) error = %v, want not exist", err)
 	}
-	if _, err := removePath(&FSRemoveParams{Path: filepath.Join(root, "missing")}); err != nil {
+	if _, err := removePath(context.Background(), &FSRemoveParams{Path: filepath.Join(root, "missing")}); err != nil {
 		t.Fatalf("removePath(default force missing) error = %v", err)
 	}
 }
 
 func TestWriteFileInvalidBase64Message(t *testing.T) {
-	_, err := writeFile(&FSWriteFileParams{Path: filepath.Join(t.TempDir(), "bad.txt"), DataBase64: "not base64"})
+	_, err := writeFile(context.Background(), &FSWriteFileParams{Path: filepath.Join(t.TempDir(), "bad.txt"), DataBase64: "not base64"})
 	if err == nil || !strings.Contains(err.Error(), "fs/writeFile requires valid base64 dataBase64") {
 		t.Fatalf("writeFile() error = %v", err)
 	}

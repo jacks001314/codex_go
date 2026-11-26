@@ -53,7 +53,7 @@ func TestFSHelperSandboxCommandRejectsForeignPolicyCWDLikeRust(t *testing.T) {
 	}
 	raw := json.RawMessage(`{"type":"managed","file_system":{"type":"restricted","entries":[{"path":{"type":"special","value":{"kind":"project_roots"}},"access":"write"}]},"network":"enabled"}`)
 	ctx := &FileSystemSandboxContext{Permissions: raw, CWD: foreign}
-	_, _, err := fsSandboxCommand(ctx, nil, "", foreign, nil, "")
+	_, _, _, err := fsSandboxCommand(ctx, nil, "", foreign, nil, "")
 	if err == nil {
 		t.Fatal("sandbox command accepted a foreign policy cwd")
 	}

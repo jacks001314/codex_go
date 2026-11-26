@@ -1,6 +1,7 @@
 package execserver
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -30,7 +31,7 @@ func TestFilesystemRequiredSandboxRejectsWriteWithoutMutation(t *testing.T) {
 		t.Fatalf("required=%v err=%v", required, err)
 	}
 	for _, target := range []string{existing, missing} {
-		_, err := writeFile(&FSWriteFileParams{Path: target, DataBase64: base64.StdEncoding.EncodeToString([]byte("changed")), Sandbox: ctx})
+		_, err := writeFile(context.Background(), &FSWriteFileParams{Path: target, DataBase64: base64.StdEncoding.EncodeToString([]byte("changed")), Sandbox: ctx})
 		var failure *requestFailure
 		if !errors.As(err, &failure) || failure.code != -32602 || !strings.Contains(failure.message, "filesystem sandbox cannot be enforced") {
 			t.Fatalf("write %s: %v", target, err)
@@ -46,7 +47,7 @@ func TestFilesystemRequiredSandboxRejectsWriteWithoutMutation(t *testing.T) {
 	// A fully unrestricted filesystem does not need a helper, even when the
 	// Windows sandbox is disabled.
 	ctx.Permissions = json.RawMessage(`{"type":"managed","file_system":{"type":"unrestricted"},"network":"restricted"}`)
-	if _, err := writeFile(&FSWriteFileParams{Path: missing, DataBase64: base64.StdEncoding.EncodeToString([]byte("allowed")), Sandbox: ctx}); err != nil {
+	if _, err := writeFile(context.Background(), &FSWriteFileParams{Path: missing, DataBase64: base64.StdEncoding.EncodeToString([]byte("allowed")), Sandbox: ctx}); err != nil {
 		t.Fatal(err)
 	}
 	contents, err = os.ReadFile(missing)

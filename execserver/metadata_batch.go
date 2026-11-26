@@ -1,6 +1,7 @@
 package execserver
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 )
@@ -101,7 +102,7 @@ func metadataBatchFits(paths []string) bool {
 // sandboxed helper handles the whole batch in a single invocation, and the
 // unsandboxed path resolves each entry in order (Rust
 // FileSystemHandler::get_metadata_batch).
-func getMetadataBatch(params *FSGetMetadataBatchParams) (*FSGetMetadataBatchResponse, error) {
+func getMetadataBatch(ctx context.Context, params *FSGetMetadataBatchParams) (*FSGetMetadataBatchResponse, error) {
 	if params == nil {
 		return nil, errors.New("fs/getMetadataBatch params are required")
 	}
@@ -109,7 +110,7 @@ func getMetadataBatch(params *FSGetMetadataBatchParams) (*FSGetMetadataBatchResp
 		return nil, requestError(-32600, "invalid request: metadata batch exceeds size limit")
 	}
 	var sandboxed FSGetMetadataBatchResponse
-	if ran, err := runSandboxedFSOperation(params.Sandbox, MethodFSGetMetadataBatch, params, &sandboxed); ran {
+	if ran, err := runSandboxedFSOperation(ctx, params.Sandbox, MethodFSGetMetadataBatch, params, &sandboxed); ran {
 		if err != nil {
 			return nil, err
 		}
@@ -122,7 +123,7 @@ func getMetadataBatch(params *FSGetMetadataBatchParams) (*FSGetMetadataBatchResp
 	results := make([]FSMetadataBatchResult, 0, len(params.Paths))
 	for _, path := range params.Paths {
 		// Each entry reports its own failure instead of failing the batch.
-		metadata, err := getMetadataFollow(&FSGetMetadataParams{Path: path}, followSymlinks)
+		metadata, err := getMetadataFollow(ctx, &FSGetMetadataParams{Path: path}, followSymlinks)
 		if err != nil {
 			failure := fsOperationFailure(err)
 			results = append(results, FSMetadataBatchResult{

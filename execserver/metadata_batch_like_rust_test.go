@@ -65,7 +65,7 @@ func TestFSGetMetadataBatchPreservesOrderAndErrorsLikeRust(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	missingPath := filepath.Join(dir, "missing.txt")
-	response, err := getMetadataBatch(&FSGetMetadataBatchParams{Paths: []string{
+	response, err := getMetadataBatch(context.Background(), &FSGetMetadataBatchParams{Paths: []string{
 		fileURIForMetadataBatchTest(filePath),
 		fileURIForMetadataBatchTest(missingPath),
 		fileURIForMetadataBatchTest(dir),
@@ -102,7 +102,7 @@ func TestFSGetMetadataBatchFollowSymlinksLikeRust(t *testing.T) {
 		t.Fatalf("Symlink() error = %v", err)
 	}
 	follow := false
-	response, err := getMetadataBatch(&FSGetMetadataBatchParams{
+	response, err := getMetadataBatch(context.Background(), &FSGetMetadataBatchParams{
 		Paths:          []string{fileURIForMetadataBatchTest(link)},
 		FollowSymlinks: &follow,
 	})
@@ -112,7 +112,7 @@ func TestFSGetMetadataBatchFollowSymlinksLikeRust(t *testing.T) {
 	if metadata := response.Results[0].Metadata; metadata == nil || !metadata.IsSymlink || metadata.IsFile {
 		t.Fatalf("no-follow result = %+v", response.Results[0])
 	}
-	response, err = getMetadataBatch(&FSGetMetadataBatchParams{
+	response, err = getMetadataBatch(context.Background(), &FSGetMetadataBatchParams{
 		Paths: []string{fileURIForMetadataBatchTest(link)},
 	})
 	if err != nil {

@@ -3,6 +3,7 @@ package execserver
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -107,7 +108,7 @@ func runDirectFSHelperRequest(request *fsHelperRequest) (json.RawMessage, error)
 			return nil, err
 		}
 		params.Sandbox = nil
-		response, err := readFile(&params)
+		response, err := readFile(context.Background(), &params)
 		return marshalResponse(response, err)
 	case MethodFSWriteFile:
 		var params FSWriteFileParams
@@ -115,7 +116,7 @@ func runDirectFSHelperRequest(request *fsHelperRequest) (json.RawMessage, error)
 			return nil, err
 		}
 		params.Sandbox = nil
-		response, err := writeFile(&params)
+		response, err := writeFile(context.Background(), &params)
 		return marshalResponse(response, err)
 	case MethodFSCreateDirectory:
 		var params FSCreateDirectoryParams
@@ -123,7 +124,7 @@ func runDirectFSHelperRequest(request *fsHelperRequest) (json.RawMessage, error)
 			return nil, err
 		}
 		params.Sandbox = nil
-		response, err := createDirectory(&params)
+		response, err := createDirectory(context.Background(), &params)
 		return marshalResponse(response, err)
 	case MethodFSGetMetadata:
 		var params FSGetMetadataParams
@@ -131,7 +132,7 @@ func runDirectFSHelperRequest(request *fsHelperRequest) (json.RawMessage, error)
 			return nil, err
 		}
 		params.Sandbox = nil
-		response, err := getMetadata(&params)
+		response, err := getMetadata(context.Background(), &params)
 		return marshalResponse(response, err)
 	case MethodFSGetMetadataBatch:
 		var params FSGetMetadataBatchParams
@@ -141,7 +142,7 @@ func runDirectFSHelperRequest(request *fsHelperRequest) (json.RawMessage, error)
 		// The helper runs inside the sandbox, so the batch resolves without
 		// another helper launch (Rust #63266 run_direct_request).
 		params.Sandbox = nil
-		response, err := getMetadataBatch(&params)
+		response, err := getMetadataBatch(context.Background(), &params)
 		return marshalResponse(response, err)
 	case MethodFSCanonicalize:
 		var params FSCanonicalizeParams
@@ -149,7 +150,7 @@ func runDirectFSHelperRequest(request *fsHelperRequest) (json.RawMessage, error)
 			return nil, err
 		}
 		params.Sandbox = nil
-		response, err := canonicalize(&params)
+		response, err := canonicalize(context.Background(), &params)
 		return marshalResponse(response, err)
 	case MethodFSReadDirectory:
 		var params FSReadDirectoryParams
@@ -157,7 +158,7 @@ func runDirectFSHelperRequest(request *fsHelperRequest) (json.RawMessage, error)
 			return nil, err
 		}
 		params.Sandbox = nil
-		response, err := readDirectory(&params)
+		response, err := readDirectory(context.Background(), &params)
 		return marshalResponse(response, err)
 	case MethodFSWalk:
 		var params FSWalkParams
@@ -165,7 +166,7 @@ func runDirectFSHelperRequest(request *fsHelperRequest) (json.RawMessage, error)
 			return nil, err
 		}
 		params.Sandbox = nil
-		response, err := walkPath(&params)
+		response, err := walkPath(context.Background(), &params)
 		return marshalResponse(response, err)
 	case MethodFSRemove:
 		var params FSRemoveParams
@@ -173,7 +174,7 @@ func runDirectFSHelperRequest(request *fsHelperRequest) (json.RawMessage, error)
 			return nil, err
 		}
 		params.Sandbox = nil
-		response, err := removePath(&params)
+		response, err := removePath(context.Background(), &params)
 		return marshalResponse(response, err)
 	case MethodFSCopy:
 		var params FSCopyParams
@@ -181,17 +182,21 @@ func runDirectFSHelperRequest(request *fsHelperRequest) (json.RawMessage, error)
 			return nil, err
 		}
 		params.Sandbox = nil
-		response, err := copyPath(&params)
+		response, err := copyPath(context.Background(), &params)
 		return marshalResponse(response, err)
 	default:
 		return nil, requestError(-32602, fmt.Sprintf("unknown fs helper operation %s", request.Operation))
 	}
 }
 
-func runSandboxedFSOperation(ctx *FileSystemSandboxContext, operation string, params any, target any) (bool, error) {
+func runSandboxedFSOperation(traceCtx context.Context, ctx *FileSystemSandboxContext, operation string, params any, target any) (bool, error) {
 	required, profile, profileJSON, cwd, workspaceRoots, err := prepareFSSandboxForOperation(ctx, operation)
 	if err != nil || !required {
 		return required, err
+	}
+	traceCtx, span := startExecServerSpan(traceCtx, "fs.sandbox_execute", map[string]string{"operation": operation})
+	if span != nil {
+		defer span.End()
 	}
 	paramsJSON, err := json.Marshal(params)
 	if err != nil {
@@ -214,10 +219,14 @@ func runSandboxedFSOperation(ctx *FileSystemSandboxContext, operation string, pa
 	if ctx != nil {
 		allowedSymlinkedCodexHome = ctx.allowedSymlinkedCodexHome
 	}
-	command, env, err := fsSandboxCommand(ctx, profile, profileJSON, cwd, workspaceRoots, allowedSymlinkedCodexHome)
+	command, env, plan, err := fsSandboxCommand(ctx, profile, profileJSON, cwd, workspaceRoots, allowedSymlinkedCodexHome)
 	if err != nil {
 		return true, err
 	}
+	// Rust #61276 records the helper policy's entry count during launch
+	// preparation, after materializing project roots and before the minimal and
+	// runtime read grants are appended (sandboxing::launch::PreparedLaunchPolicy).
+	setExecServerSpanAttribute(traceCtx, "permission_entries", int64(plan.PermissionEntryCount))
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Dir = fsHelperLaunchRoot(cwd)
 	cmd.Env = fsHelperLauncherEnv(env)
@@ -411,29 +420,29 @@ func fsPermissionsDependOnCWD(raw json.RawMessage) bool {
 	return false
 }
 
-func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.PermissionProfile, profileJSON string, cwd string, workspaceRoots []string, allowedSymlinkedCodexHome string) ([]string, map[string]string, error) {
+func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.PermissionProfile, profileJSON string, cwd string, workspaceRoots []string, allowedSymlinkedCodexHome string) ([]string, map[string]string, *sandbox.CommandRunPlan, error) {
 	executable, err := os.Executable()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	executable, err = filepath.Abs(executable)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	// Rust #61276 rejects a policy working directory that does not exist on
 	// this executor before any sandbox preparation runs; the helper must never
 	// receive a path it cannot anchor permissions to.
 	if err := validateFSHelperPolicyCWD(runtime.GOOS, cwd); err != nil {
-		return nil, nil, requestError(-32602, err.Error())
+		return nil, nil, nil, requestError(-32602, err.Error())
 	}
 	env := fsHelperEnvironment()
 	helperCommand := fsHelperCommandForExecutable(executable)
 	plan, err := fsSandboxRunPlan(ctx, profile, profileJSON, cwd, workspaceRoots, allowedSymlinkedCodexHome, executable, helperCommand)
 	if err != nil {
-		return nil, nil, requestError(-32602, fmt.Sprintf("failed to prepare fs sandbox: %v", err))
+		return nil, nil, nil, requestError(-32602, fmt.Sprintf("failed to prepare fs sandbox: %v", err))
 	}
 	if err := plan.UnsupportedError(); err != nil {
-		return nil, nil, requestError(-32602, fmt.Sprintf("failed to prepare fs sandbox: %v", err))
+		return nil, nil, nil, requestError(-32602, fmt.Sprintf("failed to prepare fs sandbox: %v", err))
 	}
 	runSandboxIntegrityChecks(plan, string(ctx.SandboxOverride), cwd, plan.Command, env)
 	// Rust #61276: a filesystem helper must never run outside a sandbox. A
@@ -441,20 +450,20 @@ func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 	// asked for, so it reports SandboxUnavailable instead of running the helper
 	// unconfined.
 	if fsHelperWindowsSandboxUnavailable(runtime.GOOS, ctx, cwd) {
-		return nil, nil, requestError(-32602, "filesystem sandbox cannot be enforced on this executor")
+		return nil, nil, nil, requestError(-32602, "filesystem sandbox cannot be enforced on this executor")
 	}
 	if runtime.GOOS != "windows" {
-		return plan.Command, env, nil
+		return plan.Command, env, plan, nil
 	}
 	selection, err := selectWindowsSandboxForExecutor(ctx.WindowsSandboxLevel, cwd)
 	if err != nil {
-		return nil, nil, requestError(-32602, fmt.Sprintf("failed to prepare fs sandbox: %v", err))
+		return nil, nil, nil, requestError(-32602, fmt.Sprintf("failed to prepare fs sandbox: %v", err))
 	}
 	if selection == WindowsSandboxSelectionMXC {
-		return nil, nil, requestError(-32602, "failed to prepare fs sandbox: native MXC is unavailable on this executor")
+		return nil, nil, nil, requestError(-32602, "failed to prepare fs sandbox: native MXC is unavailable on this executor")
 	}
 	if selection == WindowsSandboxSelectionDisabled {
-		return nil, nil, requestError(-32602, "filesystem sandbox cannot be enforced on this executor")
+		return nil, nil, nil, requestError(-32602, "filesystem sandbox cannot be enforced on this executor")
 	}
 	level := selection.restrictedTokenLevel()
 	args, err := windowssandbox.CreateWindowsSandboxCommandArgsForPermissionProfile(windowssandbox.WindowsSandboxCommandArgsRequest{
@@ -475,12 +484,12 @@ func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 		StdinOpen: true,
 	})
 	if err != nil {
-		return nil, nil, requestError(-32602, fmt.Sprintf("failed to prepare fs sandbox: %v", err))
+		return nil, nil, nil, requestError(-32602, fmt.Sprintf("failed to prepare fs sandbox: %v", err))
 	}
 	// The wrapper runs in a separate process and must inherit the parent's
 	// runtime selection, not a shell-supplied override (Rust #45550).
 	windowssandbox.ApplyWrapperRuntimeEnv(env)
-	return append([]string{executable}, args...), env, nil
+	return append([]string{executable}, args...), env, plan, nil
 }
 
 // validateFSHelperPolicyCWD rejects a policy working directory whose absolute

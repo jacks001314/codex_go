@@ -3,6 +3,7 @@
 package execserver
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -47,7 +48,7 @@ func TestFSHelperRunsUnderWindowsRestrictedTokenLikeRust(t *testing.T) {
 	// A write-restricted policy forces the sandboxed helper, so this write proves
 	// the restricted-token wrapper executed rather than only being generated.
 	insideWrite := filepath.Join(workspace, "written.txt")
-	required, err := runSandboxedFSOperation(ctx, MethodFSWriteFile, FSWriteFileParams{
+	required, err := runSandboxedFSOperation(context.Background(), ctx, MethodFSWriteFile, FSWriteFileParams{
 		Path:       insideWrite,
 		DataBase64: base64.StdEncoding.EncodeToString([]byte("payload")),
 	}, &FSWriteFileResponse{})
@@ -67,7 +68,7 @@ func TestFSHelperRunsUnderWindowsRestrictedTokenLikeRust(t *testing.T) {
 	// Rust #58195 omits the sandbox context for a read the policy does not
 	// restrict, so this read keeps the direct path while the write above ran
 	// inside the restricted token.
-	if required, err := runSandboxedFSOperation(ctx, MethodFSReadFile, FSReadFileParams{Path: insidePath}, &FSReadFileResponse{}); err != nil || required {
+	if required, err := runSandboxedFSOperation(context.Background(), ctx, MethodFSReadFile, FSReadFileParams{Path: insidePath}, &FSReadFileResponse{}); err != nil || required {
 		t.Fatalf("unrestricted read required=%v err=%v, want the direct path", required, err)
 	}
 	if data, err := os.ReadFile(insidePath); err != nil || string(data) != "inside" {
@@ -75,7 +76,7 @@ func TestFSHelperRunsUnderWindowsRestrictedTokenLikeRust(t *testing.T) {
 	}
 
 	outsideWrite := filepath.Join(outside, "escape.txt")
-	_, err = runSandboxedFSOperation(ctx, MethodFSWriteFile, FSWriteFileParams{
+	_, err = runSandboxedFSOperation(context.Background(), ctx, MethodFSWriteFile, FSWriteFileParams{
 		Path:       outsideWrite,
 		DataBase64: base64.StdEncoding.EncodeToString([]byte("escape")),
 	}, &FSWriteFileResponse{})

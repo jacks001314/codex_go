@@ -93,6 +93,11 @@ type CommandRunPlan struct {
 	LinuxSandboxPIDNamespace linuxsandbox.LinuxSandboxPIDNamespace
 	RequiresPlatformSandbox  bool
 	UnsupportedReason        string
+	// PermissionEntryCount is the helper policy's entry count measured the
+	// way Rust sandboxing::launch::PreparedLaunchPolicy::resolve records
+	// permission_entries: after materializing project roots and before the
+	// minimal and runtime read grants are appended.
+	PermissionEntryCount int
 }
 
 // SandboxState is the opaque sandbox policy an MCP host forwards from tool-call
@@ -280,9 +285,6 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 			plan.CodexLinuxSandboxExe = cleanRunPath(sandboxState.CodexLinuxSandboxExe)
 		}
 	}
-	if err := applySandboxStateOverrides(plan, req); err != nil {
-		return nil, err
-	}
 	if req.WorkspaceRoots != nil && plan.PermissionProfile != nil && !plan.PermissionProfile.Disabled {
 		materialized, materializeErr := MaterializePermissionProfileWorkspaceRoots(plan.PermissionProfile, plan.CWD, req.WorkspaceRoots)
 		if materializeErr != nil {
@@ -294,6 +296,12 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 		}
 		plan.PermissionProfile = materialized
 		plan.PermissionProfileJSON = profileJSON
+		plan.PermissionEntryCount = permissionEntryCount(profileJSON)
+	}
+	// Rust adds the runtime read grants after measuring permission_entries, so
+	// the measurement stays on the pre-grant policy.
+	if err := applySandboxStateOverrides(plan, req); err != nil {
+		return nil, err
 	}
 	if !platformSupportsPermissionProfileSandbox() && plan.PermissionProfile != nil && !plan.PermissionProfile.Disabled && !permissionUnsupportedAdded {
 		unsupported = append(unsupported, "sandbox state")
@@ -478,6 +486,21 @@ func parseSandboxStateJSON(raw string) (*SandboxState, error) {
 		return nil, fmt.Errorf("%w: sandbox state cwd is not native to this host", ErrInvalidSandboxRunRequest)
 	}
 	return &state, nil
+}
+
+// permissionEntryCount counts the file system entries of a serialized runtime
+// permission profile, the Go equivalent of
+// FileSystemSandboxPolicy::entries.len() at the Rust recording point.
+func permissionEntryCount(profileJSON string) int {
+	var profile struct {
+		FileSystem struct {
+			Entries []json.RawMessage `json:"entries"`
+		} `json:"file_system"`
+	}
+	if err := json.Unmarshal([]byte(profileJSON), &profile); err != nil {
+		return 0
+	}
+	return len(profile.FileSystem.Entries)
 }
 
 func applySandboxStateOverrides(plan *CommandRunPlan, req *CommandRunRequest) error {

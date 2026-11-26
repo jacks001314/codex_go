@@ -5,6 +5,8 @@ package execserver
 import (
 	"encoding/json"
 	"testing"
+
+	"codex_go/sandbox"
 )
 
 // TestPrepareExecProcessTransparentTCPLikeRust pins Rust #61372's executor
@@ -50,6 +52,23 @@ func TestPrepareExecProcessTransparentTCPLikeRust(t *testing.T) {
 	}
 	if containsExecServerArg(plain, "--transparent-tcp") {
 		t.Fatalf("unmanaged command unexpectedly carries --transparent-tcp: %#v", plain)
+	}
+	// Rust #61372 keeps the startup switch out of the launch gate: a native
+	// launch on an executor with capture enabled stays native instead of
+	// failing the managed-sandbox check.
+	native := *managed
+	native.Sandbox = nil
+	native.EnforceManagedNetwork = false
+	native.ManagedNetwork = nil
+	plainNative, _, nativeType, err := prepareExecProcessWithTransparentTCP(&native, "", true)
+	if err != nil {
+		t.Fatalf("prepareExecProcessWithTransparentTCP(native) error = %v", err)
+	}
+	if nativeType != sandbox.SandboxTypeNone {
+		t.Fatalf("native launch sandbox type = %v, want none", nativeType)
+	}
+	if len(plainNative) != 1 || plainNative[0] != "true" {
+		t.Fatalf("native command = %#v, want the bare argv", plainNative)
 	}
 }
 
