@@ -49412,10 +49412,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "blocked_precondition",
+   "status": "complete",
    "evidence": [
-    "Guardian v3 housekeeping runtime (lifecycle-managed tasks) is not ported; no housekeeper to manage.",
-    "plan: update/plan_2026_11_16.md batch 74"
+    "installGuardianV3Host registers thread-ready, turn-ended and thread-stopped callbacks on the thread manager, so the runtime decides which threads are roots, opens their board and history reader, supplies the routing sampler and wakes or stops the worker.",
+    "agentboard.GuardianCaptureQueue coalesces user-message and turn-end wakes into one routing worker per root, reads originals from the durable cursor in order, and the housekeeper runs one tool-free model request bound to a batch timeout that defaults to 90s through config.GuardianV3HousekeeperBatchTimeout.",
+    "StopRoot and Close cancel and join the worker; the per-root stop has a five-second bound and lets accepted evidence appends finish before the store closes, and the stored start position resumes at the durable tail for a resumed root.",
+    "Malformed routing answers do not echo the model content: TestGuardianRoutingErrorsDoNotEchoModelContentLikeRust proves both the parser and the decider keep the answer out of the error, and TestGuardianV3Host* cover route-on-wake-then-join, failure recording, thread lifecycle, the feature gate and the start position. Verified on Windows with go test ./agentboard and go test ./appserver -run GuardianV3."
    ]
   },
   {
@@ -49425,10 +49427,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "blocked_precondition",
+   "status": "complete",
    "evidence": [
-    "Depends on #61795: the app-server does not host a Guardian v3 housekeeper yet.",
-    "plan: update/plan_2026_11_16.md batch 74"
+    "The app server hosts the housekeeper per root: appserver/guardian_v3_lifecycle.go wires the thread lifecycle into GuardianV3Host, builds each root's board (NewGuardianLocalBoard), evidence reader, start position, housekeeper budget, decider and Guardian inference sampler, and closes the host before the stores it reads are closed.",
+    "Child threads map to their tree root, the feature gate is features.Enabled(cfg.FeatureSettings(), \"guardianv3\"), and a resumed root starts at its durable tail. TestGuardianV3HostFollowsThreadLifecycleLikeRust and TestGuardianV3HostStaysOffWithoutFeatureLikeRust pass, along with the rest of go test ./appserver -run GuardianV3."
    ]
   },
   {
@@ -49440,8 +49442,8 @@
    ],
    "status": "blocked_precondition",
    "evidence": [
-    "Depends on #61795: the dedicated Guardian v3 housekeeper inference client has no host.",
-    "plan: update/plan_2026_11_16.md batch 74"
+    "Guardian inference provider selection exists (appserver/guardian_inference.go, Rust #62588 parity), and the housekeeper reaches it through guardianV3ModelSampler.",
+    "Still missing (Rust #61798): a dedicated housekeeper client that keeps one tool-free conversation across routing batches with transient retry, Retry-After exhaustion, HTTP fallback, credential renewal and command-token rotation."
    ]
   },
   {
@@ -49453,8 +49455,8 @@
    ],
    "status": "blocked_precondition",
    "evidence": [
-    "Depends on #61795: housekeeping sampler routing follows the missing housekeeper.",
-    "plan: update/plan_2026_11_16.md batch 74"
+    "Go routes housekeeping through the Guardian inference sampler rather than a separate review-session thread, which is the shape #61799 asks for.",
+    "Still missing (Rust #61799): the retained batch history and whole-batch eviction under context-window pressure, committing sampled history only after all board writes succeed and the cursor advances, and cancelling routing when the account changes while letting accepted appends finish."
    ]
   },
   {
