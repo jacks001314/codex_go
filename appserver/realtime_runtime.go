@@ -27,6 +27,10 @@ import (
 
 func (r *RuntimeRouter) startRealtimeConversationAsync(params realtime.StartParams) {
 	r.enqueueRealtimeOperation(params.ThreadID, func(ctx context.Context) {
+		// Rust #62288 restores durable speech before the new transport can
+		// stream, so frames captured right after a reconnect cannot be cleared
+		// by the recovery itself.
+		r.recoverRealtimeUnconsumedFrames(params.ThreadID, realtimeRequestedSessionID(params))
 		options, err := r.realtimeStartOptions(&params)
 		if err == nil {
 			if options == nil {
@@ -44,9 +48,6 @@ func (r *RuntimeRouter) startRealtimeConversationAsync(params realtime.StartPara
 				// Rust #62299: a reattached call restores speech that a previous
 				// call saved at hangup, before any newly captured speech.
 				r.restoreRealtimeSessionEndSpeech(params.ThreadID)
-				// Rust #62288: durable frames the previous transport recorded but no
-				// input consumed stay available ahead of newly captured speech.
-				r.recoverRealtimeUnconsumedFrames(params.ThreadID)
 				r.notifyRealtime(notifications)
 				return
 			}
@@ -976,22 +977,34 @@ func (r *RuntimeRouter) restoreRealtimeSessionEndSpeech(threadID string) {
 	r.requireRealtime().SeedRealtimeSessionEndSpeech(threadID, text, observedAt)
 }
 
+// realtimeRequestedSessionID is the call a start request reattaches to. A start
+// without a client session id (or an existing-call transport id) begins a fresh
+// call that has no persisted speech to replay.
+func realtimeRequestedSessionID(params realtime.StartParams) string {
+	if params.RealtimeSessionID != nil {
+		if id := strings.TrimSpace(*params.RealtimeSessionID); id != "" {
+			return id
+		}
+	}
+	if params.Transport != nil && params.Transport.Type == "existingCall" {
+		return strings.TrimSpace(params.Transport.CallID)
+	}
+	return ""
+}
+
 // recoverRealtimeUnconsumedFrames restores durable speech that a previous
 // transport recorded and no input consumed (Rust #62288 V3 reconnect ordering).
 // Only frame history replays; a V2 call keeps its own bounded transcript tail.
-func (r *RuntimeRouter) recoverRealtimeUnconsumedFrames(threadID string) {
-	if r == nil || r.services.StateRuntime == nil || r.services.Realtime == nil {
+func (r *RuntimeRouter) recoverRealtimeUnconsumedFrames(threadID string, sessionID string) {
+	if r == nil || r.services.StateRuntime == nil {
 		return
 	}
 	threadID = strings.TrimSpace(threadID)
-	if threadID == "" {
+	sessionID = strings.TrimSpace(sessionID)
+	if threadID == "" || sessionID == "" {
 		return
 	}
 	realtimeManager := r.requireRealtime()
-	sessionID := strings.TrimSpace(realtimeManager.ActiveRealtimeSessionID(threadID))
-	if sessionID == "" {
-		return
-	}
 	ctx := context.Background()
 	persisted, err := r.services.StateRuntime.LoadThreadRealtimeSession(ctx, threadID, sessionID)
 	if err != nil || persisted == nil || len(persisted.Items) == 0 {

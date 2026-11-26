@@ -104,6 +104,26 @@ func TestRealtimeTranscriptSealFailureRequiresRecoveryLikeRust(t *testing.T) {
 	}
 }
 
+func TestRealtimeStartRequestNamesTheSessionToRecoverLikeRust(t *testing.T) {
+	sessionID := "voice-1"
+	cases := []struct {
+		name   string
+		params realtime.StartParams
+		want   string
+	}{
+		{name: "explicit-session", params: realtime.StartParams{RealtimeSessionID: &sessionID}, want: "voice-1"},
+		{name: "existing-call", params: realtime.StartParams{Transport: &realtime.StartTransport{Type: "existingCall", CallID: "call-9"}}, want: "call-9"},
+		{name: "fresh-call", params: realtime.StartParams{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := realtimeRequestedSessionID(tc.params); got != tc.want {
+				t.Fatalf("requested session = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRealtimeReconnectReplaysUnconsumedSpeechFirstLikeRust(t *testing.T) {
 	router, runtime, threadID, _ := openPersistedRealtimeThread(t)
 	insertPersistedRealtimeItem(t, runtime, threadID, 0, map[string]any{"id": "voice-1:started", "realtime_session_id": "voice-1", "observed_at_ms": 100, "type": "realtime_session_started"})
@@ -114,10 +134,9 @@ func TestRealtimeReconnectReplaysUnconsumedSpeechFirstLikeRust(t *testing.T) {
 		"reason": "chunk", "source_event_ids": []string{"frame-used"}, "input_item_id": "input-1", "input": "already sent",
 	})
 
-	// The manager adopted the reattached session before the persisted history was
-	// read, exactly as the app-server start hook does.
-	router.requireRealtime().RecoverRealtimeSession(threadID, "voice-1", nil)
-	router.recoverRealtimeUnconsumedFrames(threadID)
+	// The start hook restores the reattaching session's persisted speech before
+	// the transport can stream newly captured frames.
+	router.recoverRealtimeUnconsumedFrames(threadID, "voice-1")
 	if ids := router.requireRealtime().RealtimeRecoveredFrameIDs(threadID); len(ids) != 1 || ids[0] != "frame-pending" {
 		t.Fatalf("recovered frames = %#v", ids)
 	}
