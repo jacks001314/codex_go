@@ -12206,6 +12206,9 @@ func historyMessageFromCell(cell historycell.HistoryCell, width int) codextui.Me
 	if imageCell, ok := cell.(historycell.ImagePathCell); ok {
 		message.ImagePath = strings.TrimSpace(imageCell.ImagePath())
 	}
+	if generated, ok := cell.(historycell.GeneratedImageCell); ok && generated.GeneratedImage() {
+		message.ImageGenerated = true
+	}
 	if transcriptCell, ok := cell.(historycell.TranscriptLinesCell); ok {
 		message.TranscriptText = strings.Join(transcriptCell.TranscriptLines(width), "\n")
 	}
@@ -15367,6 +15370,9 @@ func renderTranscriptLayoutInternal(cache *transcriptMessageCache, state *codext
 					contentRow: line,
 					columns:    int(preview.Columns),
 					rows:       imageRows,
+					// Generated previews sit on the body's first column; inspected
+					// previews stay centered (Rust image_left_aligned).
+					leftAligned: message.ImageGenerated,
 				})
 				line += imageRows
 				ranges[i][1] = line

@@ -136,6 +136,10 @@ type Message struct {
 	// ImagePath is the local artifact a rich fullscreen transcript may preview
 	// below this entry. Image rows are layout-only and never searchable text.
 	ImagePath string
+	// ImageGenerated marks a preview produced by image generation rather than an
+	// inspected file. Generated previews span the transcript body and left-align
+	// (Rust PreviewKind::Generated).
+	ImageGenerated bool
 	// CollabToolCall marks a history entry projected from a persisted collab
 	// tool call, so a replayed spawn/wait row is relabelled once subagent
 	// metadata arrives (Rust #63444).

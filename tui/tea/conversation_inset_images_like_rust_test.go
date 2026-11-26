@@ -12,9 +12,9 @@ import (
 )
 
 // Rust #58718 paints the conversation, including image previews, inside the
-// supplied bounds. A preview is centered in the inset width and offset by the
-// rectangle origin, while the surrounding viewport cells stay untouched for
-// the host that owns them.
+// supplied bounds, while the surrounding viewport cells stay untouched for the
+// host that owns them. Rust #61919 left-aligns a generated preview at the
+// rectangle origin.
 func TestConversationInsetPlacesImageInsideRectLikeRust(t *testing.T) {
 	path := writeTranscriptTestPNG(t, 40, 32)
 	inset := ConversationRect{X: 6, Y: 4, Width: 50, Height: 18}
@@ -34,9 +34,9 @@ func TestConversationInsetPlacesImageInsideRectLikeRust(t *testing.T) {
 		t.Fatalf("targets = %#v", targets)
 	}
 	target := targets[0].key
-	wantX := inset.X + max((inset.Width-target.columns)/2, 0)
+	wantX := inset.X
 	if target.x != wantX {
-		t.Fatalf("image column = %d, want %d centered in the inset", target.x, wantX)
+		t.Fatalf("image column = %d, want %d at the inset origin", target.x, wantX)
 	}
 	if target.x < inset.X || target.x+target.columns > inset.X+inset.Width {
 		t.Fatalf("image columns %d..%d escape the inset %d..%d", target.x, target.x+target.columns, inset.X, inset.X+inset.Width)

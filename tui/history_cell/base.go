@@ -15,6 +15,13 @@ type HistoryCell interface {
 
 // ImagePathCell is implemented by history cells that carry a local image
 // artifact the owned fullscreen transcript may preview.
+// GeneratedImageCell marks a local preview produced by image generation rather
+// than one the user inspected. The fullscreen transcript sizes those across the
+// body and left-aligns them (Rust transcript_view::layout PreviewKind::Generated).
+type GeneratedImageCell interface {
+	GeneratedImage() bool
+}
+
 type ImagePathCell interface {
 	ImagePath() string
 }

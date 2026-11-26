@@ -109,6 +109,79 @@ func Load(path string, width int, protocol pets.ImageProtocol, cell CellSize) (*
 	}, nil
 }
 
+// GeneratedMaxHeight is the pixel ceiling for a generated preview outside a
+// fullscreen virtual image pane (Rust transcript_image.rs PreviewKind::Generated).
+const GeneratedMaxHeight = 400
+
+// LoadGenerated decodes path at the size Rust reserves for a generated image.
+// The preview spans the whole transcript body instead of the inspected 48
+// columns, and its pixel cap follows the aspect: 768 for 2:1 or flatter, 480
+// from 1.01:1, otherwise 400, with a 400px height ceiling. Inside a fullscreen
+// virtual image pane the row budget is six measured cells instead.
+func LoadGenerated(path string, width int, protocol pets.ImageProtocol, cell CellSize, virtualBase bool) (*TranscriptImage, error) {
+	columns := width - 2
+	if columns <= 0 {
+		return nil, fmt.Errorf("%w: no preview columns", ErrUnsupported)
+	}
+	cellWidth, cellHeight := uint32(8), uint32(16)
+	if protocol == pets.ImageProtocolSixel {
+		if cell.Width == 0 || cell.Height == 0 {
+			return nil, fmt.Errorf("%w: Sixel needs a terminal cell size", ErrUnsupported)
+		}
+		cellWidth, cellHeight = cell.Width, cell.Height
+	} else if protocol != pets.ImageProtocolKitty && protocol != pets.ImageProtocolKittyLocalFile {
+		return nil, fmt.Errorf("%w: unknown image protocol %q", ErrUnsupported, protocol)
+	} else if cell.Width != 0 && cell.Height != 0 {
+		cellWidth, cellHeight = cell.Width, cell.Height
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%w: not a regular file", ErrUnsupported)
+	}
+	if info.Size() > MaxEncodedBytes {
+		return nil, fmt.Errorf("%w: encoded size %d", ErrTooLarge, info.Size())
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	config, _, err := image.DecodeConfig(file)
+	_ = file.Close()
+	if err != nil {
+		return nil, err
+	}
+	if config.Width <= 0 || config.Height <= 0 {
+		return nil, fmt.Errorf("%w: empty image", ErrUnsupported)
+	}
+	maxWidth := uint32(400)
+	switch ratio := float64(config.Width) / float64(config.Height); {
+	case ratio >= 2.0:
+		maxWidth = 768
+	case ratio >= 1.01:
+		maxWidth = 480
+	}
+	maxHeight := uint32(GeneratedMaxHeight)
+	if virtualBase {
+		maxHeight = 6 * cellHeight
+	}
+	pixels, err := LoadPixels(path, int(min(uint32(columns)*cellWidth, maxWidth)), int(min(maxHeight, uint32(config.Height))))
+	if err != nil {
+		return nil, err
+	}
+	dstWidth, dstHeight := pixels.Bounds().Dx(), pixels.Bounds().Dy()
+	return &TranscriptImage{
+		Protocol:   protocol,
+		Columns:    uint16((dstWidth + int(cellWidth) - 1) / int(cellWidth)),
+		Rows:       uint16((dstHeight + int(cellHeight) - 1) / int(cellHeight)),
+		Pixels:     pixels,
+		CellWidth:  cellWidth,
+		CellHeight: cellHeight,
+	}, nil
+}
+
 // LoadPixels decodes path and scales the raster to fit maxWidth x maxHeight
 // without upscaling, applying the same encoded/decoded allocation bounds as
 // Load. Rust transcript_image::load_pixels shares this contract.

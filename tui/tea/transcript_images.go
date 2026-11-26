@@ -26,6 +26,9 @@ type transcriptImagePlan struct {
 	contentRow int
 	columns    int
 	rows       int
+	// leftAligned pins a generated preview to the body's first column; inspected
+	// previews stay centered (Rust transcript_view::layout image_left_aligned).
+	leftAligned bool
 }
 
 type transcriptImageCacheKey struct {
@@ -34,6 +37,8 @@ type transcriptImageCacheKey struct {
 	protocol   pets.ImageProtocol
 	cellWidth  uint32
 	cellHeight uint32
+	generated  bool
+	virtual    bool
 }
 
 // transcriptImageCache bounds decoded thumbnails by entry count. Each entry is
@@ -99,7 +104,7 @@ func (c *transcriptMessageCache) transcriptImageFilesCurrent() bool {
 	return true
 }
 
-func (c *transcriptImageCache) load(path string, width int, protocol pets.ImageProtocol, cell transcript_image.CellSize) *transcript_image.TranscriptImage {
+func (c *transcriptImageCache) load(path string, width int, protocol pets.ImageProtocol, cell transcript_image.CellSize, generated bool, virtual bool) *transcript_image.TranscriptImage {
 	if c == nil || strings.TrimSpace(path) == "" || width <= 0 || protocol == "" {
 		return nil
 	}
@@ -109,6 +114,8 @@ func (c *transcriptImageCache) load(path string, width int, protocol pets.ImageP
 		protocol:   protocol,
 		cellWidth:  cell.Width,
 		cellHeight: cell.Height,
+		generated:  generated,
+		virtual:    virtual,
 	}
 	info, err := os.Stat(path)
 	if err != nil || !info.Mode().IsRegular() {
@@ -118,7 +125,12 @@ func (c *transcriptImageCache) load(path string, width int, protocol pets.ImageP
 	if entry, ok := c.entries[key]; ok && entry.size == info.Size() && entry.modTime.Equal(info.ModTime()) {
 		return entry.image
 	}
-	imageData, err := transcript_image.Load(path, width, protocol, cell)
+	var imageData *transcript_image.TranscriptImage
+	if generated {
+		imageData, err = transcript_image.LoadGenerated(path, width, protocol, cell, virtual)
+	} else {
+		imageData, err = transcript_image.Load(path, width, protocol, cell)
+	}
 	if err != nil || imageData == nil {
 		delete(c.entries, key)
 		return nil
@@ -414,7 +426,10 @@ func (r *transcriptImageRuntime) targetsLocked() []drawnTranscriptImage {
 			continue
 		}
 		visibleStart := max(plan.contentRow, r.offset)
-		x := r.left + max((r.width-plan.columns)/2, 0)
+		x := r.left
+		if !plan.leftAligned {
+			x = r.left + max((r.width-plan.columns)/2, 0)
+		}
 		y := r.top + visibleStart - r.offset
 		if y < 0 {
 			hidden := min(-y, rows)
@@ -521,7 +536,7 @@ func (m *Model) transcriptImagePreview(message codextui.Message, width int, expa
 	if len(normalizeActivityIDs(message.ActivityIDs)) > 0 && !expanded {
 		return nil
 	}
-	imageData := m.transcriptImageCache.load(message.ImagePath, width, protocol, m.transcriptImageCell)
+	imageData := m.transcriptImageCache.load(message.ImagePath, width, protocol, m.transcriptImageCell, message.ImageGenerated, m.tmuxImageBase() != nil)
 	if imageData == nil || int(imageData.Columns)+2 > width {
 		return nil
 	}

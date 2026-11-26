@@ -288,6 +288,13 @@ func (c ImageGenerationHistoryCell) RawLines() []string {
 	return plainLines(c.Lines)
 }
 
+// GeneratedImage marks this cell as an image-generation result so the
+// fullscreen transcript renders it with the generated preview size (Rust
+// PreviewKind::Generated).
+func (c ImageGenerationHistoryCell) GeneratedImage() bool {
+	return c.ImagePath() != ""
+}
+
 // ImagePath returns the saved local artifact path for transcript previews.
 func (c ImageGenerationHistoryCell) ImagePath() string {
 	return c.SavedPath
