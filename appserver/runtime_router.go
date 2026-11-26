@@ -6747,7 +6747,7 @@ func (r *RuntimeRouter) handleEphemeralThreadStartRuntime(request *Request) (*Th
 	serviceTier := threadLifecycleServiceTier(params.ServiceTierSet, params.ServiceTier)
 	record := &session.Record{
 		ID:        threadID,
-		SessionID: string(threadID),
+		SessionID: threadStartSessionID(&params, threadID),
 		Preview:   params.Prompt,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -6916,6 +6916,10 @@ func (r *RuntimeRouter) handleEphemeralThreadForkRuntime(request *Request) (*Thr
 		BeforeTurnID: params.BeforeTurnID,
 		Ephemeral:    true,
 		Now:          runtimeRouterNow(r).UTC(),
+	}
+	if params.InheritedSessionID != nil {
+		// Rust #61945: only a host-started fork may name the root session.
+		forkOptions.SessionID = strings.TrimSpace(*params.InheritedSessionID)
 	}
 	if historyBase, prepared, prepareErr := r.services.ThreadRouter.preparePaginatedForkHistoryBase(sourceRecord, &params); prepareErr != nil {
 		return nil, true, prepareErr
@@ -8824,6 +8828,10 @@ func (r *RuntimeRouter) handleActiveThreadForkRuntime(request *Request) (any, bo
 		BeforeTurnID: params.BeforeTurnID,
 		Ephemeral:    params.Ephemeral,
 		Now:          now,
+	}
+	if params.InheritedSessionID != nil {
+		// Rust #61945: only a host-started fork may name the root session.
+		forkOptions.SessionID = strings.TrimSpace(*params.InheritedSessionID)
 	}
 	if historyBase, prepared, prepareErr := r.services.ThreadRouter.preparePaginatedForkHistoryBase(sourceRecord, &params); prepareErr != nil {
 		return nil, true, prepareErr

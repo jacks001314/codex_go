@@ -1689,7 +1689,7 @@ func (r *Router) handleThreadStart(request *Request) (*ThreadStartResponse, erro
 	serviceTier := threadLifecycleServiceTierForModel(nil, params.ServiceTierSet, params.ServiceTier, params.Model)
 	record := &session.Record{
 		ID:        threadID,
-		SessionID: string(threadID),
+		SessionID: threadStartSessionID(&params, threadID),
 		Preview:   params.Prompt,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -2850,6 +2850,10 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 		BeforeTurnID: params.BeforeTurnID,
 		Ephemeral:    params.Ephemeral,
 		Now:          r.now().UTC(),
+	}
+	if params.InheritedSessionID != nil {
+		// Rust #61945: only a host-started fork may name the root session.
+		forkOptions.SessionID = strings.TrimSpace(*params.InheritedSessionID)
 	}
 	if historyBase, prepared, prepareErr := r.preparePaginatedForkHistoryBase(sourceRecord, &params); prepareErr != nil {
 		return nil, prepareErr

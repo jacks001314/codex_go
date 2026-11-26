@@ -49922,10 +49922,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "blocked_precondition",
+   "status": "partial",
    "evidence": [
-    "Sidebar image previews and post-answer generated image presentation need the sidebar image pipeline.",
-    "plan: update/plan_2026_11_16.md batch 74"
+    "Minimal slice merged (863c88978): tui/sidebar_image decodes PNG/JPEG/GIF/static WebP and reuses the Kitty, Kitty local-file and Sixel encoders with their cleanup lifecycle; remote images read authorized fs/readFile bytes; unsupported terminals, raw mode, Zellij, old iTerm, unmeasured Sixel and tmux without passthrough degrade to a path plus metadata hint; a saved generated image is queued per thread/turn and shown after the matching completion, interruption or failure, with restored history deduped and ordered; the preview checks both the requested and canonical path.",
+    "Verified here with go build ./..., go test ./tui/..., the app sidebar and generated-image tests, the parity contract and alignment tests, and go vet ./tui/... ./app. The macOS node ran go test ./tui/... green.",
+    "Partial residuals: Rust-sized 400/480/768px generated images with a left-aligned caption, split-turn item cross-page image relocation and search anchor adjustment, the side-companion captured queue handoff, and the Kitty startup query/reply are not ported; Go paginates whole-turn summaries only, so both sidebar contracts stay partial."
    ]
   },
   {
@@ -50076,10 +50077,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "blocked_precondition",
+   "status": "complete",
    "evidence": [
-    "The capability exists in Go but not on the host protocol surface. session.Store honours an explicit ForkOptions.SessionID for plain and prepared forks while keeping the thread id distinct and the persisted session id on resume; TestPreparedForkInheritsRootSessionIDLikeRust and store_test.go's custom-session case cover it.",
-    "Missing piece: appserver ThreadStartParams exposes no inherited-session field, so a host SDK cannot supply one, and Go never had Rust's guard that rejects it for resumed threads and native children. Porting #61945 needs that host/protocol surface plus the matching rejection guard."
+    "thread/start and thread/fork accept inheritedSessionId: the host names the root session, the thread keeps its own distinct id, and the value persists on the record. Blank values are rejected, and a thread source that is not the host itself (for example subagent) is rejected with \"requires ... started directly by the host\".",
+    "Resumed threads keep their persisted session because thread/resume has no such field, and native children keep the controller session because the spawn path builds its own fork options instead of reading the host fork params.",
+    "Covered by TestHostStartedThreadsInheritSessionIDLikeRust and TestHostInheritedSessionIDRejectsBlankAndNativeSources: start and fork both land on the inherited session while keeping distinct thread ids, the fork records forkedFromId, resume keeps the persisted session, and the plain path is unchanged. Verified on Windows with go build ./appserver and the focused tests."
    ]
   },
   {

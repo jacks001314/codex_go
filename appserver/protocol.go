@@ -1728,6 +1728,10 @@ type ThreadStartParams struct {
 	MultiAgentMode MultiAgentMode    `json:"multiAgentMode,omitempty"`
 	HistoryMode    ThreadHistoryMode `json:"historyMode,omitempty"`
 	ThreadSource   *ThreadSource     `json:"threadSource,omitempty"`
+	// InheritedSessionID lets the host put a new thread in an existing root
+	// session (Rust #61945). The thread keeps its own id; resume uses the
+	// persisted session and native children keep their controller session.
+	InheritedSessionID *string `json:"inheritedSessionId,omitempty"`
 	ProjectID      *string           `json:"projectId,omitempty"`
 	// DaybreakEnabled is the initial Daybreak choice for a persistent thread
 	// (Rust #45513). Omitted or null leaves it unset; ephemeral threads reject
@@ -1777,6 +1781,14 @@ func (p *ThreadStartParams) Validate() error {
 	}
 	if err := validateThreadRuntimeWorkspaceRoots(p.RuntimeWorkspaceRoots); err != nil {
 		return err
+	}
+	if p.InheritedSessionID != nil && strings.TrimSpace(*p.InheritedSessionID) == "" {
+		return jsonRPCInvalidRequest("`inheritedSessionId` must not be blank")
+	}
+	if p.InheritedSessionID != nil && p.ThreadSource != nil && *p.ThreadSource != ThreadSourceUser {
+		// Rust #61945 rejects explicit session inheritance for anything that is
+		// not a thread the host itself started.
+		return jsonRPCInvalidRequest("`inheritedSessionId` requires a fork started directly by the host")
 	}
 	if _, _, err := threadUnloadDelayFromConfig(p.Config); err != nil {
 		return jsonRPCInvalidRequest(err.Error())
@@ -2335,6 +2347,22 @@ type ThreadForkParams struct {
 	// ExperimentalDisablePredictionMcp disables MCP servers in a prediction fork
 	// whose inherited window uses incremental tools on Responses Lite (#57287).
 	ExperimentalDisablePredictionMcp bool `json:"experimentalDisablePredictionMcp,omitempty"`
+	// InheritedSessionID is the root session the host assigns to this forked
+	// thread (Rust #61945). The fork keeps its own distinct thread id; a
+	// resumed thread keeps its persisted session and native children keep
+	// their controller's session, so neither path accepts this field.
+	InheritedSessionID *string `json:"inheritedSessionId,omitempty"`
+}
+
+// threadStartSessionID keeps the new thread's own id as its session unless
+// the host named the root session the thread belongs to (Rust #61945).
+func threadStartSessionID(params *ThreadStartParams, threadID session.ThreadID) string {
+	if params != nil && params.InheritedSessionID != nil {
+		if id := strings.TrimSpace(*params.InheritedSessionID); id != "" {
+			return id
+		}
+	}
+	return string(threadID)
 }
 
 func (p *ThreadForkParams) UnmarshalJSON(data []byte) error {
