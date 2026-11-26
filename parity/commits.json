@@ -47169,7 +47169,8 @@
    ],
    "status": "partial",
    "evidence": [
-    "plan_2026_11_13.md records: 部分：空工作区不回退 CWD、helper 禁网、Windows 消费最终 profile；非 legacy 路径已授权并传递独立 Linux sandbox launcher（精确文件、父目录不授权），legacy 保持无运行时读取授权。真实 Linux 隔离与根别名规范化待补。见 fs_helper_boundary_2026_11_14.md、fs_helper_linux_launcher_2026_11_14.md"
+    "Go centralizes filesystem-helper preparation in execserver/fsSandboxRunPlan plus sandbox.BuildCommandRunPlan instead of Rust's SandboxManager::transform with a SandboxOperation enum. The helper path materializes the explicit workspace roots (an empty non-nil list stays empty and is never replaced by the cwd), forces SandboxDisableNetwork so the serialized profile and enforcement both report restricted networking, adds the helper executables as sandbox-readable roots (skipped for legacy Landlock, which needs none), and reuses the same plan for the platform sandbox command and the Windows restricted-token wrapper, which consumes plan.PermissionProfile so runtime read grants are part of the enforced and serialized profile. Evidence: execserver/fs_helper_permissions_like_rust_test.go (nil, empty and single workspace roots times legacy Landlock: helper keeps restricted network, write grants equal the input roots, the helper executable is readable, the caller's profile is unchanged), fs_helper_launch_root_like_rust_test.go, fs_helper_required_write_test.go, update/fs_helper_boundary_2026_11_14.md, update/fs_helper_write_boundary_2026_11_14.md; go test ./execserver and go vet ./execserver pass on Windows.",
+    "Residual for this entry: Go has no sandbox-level helper operation enum because helper preparation is an exec-server concern; a helper whose policy needs no enforcement (full disk read and write with no deny-read entries for the path convention) still runs directly instead of under an empty Landlock/Seatbelt profile, which Rust would launch with network restricted. Real Linux Landlock and macOS Seatbelt isolation of the helper cannot be exercised on this Windows host; only the plan, the serialized profile and the launch command are asserted."
    ]
   },
   {
@@ -47833,7 +47834,8 @@
    ],
    "status": "partial",
    "evidence": [
-    "plan_2026_11_13.md records: 部分：wrapper 显式空工作区贯穿 argv/解析/CaptureRequest；非 Windows 执行器收到 Windows 令牌沙箱请求时返回 SandboxUnavailable；helper 固定 Preserve proxy 语义、单一 run plan 准备；新增非本机策略 cwd 拒绝（形如 '<cwd>' is invalid on '<os>'，先于沙箱准备），execserver 全包 20.270s 通过。真实 Linux 隔离与根别名规范化待补。见 fs_wrapper_roots_2026_11_14.md、fs_helper_windows_unavailable_2026_11_14.md、fs_helper_policy_cwd_like_rust_test.go"
+    "Go implements the #61276 behaviours without Rust's removed transform_for_direct_spawn surface: fsSandboxCommand rejects a policy working directory whose path convention does not belong to this executor ('<cwd>' is invalid on '<os>') before any sandbox preparation, fsHelperWindowsSandboxUnavailable reports SandboxUnavailable when a filesystem helper asks for a Windows token sandbox on a non-Windows executor (an explicit disabled level or a Unix policy path stays local), unsupported run plans fail through plan.UnsupportedError instead of launching unconfined, and the Windows wrapper is prepared from the finalized plan with ProxySettingsPreserve and the executor's runtime environment. Evidence: execserver/fs_helper_policy_cwd_like_rust_test.go, fs_helper_windows_unavailable_like_rust_test.go, fs_helper_linux_launcher_like_rust_test.go, update/fs_helper_windows_unavailable_2026_11_14.md, update/fs_wrapper_roots_2026_11_14.md; go test ./execserver passes on Windows and GOOS=linux go vet ./execserver is clean.",
+    "Residual for this entry: the permission-entry-count trace is not recorded because Go emits no tracing span for helper launch preparation, and the Windows direct-spawn wrapper tests assert the generated command rather than executing a restricted token on a real Windows sandbox host."
    ]
   },
   {
