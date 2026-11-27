@@ -97,6 +97,7 @@ func (r *RuntimeRouter) handleServerRequestResolvedResponse(request *ServerReque
 type reviewAnalyticsInput struct {
 	ThreadID      string
 	TurnID        string
+	RootTurnID    *string
 	ItemID        string
 	ReviewID      string
 	SubjectKind   string
@@ -308,6 +309,7 @@ func (r *RuntimeRouter) emitGuardianReviewCompletedAnalytics(ctx context.Context
 	r.emitReviewAnalyticsEvent(ctx, reviewAnalyticsInput{
 		ThreadID:      notification.ThreadID,
 		TurnID:        notification.TurnID,
+		RootTurnID:    notification.guardianReviewedActionRootTurnID,
 		ItemID:        itemID,
 		ReviewID:      notification.ReviewID,
 		SubjectKind:   subjectKind,
@@ -320,6 +322,7 @@ func (r *RuntimeRouter) emitGuardianReviewCompletedAnalytics(ctx context.Context
 		CompletedAtMS: notification.CompletedAtMS,
 		ContextMode:   notification.guardianContextMode,
 	})
+	r.emitGuardianReviewAnalytics(ctx, notification)
 	r.emitGuardianV2ClassificationAnalytics(ctx, notification, result)
 }
 

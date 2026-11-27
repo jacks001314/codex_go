@@ -65,8 +65,10 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	// (#63553) added the alternate-provider and unscoped-remote picker
 	// goldens (1581 -> 1583). Re-anchored to 8b096dce07: #63619 removed the
 	// /mcp secret-masking history snapshot (1583 -> 1582).
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1577 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1577", got)
+	// Re-anchored to upstream afe555b9d3: the 3f65e9f131..afe555b9d3 window
+	// added one golden (1582 -> 1578 after the intervening removals).
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1578 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1578", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -129,6 +131,16 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			},
 		},
 		{
+			Path:     "tui/src/app/sidebar_document/snapshots",
+			Files:    1,
+			Owner:    "tui/app",
+			Focus:    "sidebar document diff presentation",
+			Priority: []string{"app", "diff"},
+			Required: []string{
+				"tui/src/app/sidebar_document/snapshots/codex_tui__app__sidebar_document__diff__tests__slash_diff_sidebar.snap",
+			},
+		},
+		{
 			Path: "tui/src/app/snapshots",
 			// #46733/#46739/#46751/#46752 added the owned-transcript browsing,
 			// prompt-navigation, slash-picker, composer-gap and warnings-page
@@ -144,7 +156,9 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// Re-anchored to upstream a394ff9cf6: one more app-level golden.
 			// Re-anchored to upstream 59ac39addb: three app-level goldens joined
 			// the sidebar/document preview work (#61920/#61922).
-			Files:    124,
+			// Re-anchored to upstream afe555b9d3: the window added three app-level
+			// goldens.
+			Files:    127,
 			Owner:    "tui/app, tui/chatwidget",
 			Focus:    "desktop history UI, cancelled-turn composer restore, and thread goal action rendering",
 			Priority: []string{"app", "composer", "history"},
@@ -254,7 +268,8 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// Re-anchored to upstream a394ff9cf6: the prepared footer viewport
 			// golden moved here from bottom_pane/footer (263).
 			// Re-anchored to upstream 59ac39addb: one more bottom-pane golden.
-			Files:    269,
+			// Re-anchored to upstream afe555b9d3: one more bottom-pane golden.
+			Files:    270,
 			Owner:    "tui/bottom_pane",
 			Focus:    "composer, footer, slash popup, approval overlays, MCP elicitation, queued input, and bottom pane layout",
 			Priority: []string{"composer", "approval", "status", "mcp", "slash"},
@@ -354,7 +369,8 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// Re-anchored to a7a9d82f: the rate-limit recovery notice (#60435) and one more golden landed.
 			// Re-anchored to 8e757686c1: the provider-scoped model picker added
 			// the alternate-provider and unscoped-remote picker goldens (346).
-			Files:    344,
+			// Re-anchored to upstream afe555b9d3: two more chatwidget goldens.
+			Files:    346,
 			Owner:    "tui/chatwidget, tui/tea",
 			Focus:    "main chat widget terminal snapshots for status lines, approvals, plugins, hooks, review, usage, and unified exec",
 			Priority: []string{"approval", "status", "history", "unified-exec", "review"},
@@ -529,14 +545,14 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// the headless gateway device-code prompt (#60662) added two.
 			// Re-anchored to upstream a394ff9cf6: one more golden.
 			// Re-anchored to upstream 59ac39addb: one more tui/src golden.
-			Files:    219,
+			Files:    211,
 			Owner:    "tui, tui/markdown, tui/app",
 			Focus:    "diff render, markdown render, keymap, resume picker, pager overlay, model migration, and status indicator snapshots",
 			Priority: []string{"diff", "markdown", "status", "session", "keymap"},
 			Required: []string{
 				"tui/src/snapshots/codex_tui__diff_render__tests__diff_gallery_80x24.snap",
 				"tui/src/snapshots/codex_tui__markdown_render__markdown_render_tests__markdown_render_complex_snapshot.snap",
-				"tui/src/snapshots/codex_tui__resume_picker__tests__resume_picker_screen.snap",
+				"tui/src/snapshots/codex_tui__resume_picker__tests__resume_picker_table.snap",
 				"tui/src/snapshots/codex_tui__diff_render__tests__syntax_colors_follow_the_actual_diff_background.snap",
 				"tui/src/snapshots/codex_tui__resume_picker__color_tests__compact_picker_keeps_metadata_and_labeled_primary_actions.snap",
 				"tui/src/snapshots/codex_tui__tool_output__tests__preview_caps_wrapped_output_and_counts_hidden_logical_lines.snap",
@@ -562,7 +578,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// text helpers, follow control, prompt header, search,
 			// selection hints, composer gap, and the compact/detailed copy
 			// presentations.
-			Files:    53,
+			Files:    55,
 			Owner:    "tui/transcript_view",
 			Focus:    "interactive transcript viewport: layout cache, text/tab rendering, prompt header, search, selection hints, and copy feedback",
 			Priority: []string{"history", "app", "composer"},
@@ -607,15 +623,14 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		{
 			Path: "tui/tests/suite/snapshots",
 			// #48211 added the external-editor visible-handoff snapshot.
-			Files:    5,
+			Files:    4,
 			Owner:    "tui",
-			Focus:    "integration suite snapshots for automatic background server startup failures and shared-daemon feature/host-policy/override mismatches",
+			Focus:    "integration suite snapshots for automatic background server startup failures and shared-daemon feature/override mismatches",
 			Priority: []string{"status"},
 			Required: []string{
 				"tui/tests/suite/snapshots/all__suite__focus_palette__external_editor__external_editor_visible_handoff.snap",
 				"tui/tests/suite/snapshots/all__suite__focus_palette__daemon_auto_start_failure.snap",
 				"tui/tests/suite/snapshots/all__suite__daemon_compatibility__daemon_feature_mismatch.snap",
-				"tui/tests/suite/snapshots/all__suite__daemon_compatibility__daemon_host_policy_mismatch.snap",
 				"tui/tests/suite/snapshots/all__suite__daemon_compatibility__daemon_override_mismatch.snap",
 			},
 		},
@@ -634,7 +649,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/status_indicator_widget/snapshots",
-			Files:    1,
+			Files:    2,
 			Owner:    "tui",
 			Focus:    "status shimmer and progress effects obeying the master toggle",
 			Priority: []string{"status"},

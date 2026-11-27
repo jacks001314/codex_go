@@ -377,7 +377,7 @@
    "id": "skill-selection",
    "status": "done",
    "area": "skills",
-   "test": "go test ./prompt ./appserver -run \"SkillSelection|SkillShadow|SkillsContext|ExplicitSkill|selection\" -count=1"
+   "test": "go test ./prompt ./appserver -run \"SkillsContext|ExplicitSkill|selection\" -count=1"
   },
   {
    "id": "environment-status",
@@ -1050,17 +1050,10 @@
   },
   {
    "status": "done",
-   "userImpact": "Shadow skill-selection evaluation now covers recent-history + character-routing fusions.",
-   "id": "skill-shadow-fused-selectors",
-   "reason": "Aligned upstream ea10ae7d0f (#38993 Evaluate recent and character-routed skill selection): prompt gains LruPlusCharacterRoutingSkillSelector (lru_plus_character_routing_v1) and LruPlusLexicalCharacterRoutingSkillSelector (lru_plus_lexical_character_routing_v1) fusing LRU recent-invocation history with character routing-card (and weighted lexical) matches through reciprocal rank fusion (RRF_K=10, cap 50), mirroring Rust dynamic_skill_selector lru_plus_character_routing; both are wired into RunSkillShadowSelectionWithTaskContext and recorded in the shadow metrics. Registered as contract skill-shadow-fused-selectors.",
-   "test": "go test ./prompt -run 'LruPlus|TaskContext' -count=1; go test ./appserver -run SkillShadow -count=1"
-  },
-  {
-   "status": "done",
-   "userImpact": "Short continuation prompts recover recently relevant skills across turns.",
-   "id": "skill-shadow-task-context-fusion",
-   "reason": "Aligned upstream 21cfd369ef (#39008 Add task context to shadow skill selection): prompt.ShadowTaskContext retains up to 2 prior substantive requests (2 KiB request / 4 KiB augmented query, UTF-8-safe truncation) and up to 50 recently relevant skills; BeginTurn freezes the augmented query + recent skills for task_context_fusion_v1 (LRU-of-snapshot-skills + character routing); explicit skill intent and successful invocations are recorded for future turns only, never the active turn's predictions; appserver wires per-thread state, substantive detection (skill/mention intents + normalized ignore list), and explicit-intent recording. Registered as contract skill-shadow-task-context-fusion.",
-   "test": "go test ./prompt -run 'ShadowTaskContext|TaskContextFusion' -count=1; go test ./appserver -run 'SkillShadowTaskContext|SkillShadow' -count=1"
+   "userImpact": "The background skill-ranking experiment no longer runs or emits comparison metrics, while old skill_search settings remain accepted.",
+   "id": "skill-shadow-experiment-removed",
+   "reason": "Aligned upstream 06c718ae68 (#63993 Remove the shadow skill ranking experiment): Go deleted the cheap skill selectors, ShadowTaskContext, per-thread shadow state, background ranking workers, invocation queues and shadow metrics. The skill_search feature is now a removed compatibility key whose true or false overrides are ignored, matching Rust's configuration behavior.",
+   "test": "go test ./features -run 'TestSkillSearchRemovedCompatibilityLikeRust|TestGuardianV3ShadowFeatureRegisteredLikeRust' -count=1; go test ./appserver ./prompt -count=1"
   },
   {
    "status": "done",

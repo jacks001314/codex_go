@@ -2272,6 +2272,10 @@ func TestHTTPMCPInitializedNotificationRetriesWholeHandshake(t *testing.T) {
 	var initializeCount atomic.Int64
 	var notificationCount atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
 		var request struct {
 			ID     int64  `json:"id"`
 			Method string `json:"method"`

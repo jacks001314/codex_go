@@ -35,14 +35,7 @@ func restoredModeration(value any) any {
 		return value
 	}
 	display, present := object["display"]
-	if !present || display == nil {
-		return map[string]any{"moderated": moderated, "display": nil}
-	}
-	normalized, valid := normalizeAgentMessageDisplay(display)
-	if !valid {
-		return map[string]any{"moderated": true, "display": nil}
-	}
-	return map[string]any{"moderated": moderated, "display": normalized}
+	return moderationContract(moderated, display, present, promptWellbeingResultsValue(object))
 }
 
 // finalAnswerModerationKey names the per-turn slot that keeps the moderation

@@ -21,8 +21,13 @@ import (
 const (
 	CodexAppsServerName           = "codex_apps"
 	DefaultMCPServerEnvironmentID = "local"
-	ServerAuthOAuth               = "oauth"
-	ServerAuthChatGPT             = "chatgpt"
+	// Rust's rmcp-client defaults: a startup handshake gets 30 seconds, while
+	// an individual tool call gets 300 seconds. The two budgets stay separate
+	// so a slow fallback handshake cannot consume the first tool call's time.
+	defaultMCPStartupTimeout = 30 * time.Second
+	defaultMCPToolTimeout    = 300 * time.Second
+	ServerAuthOAuth          = "oauth"
+	ServerAuthChatGPT        = "chatgpt"
 	// ServerAuthEMAAuth exchanges an enterprise IdP refresh token or a current
 	// ID token for resource-specific authorization (Rust #44832, #62129). EMA
 	// connections are not enabled in this version; the mode only drives config

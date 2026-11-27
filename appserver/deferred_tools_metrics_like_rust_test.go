@@ -52,7 +52,7 @@ func (s *deferredToolsMetricSinkForTest) snapshot() []deferredToolsHistogramSamp
 // logarithmic boundaries.
 func TestDeferredToolsFragmentMetricsLikeRust(t *testing.T) {
 	sink := &deferredToolsMetricSinkForTest{}
-	router := NewRuntimeRouter(RuntimeServices{SkillShadowMetrics: sink})
+	router := NewRuntimeRouter(RuntimeServices{SkillsMetrics: sink})
 	defer router.Close()
 	router.recordDeferredToolsFragmentMetrics(&contextfrag.DeferredToolsFragmentReport{
 		Snapshot:         true,

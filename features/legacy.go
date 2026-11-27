@@ -51,6 +51,7 @@ var ignoredFeatureKeys = map[string]bool{
 	// advertises the key unconditionally instead.
 	remoteCompactionV2Key:             true,
 	"skill_env_var_dependency_prompt": true,
+	"skill_search":                    true,
 	"terminal_resize_reflow":          true,
 }
 

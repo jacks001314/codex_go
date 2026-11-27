@@ -137,6 +137,34 @@ func guardianReviewOriginFromContext(ctx context.Context) *guardianReviewOrigin 
 	return origin
 }
 
+type guardianReviewedActionRootTurnID struct {
+	turnID string
+	known  bool
+}
+
+type guardianReviewedActionRootTurnIDKey struct{}
+
+// withGuardianReviewedActionRootTurnID marks the action's causal root. Network
+// approval calls this for every request so an untagged request explicitly
+// clears the lineage instead of inheriting the servicing turn's root.
+func withGuardianReviewedActionRootTurnID(ctx context.Context, turnID string) context.Context {
+	if ctx == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, guardianReviewedActionRootTurnIDKey{}, guardianReviewedActionRootTurnID{
+		turnID: strings.TrimSpace(turnID),
+		known:  true,
+	})
+}
+
+func guardianReviewedActionRootTurnIDFromContext(ctx context.Context) (string, bool) {
+	if ctx == nil {
+		return "", false
+	}
+	value, _ := ctx.Value(guardianReviewedActionRootTurnIDKey{}).(guardianReviewedActionRootTurnID)
+	return value.turnID, value.known
+}
+
 // guardianReviewPlanWithOrigin keeps the current review settings and swaps only
 // the environment state the reviewer is prepared against. Rust #44575 reviews a
 // background execution in the environments it started with even when the
@@ -1473,6 +1501,8 @@ func (r *modelGuardianReviewer) reviewOutcome(ctx context.Context, threadID, tur
 	}
 	event.GuardianContextMode = attribution.ContextMode.String()
 	store.SetGuardianContextMode(event.ID, event.GuardianContextMode)
+	event.ReviewedActionRootTurnID = r.reviewedActionRootTurnID(threadID, turnID, ctx)
+	store.SetReviewedActionRootTurnID(event.ID, event.ReviewedActionRootTurnID)
 	emit(threadID, event)
 	// Rust #47630 ReviewAction::validate: an action may only be reviewed against
 	// the environment that owns it. Manual approval routing still sees the
@@ -2428,6 +2458,22 @@ func (r *modelGuardianReviewer) classificationTurnID() string {
 		}
 	}
 	return guardianClassificationTurnID()
+}
+
+// reviewedActionRootTurnID resolves the trusted causal root of the reviewed
+// action. A verified execution registration supplies its captured root; other
+// reviews use the reviewed turn's recorded lineage. An explicit empty value
+// from the network path remains unknown (Rust #63837).
+func (r *modelGuardianReviewer) reviewedActionRootTurnID(threadID, turnID string, ctx context.Context) *string {
+	if root, known := guardianReviewedActionRootTurnIDFromContext(ctx); known {
+		return stringPtrIfNotEmpty(strings.TrimSpace(root))
+	}
+	if r != nil && r.trustedRootTurnID != nil {
+		if root, ok := r.trustedRootTurnID(threadID, turnID); ok {
+			return stringPtrIfNotEmpty(strings.TrimSpace(root))
+		}
+	}
+	return nil
 }
 
 // reviewClientMetadata builds the guardian review request's client metadata.
@@ -3764,11 +3810,17 @@ func (r *RuntimeRouter) notifyGuardianReviewEvent(threadID string, event *state.
 	if event.CompletedAtMS != nil {
 		completedAt = *event.CompletedAtMS
 	}
+	var reviewedActionRootTurnID *string
+	if event.ReviewedActionRootTurnID != nil {
+		value := strings.TrimSpace(*event.ReviewedActionRootTurnID)
+		reviewedActionRootTurnID = stringPtrIfNotEmpty(value)
+	}
 	r.notify(NotificationItemGuardianApprovalReviewCompleted, &ItemGuardianApprovalReviewCompletedNotification{
 		ThreadID: threadID, TurnID: event.TurnID, StartedAtMS: uint64(event.StartedAtMS), CompletedAtMS: uint64(completedAt), ReviewID: event.ID, TargetItemID: targetItemID,
 		DecisionSource: AutoReviewDecisionSourceAgent, Review: review, Action: action,
-		guardianContextMode:      event.GuardianContextMode,
-		guardianClassifierTurnID: event.ClassifierTurnID,
+		guardianContextMode:              event.GuardianContextMode,
+		guardianClassifierTurnID:         event.ClassifierTurnID,
+		guardianReviewedActionRootTurnID: reviewedActionRootTurnID,
 	})
 }
 

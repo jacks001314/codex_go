@@ -194,8 +194,9 @@ func TestSelectBwrapLauncherForPolicySkipsWritableCandidateLikeRust(t *testing.T
 	// Control: without the writable grant the stub is probed and selected, which
 	// is exactly what the policy filter has to prevent.
 	launcher = selectBwrapLauncherForPolicy(sandboxpath.FilesystemPolicy{}, bin, "/", probeBwrapHelp, bundled)
-	if launcher.Program != stub || launcher.Bundled {
-		t.Fatalf("launcher = %+v, want the system stub %q", launcher, stub)
+	wantStub := sandboxpath.CanonicalExecutable(stub)
+	if launcher.Program != wantStub || launcher.Bundled {
+		t.Fatalf("launcher = %+v, want the system stub %q", launcher, wantStub)
 	}
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatalf("the control probe never ran (%v), so the test cannot attribute the skip to the filter", err)

@@ -14,6 +14,7 @@ import (
 
 	"codex_go/cli"
 	"codex_go/rollout"
+	"codex_go/sandbox/sandboxpath"
 	"codex_go/session"
 )
 
@@ -248,7 +249,9 @@ func TestPrepareInteractiveForkWorktreeStartsForkInLatestSourceDirectoryLikeRust
 	if owner != string(startup.forked.ID) {
 		t.Fatalf("worktree owner = %q, want %q", owner, startup.forked.ID)
 	}
-	if !strings.EqualFold(filepath.Clean(startup.worktree.checkout.SourceRoot), filepath.Clean(repo)) {
+	gotSourceRoot := sandboxpath.CanonicalDirectory(startup.worktree.checkout.SourceRoot)
+	wantSourceRoot := sandboxpath.CanonicalDirectory(repo)
+	if gotSourceRoot == "" || wantSourceRoot == "" || !strings.EqualFold(gotSourceRoot, wantSourceRoot) {
 		t.Fatalf("checkout source root = %q, want %q", startup.worktree.checkout.SourceRoot, repo)
 	}
 }

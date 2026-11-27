@@ -18,7 +18,7 @@ import (
 // skipped render records the zero report.
 func TestRecordSkillCatalogRenderLikeRust(t *testing.T) {
 	metrics := state.NewTaskMetrics()
-	router := NewRuntimeRouter(RuntimeServices{SkillShadowMetrics: metrics})
+	router := NewRuntimeRouter(RuntimeServices{SkillsMetrics: metrics})
 
 	router.recordSkillCatalogRender(skillCatalogSurfaceTurnInput, &promptctx.SkillRenderReport{
 		TotalCount:                5,
@@ -96,8 +96,8 @@ func TestInstructionsWithSkillsContextRecordsCatalogMetrics(t *testing.T) {
 	}
 	metrics := state.NewTaskMetrics()
 	router := NewRuntimeRouter(RuntimeServices{
-		Skills:             NewSkillsService([]string{root}),
-		SkillShadowMetrics: metrics,
+		Skills:        NewSkillsService([]string{root}),
+		SkillsMetrics: metrics,
 	})
 	if _, _, _, err := router.instructionsWithSkillsContextForTurn(
 		context.Background(), "thread-1", "turn-1", nil, &turn.TurnStartParams{Prompt: "hello"}, "",

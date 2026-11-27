@@ -712,36 +712,6 @@
    "verifier": "TestProjectStoreLifecycleMirrorsRustProjectsStore;TestProjectCursorValidation;TestRuntimeRouterProjectLifecycleMirrorsRustProjectsProcessor;TestRuntimeRouterProjectValidationMirrorsRustProjectsProcessor;TestRuntimeRouterThreadMetadataProjectUpdateMirrorsRustThreadProcessor;TestRuntimeRouterProjectResponsesOmitPositionLikeRust"
   },
   {
-   "id": "skill-shadow-fused-selectors",
-   "goPaths": [
-    "prompt",
-    "appserver"
-   ],
-   "rustPaths": [
-    "ext/skills/src/dynamic_skill_selector/lru_plus_character_routing.rs",
-    "ext/skills/src/dynamic_skill_selector.rs"
-   ],
-   "kind": "shared-fixtures",
-   "phase": "P2",
-   "status": "complete",
-   "verifier": "TestLruPlusCharacterRoutingRecoversRecentlyInvokedSkill;TestLruPlusCharacterRoutingColdStartFallsBackToRoutingCard;TestLruPlusLexicalCharacterRoutingFusesAllThreeSignals;TestLruPlusCharacterRoutingRespectsLimitAndDeduplicates;TestRuntimeRouterSkillShadowSelectionRecordsRustMethodsWithoutChangingCatalog"
-  },
-  {
-   "id": "skill-shadow-task-context-fusion",
-   "goPaths": [
-    "prompt",
-    "appserver"
-   ],
-   "rustPaths": [
-    "ext/skills/src/shadow_selection_experiment/task_context.rs",
-    "ext/skills/src/shadow_selection_experiment/mod.rs"
-   ],
-   "kind": "shared-fixtures",
-   "phase": "P2",
-   "status": "complete",
-   "verifier": "TestShadowTaskContextContinuationRecoversPriorRequest;TestShadowTaskContextTurnIsolationAndBoundedHistory;TestShadowTaskContextSkipsNonSubstantivePriorRequests;TestTaskContextFusionRecoversSkillFromEarlierTurn;TestSkillShadowTaskContextFusionRecoversEarlierTurnSkill"
-  },
-  {
    "id": "guardian-max-tool-call-lag",
    "goPaths": [
     "appserver",

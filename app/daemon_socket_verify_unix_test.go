@@ -40,6 +40,9 @@ func publishTestControlSocketAlias(t *testing.T, socketPath string) {
 	if err != nil {
 		t.Fatalf("SharedDaemonSocketDirectory() error = %v", err)
 	}
+	if _, err := codexuds.PrepareSharedDaemonSocketDirectory(); err != nil {
+		t.Fatalf("PrepareSharedDaemonSocketDirectory() error = %v", err)
+	}
 	sum := sha256.Sum256([]byte(filepath.Join(parent, filepath.Base(socketPath))))
 	if err := os.Symlink(filepath.Join(shared, hex.EncodeToString(sum[:])), socketPath); err != nil {
 		t.Fatalf("Symlink(%s) error = %v", socketPath, err)

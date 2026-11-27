@@ -99,14 +99,25 @@ func TestStdioConnectionStreamsFSReadFileLikeRust(t *testing.T) {
 	if err := serveJSONLineConnection(router, strings.NewReader(initialize+request+"\n"), &stdout); err != nil {
 		t.Fatalf("serveJSONLineConnection() error = %v", err)
 	}
-	lines := bytes.Split(bytes.TrimSpace(stdout.Bytes()), []byte("\n"))
-	line := lines[len(lines)-1]
 	var decoded struct {
 		JSONRPC string `json:"jsonrpc"`
 		ID      int    `json:"id"`
 		Result  struct {
 			DataBase64 string `json:"dataBase64"`
 		} `json:"result"`
+	}
+	var line []byte
+	for _, candidate := range bytes.Split(bytes.TrimSpace(stdout.Bytes()), []byte("\n")) {
+		var frame struct {
+			ID int `json:"id"`
+		}
+		if err := json.Unmarshal(candidate, &frame); err == nil && frame.ID == 9 {
+			line = candidate
+			break
+		}
+	}
+	if line == nil {
+		t.Fatalf("fs/readFile response missing from stream: %s", stdout.Bytes())
 	}
 	if err := json.Unmarshal(line, &decoded); err != nil {
 		t.Fatalf("streamed frame is not valid JSON: %v: %s", err, line)

@@ -1,6 +1,7 @@
 package exec
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -117,7 +118,26 @@ func TestResolveExecPermissionProfileAppendsAddDirsLikeRust(t *testing.T) {
 			t.Fatalf("permission profile missing --add-dir root %q:\n%s", want, raw)
 		}
 	}
-	if strings.Count(unescaped, external) != 1 {
+	var decoded struct {
+		FileSystem struct {
+			Entries []struct {
+				Path struct {
+					Type string `json:"type"`
+					Path string `json:"path"`
+				} `json:"path"`
+			} `json:"entries"`
+		} `json:"file_system"`
+	}
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		t.Fatalf("Unmarshal permission profile error = %v", err)
+	}
+	directRootCount := 0
+	for _, entry := range decoded.FileSystem.Entries {
+		if entry.Path.Type == "path" && entry.Path.Path == external {
+			directRootCount++
+		}
+	}
+	if directRootCount != 1 {
 		t.Fatalf("--add-dir duplicated a root:\n%s", raw)
 	}
 }

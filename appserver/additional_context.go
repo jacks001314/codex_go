@@ -24,7 +24,7 @@ const (
 	additionalContextToolNamespace = "agent"
 	// additionalContextValueTokenBudget bounds an untrusted context value before
 	// it is compared for deduplication or sent to the model.
-	additionalContextValueTokenBudget = 1000
+	additionalContextValueTokenBudget = 10_000
 	// maxDerivedAdditionalContextNameChars bounds a tool name derived from an
 	// opaque context key.
 	maxDerivedAdditionalContextNameChars = 128

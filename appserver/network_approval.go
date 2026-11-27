@@ -96,6 +96,7 @@ type networkApprovalPromptQueue struct {
 type activeNetworkApprovalCall struct {
 	threadID      string
 	turnID        string
+	rootTurnID    *string
 	callID        string
 	environmentID string
 	trigger       *guardianNetworkAccessTrigger
@@ -717,6 +718,14 @@ func (s *networkApprovalService) requestGuardianApproval(ctx context.Context, ac
 	// Rust #57207: the review's display identity stays empty, while its
 	// critical-path owner is the triggering tool call.
 	reviewCtx := withGuardianTimingCallID(ctx, networkApprovalTimingCallID(ownerCall))
+	// Only a verified execution tag establishes the reviewed action's root.
+	// Every network review marks the lineage explicitly, including untagged
+	// requests, so it cannot inherit the servicing turn's root (Rust #63837).
+	reviewedActionRootTurnID := ""
+	if ownerCall != nil && strings.TrimSpace(request.ExecutionID) != "" {
+		reviewedActionRootTurnID = stringPtrValue(ownerCall.rootTurnID)
+	}
+	reviewCtx = withGuardianReviewedActionRootTurnID(reviewCtx, reviewedActionRootTurnID)
 	if ownerCall != nil {
 		reviewCtx = withGuardianReviewOrigin(reviewCtx, ownerCall.origin)
 	}
@@ -826,6 +835,7 @@ func (s *networkApprovalService) registerActiveCallWithContext(ctx context.Conte
 	call := &activeNetworkApprovalCall{
 		threadID:        threadID,
 		turnID:          turnID,
+		rootTurnID:      s.router.analyticsRootTurnIDForEvent(threadID, turnID, ""),
 		callID:          callID,
 		environmentID:   environmentID,
 		trigger:         trigger,

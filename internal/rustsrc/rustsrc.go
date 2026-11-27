@@ -51,18 +51,57 @@ func AnchorRoots() []string {
 	return roots
 }
 
-// Candidates returns the Rust codex-rs roots to probe in order: the frozen
-// anchor worktrees first, then the legacy sibling checkouts. Callers prepend
-// CODEX_RUST_ROOT and keep their own validation.
+// Candidates returns the Rust codex-rs roots to probe in order: an anchor for
+// the ledger's pinned commit, the live sibling checkouts, then unrelated frozen
+// anchors. An unrelated anchor must not hide a newer live checkout merely
+// because the exact pinned worktree has not been created yet.
+//
+// Callers prepend CODEX_RUST_ROOT and keep their own validation.
 func Candidates() []string {
-	candidates := AnchorRoots()
-	return append(candidates,
+	anchors := AnchorRoots()
+	pinned, other := splitPinnedAnchorRoots(anchors, frozenCommit())
+	candidates := append([]string(nil), pinned...)
+	candidates = append(candidates, liveRoots()...)
+	candidates = append(candidates,
 		filepath.Join("..", "..", "git", legacyClone, "codex-rs"),
 		filepath.Join("..", "..", "..", "git", legacyClone, "codex-rs"),
 		filepath.Join("..", "..", "codex-main", "codex-rs"),
 		filepath.Join("..", "..", "..", "codex-main", "codex-rs"),
 		filepath.Join("..", "codex-main", "codex-rs"),
 	)
+	return append(candidates, other...)
+}
+
+func liveRoots() []string {
+	var roots []string
+	seen := make(map[string]bool)
+	for _, gitDir := range gitDirs() {
+		root := filepath.Join(gitDir, legacyClone, "codex-rs")
+		if seen[root] {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(root, "Cargo.toml")); err != nil {
+			continue
+		}
+		seen[root] = true
+		roots = append(roots, root)
+	}
+	return roots
+}
+
+func splitPinnedAnchorRoots(roots []string, frozen string) (pinned []string, other []string) {
+	if len(frozen) < shortCommitLen {
+		return nil, append([]string(nil), roots...)
+	}
+	prefix := anchorPrefix + frozen[:shortCommitLen]
+	for _, root := range roots {
+		if strings.HasPrefix(filepath.Base(filepath.Dir(root)), prefix) {
+			pinned = append(pinned, root)
+			continue
+		}
+		other = append(other, root)
+	}
+	return pinned, other
 }
 
 // gitDirs lists the git directories among the ancestors of the working

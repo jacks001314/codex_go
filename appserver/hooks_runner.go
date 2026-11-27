@@ -780,8 +780,71 @@ func (r *HookRunner) commandForHook(ctx context.Context, metadata HookMetadata) 
 		return osexec.CommandContext(ctx, program, "-lc", command)
 	}
 	args := append([]string(nil), r.ShellArgs...)
+	if runtime.GOOS == "windows" && len(args) > 0 && strings.EqualFold(args[len(args)-1], "-Command") &&
+		!powershellHookScriptHasNamedBlock(command) {
+		// PowerShell -Command collapses native exit code 2 to 1. Check $?
+		// first so a successful hook stays successful, then preserve the
+		// native status (Rust #64013).
+		command += "\nif ($?) { exit 0 }\nif ($LASTEXITCODE) { exit $LASTEXITCODE }\nexit 1"
+	}
 	args = append(args, command)
 	return osexec.CommandContext(ctx, r.ShellProgram, args...)
+}
+
+// powershellHookScriptHasNamedBlock reports whether a -Command script starts
+// with a PowerShell named block (possibly after param/using declarations).
+// PowerShell forbids appending top-level statements after those blocks.
+func powershellHookScriptHasNamedBlock(script string) bool {
+	script = strings.TrimSpace(script)
+	for {
+		switch {
+		case strings.HasPrefix(script, "#"):
+			_, rest, ok := strings.Cut(script, "\n")
+			if !ok {
+				return false
+			}
+			script = strings.TrimSpace(rest)
+		case strings.HasPrefix(script, "<#"):
+			_, rest, ok := strings.Cut(script, "#>")
+			if !ok {
+				return false
+			}
+			script = strings.TrimSpace(rest)
+		default:
+			goto commentsDone
+		}
+	}
+commentsDone:
+	if !strings.Contains(script, "{") {
+		return false
+	}
+	words := strings.FieldsFunc(script, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == '\r' || r == '\n' || r == '{' || r == '(' || r == ')' || r == ';' || r == '<' || r == '>'
+	})
+	if len(words) == 0 {
+		return false
+	}
+	namedBlock := func(word string) bool {
+		switch strings.ToLower(word) {
+		case "begin", "process", "end", "clean", "dynamicparam":
+			return true
+		default:
+			return false
+		}
+	}
+	if namedBlock(words[0]) {
+		return true
+	}
+	declaration := strings.EqualFold(words[0], "param") || strings.EqualFold(words[0], "using") || strings.HasPrefix(script, "[")
+	if !declaration {
+		return false
+	}
+	for _, word := range words[1:] {
+		if namedBlock(word) {
+			return true
+		}
+	}
+	return false
 }
 
 // hookEnvironment returns the captured session environment, falling back to

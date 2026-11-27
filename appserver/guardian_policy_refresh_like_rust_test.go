@@ -289,3 +289,68 @@ func (f guardianPolicyTestLoaderFunc) LoadGuardianPolicySnapshot(revision int64)
 func guardianPolicyTestLoader(fn guardianPolicyTestLoaderFunc) GuardianPolicyLoader {
 	return fn
 }
+
+// Mirrors Rust #63995: a reviewer change is published to contributors for both
+// a root thread and its child, after the live-turn update, even when the new
+// policy blocks the current model.
+func TestGuardianPolicyRefreshNotifiesConfigContributorsLikeRust(t *testing.T) {
+	manager := NewThreadManager(nil)
+	for _, threadID := range []string{"root-thread", "child-thread"} {
+		if err := manager.RegisterTurn(threadID, "turn-"+threadID, func() {}, time.Now().UnixMilli(), &turn.TurnStartParams{ThreadID: threadID}); err != nil {
+			t.Fatalf("RegisterTurn(%s) error = %v", threadID, err)
+		}
+		manager.UpdateTurn(threadID, "turn-"+threadID, func(active *activeRuntimeTurn) {
+			active.RunConfig = &appTurnRunConfig{
+				Model:             "gpt-5.4",
+				ApprovalsReviewer: string(config.ApprovalsReviewerAutoReview),
+				Config:            &config.Config{Values: map[string]any{"approvals_reviewer": string(config.ApprovalsReviewerAutoReview)}},
+			}
+		})
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(t.TempDir())})
+	router.threads = manager
+	router.active = manager.active
+	router.turnsMu = &manager.turnsMu
+	changes := make(chan ConfigChangedInput, 2)
+	router.RegisterConfigChangedHandler(func(input ConfigChangedInput) {
+		changes <- input
+	})
+
+	policy := "blocking policy"
+	snapshot := &config.GuardianPolicySnapshot{
+		Revision: 12,
+		Requirements: &config.ConfigRequirements{
+			GuardianPolicyConfig:      &policy,
+			AutoReview:                &config.AutoReviewRequirements{RequiredOnModels: []string{"gpt-5.4"}},
+			AllowedApprovalsReviewers: []config.ApprovalsReviewer{config.ApprovalsReviewerUser},
+		},
+	}
+	for _, threadID := range []string{"root-thread", "child-thread"} {
+		if rejection := router.applyGuardianPolicyToThread(threadID, snapshot); rejection == nil {
+			t.Fatalf("applyGuardianPolicyToThread(%s) rejection = nil, want blocked model", threadID)
+		}
+	}
+
+	seen := map[string]bool{}
+	for range 2 {
+		select {
+		case change := <-changes:
+			seen[change.ThreadID] = true
+			if change.Previous == nil || change.Current == nil {
+				t.Fatalf("%s config change = %#v", change.ThreadID, change)
+			}
+			if change.PreviousApprovalsReviewer != string(config.ApprovalsReviewerAutoReview) ||
+				change.CurrentApprovalsReviewer != string(config.ApprovalsReviewerUser) {
+				t.Fatalf("%s reviewer change = %s -> %s", change.ThreadID, change.PreviousApprovalsReviewer, change.CurrentApprovalsReviewer)
+			}
+			if change.Current.GuardianPolicyRevision() != 12 {
+				t.Fatalf("%s current policy revision = %d, want 12", change.ThreadID, change.Current.GuardianPolicyRevision())
+			}
+		case <-time.After(time.Second):
+			t.Fatal("config contributor did not receive both thread updates")
+		}
+	}
+	if !seen["root-thread"] || !seen["child-thread"] {
+		t.Fatalf("config change threads = %#v", seen)
+	}
+}

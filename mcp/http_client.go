@@ -201,6 +201,19 @@ type httpClient struct {
 	// created lazily so callers without a catalog keep working (Rust #43031).
 	catalogOnce sync.Once
 	catalog     *clientToolCatalog
+	// cleanupMu coordinates deletion of sessions allocated by a handshake that
+	// has not been committed to this connection. A failed initialization can
+	// race client teardown, so only one DELETE may own each session ID.
+	cleanupMu               sync.Mutex
+	pendingHandshakeSession map[string]struct{}
+	sessionDeletions        map[string]*mcpSessionDeletion
+}
+
+type mcpSessionDeletion struct {
+	sessionID string
+	ctx       context.Context
+	done      chan struct{}
+	err       error
 }
 
 // toolCatalog returns the catalog owned by this connection, creating an empty
@@ -682,15 +695,10 @@ func (c *httpClient) oauthHTTPClient(timeout time.Duration) *http.Client {
 }
 
 func mcpClientTimeout(config *ServerConfig) time.Duration {
-	if config != nil {
-		if config.ToolTimeout > 0 {
-			return config.ToolTimeout
-		}
-		if config.StartupTimeout > 0 {
-			return config.StartupTimeout
-		}
+	if config != nil && config.ToolTimeout > 0 {
+		return config.ToolTimeout
 	}
-	return 15 * time.Second
+	return defaultMCPToolTimeout
 }
 
 func (c *httpClient) Close() error {
@@ -704,10 +712,15 @@ func (c *httpClient) Close() error {
 	c.startupComplete.Store(false)
 	c.closed = true
 	c.mu.Unlock()
-	if sessionID == "" {
-		return nil
+	var err error
+	if sessionID != "" {
+		err = c.deleteSession(sessionID)
 	}
-	return c.deleteSession(sessionID)
+	// A handshake canceled at its caller deadline leaves its DELETE running in
+	// the background. Teardown still waits for that bounded work, without
+	// issuing a second DELETE for the same session.
+	c.waitForSessionDeletions()
+	return err
 }
 
 func (c *httpClient) isClosed() bool {
@@ -727,6 +740,107 @@ func (c *httpClient) isInitialized() bool {
 }
 
 func (c *httpClient) deleteSession(sessionID string) error {
+	return c.coordinateSessionDeletion(context.Background(), sessionID)
+}
+
+func (c *httpClient) coordinateSessionDeletion(ctx context.Context, sessionID string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if c == nil || sessionID == "" {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	c.cleanupMu.Lock()
+	if c.sessionDeletions == nil {
+		c.sessionDeletions = map[string]*mcpSessionDeletion{}
+	}
+	deletion := c.sessionDeletions[sessionID]
+	if deletion == nil {
+		deletion = &mcpSessionDeletion{
+			sessionID: sessionID,
+			ctx:       ctx,
+			done:      make(chan struct{}),
+		}
+		c.sessionDeletions[sessionID] = deletion
+		go c.runSessionDeletion(deletion)
+	}
+	c.cleanupMu.Unlock()
+	select {
+	case <-deletion.done:
+		return deletion.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (c *httpClient) runSessionDeletion(deletion *mcpSessionDeletion) {
+	// Keep trace values from the initiating call while detaching cancellation,
+	// so a caller deadline returns immediately without abandoning cleanup.
+	ctx := context.WithoutCancel(deletion.ctx)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	deletion.err = c.deleteSessionHTTP(ctx, deletion.sessionID)
+	close(deletion.done)
+}
+
+func (c *httpClient) waitForSessionDeletions() {
+	if c == nil {
+		return
+	}
+	c.cleanupMu.Lock()
+	pending := make([]<-chan struct{}, 0, len(c.sessionDeletions))
+	for _, deletion := range c.sessionDeletions {
+		select {
+		case <-deletion.done:
+		default:
+			pending = append(pending, deletion.done)
+		}
+	}
+	c.cleanupMu.Unlock()
+	for _, done := range pending {
+		<-done
+	}
+}
+
+func (c *httpClient) trackHandshakeSession(sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if c == nil || sessionID == "" {
+		return
+	}
+	c.cleanupMu.Lock()
+	if c.pendingHandshakeSession == nil {
+		c.pendingHandshakeSession = map[string]struct{}{}
+	}
+	c.pendingHandshakeSession[sessionID] = struct{}{}
+	c.cleanupMu.Unlock()
+}
+
+func (c *httpClient) completeHandshakeSession(sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if c == nil || sessionID == "" {
+		return
+	}
+	c.cleanupMu.Lock()
+	delete(c.pendingHandshakeSession, sessionID)
+	// A server may reuse an ID after an earlier recovery. Once this connection
+	// owns the session, teardown must be able to issue a fresh DELETE for it.
+	delete(c.sessionDeletions, sessionID)
+	c.cleanupMu.Unlock()
+}
+
+func (c *httpClient) cleanupAbandonedHandshakeSession(ctx context.Context, sessionID string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if c == nil || sessionID == "" {
+		return nil
+	}
+	c.cleanupMu.Lock()
+	delete(c.pendingHandshakeSession, sessionID)
+	c.cleanupMu.Unlock()
+	return c.coordinateSessionDeletion(ctx, sessionID)
+}
+
+func (c *httpClient) deleteSessionHTTP(ctx context.Context, sessionID string) error {
 	if c == nil || c.config == nil {
 		return nil
 	}
@@ -734,7 +848,7 @@ func (c *httpClient) deleteSession(sessionID string) error {
 	if endpoint == "" {
 		return nil
 	}
-	request, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, endpoint, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
 	if err != nil {
 		return err
 	}
@@ -742,7 +856,8 @@ func (c *httpClient) deleteSession(sessionID string) error {
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set(mcpHTTPProtocolVersionHeader, c.effectiveProtocolVersion())
 	request.Header.Set(mcpHTTPSessionIDHeader, strings.TrimSpace(sessionID))
-	if token := c.bearerToken(); token != "" {
+	token, oauthToken := c.authorizationBearerToken(false)
+	if token != "" {
 		request.Header.Set("Authorization", "Bearer "+token)
 	}
 	if c.config.ApplyHTTPRequest != nil && strings.TrimSpace(c.config.BearerTokenEnvVar) == "" {
@@ -750,13 +865,38 @@ func (c *httpClient) deleteSession(sessionID string) error {
 			return err
 		}
 	}
-	model.InjectTraceHeadersFromContext(request.Context(), request.Header)
+	model.InjectTraceHeadersFromContext(ctx, request.Header)
 	response, err := c.client.Do(request)
 	if err != nil {
 		return err
 	}
+	if response.StatusCode == http.StatusUnauthorized && oauthToken && strings.TrimSpace(token) != "" {
+		retryToken, retryOAuthToken := c.authorizationBearerToken(true)
+		if retryOAuthToken && strings.TrimSpace(retryToken) != "" {
+			_ = response.Body.Close()
+			request, err = http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+			if err != nil {
+				return err
+			}
+			c.applyConfiguredHTTPHeaders(request)
+			request.Header.Set("Accept", "application/json")
+			request.Header.Set(mcpHTTPProtocolVersionHeader, c.effectiveProtocolVersion())
+			request.Header.Set(mcpHTTPSessionIDHeader, strings.TrimSpace(sessionID))
+			request.Header.Set("Authorization", "Bearer "+retryToken)
+			if c.config.ApplyHTTPRequest != nil && strings.TrimSpace(c.config.BearerTokenEnvVar) == "" {
+				if err := c.config.ApplyHTTPRequest(request, nil); err != nil {
+					return err
+				}
+			}
+			model.InjectTraceHeadersFromContext(ctx, request.Header)
+			response, err = c.client.Do(request)
+			if err != nil {
+				return err
+			}
+		}
+	}
 	defer response.Body.Close()
-	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusGone {
+	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusGone || response.StatusCode == http.StatusMethodNotAllowed {
 		return nil
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -888,14 +1028,16 @@ func (c *httpClient) initialize(ctx context.Context) (string, error) {
 		return "", err
 	}
 	defer response.Body.Close()
-	rpc, err := c.readRPCResponse(ctx, response, requestID, response.Header.Get(mcpHTTPSessionIDHeader))
+	sessionID := strings.TrimSpace(response.Header.Get(mcpHTTPSessionIDHeader))
+	c.trackHandshakeSession(sessionID)
+	rpc, err := c.readRPCResponse(ctx, response, requestID, sessionID)
 	if err != nil {
 		recordProtocolDiscoveryMetrics(mcpProtocolDiscoveryModeLabel(c.protocolMode), "failure", time.Since(started))
-		return "", err
+		return sessionID, err
 	}
 	if rpc.Error != nil {
 		recordProtocolDiscoveryMetrics(mcpProtocolDiscoveryModeLabel(c.protocolMode), "failure", time.Since(started))
-		return "", newMCPRemoteError("initialize", rpc.Error)
+		return sessionID, newMCPRemoteError("initialize", rpc.Error)
 	}
 	var initialized struct {
 		ProtocolVersion string `json:"protocolVersion"`
@@ -912,7 +1054,7 @@ func (c *httpClient) initialize(ctx context.Context) (string, error) {
 	c.capabilitiesMu.Lock()
 	c.serverCapabilities = mcpServerCapabilitiesFromInitializeResult(rpc.Result)
 	c.capabilitiesMu.Unlock()
-	return response.Header.Get(mcpHTTPSessionIDHeader), nil
+	return sessionID, nil
 }
 
 func (c *httpClient) discover(ctx context.Context) (string, error) {
@@ -926,10 +1068,12 @@ func (c *httpClient) discover(ctx context.Context) (string, error) {
 		return "", err
 	}
 	defer response.Body.Close()
-	rpc, err := c.readRPCResponse(ctx, response, requestID, response.Header.Get(mcpHTTPSessionIDHeader))
+	sessionID := strings.TrimSpace(response.Header.Get(mcpHTTPSessionIDHeader))
+	c.trackHandshakeSession(sessionID)
+	rpc, err := c.readRPCResponse(ctx, response, requestID, sessionID)
 	if err != nil {
 		recordProtocolDiscoveryMetrics("auto", "failure", time.Since(started))
-		return "", err
+		return sessionID, err
 	}
 	if rpc.Error != nil {
 		if rpc.Error.Code == mcpJSONRPCUnsupportedProtocolVersionCode {
@@ -939,21 +1083,21 @@ func (c *httpClient) discover(ctx context.Context) (string, error) {
 		}
 		if rpc.Error.Code == mcpJSONRPCMethodNotFoundCode && c.modernVersionOffered.Load() {
 			recordProtocolDiscoveryMetrics("auto", "failure", time.Since(started))
-			return "", fmt.Errorf("server rejected discovery after offering a modern protocol: %s", rpc.Error.Message)
+			return sessionID, fmt.Errorf("server rejected discovery after offering a modern protocol: %s", rpc.Error.Message)
 		}
 		recordProtocolDiscoveryMetrics("auto", "failure", time.Since(started))
-		return "", newMCPRemoteError("server/discover", rpc.Error)
+		return sessionID, newMCPRemoteError("server/discover", rpc.Error)
 	}
 	if err := validateMCPModernDiscovery(rpc.Result); err != nil {
 		recordProtocolDiscoveryMetrics("auto", "failure", time.Since(started))
-		return "", err
+		return sessionID, err
 	}
 	recordProtocolDiscoveryMetrics("auto", "modern", time.Since(started))
 	c.supportsSandboxStateMetaCapability = checkSandboxStateMetaCapability(rpc.Result)
 	c.capabilitiesMu.Lock()
 	c.serverCapabilities = mcpServerCapabilitiesFromInitializeResult(rpc.Result)
 	c.capabilitiesMu.Unlock()
-	return response.Header.Get(mcpHTTPSessionIDHeader), nil
+	return sessionID, nil
 }
 
 // serverCapabilitiesRaw returns the advertised capabilities captured during
@@ -993,11 +1137,15 @@ func (c *httpClient) reinitialize(ctx context.Context) error {
 			sessionID, err = c.discover(ctx)
 			if err == nil {
 				c.sessionID = sessionID
+				c.completeHandshakeSession(sessionID)
 				c.initialized = true
 				c.startupComplete.Store(true)
 				return nil
 			}
 			if isMCPDiscoveryFallbackError(err) {
+				if cleanupErr := c.cleanupAbandonedHandshakeSession(ctx, sessionID); cleanupErr != nil && ctx.Err() != nil {
+					return ctx.Err()
+				}
 				c.protocolMode = MCPProtocolLegacy
 				sessionID, err = c.initialize(ctx)
 			}
@@ -1008,10 +1156,14 @@ func (c *httpClient) reinitialize(ctx context.Context) error {
 			c.sessionID = sessionID
 			err = c.notifyInitialized(ctx, sessionID)
 			if err == nil {
+				c.completeHandshakeSession(sessionID)
 				c.initialized = true
 				c.startupComplete.Store(true)
 				return nil
 			}
+		}
+		if cleanupErr := c.cleanupAbandonedHandshakeSession(ctx, sessionID); cleanupErr != nil && ctx.Err() != nil {
+			return ctx.Err()
 		}
 		c.sessionID = ""
 		if attempt >= len(mcpStreamableHTTPRetryDelays) || !isRetryableMCPStreamableHTTPError(err) {

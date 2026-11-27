@@ -24,11 +24,11 @@ func TestAdditionalContextValueBytesBucketsMatchRust(t *testing.T) {
 		if buckets[i] == buckets[i-1] {
 			t.Fatalf("duplicate bucket at %d: %v", i, buckets[i])
 		}
-		if buckets[i] == 4096 {
+		if buckets[i] == 40*1024 {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("4 KiB truncation boundary missing from %v", buckets)
+		t.Fatalf("40 KiB truncation boundary missing from %v", buckets)
 	}
 }

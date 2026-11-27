@@ -271,6 +271,9 @@ type Event struct {
 	// reserved (Rust #62125). Like GuardianContextMode it is host telemetry
 	// attribution, not part of the persisted or client-visible review event.
 	ClassifierTurnID string `json:"-"`
+	// ReviewedActionRootTurnID is the trusted causal root of the reviewed
+	// action (Rust #63837). It is host telemetry attribution only.
+	ReviewedActionRootTurnID *string `json:"-"`
 }
 
 // GuardianReviewReason mirrors Rust's GuardianReviewReason
@@ -604,6 +607,27 @@ func (s *ReviewStore) SetClassifierTurnID(id string, turnID string) bool {
 		return false
 	}
 	event.ClassifierTurnID = turnID
+	return true
+}
+
+// SetReviewedActionRootTurnID records the trusted causal root used by review
+// analytics. The stored event retains it across every terminal transition.
+func (s *ReviewStore) SetReviewedActionRootTurnID(id string, rootTurnID *string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	event := s.events[id]
+	if event == nil {
+		return false
+	}
+	if rootTurnID == nil || strings.TrimSpace(*rootTurnID) == "" {
+		event.ReviewedActionRootTurnID = nil
+		return true
+	}
+	value := strings.TrimSpace(*rootTurnID)
+	event.ReviewedActionRootTurnID = &value
 	return true
 }
 

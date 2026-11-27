@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "startedAt": "2026-11-27T00:00:00+08:00",
+  "platform": "windows/amd64",
+  "goVersion": "go1.26.5",
+  "goRepository": "D:\\qax\\reagent\\dev\\codex_go",
+  "goStartCommit": "f5c456e55744b4919bfa3e80be81629ea8bdef57",
+  "goStartDirty": false,
+  "rustRepository": "D:\\qax\\reagent\\dev\\git\\codex",
+  "rustBranch": "main",
+  "rustPreviousTarget": "3f65e9f13165d85d1b1fbe20ce06c55758f927b9",
+  "rustCommit": "57b493a648",
+  "rustWindowCommitCount": 100,
+  "platformAgents": {
+    "linux": "agent-830584841d8b7160a532579d",
+    "macos": "agent-0d97ae69693d9637acad7f10"
+  },
+  "scenarios": [
+    "L0 parity static contracts",
+    "L1 affected Go package tests",
+    "L2 affected replay contracts",
+    "Ubuntu platform gates",
+    "macOS platform gates"
+  ],
+  "environmentVariablesRecorded": []
+}

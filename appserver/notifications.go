@@ -836,6 +836,9 @@ type ItemGuardianApprovalReviewCompletedNotification struct {
 	// guardianClassifierTurnID is host telemetry attribution for the
 	// classification request that produced this review (Rust #62125).
 	guardianClassifierTurnID string
+	// guardianReviewedActionRootTurnID is the trusted causal root of the
+	// reviewed action (Rust #63837).
+	guardianReviewedActionRootTurnID *string
 }
 
 // StrictReviewRequiredNotification mirrors Rust
@@ -897,8 +900,8 @@ type MCPServerStatusUpdatedNotification struct {
 	Name     string  `json:"name"`
 	// EnvironmentID is the registration scope, not necessarily the server's
 	// execution environment (Rust #61257).
-	EnvironmentID *string                        `json:"environmentId,omitempty"`
-	Status        string                         `json:"status"`
+	EnvironmentID *string `json:"environmentId,omitempty"`
+	Status        string  `json:"status"`
 	// DurationMs is the measured startup time for a ready or failed attempt;
 	// nil for starting, cancelled, and reused connections (Rust #63613).
 	DurationMs    *uint64                        `json:"durationMs"`

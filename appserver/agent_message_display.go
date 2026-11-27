@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"encoding/json"
+	"math"
 	"strings"
 )
 
@@ -18,18 +19,128 @@ func normalizeFinalAnswerModeration(metadata any) any {
 	if value, ok := entry["moderated"].(bool); ok {
 		moderated = value
 	}
-	display, ok := entry["display"]
-	if !ok || display == nil {
+	display, displayPresent := entry["display"]
+	return moderationContract(moderated, display, displayPresent, promptWellbeingResultsValue(entry))
+}
+
+// moderationContract builds the narrowed app-server AgentMessageModeration
+// shape. Prompt wellbeing results are optional and malformed values are
+// discarded without changing the moderation verdict (Rust #63886).
+func moderationContract(moderated bool, display any, displayPresent bool, rawResults any) map[string]any {
+	out := map[string]any{"moderated": moderated, "display": nil}
+	if results, ok := normalizePromptWellbeingResults(rawResults); ok {
+		out["promptWellbeingResults"] = results
+	}
+	if !displayPresent || display == nil {
 		// The app-server contract keeps the nullable display field, so an
 		// absent instruction is an explicit null (Rust #60172).
-		return map[string]any{"moderated": moderated, "display": nil}
+		return out
 	}
 	normalized, valid := normalizeAgentMessageDisplay(display)
 	if !valid {
 		// An unreadable instruction leaves the answer restricted.
-		return map[string]any{"moderated": true, "display": nil}
+		out["moderated"] = true
+		return out
 	}
-	return map[string]any{"moderated": moderated, "display": normalized}
+	out["display"] = normalized
+	return out
+}
+
+func promptWellbeingResultsValue(entry map[string]any) any {
+	if value, ok := entry["promptWellbeingResults"]; ok {
+		return value
+	}
+	return entry["prompt_wellbeing_results"]
+}
+
+// normalizePromptWellbeingResults validates every result as one unit. Rust
+// deserializes the optional field into Vec<PromptWellbeingResult>; an invalid
+// value is dropped while the rest of the moderation decision remains usable.
+func normalizePromptWellbeingResults(value any) ([]any, bool) {
+	if value == nil {
+		return nil, false
+	}
+	rawResults, ok := value.([]any)
+	if !ok {
+		return nil, false
+	}
+	results := make([]any, 0, len(rawResults))
+	for _, raw := range rawResults {
+		result, ok := normalizePromptWellbeingResult(raw)
+		if !ok {
+			return nil, false
+		}
+		results = append(results, result)
+	}
+	return results, true
+}
+
+func normalizePromptWellbeingResult(value any) (map[string]any, bool) {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	inputItemID, ok := object["inputItemId"].(string)
+	if !ok {
+		return nil, false
+	}
+	labels, ok := normalizePromptWellbeingLabels(object["labels"])
+	if !ok {
+		return nil, false
+	}
+	rawScores, ok := object["scores"].(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	scores := make(map[string]any, len(rawScores))
+	for label, score := range rawScores {
+		if !isPromptWellbeingScore(score) {
+			return nil, false
+		}
+		scores[label] = score
+	}
+	return map[string]any{
+		"inputItemId": inputItemID,
+		"scores":      scores,
+		"labels":      labels,
+	}, true
+}
+
+func normalizePromptWellbeingLabels(value any) ([]any, bool) {
+	switch labels := value.(type) {
+	case []any:
+		out := make([]any, 0, len(labels))
+		for _, label := range labels {
+			if _, ok := label.(string); !ok {
+				return nil, false
+			}
+			out = append(out, label)
+		}
+		return out, true
+	case []string:
+		out := make([]any, 0, len(labels))
+		for _, label := range labels {
+			out = append(out, label)
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+
+func isPromptWellbeingScore(value any) bool {
+	switch number := value.(type) {
+	case json.Number:
+		_, err := number.Float64()
+		return err == nil
+	case float64:
+		return !math.IsNaN(number) && !math.IsInf(number, 0)
+	case int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64:
+		return true
+	default:
+		return false
+	}
 }
 
 // moderationEntry accepts the stream metadata wrapper and the bare entry that

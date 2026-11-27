@@ -3,6 +3,7 @@ package windowssandbox
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -50,6 +51,9 @@ func TestPrepareLegacySpawnContextAppliesOfflineNetworkEnv(t *testing.T) {
 }
 
 func TestRootCapabilitySIDsDedupAndMatchingPreferSpecificRoot(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("root capability SIDs use Windows path identity and DACL semantics")
+	}
 	codexHome := t.TempDir()
 	root := t.TempDir()
 	child := filepath.Join(root, "child")

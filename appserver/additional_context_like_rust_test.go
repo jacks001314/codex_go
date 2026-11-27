@@ -207,7 +207,7 @@ func TestRuntimeRouterAdditionalContextToolOutputTruncationLikeRust(t *testing.T
 		return &request
 	}
 
-	longValue := "browser-head-" + strings.Repeat("b", 20_000) + "-browser-tail"
+	longValue := "browser-head-" + strings.Repeat("b", 80_000) + "-browser-tail"
 	first := runTurn(2, longValue, "long context")
 	outputs := additionalContextToolOutputs(t, first.InputItems)
 	if len(outputs) != 1 {
@@ -223,11 +223,11 @@ func TestRuntimeRouterAdditionalContextToolOutputTruncationLikeRust(t *testing.T
 	if !strings.Contains(body, "tokens truncated") {
 		t.Fatalf("truncated body lacks the marker: %q", body)
 	}
-	if len(body) > 5*1024 {
-		t.Fatalf("body length = %d, want at most %d", len(body), 5*1024)
+	if len(body) > 40*1024 {
+		t.Fatalf("body length = %d, want at most %d", len(body), 40*1024)
 	}
 
-	changedMiddle := longValue[:10_000] + "c" + longValue[10_001:]
+	changedMiddle := longValue[:40_000] + "c" + longValue[40_001:]
 	second := runTurn(3, changedMiddle, "changed middle")
 	secondOutputs := additionalContextToolOutputs(t, second.InputItems)
 	if len(secondOutputs) != 1 || secondOutputs[0]["output"] != outputs[0]["output"] {

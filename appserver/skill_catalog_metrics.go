@@ -25,10 +25,10 @@ const (
 // characters, all tagged by the catalog surface. A skipped render records the
 // zero report (Rust's SkillRenderReport::default()).
 func (r *RuntimeRouter) recordSkillCatalogRender(surface string, report *promptctx.SkillRenderReport) {
-	if r == nil || r.services.SkillShadowMetrics == nil {
+	if r == nil || r.services.SkillsMetrics == nil {
 		return
 	}
-	sink := r.services.SkillShadowMetrics
+	sink := r.services.SkillsMetrics
 	tags := map[string]string{"catalog_surface": surface}
 	totalCount, includedCount, omittedCount, truncatedChars := 0, 0, 0, 0
 	if report != nil {

@@ -78,13 +78,7 @@ func rustSnapshotRoot(t *testing.T) string {
 	if env := os.Getenv("CODEX_RUST_ROOT"); env != "" {
 		candidates = append(candidates, env)
 	}
-	candidates = append(candidates, rustsrc.AnchorRoots()...)
-	candidates = append(candidates,
-		filepath.Join("..", "..", "git", "codex", "codex-rs"),
-		filepath.Join("..", "..", "..", "git", "codex", "codex-rs"),
-		filepath.Join("..", "..", "..", "codex-main", "codex-rs"),
-		filepath.Join("..", "codex-main", "codex-rs"),
-	)
+	candidates = append(candidates, rustsrc.Candidates()...)
 	for _, candidate := range candidates {
 		abs, err := filepath.Abs(candidate)
 		if err != nil {
@@ -232,6 +226,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"model-provider-info",
 		"mxc-sandbox",
 		"models-manager",
+		"network-policy-types",
 		"network-proxy",
 		"ollama",
 		"process-hardening",
@@ -375,7 +370,9 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// plugin-archive-verification member, and exec/src/lib.rs and
 		// core/src/client.rs advanced in the same window.
 		// Re-anchored to upstream a0d5b0a661 (#63621): app-server-protocol/src/protocol/common.rs gained MESSAGE_BOARD_CLIENT_NAME; every other pin below is unchanged at that head.
-		{Path: "Cargo.toml", SHA256: "3be4886b7761faed76b1283a29b0d851d52bf7192cd3d09227e5dec1832c7371"},
+		// Re-anchored to upstream afe555b9d3: Cargo.toml gained the
+		// network-policy-types workspace member; the LF-normalized digest moved.
+		{Path: "Cargo.toml", SHA256: "92928a489db7363dec1ef6dfc2a31798346fc096847567acdc7ea3bd337dc7c5"},
 		{Path: "cli/src/lib.rs", SHA256: "4b67417ded45ae654415e1b46c18c2716810f5fc58be141766da64427e1522ed"},
 		// Re-pinned to upstream 8ae55c863d (#47411): the shared network policy
 		// runs through embedded Codex startup.
@@ -408,13 +405,13 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// runtime authentication through ProviderAuthContext (#57607).
 		// Re-anchored to upstream 59ac39addb: the client gained the
 		// user-input snapshot path for tool outputs (#61962).
-		{Path: "core/src/client.rs", SHA256: "3ee65582c21311ab0b08ac04213396bcdc49791fc518d6f8f5676fbf727b6581"},
+		{Path: "core/src/client.rs", SHA256: "cc62a16922f09369bf458db09da0b63508a9006d41d505569ba70dd13f65c570"},
 		// Re-pinned to upstream 8ae55c863d (#47207/#47248/#47377/#47648): the
 		// gateway OAuth, MCP resource-target, realtime reasoning-status and
 		// executor bearer-token requests.
 		// Round-112 re-anchor to 8196bcdc18: thread/sample/cancel joined the
 		// client request definitions.
-		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "e8fa010581eb4aa3eb28636ce02eaa0945fcefe83998e19feaf0b5424c3d64d8"},
+		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "0e30e991cb640a198c6df55d58b21bac3eb18b6ab18c096b6bda7f768bdb06c1"},
 		// Re-pinned to upstream 8ae55c863d (#46917/#47028/#47207/#47407): the
 		// provider-requirements, message-board, gateway-auth and network-policy
 		// suites joined the module list.

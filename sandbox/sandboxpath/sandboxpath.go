@@ -65,6 +65,7 @@ func (r *WritableRoot) PathContainsProtectedMetadataName(path string) bool {
 	}
 	root := cleanAbsolute(r.Root)
 	target := cleanAbsolute(path)
+	target, root = normalizePathForContainment(target, root)
 	relative, err := filepath.Rel(root, target)
 	if err != nil || relative == "." || strings.HasPrefix(relative, "..") {
 		return false
@@ -74,10 +75,10 @@ func (r *WritableRoot) PathContainsProtectedMetadataName(path string) bool {
 		first = relative[:index]
 	}
 	for _, name := range r.ProtectedMetadataNames {
-		// Rust compares with `==` because Seatbelt resolves the case alias in
-		// the kernel; Windows path identity is case-insensitive (Rust #41209),
-		// so a missing `.git` must still refuse `.GIT` there.
-		if first == name || (runtime.GOOS == "windows" && strings.EqualFold(first, name)) {
+		// Rust relies on Seatbelt to resolve case aliases in the kernel. Go
+		// checks them directly so a missing `.git` cannot be created as `.GIT`
+		// on case-insensitive platforms.
+		if first == name || ((runtime.GOOS == "windows" || runtime.GOOS == "darwin") && strings.EqualFold(first, name)) {
 			return true
 		}
 	}
@@ -500,6 +501,7 @@ func PathWithin(path string, root string) bool {
 	if path == "" || root == "" {
 		return false
 	}
+	path, root = normalizePathForContainment(path, root)
 	relative, err := filepath.Rel(root, path)
 	if err != nil {
 		return false

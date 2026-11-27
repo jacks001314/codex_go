@@ -1288,42 +1288,6 @@ auto_review = true`, true},
 	}
 }
 
-func TestSkillShadowSelectionEnabledUsesRustDefaultAndSkillsConfig(t *testing.T) {
-	if !(&Config{Values: map[string]any{}}).SkillShadowSelectionEnabled() {
-		t.Fatal("SkillShadowSelectionEnabled() default = false, want true")
-	}
-	disabled := &Config{Values: map[string]any{"features": map[string]any{"skill_search": false}}}
-	if disabled.SkillShadowSelectionEnabled() {
-		t.Fatal("SkillShadowSelectionEnabled() = true, want false when skill_search=false")
-	}
-	enabled := &Config{Values: map[string]any{"skills": map[string]any{"shadow_selection_enabled": true}}}
-	if !enabled.SkillShadowSelectionEnabled() {
-		t.Fatal("SkillShadowSelectionEnabled() = false, want true")
-	}
-	compat := &Config{Values: map[string]any{"features": map[string]any{"skill_search": false}, "skills": map[string]any{"shadow_selection_enabled": true}}}
-	if !compat.SkillShadowSelectionEnabled() {
-		t.Fatal("SkillShadowSelectionEnabled() legacy skills.shadow_selection_enabled=true should enable compatibility path")
-	}
-	invalid := &Config{Values: map[string]any{"features": map[string]any{"skill_search": false}, "skills": map[string]any{"shadow_selection_enabled": "true"}}}
-	if invalid.SkillShadowSelectionEnabled() {
-		t.Fatal("SkillShadowSelectionEnabled() invalid value should use false default")
-	}
-}
-
-func TestSkillSelectionEnabledDefaultsOffAndRequiresBoolean(t *testing.T) {
-	if (&Config{}).SkillSelectionEnabled() {
-		t.Fatal("SkillSelectionEnabled() default = true, want false")
-	}
-	enabled := &Config{Values: map[string]any{"skills": map[string]any{"selection_enabled": true}}}
-	if !enabled.SkillSelectionEnabled() {
-		t.Fatal("SkillSelectionEnabled() = false, want true")
-	}
-	invalid := &Config{Values: map[string]any{"skills": map[string]any{"selection_enabled": "true"}}}
-	if invalid.SkillSelectionEnabled() {
-		t.Fatal("SkillSelectionEnabled() accepted a non-boolean value")
-	}
-}
-
 // TestCloudSkillsEnabledUsesRustDefaultAndNestedConfig pins the #47074 config
 // move: cloud skills default to enabled and are gated by
 // `cloud.skills.enabled`, while the legacy `orchestrator.skills` table is

@@ -104,7 +104,11 @@ func responsesRequestDiagnosticFields(request *AgentRequest, apiRequest *respons
 		fields["tool_count"] = toolCount
 		if encoded, err := json.Marshal(apiRequest); err == nil {
 			fields["request_body_bytes"] = len(encoded)
-			fields["request_body"] = json.RawMessage(encoded)
+			if request != nil && request.OmitRequestBodyFromLogs {
+				fields["request_body"] = "<redacted>"
+			} else {
+				fields["request_body"] = json.RawMessage(encoded)
+			}
 		}
 	}
 	return fields

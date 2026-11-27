@@ -950,7 +950,10 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 			}
 			timeoutSec := handler.timeoutSecForEvent(event)
 			key := hookDiscoveryKey(source.KeySource, event, groupIndex, handlerIndex)
-			additionalContextLimit := handler.additionalContextLimit()
+			additionalContextLimit, warning := normalizeHookAdditionalContextLimit(event, HookHandlerCommand, handler.additionalContextLimit(), source.Path)
+			if warning != "" {
+				entry.Warnings = append(entry.Warnings, warning)
+			}
 			declarationHash := hookDiscoveryHash(event, group.Matcher, command, handler.Async, timeoutSec, handler.statusMessage(), additionalContextLimit, failurePolicyConfig)
 			state := source.State(key)
 			displayCommand := expandHookEnvPlaceholders(command, source.Env)
@@ -1020,9 +1023,13 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 				continue
 			}
 			timeoutSec := handler.timeoutSecForEvent(event)
+			additionalContextLimit, warning := normalizeHookAdditionalContextLimit(event, HookHandlerMCPTool, handler.additionalContextLimit(), source.Path)
+			if warning != "" {
+				entry.Warnings = append(entry.Warnings, warning)
+			}
 			key := hookDiscoveryKey(source.KeySource, event, groupIndex, handlerIndex)
 			inputTemplate := cloneHookInput(handler.Input)
-			declarationHash := hookDiscoveryHashHandler(event, group.Matcher, HookHandlerMCPTool, "", false, handler.Server, handler.Tool, inputTemplate, timeoutSec, handler.statusMessage(), nil, failurePolicyConfig)
+			declarationHash := hookDiscoveryHashHandler(event, group.Matcher, HookHandlerMCPTool, "", false, handler.Server, handler.Tool, inputTemplate, timeoutSec, handler.statusMessage(), additionalContextLimit, failurePolicyConfig)
 			state := source.State(key)
 			pluginContentHash, ok := source.pluginContentHash(entry, builtin)
 			if !ok {
@@ -1055,6 +1062,7 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 				TimeoutSec:             timeoutSec,
 				StatusMessage:          handler.statusMessage(),
 				OnFailure:              failurePolicy,
+				AdditionalContextLimit: additionalContextLimit,
 				SourcePath:             source.Path,
 				compiledMatcher:        compiledMatcher,
 				Source:                 source.Source,
@@ -1201,6 +1209,32 @@ func (h *hookJSONHandlerConfigWire) statusMessage() *string {
 		return cloneString(h.StatusMessage)
 	}
 	return cloneString(h.StatusMessageAlias)
+}
+
+const maxMCPHookContextTokens int64 = 10_000
+
+// normalizeHookAdditionalContextLimit mirrors Rust #63922. Only events that
+// can emit additionalContext retain the setting. MCP hooks must use 1-10,000
+// tokens; unsupported values are clamped with a warning while command hooks
+// may use zero to disable spilling or a larger threshold.
+func normalizeHookAdditionalContextLimit(event HookEventName, handlerType HookHandlerType, limit *int64, path string) (*int64, string) {
+	if limit == nil {
+		return nil, ""
+	}
+	supported := false
+	switch event {
+	case HookEventPreToolUse, HookEventPostToolUse, HookEventSessionStart,
+		HookEventUserPromptSubmit, HookEventSubagentStart:
+		supported = true
+	}
+	if !supported {
+		return nil, fmt.Sprintf("ignoring additionalContextLimit for %s hook in %s: this event cannot emit additionalContext", hookEventRustName(event), path)
+	}
+	if handlerType == HookHandlerMCPTool && (*limit < 1 || *limit > maxMCPHookContextTokens) {
+		clamped := maxMCPHookContextTokens
+		return &clamped, fmt.Sprintf("clamping additionalContextLimit from %d to %d for MCP hook in %s", *limit, maxMCPHookContextTokens, path)
+	}
+	return limit, ""
 }
 
 func (h *hookJSONHandlerConfigWire) additionalContextLimit() *int64 {

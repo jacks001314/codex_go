@@ -2591,33 +2591,6 @@ func (c *Config) GuardianV2FreeGuardian() bool {
 	return value
 }
 
-func (c *Config) SkillShadowSelectionEnabled() bool {
-	if featureflags.Enabled(c.FeatureSettings(), "skill_search") {
-		return true
-	}
-	if c == nil || c.Values == nil {
-		return false
-	}
-	skills, ok := c.Values["skills"].(map[string]any)
-	if !ok {
-		return false
-	}
-	enabled, ok := skills["shadow_selection_enabled"].(bool)
-	return ok && enabled
-}
-
-func (c *Config) SkillSelectionEnabled() bool {
-	if c == nil || c.Values == nil {
-		return false
-	}
-	skills, ok := c.Values["skills"].(map[string]any)
-	if !ok {
-		return false
-	}
-	enabled, ok := skills["selection_enabled"].(bool)
-	return ok && enabled
-}
-
 // CloudSkillsEnabled reports whether host-supplied cloud skills are discovered
 // and exposed to the model, mirroring Rust's
 // `cfg.cloud.skills.enabled.unwrap_or(true)` (core/config/mod.rs, #47074).

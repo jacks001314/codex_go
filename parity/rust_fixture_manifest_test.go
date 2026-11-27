@@ -63,7 +63,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// added the human success and config-failure snapshots (#57606).
 			// Re-anchored to upstream 188940258d: the remote-exec suite and its
 			// shared helper joined cli/tests (#63462).
-			Files: 54,
+			// Re-anchored to upstream afe555b9d3: one more CLI fixture joined the
+			// directory in the 3f65e9f131..afe555b9d3 window.
+			Files: 55,
 			Owner: "cli, app",
 			Focus: "CLI help, hidden commands, feature flags, MCP/plugin/login flows",
 			Required: []string{
@@ -114,7 +116,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// intervening sync windows.
 			// Re-anchored to upstream 9018f3a3: #60620 added the compacted-parent
 			// pending-tool-call thread/sample snapshot.
-			Files: 192,
+			// Re-anchored to upstream afe555b9d3: one v2 fixture joined in the
+			// 3f65e9f131..afe555b9d3 window.
+			Files: 193,
 			Owner: "appserver",
 			Focus: "JSON-RPC v2 protocol and runtime fixtures",
 			Required: []string{
@@ -179,7 +183,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// remote-exec suites joined core/tests/suite.
 			// Re-anchored to upstream 1985925638: #63533 added the
 			// client_websockets_catalog_etag and models_etag_responses suites.
-			Files: 511,
+			// Re-anchored to upstream afe555b9d3: the window added two core-suite
+			// fixtures.
+			Files: 513,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{

@@ -62,11 +62,11 @@ func TestEnvironmentContextUTCDateLikeRust(t *testing.T) {
 		wantLocal := instant.In(time.Local).Format("2006-01-02")
 		wantUTC := instant.UTC().Format("2006-01-02")
 		params := &turn.TurnStartParams{}
-		local := router.turnEnvironmentContextTextWithOptions(context.Background(), params, &instant, "UTC", "", true, false, environmentWorldStateRemovals{}, false, nil)
+		local := router.turnEnvironmentContextTextWithOptions(context.Background(), params, &instant, "UTC", "", true, false, environmentWorldStateRemovals{}, false, false, nil)
 		if !strings.Contains(local, "<current_date>"+wantLocal+"</current_date>") {
 			t.Fatalf("local context = %q, want the local date %s", local, wantLocal)
 		}
-		utc := router.turnEnvironmentContextTextWithOptions(context.Background(), params, &instant, "UTC", "", true, true, environmentWorldStateRemovals{}, false, nil)
+		utc := router.turnEnvironmentContextTextWithOptions(context.Background(), params, &instant, "UTC", "", true, true, environmentWorldStateRemovals{}, false, false, nil)
 		if !strings.Contains(utc, "<current_date_utc>"+wantUTC+"</current_date_utc>") {
 			t.Fatalf("utc context = %q, want the UTC date %s", utc, wantUTC)
 		}

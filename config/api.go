@@ -1302,6 +1302,10 @@ type ConfiguredHookHandler struct {
 	TimeoutSec     *uint64        `json:"timeoutSec,omitempty"`
 	Async          bool           `json:"async,omitempty"`
 	StatusMessage  *string        `json:"statusMessage,omitempty"`
+	// AdditionalContextLimit is the approximate token threshold for spilling
+	// plaintext hook additionalContext to disk. MCP hooks clamp unsupported
+	// values to 10,000 during discovery (Rust #63922).
+	AdditionalContextLimit *uint64 `json:"additionalContextLimit,omitempty"`
 	// OnFailure is the per-handler failure policy (Rust #62831), serialized as
 	// a nullable `onFailure` on command and MCP tool handlers.
 	OnFailure *string `json:"onFailure"`
@@ -1311,21 +1315,23 @@ func (h *ConfiguredHookHandler) MarshalJSON() ([]byte, error) {
 	switch h.Type {
 	case "command":
 		return json.Marshal(struct {
-			Type           string  `json:"type"`
-			Command        string  `json:"command"`
-			CommandWindows *string `json:"commandWindows"`
-			TimeoutSec     *uint64 `json:"timeoutSec"`
-			Async          bool    `json:"async"`
-			StatusMessage  *string `json:"statusMessage"`
-			OnFailure      *string `json:"onFailure"`
+			Type                   string  `json:"type"`
+			Command                string  `json:"command"`
+			CommandWindows         *string `json:"commandWindows"`
+			TimeoutSec             *uint64 `json:"timeoutSec"`
+			Async                  bool    `json:"async"`
+			StatusMessage          *string `json:"statusMessage"`
+			AdditionalContextLimit *uint64 `json:"additionalContextLimit,omitempty"`
+			OnFailure              *string `json:"onFailure"`
 		}{
-			Type:           h.Type,
-			Command:        h.Command,
-			CommandWindows: cloneStringPtr(h.CommandWindows),
-			TimeoutSec:     cloneUint64Ptr(h.TimeoutSec),
-			Async:          h.Async,
-			StatusMessage:  cloneStringPtr(h.StatusMessage),
-			OnFailure:      cloneStringPtr(h.OnFailure),
+			Type:                   h.Type,
+			Command:                h.Command,
+			CommandWindows:         cloneStringPtr(h.CommandWindows),
+			TimeoutSec:             cloneUint64Ptr(h.TimeoutSec),
+			Async:                  h.Async,
+			StatusMessage:          cloneStringPtr(h.StatusMessage),
+			AdditionalContextLimit: cloneUint64Ptr(h.AdditionalContextLimit),
+			OnFailure:              cloneStringPtr(h.OnFailure),
 		})
 	case "prompt", "agent":
 		return json.Marshal(struct {
@@ -1333,17 +1339,19 @@ func (h *ConfiguredHookHandler) MarshalJSON() ([]byte, error) {
 		}{Type: h.Type})
 	case "mcp_tool":
 		return json.Marshal(struct {
-			Type          string         `json:"type"`
-			Server        string         `json:"server"`
-			Tool          string         `json:"tool"`
-			Input         map[string]any `json:"input"`
-			TimeoutSec    *uint64        `json:"timeoutSec"`
-			StatusMessage *string        `json:"statusMessage"`
-			OnFailure     *string        `json:"onFailure"`
+			Type                   string         `json:"type"`
+			Server                 string         `json:"server"`
+			Tool                   string         `json:"tool"`
+			Input                  map[string]any `json:"input"`
+			TimeoutSec             *uint64        `json:"timeoutSec"`
+			StatusMessage          *string        `json:"statusMessage"`
+			AdditionalContextLimit *uint64        `json:"additionalContextLimit,omitempty"`
+			OnFailure              *string        `json:"onFailure"`
 		}{
 			Type: h.Type, Server: h.Server, Tool: h.Tool, Input: cloneMap(h.Input),
 			TimeoutSec: cloneUint64Ptr(h.TimeoutSec), StatusMessage: cloneStringPtr(h.StatusMessage),
-			OnFailure: cloneStringPtr(h.OnFailure),
+			AdditionalContextLimit: cloneUint64Ptr(h.AdditionalContextLimit),
+			OnFailure:              cloneStringPtr(h.OnFailure),
 		})
 	default:
 		type configuredHookHandlerAlias ConfiguredHookHandler

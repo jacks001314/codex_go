@@ -18,6 +18,13 @@ func TestAnchorRootsPrefersPinnedWorktree(t *testing.T) {
 			t.Fatalf("WriteFile(Cargo.toml) error = %v", err)
 		}
 	}
+	live := filepath.Join(root, "git", legacyClone, "codex-rs")
+	if err := os.MkdirAll(live, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) error = %v", live, err)
+	}
+	if err := os.WriteFile(filepath.Join(live, "Cargo.toml"), []byte("[workspace]\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(Cargo.toml) error = %v", err)
+	}
 	repo := filepath.Join(root, "repo")
 	if err := os.MkdirAll(filepath.Join(repo, "parity"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(parity) error = %v", err)
@@ -44,12 +51,59 @@ func TestAnchorRootsPrefersPinnedWorktree(t *testing.T) {
 	}
 
 	candidates := Candidates()
-	if len(candidates) != len(roots)+5 {
-		t.Fatalf("Candidates() = %v, want %d entries", candidates, len(roots)+5)
+	if len(candidates) != len(roots)+6 {
+		t.Fatalf("Candidates() = %v, want %d entries", candidates, len(roots)+6)
 	}
-	last := candidates[len(candidates)-1]
-	if want := filepath.Join("..", "codex-main", "codex-rs"); last != want {
-		t.Fatalf("Candidates() last = %s, want legacy fallback %s", last, want)
+	if candidates[0] != pinned {
+		t.Fatalf("Candidates()[0] = %s, want pinned worktree %s", candidates[0], pinned)
+	}
+	if candidates[1] != live {
+		t.Fatalf("Candidates()[1] = %s, want discovered live checkout %s", candidates[1], live)
+	}
+	if want := filepath.Join("..", "..", "git", legacyClone, "codex-rs"); candidates[2] != want {
+		t.Fatalf("Candidates()[2] = %s, want relative live fallback %s", candidates[2], want)
+	}
+	if candidates[len(candidates)-1] != other {
+		t.Fatalf("Candidates() last = %s, want unrelated anchor %s", candidates[len(candidates)-1], other)
+	}
+}
+
+func TestCandidatesPreferLiveCheckoutWhenPinnedAnchorIsMissing(t *testing.T) {
+	root := t.TempDir()
+	stale := filepath.Join(root, "git", "codex-anchor-ffffffff", "codex-rs")
+	if err := os.MkdirAll(stale, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) error = %v", stale, err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, "Cargo.toml"), []byte("[workspace]\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(Cargo.toml) error = %v", err)
+	}
+	live := filepath.Join(root, "git", legacyClone, "codex-rs")
+	if err := os.MkdirAll(live, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) error = %v", live, err)
+	}
+	if err := os.WriteFile(filepath.Join(live, "Cargo.toml"), []byte("[workspace]\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(Cargo.toml) error = %v", err)
+	}
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(filepath.Join(repo, "parity"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(parity) error = %v", err)
+	}
+	manifest := []byte(`{"rustToInclusive":"67f0994b0123456789"}`)
+	if err := os.WriteFile(filepath.Join(repo, "parity", "commits.json"), manifest, 0o600); err != nil {
+		t.Fatalf("WriteFile(commits.json) error = %v", err)
+	}
+	pkg := filepath.Join(repo, "somepkg")
+	if err := os.MkdirAll(pkg, 0o755); err != nil {
+		t.Fatalf("MkdirAll(somepkg) error = %v", err)
+	}
+	t.Chdir(pkg)
+
+	candidates := Candidates()
+	if candidates[0] != live {
+		t.Fatalf("Candidates()[0] = %s, want discovered live checkout %s", candidates[0], live)
+	}
+	if candidates[len(candidates)-1] != stale {
+		t.Fatalf("Candidates() last = %s, want stale anchor %s", candidates[len(candidates)-1], stale)
 	}
 }
 

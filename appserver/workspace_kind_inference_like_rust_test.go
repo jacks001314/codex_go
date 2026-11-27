@@ -78,6 +78,7 @@ func TestTurnStartReportsInferredWorkspaceKindLikeRust(t *testing.T) {
 		Agent:        agent,
 		ThreadStatus: NewThreadStatusManager(),
 	})
+	t.Cleanup(func() { _ = router.Close() })
 	router.SetNotificationSink(NewNotificationBuffer())
 	if !router.rememberConnectionClientInfo("", ClientInfo{Name: "codex-tui", Version: "1.0"}) {
 		t.Fatal("client info was not recorded")

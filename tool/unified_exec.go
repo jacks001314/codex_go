@@ -357,6 +357,10 @@ type unifiedExecProcess struct {
 	// can precede finalization while the output collector still records the
 	// exit code (Rust #62557 state.has_exited).
 	processExited bool
+	// exitCodeKnown makes the exit status and code one state. Rust #63896
+	// derives has_exited from the shared exit code, so callers never observe an
+	// exited process before its code is available.
+	exitCodeKnown bool
 	exitCode      int
 	waitErr       error
 	timedOut      bool
@@ -1796,6 +1800,7 @@ func (p *unifiedExecProcess) finishWithExit(err error, exitCode *int) {
 	} else if err != nil {
 		p.exitCode = -1
 	}
+	p.exitCodeKnown = true
 	var violationOutput *sandbox.SandboxExecOutput
 	var violationSandboxType sandbox.SandboxType
 	if p.sandboxType != nil {
@@ -2227,10 +2232,11 @@ func (p *unifiedExecProcess) enforceTimeout(timeout time.Duration) {
 func (p *unifiedExecProcess) hasExited() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.processExited || p.exited {
-		return true
+	if !p.exitCodeKnown && p.cmd != nil && p.cmd.ProcessState != nil {
+		p.exitCode = unifiedExecExitCode(p.cmd.ProcessState, p.waitErr)
+		p.exitCodeKnown = true
 	}
-	return p.cmd != nil && p.cmd.ProcessState != nil
+	return p.exitCodeKnown
 }
 
 // markProcessExited records an executor-confirmed exit without clearing the
@@ -2420,7 +2426,7 @@ func (p *unifiedExecProcess) snapshotAndDrain() (string, int, bool, int, error, 
 	if p.output != nil {
 		output, omittedBytes = p.output.DrainWithOmissionMarker()
 	}
-	return string(output), omittedBytes, p.exited, p.exitCode, p.waitErr, p.timedOut
+	return string(output), omittedBytes, p.exitCodeKnown, p.exitCode, p.waitErr, p.timedOut
 }
 
 type unifiedExecOutputWriter struct {

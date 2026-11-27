@@ -155,7 +155,7 @@ func (s environmentWorldStateSection) normalized() environmentWorldStateSection 
 // turn's selected environments. The captured environment shell, working
 // directory, and (with per_environment_context) its own network and filesystem
 // rules are the values the model is about to see.
-func (r *RuntimeRouter) environmentWorldStateSectionForTurn(ctx context.Context, params *turn.TurnStartParams, date *time.Time, timezone string, shellVersion string, includeTime bool, utcDate bool, perEnvironment bool, networkRequirements *config.NetworkRequirements) environmentWorldStateSection {
+func (r *RuntimeRouter) environmentWorldStateSectionForTurn(ctx context.Context, params *turn.TurnStartParams, date *time.Time, timezone string, shellVersion string, includeTime bool, utcDate bool, perEnvironment bool, filesystemFormat sandbox.FileSystemContextFormat, networkRequirements *config.NetworkRequirements) environmentWorldStateSection {
 	section := environmentWorldStateSection{
 		Environments:   map[string]environmentWorldStateEnvironment{},
 		PerEnvironment: perEnvironment,
@@ -205,7 +205,7 @@ func (r *RuntimeRouter) environmentWorldStateSectionForTurn(ctx context.Context,
 			if len(roots) == 0 {
 				roots = []string{cwd}
 			}
-			if filesystem, err := sandbox.RenderFileSystemContext(environment.PermissionProfile, cwd, roots); err == nil {
+			if filesystem, err := sandbox.RenderFileSystemContextWithFormat(environment.PermissionProfile, cwd, roots, filesystemFormat); err == nil {
 				entry.Filesystem = strings.TrimSpace(filesystem)
 			}
 		}
@@ -230,7 +230,7 @@ func (r *RuntimeRouter) environmentWorldStateSectionForTurn(ctx context.Context,
 		if len(roots) == 0 {
 			roots = []string{cwd}
 		}
-		if filesystem, err := sandbox.RenderFileSystemContext(primary.PermissionProfile, cwd, roots); err == nil {
+		if filesystem, err := sandbox.RenderFileSystemContextWithFormat(primary.PermissionProfile, cwd, roots, filesystemFormat); err == nil {
 			section.Filesystem = strings.TrimSpace(filesystem)
 		}
 	}

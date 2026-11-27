@@ -77,6 +77,9 @@ var Registry = []Spec{
 	{Key: "shell_snapshot", Stage: StageStable, DefaultEnabled: true},
 	{Key: "shell_snapshot_v2", Stage: StageUnderDevelopment},
 	{Key: "deferred_executor", Stage: StageUnderDevelopment},
+	// Rust #64164: summarize repeated generated metadata read rules across
+	// workspace-write paths. Under development and off by default.
+	{Key: "compact_filesystem_context", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs #61494): describe each selected
 	// environment's filesystem and permissions separately. Under development
 	// and off by default.
@@ -319,7 +322,9 @@ var Registry = []Spec{
 	{Key: "item_ids", Stage: StageRemoved, DefaultEnabled: true},
 	{Key: "concurrent_reasoning_summaries", Stage: StageStable, DefaultEnabled: true},
 	{Key: "skill_mcp_dependency_install", Stage: StageStable, DefaultEnabled: true},
-	{Key: "skill_search", Stage: StageStable, DefaultEnabled: true},
+	// Rust #63993 removed the shadow skill-ranking experiment but keeps
+	// skill_search as an ignored compatibility key.
+	{Key: "skill_search", Stage: StageRemoved, DefaultEnabled: false},
 	{Key: "skill_env_var_dependency_prompt", Stage: StageRemoved},
 	{Key: "mentions_v2", Stage: StageStable, DefaultEnabled: true},
 	{Key: "steer", Stage: StageRemoved, DefaultEnabled: true},
@@ -365,6 +370,9 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs #56459): enable Guardian V3
 	// integrations. Under development and off by default.
 	{Key: "guardianv3", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust #63949: opt-in shadow intake for Guardian V3. Under development and
+	// off by default.
+	{Key: "guardianv3.shadow_enabled", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "goals", Stage: StageStable, DefaultEnabled: true},
 	{Key: "token_budget", Stage: StageUnderDevelopment},
 	{Key: "rollout_budget", Stage: StageUnderDevelopment},

@@ -188,12 +188,12 @@ const (
 const ConversationTurnCountMetric = "codex.conversation.turn.count"
 
 // AdditionalContextValueBytesBuckets mirrors Rust
-// ADDITIONAL_CONTEXT_VALUE_BYTES_BUCKETS (#58939): logarithmic byte buckets
-// through 4 MiB, with a 4 KiB boundary near the truncation cap.
+// ADDITIONAL_CONTEXT_VALUE_BYTES_BUCKETS (#63843): logarithmic byte buckets
+// through 4 MiB, with a 40 KiB boundary near the truncation cap.
 var AdditionalContextValueBytesBuckets = additionalContextValueBytesBuckets()
 
 func additionalContextValueBytesBuckets() []float64 {
-	buckets := append(metrics.ContextLogBuckets(22), 4096)
+	buckets := append(metrics.ContextLogBuckets(22), 40*1024)
 	sort.Float64s(buckets)
 	out := buckets[:0]
 	for _, bucket := range buckets {

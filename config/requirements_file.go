@@ -1633,6 +1633,9 @@ func hookHandlersAnyKey(values map[string]any, keys ...string) ([]ConfiguredHook
 		if value, ok := stringAnyKey(handlerMap, "status_message", "statusMessage"); ok {
 			handler.StatusMessage = &value
 		}
+		if value, ok := uint64AnyKey(handlerMap, "additional_context_limit", "additionalContextLimit"); ok {
+			handler.AdditionalContextLimit = &value
+		}
 		if value, ok := stringAnyKey(handlerMap, "onFailure", "on_failure"); ok {
 			// Rust's HookFailurePolicy enum accepts only these two values.
 			switch value {

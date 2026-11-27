@@ -82,9 +82,9 @@ func TestWritableRootCaseVariantMetadataLikeRust(t *testing.T) {
 // the first path component with `==`
 // (`protocol::WritableRoot::path_contains_protected_metadata_name`,
 // permissions.rs PROTECTED_METADATA_PATH_NAMES) because Seatbelt resolves the
-// alias in the kernel. On Windows path identity is case-insensitive (Rust
-// #41209), so the Go port compares case-insensitively there; otherwise a
-// missing `.git` would let `.GIT` create the real metadata directory.
+// alias in the kernel. Go has no Seatbelt kernel boundary in this predicate, so
+// Windows and case-insensitive macOS filesystems refuse the alias directly;
+// otherwise a missing `.git` would let `.GIT` create the real metadata directory.
 func TestProtectedMetadataNameGateCaseRules(t *testing.T) {
 	temp := t.TempDir()
 	workspace := filepath.Join(temp, "workspace")
@@ -98,9 +98,9 @@ func TestProtectedMetadataNameGateCaseRules(t *testing.T) {
 	if bare.IsPathWritable(filepath.Join(workspace, ".git", "config")) {
 		t.Fatalf("IsPathWritable(%q) = true, want the exact metadata name refused by the name gate", filepath.Join(workspace, ".git", "config"))
 	}
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 		if bare.IsPathWritable(filepath.Join(workspace, ".GIT", "config")) {
-			t.Fatal("Windows path identity is case-insensitive, so the name gate refuses case variants too")
+			t.Fatal("case-insensitive path identity must refuse metadata case variants")
 		}
 		return
 	}

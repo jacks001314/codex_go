@@ -72,9 +72,13 @@ type activeRuntimeTurn struct {
 	Cancel            context.CancelFunc
 	StartedAtMS       int64
 	Params            *turn.TurnStartParams
-	ConnectionID      string
-	RunConfig         *appTurnRunConfig
-	SteerCount        int
+	// PendingInitialInput remains with the registered turn until startup
+	// records the accepted input. Cleanup can reclaim it after detaching the
+	// task, so suspension cannot drop the submission (Rust #64002).
+	PendingInitialInput *turn.TurnStartParams
+	ConnectionID        string
+	RunConfig           *appTurnRunConfig
+	SteerCount          int
 	// Dictation aggregates accepted user-input provenance for this turn
 	// (Rust #61215): any true wins, unknown blocks a false report.
 	Dictation turnDictationState
@@ -1920,7 +1924,13 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	// accompanying text, and then fails with the unsupported-operation error
 	// instead of the request being refused.
 	if filtered, rejected := turnStartParamsWithoutUploadedAudio(params); rejected && !modelSupportsAudioInput(runConfig.ModelInfo) {
-		r.persistRuntimeTurnPrompt(threadID, turnID, filtered, startedAt)
+		if pending, claimedAt, owns := r.claimRuntimeTurnInitialInput(threadID, turnID); owns && pending != nil {
+			createdAt := startedAt
+			if !claimedAt.IsZero() {
+				createdAt = claimedAt
+			}
+			r.persistRuntimeTurnPrompt(threadID, turnID, filtered, createdAt)
+		}
 		r.clearActiveRuntimeTurn(threadID, turnID)
 		r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, errUnsupportedUploadedAudio, &turnCompletionAnalyticsContext{
 			ConnectionID: connectionID,
@@ -1936,10 +1946,10 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	if record, recErr := r.threadRecord(session.ThreadID(threadID), true, false); recErr == nil && record != nil {
 		ran, previousErr := r.runPreviousModelInlineCompact(ctx, threadID, turnID, connectionID, params, runConfig, record)
 		if previousErr != nil {
-			r.clearActiveRuntimeTurn(threadID, turnID)
 			// Rust #44487: pre-turn compaction runs before the incoming prompt is
 			// recorded, so preserve the accepted prompt on every failure.
-			r.persistRuntimeTurnPrompt(threadID, turnID, params, startedAt)
+			r.persistRuntimeTurnInitialInput(threadID, turnID, params, startedAt)
+			r.clearActiveRuntimeTurn(threadID, turnID)
 			r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, previousErr, &turnCompletionAnalyticsContext{ConnectionID: connectionID, Params: params, RunConfig: runConfig})
 			return
 		}
@@ -1947,8 +1957,8 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			// appTurnConfig contains the session history; reload it after
 			// compaction.
 			if runConfig, err = r.appTurnConfig(ctx, threadID, turnID, connectionID, params, startedAtMS, runtime); err != nil {
+				r.persistRuntimeTurnInitialInput(threadID, turnID, params, startedAt)
 				r.clearActiveRuntimeTurn(threadID, turnID)
-				r.persistRuntimeTurnPrompt(threadID, turnID, params, startedAt)
 				r.finishTurnWithError(threadID, turnID, startedAtMS, err)
 				return
 			}
@@ -1972,20 +1982,20 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		})
 		if compactErr != nil {
 			r.persistCompactionFailure(threadID, compactErr)
-			r.clearActiveRuntimeTurn(threadID, turnID)
 			// Rust #44487: pre-turn compaction runs before the incoming prompt is
 			// recorded, so preserve the accepted prompt on every failure, before
 			// the failure is reported.
-			r.persistRuntimeTurnPrompt(threadID, turnID, params, startedAt)
+			r.persistRuntimeTurnInitialInput(threadID, turnID, params, startedAt)
+			r.clearActiveRuntimeTurn(threadID, turnID)
 			r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, compactErr, &turnCompletionAnalyticsContext{ConnectionID: connectionID, Params: params, RunConfig: runConfig})
 			return
 		}
 		// appTurnConfig contains the session history; reload it after compaction.
 		if runConfig, err = r.appTurnConfig(ctx, threadID, turnID, connectionID, params, startedAtMS, runtime); err != nil {
-			r.clearActiveRuntimeTurn(threadID, turnID)
 			// Rust #44487: a failed pre-sampling rebuild is still a pre-turn
 			// failure, so the accepted prompt is preserved before the error.
-			r.persistRuntimeTurnPrompt(threadID, turnID, params, startedAt)
+			r.persistRuntimeTurnInitialInput(threadID, turnID, params, startedAt)
+			r.clearActiveRuntimeTurn(threadID, turnID)
 			r.finishTurnWithError(threadID, turnID, startedAtMS, err)
 			return
 		}
@@ -2009,7 +2019,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	if turnStartUsesStructuredUserInput(params) {
 		preparedUserItem, preparedUserNotice = r.preparedUserMessageInputItem(turnID, params)
 	}
-	promptPersisted = r.persistRuntimeTurnPrompt(threadID, turnID, params, startedAt)
+	promptPersisted = r.persistRuntimeTurnInitialInput(threadID, turnID, params, startedAt)
 	// Rust records an accepted inter-agent communication as soon as the turn
 	// takes it, so the rollout carries the delivery boundary before the first
 	// sampling request.
@@ -4421,6 +4431,89 @@ func (r *RuntimeRouter) registerTrackedActiveRuntimeTurn(threadID string, turnID
 	return nil
 }
 
+// parkRuntimeTurnInitialInput keeps the accepted submission with the registered
+// turn while startup work can be suspended. The turn worker and cleanup claim
+// this value under the active-turn lock, so exactly one path records it.
+func (r *RuntimeRouter) parkRuntimeTurnInitialInput(threadID, turnID string, params *turn.TurnStartParams) bool {
+	if r == nil || r.threads == nil || params == nil {
+		return false
+	}
+	parked := false
+	r.threads.UpdateTurn(threadID, turnID, func(active *activeRuntimeTurn) {
+		active.PendingInitialInput = cloneTurnStartParams(params)
+		parked = true
+	})
+	return parked
+}
+
+// armRuntimeTurnInitialInputPersistence lets cancellation paths that only
+// cancel the task (agent-tree suspension) preserve the parked submission after
+// the worker exits.
+func (r *RuntimeRouter) armRuntimeTurnInitialInputPersistence(ctx context.Context, threadID, turnID string) {
+	if r == nil || ctx == nil {
+		return
+	}
+	context.AfterFunc(ctx, func() {
+		r.persistPendingRuntimeTurnInput(threadID, turnID)
+	})
+}
+
+func (r *RuntimeRouter) persistPendingRuntimeTurnInput(threadID, turnID string) bool {
+	if r == nil || r.threads == nil {
+		return false
+	}
+	pending, startedAtMS, owns := r.threads.TakePendingInitialInput(threadID, turnID)
+	if !owns {
+		return false
+	}
+	createdAt := time.Now().UTC()
+	if startedAtMS > 0 {
+		createdAt = time.UnixMilli(startedAtMS).UTC()
+	}
+	return r.persistRuntimeTurnPrompt(threadID, turnID, pending, createdAt)
+}
+
+// persistRuntimeTurnInitialInput claims and records the parked submission. A
+// false result means cleanup already owns the input or there was no accepted
+// user item to record.
+func (r *RuntimeRouter) claimRuntimeTurnInitialInput(threadID, turnID string) (*turn.TurnStartParams, time.Time, bool) {
+	if r == nil || r.threads == nil {
+		return nil, time.Time{}, false
+	}
+	pending, startedAtMS, owns := r.threads.TakePendingInitialInput(threadID, turnID)
+	if !owns {
+		return nil, time.Time{}, false
+	}
+	createdAt := time.Now().UTC()
+	if startedAtMS > 0 {
+		createdAt = time.UnixMilli(startedAtMS).UTC()
+	}
+	return pending, createdAt, true
+}
+
+func (r *RuntimeRouter) persistRuntimeTurnInitialInput(threadID, turnID string, fallback *turn.TurnStartParams, createdAt time.Time) bool {
+	pending, claimedAt, owns := r.claimRuntimeTurnInitialInput(threadID, turnID)
+	if !owns || pending == nil {
+		return false
+	}
+	fallback = pending
+	if !claimedAt.IsZero() {
+		createdAt = claimedAt
+	}
+	return r.persistRuntimeTurnPrompt(threadID, turnID, fallback, createdAt)
+}
+
+func (r *RuntimeRouter) persistCapturedRuntimeTurnInput(active *activeRuntimeTurn) bool {
+	if r == nil || active == nil || active.PendingInitialInput == nil {
+		return false
+	}
+	createdAt := time.Now().UTC()
+	if active.StartedAtMS > 0 {
+		createdAt = time.UnixMilli(active.StartedAtMS).UTC()
+	}
+	return r.persistRuntimeTurnPrompt(active.ThreadID, active.TurnID, active.PendingInitialInput, createdAt)
+}
+
 func (r *RuntimeRouter) updateActiveRuntimeTurnAnalytics(threadID string, turnID string, connectionID string, runConfig *appTurnRunConfig) {
 	if r == nil {
 		return
@@ -4501,6 +4594,7 @@ func (r *RuntimeRouter) cancelActiveRuntimeTurn(threadID string, turnID string) 
 	if active.Cancel != nil {
 		active.Cancel()
 	}
+	r.persistCapturedRuntimeTurnInput(active)
 	if r.networkApproval != nil {
 		r.networkApproval.cancelPendingForTurn(threadID, turnID)
 		r.networkApproval.clearActiveCallsForTurn(threadID, turnID)
@@ -4549,6 +4643,7 @@ func (r *RuntimeRouter) cancelActiveRuntimeTurnTracked(threadID string, turnID s
 		}
 		active.Cancel()
 	}
+	r.persistCapturedRuntimeTurnInput(active)
 	if r.networkApproval != nil {
 		r.networkApproval.cancelPendingForTurn(threadID, turnID)
 		r.networkApproval.clearActiveCallsForTurn(threadID, turnID)
@@ -8352,6 +8447,10 @@ func (r *RuntimeRouter) compactEnvironmentContext(ctx context.Context, record *s
 		}
 	}
 	perEnvironment := cfg != nil && features.Enabled(cfg.FeatureSettings(), "per_environment_context")
+	filesystemFormat := sandbox.FileSystemContextFull
+	if cfg != nil && features.Enabled(cfg.FeatureSettings(), "compact_filesystem_context") {
+		filesystemFormat = sandbox.FileSystemContextCompact
+	}
 	var managedNetwork *config.NetworkRequirements
 	if cfg != nil && cfg.Requirements != nil {
 		managedNetwork = cfg.Requirements.Network
@@ -8361,13 +8460,13 @@ func (r *RuntimeRouter) compactEnvironmentContext(ctx context.Context, record *s
 	// Rust renders the whole world state for a compaction window (render_full),
 	// so a value that disappeared is already explicit and no unavailable marker
 	// is emitted; the snapshot still records what the model will see.
-	section := r.environmentWorldStateSectionForTurn(ctx, contextParams, current, localTimezoneName(), "", cfg.IncludeEnvironmentContextTime(), utcEnvironmentDate, perEnvironment, managedNetwork)
+	section := r.environmentWorldStateSectionForTurn(ctx, contextParams, current, localTimezoneName(), "", cfg.IncludeEnvironmentContextTime(), utcEnvironmentDate, perEnvironment, filesystemFormat, managedNetwork)
 	// No diff is rendered here, so the host roster is not read (Rust resolves it
 	// only for an emitted environment fragment).
 	if _, err := r.recordEnvironmentWorldState(record, section, false, false, nil); err != nil {
 		return nil, err
 	}
-	text := r.turnEnvironmentContextTextWithOptions(ctx, contextParams, current, localTimezoneName(), "", cfg.IncludeEnvironmentContextTime(), utcEnvironmentDate, environmentWorldStateRemovals{}, perEnvironment, managedNetwork)
+	text := r.turnEnvironmentContextTextWithOptions(ctx, contextParams, current, localTimezoneName(), "", cfg.IncludeEnvironmentContextTime(), utcEnvironmentDate, environmentWorldStateRemovals{}, perEnvironment, filesystemFormat == sandbox.FileSystemContextCompact, managedNetwork)
 	return append(items, compact.Item{
 		ID: "environment-context-" + safeIdentifier(request.TurnID), Type: "message", Role: "user", Kind: "environment_context", Text: text, Created: created,
 	}), nil
@@ -10095,12 +10194,16 @@ func (r *RuntimeRouter) turnEnvironmentContextInputItemForTurn(ctx context.Conte
 	params = r.environmentContextParams(threadID, params)
 	shellVersion := r.powershellShellVersionForTurn(ctx, cfg, params)
 	perEnvironment := cfg != nil && features.Enabled(cfg.FeatureSettings(), "per_environment_context")
+	filesystemFormat := sandbox.FileSystemContextFull
+	if cfg != nil && features.Enabled(cfg.FeatureSettings(), "compact_filesystem_context") {
+		filesystemFormat = sandbox.FileSystemContextCompact
+	}
 	var managedNetwork *config.NetworkRequirements
 	if cfg != nil && cfg.Requirements != nil {
 		managedNetwork = cfg.Requirements.Network
 	}
 	utcEnvironmentDate := features.Enabled(cfg.FeatureSettings(), "utc_environment_date")
-	section := r.environmentWorldStateSectionForTurn(ctx, params, current, localTimezoneName(), shellVersion, cfg.IncludeEnvironmentContextTime(), utcEnvironmentDate, perEnvironment, managedNetwork)
+	section := r.environmentWorldStateSectionForTurn(ctx, params, current, localTimezoneName(), shellVersion, cfg.IncludeEnvironmentContextTime(), utcEnvironmentDate, perEnvironment, filesystemFormat, managedNetwork)
 	// Rust reads the host roster only after the environment diff selected its
 	// updates (WorldState::resolve_host_roster), so a turn whose environment
 	// context did not change must not consult the agent session reader.
@@ -10243,7 +10346,7 @@ func (r *RuntimeRouter) turnEnvironmentContextText(params *turn.TurnStartParams,
 }
 
 func (r *RuntimeRouter) turnEnvironmentContextTextWithContext(ctx context.Context, params *turn.TurnStartParams, date *time.Time, timezone string, shellVersion string, includeTime bool, removals environmentWorldStateRemovals) string {
-	return r.turnEnvironmentContextTextWithOptions(ctx, params, date, timezone, shellVersion, includeTime, false, removals, false, nil)
+	return r.turnEnvironmentContextTextWithOptions(ctx, params, date, timezone, shellVersion, includeTime, false, removals, false, false, nil)
 }
 
 // turnEnvironmentContextTextWithOptions renders Rust's EnvironmentsState. The
@@ -10252,8 +10355,12 @@ func (r *RuntimeRouter) turnEnvironmentContextTextWithContext(ctx context.Contex
 // network rules. Shared managed network requirements become
 // <thread_network_requirements> so they are not mistaken for an environment's
 // own domains.
-func (r *RuntimeRouter) turnEnvironmentContextTextWithOptions(ctx context.Context, params *turn.TurnStartParams, date *time.Time, timezone string, shellVersion string, includeTime bool, utcDate bool, removals environmentWorldStateRemovals, perEnvironment bool, networkRequirements *config.NetworkRequirements) string {
-	section := r.environmentWorldStateSectionForTurn(ctx, params, date, timezone, shellVersion, includeTime, utcDate, perEnvironment, networkRequirements)
+func (r *RuntimeRouter) turnEnvironmentContextTextWithOptions(ctx context.Context, params *turn.TurnStartParams, date *time.Time, timezone string, shellVersion string, includeTime bool, utcDate bool, removals environmentWorldStateRemovals, perEnvironment bool, compactFilesystem bool, networkRequirements *config.NetworkRequirements) string {
+	filesystemFormat := sandbox.FileSystemContextFull
+	if compactFilesystem {
+		filesystemFormat = sandbox.FileSystemContextCompact
+	}
+	section := r.environmentWorldStateSectionForTurn(ctx, params, date, timezone, shellVersion, includeTime, utcDate, perEnvironment, filesystemFormat, networkRequirements)
 	threadID := ""
 	if params != nil {
 		threadID = strings.TrimSpace(params.ThreadID)
@@ -12456,11 +12563,6 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 	customMetadata, customWarnings := r.customSkillMetadataForRuntime(ctx, turnID)
 	skillMetadata = append(skillMetadata, customMetadata...)
 	r.notifySkillWarnings(threadID, customWarnings)
-	r.runSkillShadowSelection(threadID, turnID, cfg, params, hostSkillMetadata, orchestratorMetadata)
-	hostSkillMetadata = selectSkillMetadata(cfg, params, hostSkillMetadata)
-	selectedCapabilitySkillMetadata = selectSkillMetadata(cfg, params, selectedCapabilitySkillMetadata)
-	orchestratorMetadata = selectSkillMetadata(cfg, params, orchestratorMetadata)
-	customMetadata = selectSkillMetadata(cfg, params, customMetadata)
 	skillMetadata = append(append(append(append([]promptctx.InstructionsSkillMetadata(nil), hostSkillMetadata...), selectedCapabilitySkillMetadata...), orchestratorMetadata...), customMetadata...)
 	r.maybePromptAndInstallSkillMCPDependencies(ctx, threadID, turnID, cfg, params, skillEntries, skillMetadata)
 	modelID := firstNonEmpty(turnParamModel(params), stringConfigValue(cfg, "model"), defaultModelForAppTurn())
@@ -14054,9 +14156,6 @@ func implicitSkillInvocationSeenKey(skill promptctx.InstructionsSkillMetadata) s
 }
 
 func (r *RuntimeRouter) trackSkillInvocationEvent(ctx context.Context, threadID string, turnID string, modelID string, productClientID string, skill promptctx.InstructionsSkillMetadata, invokeType string) {
-	if invokeType == telemetry.SkillInvocationTypeImplicit {
-		r.recordSkillShadowInvocation(threadID, turnID, skill)
-	}
 	// Rust #49689: emit the OTEL `codex.skill_invocation` log for every detected
 	// invocation, independent of the analytics exporter.
 	if r != nil {

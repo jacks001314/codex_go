@@ -216,7 +216,7 @@ func baseIntegrityDependencies(request *RunnerRequest) []integrityDependency {
 	} else {
 		dependencies = append(dependencies, integrityDependency{name: "codex", path: executable})
 	}
-	if (runtime.GOOS == "linux" || runtime.GOOS == "windows") && len(request.Command) > 0 {
+	if len(request.Command) > 0 {
 		dependencies = append(dependencies, integrityDependency{name: "sandbox_launcher", path: request.Command[0]})
 	}
 	return dependencies

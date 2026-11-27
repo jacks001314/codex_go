@@ -26586,6 +26586,7 @@ type recordingTurnEventSink struct {
 	skillInvocation    chan telemetry.SkillInvocationEventRequest
 	artifactOperation  chan telemetry.ArtifactOperationEventRequest
 	guardianV2         chan telemetry.GuardianV2EventRequest
+	guardianReview     chan telemetry.GuardianReviewEventRequest
 }
 
 type standaloneWebSearchRuntimeAgent struct {
@@ -26732,6 +26733,7 @@ func newRecordingTurnEventSink() *recordingTurnEventSink {
 		skillInvocation:    make(chan telemetry.SkillInvocationEventRequest, 8),
 		artifactOperation:  make(chan telemetry.ArtifactOperationEventRequest, 8),
 		guardianV2:         make(chan telemetry.GuardianV2EventRequest, 8),
+		guardianReview:     make(chan telemetry.GuardianReviewEventRequest, 8),
 	}
 }
 
@@ -26887,6 +26889,13 @@ func (s *recordingTurnEventSink) TrackCodexReviewEvent(ctx context.Context, even
 		return
 	}
 	s.review <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexGuardianReviewEvent(ctx context.Context, event telemetry.GuardianReviewEventRequest) {
+	if s == nil || s.guardianReview == nil {
+		return
+	}
+	s.guardianReview <- event
 }
 
 func (s *recordingTurnEventSink) TrackCodexGuardianV2Event(ctx context.Context, event telemetry.GuardianV2EventRequest) {

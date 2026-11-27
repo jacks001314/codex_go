@@ -82,7 +82,9 @@ func TestTurnStartReportsStagedThreadStartProjectLikeRust(t *testing.T) {
 		Agent:        agent,
 		ThreadStatus: NewThreadStatusManager(),
 	})
-	router.SetNotificationSink(NewNotificationBuffer())
+	t.Cleanup(func() { _ = router.Close() })
+	sink := NewNotificationBuffer()
+	router.SetNotificationSink(sink)
 	if !router.rememberConnectionClientInfo("", ClientInfo{Name: "codex-tui", Version: "1.0"}) {
 		t.Fatal("client info was not recorded")
 	}
@@ -112,4 +114,5 @@ func TestTurnStartReportsStagedThreadStartProjectLikeRust(t *testing.T) {
 	if metadata["workspace_kind"] != "project" {
 		t.Fatalf("workspace_kind = %#v, want project", metadata["workspace_kind"])
 	}
+	waitForNotificationMethod(t, sink, NotificationTurnCompleted)
 }

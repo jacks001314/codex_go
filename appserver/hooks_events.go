@@ -26,6 +26,7 @@ type SubagentHookContext struct {
 }
 
 type HookSessionStartRequest struct {
+	SessionID      string
 	ThreadID       string
 	CWD            string
 	TranscriptPath *string
@@ -36,6 +37,7 @@ type HookSessionStartRequest struct {
 }
 
 type HookSubagentStartRequest struct {
+	SessionID      string
 	ThreadID       string
 	TurnID         string
 	CWD            string
@@ -48,6 +50,7 @@ type HookSubagentStartRequest struct {
 }
 
 type HookStopRequest struct {
+	SessionID            string
 	ThreadID             string
 	TurnID               string
 	CWD                  string
@@ -123,6 +126,7 @@ func (r *HookRunner) RunModelRequest(ctx context.Context, request *HookModelRequ
 }
 
 type HookSubagentStopRequest struct {
+	SessionID            string
 	ThreadID             string
 	TurnID               string
 	CWD                  string
@@ -473,6 +477,13 @@ func nullableStringValue(value *string) any {
 	return *value
 }
 
+func hookSessionIdentifier(sessionID string, threadID string) string {
+	if sessionID = strings.TrimSpace(sessionID); sessionID != "" {
+		return sessionID
+	}
+	return strings.TrimSpace(threadID)
+}
+
 func addSubagentHookInput(input map[string]any, subagent *SubagentHookContext) {
 	if subagent == nil {
 		return
@@ -535,7 +546,7 @@ func HookInputJSON(request any) (string, error) {
 		}
 	case *HookSessionStartRequest:
 		input = map[string]any{
-			"session_id":      typed.ThreadID,
+			"session_id":      hookSessionIdentifier(typed.SessionID, typed.ThreadID),
 			"transcript_path": nullableStringValue(typed.TranscriptPath),
 			"cwd":             typed.CWD,
 			"hook_event_name": "SessionStart",
@@ -553,7 +564,7 @@ func HookInputJSON(request any) (string, error) {
 		}
 	case *HookSubagentStartRequest:
 		input = map[string]any{
-			"session_id":      typed.ThreadID,
+			"session_id":      hookSessionIdentifier(typed.SessionID, typed.ThreadID),
 			"turn_id":         typed.TurnID,
 			"transcript_path": nullableStringValue(typed.TranscriptPath),
 			"cwd":             typed.CWD,
@@ -565,7 +576,7 @@ func HookInputJSON(request any) (string, error) {
 		}
 	case *HookStopRequest:
 		input = map[string]any{
-			"session_id":             typed.ThreadID,
+			"session_id":             hookSessionIdentifier(typed.SessionID, typed.ThreadID),
 			"turn_id":                typed.TurnID,
 			"transcript_path":        nullableStringValue(typed.TranscriptPath),
 			"cwd":                    typed.CWD,
@@ -587,7 +598,7 @@ func HookInputJSON(request any) (string, error) {
 		}
 	case *HookSubagentStopRequest:
 		input = map[string]any{
-			"session_id":             typed.ThreadID,
+			"session_id":             hookSessionIdentifier(typed.SessionID, typed.ThreadID),
 			"turn_id":                typed.TurnID,
 			"transcript_path":        nullableStringValue(typed.TranscriptPath),
 			"agent_transcript_path":  nullableStringValue(typed.AgentTranscriptPath),

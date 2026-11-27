@@ -67,11 +67,11 @@ func TestAdditionalContextMetricsLikeRust(t *testing.T) {
 	name := "browser"
 	largeName := "large"
 	router.mergeAdditionalContext("thread-a", map[string]turn.AdditionalContextEntry{
-		"application_limit": {Kind: turn.AdditionalContextApplication, Value: strings.Repeat("a", 4000)},
-		"application_over":  {Kind: turn.AdditionalContextApplication, Value: strings.Repeat("a", 4001)},
-		"application_large": {Kind: turn.AdditionalContextApplication, Name: &largeName, Value: strings.Repeat("a", 40000)},
-		"opaque_named":      {Kind: turn.AdditionalContextUntrusted, Name: &name, Value: strings.Repeat("b", 4001)},
-		"opaque_unnamed":    {Kind: turn.AdditionalContextUntrusted, Value: strings.Repeat("\u00e9", 2001)},
+		"application_limit": {Kind: turn.AdditionalContextApplication, Value: strings.Repeat("a", 40000)},
+		"application_over":  {Kind: turn.AdditionalContextApplication, Value: strings.Repeat("a", 40001)},
+		"application_large": {Kind: turn.AdditionalContextApplication, Name: &largeName, Value: strings.Repeat("a", 80000)},
+		"opaque_named":      {Kind: turn.AdditionalContextUntrusted, Name: &name, Value: strings.Repeat("b", 40001)},
+		"opaque_unnamed":    {Kind: turn.AdditionalContextUntrusted, Value: strings.Repeat("\u00e9", 20001)},
 		"opaque_empty":      {Kind: turn.AdditionalContextUntrusted, Value: ""},
 	}, false)
 
@@ -107,22 +107,22 @@ func TestAdditionalContextMetricsLikeRust(t *testing.T) {
 		t.Fatal("opaque source key must never become a name tag")
 	}
 	limit := sizes["application/false/"]
-	if limit["before"].value != 4000 || limit["after"].value != 4000 {
+	if limit["before"].value != 40000 || limit["after"].value != 40000 {
 		t.Fatalf("unchanged entry sizes = %#v", limit)
 	}
 	// A value just past the budget still reports its original size; `after`
 	// includes the truncation marker, which can exceed the removed bytes
 	// (Rust #58144).
 	over := sizes["application/true/"]
-	if over["before"].value != 4001 || over["after"].value == 0 {
+	if over["before"].value != 40001 || over["after"].value == 0 {
 		t.Fatalf("slightly over-budget entry counts = %#v", over)
 	}
 	large := sizes["application/true/large"]
-	if large["before"].value != 40000 || large["after"].value >= large["before"].value {
+	if large["before"].value != 80000 || large["after"].value >= large["before"].value {
 		t.Fatalf("large entry sizes = %#v", large)
 	}
 	multibyte := sizes["untrusted/true/"]
-	if multibyte["before"].value != 4002 || multibyte["after"].value == multibyte["before"].value {
+	if multibyte["before"].value != 40002 || multibyte["after"].value == multibyte["before"].value {
 		t.Fatalf("multibyte entry sizes = %#v", multibyte)
 	}
 	empty := sizes["untrusted/false/"]

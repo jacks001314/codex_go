@@ -209,8 +209,8 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		// app-server-protocol/schema/precomputed/ in that checkout (SHA-256 compared
 		// against the Rust files themselves), so the pins below are recomputed from
 		// those exact bytes. The previous a0d5b0a661 pins described an older anchor.
-		{"stable", stablePrecomputedExports, "761cbc57dec41a697daeb94bedddf6f13ac9ba50e53c91cb74d645527d17b8bb"},
-		{"experimental", experimentalPrecomputedExports, "d1d275e3247a6af5238a8ae11ca997606b62dc17df769ae7f525ff72d45d7633"},
+		{"stable", stablePrecomputedExports, "8c65ad1122d9b1ad98799a62b80ee1184f7ee8836b5c759a3f8480243e2bad2d"},
+		{"experimental", experimentalPrecomputedExports, "fc59421f2ecfbfda0811bf89847a2440db46b2a962612a2c55ea7be55b92d80f"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

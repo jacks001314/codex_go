@@ -54,7 +54,7 @@ func TestPerEnvironmentContextGroupsRulesLikeRust(t *testing.T) {
 		"blocked.example.com": config.NetworkDeny,
 		"api.example.com":     config.NetworkAllow,
 	}}
-	text := router.turnEnvironmentContextTextWithOptions(context.Background(), params, nil, "UTC", "", false, false, environmentWorldStateRemovals{}, true, requirements)
+	text := router.turnEnvironmentContextTextWithOptions(context.Background(), params, nil, "UTC", "", false, false, environmentWorldStateRemovals{}, true, false, requirements)
 
 	for _, want := range []string{
 		"<environment_context>\n  <environments>\n",
@@ -91,7 +91,7 @@ func TestPerEnvironmentContextSingleEnvironmentOmitsPrimaryLikeRust(t *testing.T
 	params := &turn.TurnStartParams{Environments: []map[string]any{
 		perEnvironmentTestSelection(t, "env-a", cwd, sandbox.FullAccessPermissionProfile(), []string{cwd}),
 	}}
-	text := router.turnEnvironmentContextTextWithOptions(context.Background(), params, nil, "UTC", "", false, false, environmentWorldStateRemovals{}, true, nil)
+	text := router.turnEnvironmentContextTextWithOptions(context.Background(), params, nil, "UTC", "", false, false, environmentWorldStateRemovals{}, true, false, nil)
 	if !strings.Contains(text, "<environment id=\"env-a\">") || strings.Contains(text, "primary=") {
 		t.Fatalf("single per-environment context = %s", text)
 	}

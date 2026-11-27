@@ -29,6 +29,7 @@ import (
 	"sync"
 
 	"codex_go/config"
+	"codex_go/session"
 	"codex_go/turn"
 )
 
@@ -374,24 +375,27 @@ func (r *RuntimeRouter) applyGuardianPolicyToThread(threadID string, snapshot *c
 		return nil
 	}
 	var (
-		blockedReason string
-		applied       bool
-		wasBlocked    bool
+		previousConfig   *config.Config
+		nextConfig       *config.Config
+		previousReviewer string
+		updatedReviewer  string
+		blockedReason    string
+		applied          bool
+		wasBlocked       bool
 	)
 	r.threads.UpdateTurn(threadID, active.TurnID, func(live *activeRuntimeTurn) {
 		if live == nil || live.RunConfig == nil || live.RunConfig.Config == nil {
 			return
 		}
 		wasBlocked = live.GuardianPolicyBlocked
-		next := live.RunConfig.Config.CloneForGuardianPolicy()
-		if err := next.ApplyGuardianPolicy(snapshot); err != nil {
-			blockedReason = err.Error()
-			live.GuardianPolicyRevision = snapshot.Revision
-			live.GuardianPolicyBlocked = true
-			live.GuardianPolicyBlockedReason = blockedReason
-			applied = true
-			return
+		previousConfig = live.RunConfig.Config
+		previousReviewer = strings.TrimSpace(live.RunConfig.ApprovalsReviewer)
+		if previousReviewer == "" && live.Params != nil && live.Params.ApprovalsReviewer != nil {
+			previousReviewer = strings.TrimSpace(*live.Params.ApprovalsReviewer)
 		}
+		previousReviewer = normalizeStepApprovalsReviewer(previousReviewer)
+		next := live.RunConfig.Config.CloneForGuardianPolicy()
+		applyErr := next.ApplyGuardianPolicy(snapshot)
 		model := strings.TrimSpace(live.RunConfig.Model)
 		if model == "" && live.Params != nil {
 			model = strings.TrimSpace(live.Params.Model)
@@ -403,14 +407,19 @@ func (r *RuntimeRouter) applyGuardianPolicyToThread(threadID string, snapshot *c
 		if requested == "" {
 			requested = strings.TrimSpace(live.RunConfig.ApprovalsReviewer)
 		}
-		resolved, resolveErr := resolveGuardianReviewer(requested, model, next.Requirements)
-		reviewer := resolved
-		if resolveErr != nil {
-			// Publish the restrictions even when they rule out the current
-			// model, and keep the constrained default as the reviewer
-			// (Rust #62585).
-			reviewer = guardianPolicyConstrainedReviewer(next.Requirements)
-			blockedReason = fmt.Sprintf("Guardian policy blocks model %q: %v", model, resolveErr)
+		reviewer := requested
+		if applyErr == nil {
+			var resolveErr error
+			reviewer, resolveErr = resolveGuardianReviewer(requested, model, next.Requirements)
+			if resolveErr != nil {
+				// Publish the restrictions even when they rule out the current
+				// model, and keep the constrained default as the reviewer
+				// (Rust #62585).
+				reviewer = guardianPolicyConstrainedReviewer(next.Requirements)
+				blockedReason = fmt.Sprintf("Guardian policy blocks model %q: %v", model, resolveErr)
+			}
+		} else {
+			blockedReason = applyErr.Error()
 		}
 		if live.Params != nil {
 			value := reviewer
@@ -421,10 +430,18 @@ func (r *RuntimeRouter) applyGuardianPolicyToThread(threadID string, snapshot *c
 		live.GuardianPolicyRevision = snapshot.Revision
 		live.GuardianPolicyBlocked = blockedReason != ""
 		live.GuardianPolicyBlockedReason = blockedReason
+		nextConfig = next
+		updatedReviewer = reviewer
 		applied = true
 	})
 	if !applied {
 		return nil
+	}
+	// Contributors observe the effective previous and current configs only
+	// after the live-turn lock is released, including when the new policy
+	// blocks the current model (Rust #63995).
+	if previousReviewer != updatedReviewer {
+		r.emitConfigChangedContributors(threadID, previousConfig, nextConfig, previousReviewer, updatedReviewer)
 	}
 	if blockedReason == "" {
 		if wasBlocked {
@@ -435,6 +452,34 @@ func (r *RuntimeRouter) applyGuardianPolicyToThread(threadID string, snapshot *c
 		return nil
 	}
 	return &guardianPolicyRejection{ThreadID: threadID, Reason: blockedReason}
+}
+
+func (r *RuntimeRouter) emitConfigChangedContributors(threadID string, previous, current *config.Config, previousReviewer, currentReviewer string) {
+	if r == nil || previous == nil || current == nil {
+		return
+	}
+	handlers := r.internalHost.configChangedHandlersSnapshot()
+	if len(handlers) == 0 {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	sessionID := threadID
+	if record, err := r.threadRecord(session.ThreadID(threadID), true, false); err == nil && record != nil {
+		sessionID = firstNonEmpty(strings.TrimSpace(record.SessionID), threadID)
+	}
+	input := ConfigChangedInput{
+		ThreadID:                  threadID,
+		SessionID:                 sessionID,
+		Previous:                  previous,
+		Current:                   current,
+		PreviousApprovalsReviewer: previousReviewer,
+		CurrentApprovalsReviewer:  currentReviewer,
+		SessionStore:              r.internalHost.sessionStore(sessionID),
+		ThreadStore:               r.internalHost.threadStore(threadID),
+	}
+	for _, handler := range handlers {
+		handler(input)
+	}
 }
 
 // guardianPolicyConstrainedReviewer mirrors Rust

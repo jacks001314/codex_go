@@ -1026,6 +1026,24 @@ func (m *ThreadManager) UpdateTurn(threadID string, turnID string, apply func(*a
 	return true
 }
 
+// TakePendingInitialInput atomically claims the unrecorded input for one live
+// turn. The third result reports whether that turn was still registered; a
+// false result means cleanup already won the race and owns the submission.
+func (m *ThreadManager) TakePendingInitialInput(threadID string, turnID string) (*turn.TurnStartParams, int64, bool) {
+	if m == nil {
+		return nil, 0, false
+	}
+	m.turnsMu.Lock()
+	defer m.turnsMu.Unlock()
+	active := m.active[strings.TrimSpace(threadID)]
+	if active == nil || active.TurnID != strings.TrimSpace(turnID) {
+		return nil, 0, false
+	}
+	pending := cloneTurnStartParams(active.PendingInitialInput)
+	active.PendingInitialInput = nil
+	return pending, active.StartedAtMS, true
+}
+
 func (m *ThreadManager) ActiveTurn(threadID string) *activeRuntimeTurn {
 	if m == nil {
 		return nil
@@ -1437,6 +1455,7 @@ func cloneActiveRuntimeTurn(active *activeRuntimeTurn) *activeRuntimeTurn {
 	}
 	clone := *active
 	clone.Params = cloneTurnStartParams(active.Params)
+	clone.PendingInitialInput = cloneTurnStartParams(active.PendingInitialInput)
 	clone.TurnClientMetadata = cloneStringMap(active.TurnClientMetadata)
 	return &clone
 }

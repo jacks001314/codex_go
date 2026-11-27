@@ -247,6 +247,10 @@ func (c *AnalyticsEventsClient) TrackCodexReviewEvent(ctx context.Context, event
 	c.trackEvent(event)
 }
 
+func (c *AnalyticsEventsClient) TrackCodexGuardianReviewEvent(ctx context.Context, event GuardianReviewEventRequest) {
+	c.trackEvent(event)
+}
+
 func (c *AnalyticsEventsClient) TrackCodexGuardianV2Event(ctx context.Context, event GuardianV2EventRequest) {
 	c.trackEvent(event)
 }
@@ -495,6 +499,15 @@ func (e *HTTPAnalyticsExporter) TrackCodexFileChangeEvent(ctx context.Context, e
 }
 
 func (e *HTTPAnalyticsExporter) TrackCodexReviewEvent(ctx context.Context, event CodexReviewEventRequest) {
+	if e == nil {
+		return
+	}
+	if err := e.SendTrackEvents(ctx, []any{event}); err != nil {
+		slog.Warn("failed to send analytics events request", "error", err)
+	}
+}
+
+func (e *HTTPAnalyticsExporter) TrackCodexGuardianReviewEvent(ctx context.Context, event GuardianReviewEventRequest) {
 	if e == nil {
 		return
 	}

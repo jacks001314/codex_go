@@ -102,7 +102,6 @@ func BuildHostSkillsPromptContext(options *HostSkillsPromptOptions) (*HostSkills
 	}
 	metadata := promptHostSkillMetadataFromEntries(response.Skills)
 	params := &turn.TurnStartParams{Prompt: options.Prompt, Input: append([]turn.TurnUserInput(nil), options.Inputs...), CWD: options.CWD}
-	metadata = selectSkillMetadata(options.Config, params, metadata)
 
 	if options.Config == nil || options.Config.IncludeSkillInstructions() {
 		omitDescriptions := options.Config != nil && features.Enabled(options.Config.FeatureSettings(), "omit_skill_descriptions")

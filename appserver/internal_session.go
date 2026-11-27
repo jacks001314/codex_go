@@ -78,6 +78,22 @@ func (s *ExtensionStore) Delete(key string) {
 // ThreadReadyInput mirrors Rust's ThreadReadyInput: host configuration visible
 // after thread registration, the session source, and the session/thread-scoped
 // extension stores.
+// ConfigChangedInput is the host-owned equivalent of Rust's
+// ConfigContributor::on_config_changed input. Previous and Current are the
+// effective configurations before and after the Guardian policy publication;
+// the reviewer fields expose the resolved values carried outside the Values
+// map by the Go runtime.
+type ConfigChangedInput struct {
+	ThreadID                  string
+	SessionID                 string
+	Previous                  *config.Config
+	Current                   *config.Config
+	PreviousApprovalsReviewer string
+	CurrentApprovalsReviewer  string
+	SessionStore              *ExtensionStore
+	ThreadStore               *ExtensionStore
+}
+
 type ThreadReadyInput struct {
 	ThreadID       string
 	ParentThreadID string
@@ -97,11 +113,12 @@ type ThreadReadyInput struct {
 type internalSessionHost struct {
 	threadIDs sync.Map
 
-	mu            sync.RWMutex
-	readyHandlers []func(ThreadReadyInput)
-	sessionStores map[string]*ExtensionStore
-	threadStores  map[string]*ExtensionStore
-	turnStores    map[string]*ExtensionStore
+	mu                    sync.RWMutex
+	readyHandlers         []func(ThreadReadyInput)
+	configChangedHandlers []func(ConfigChangedInput)
+	sessionStores         map[string]*ExtensionStore
+	threadStores          map[string]*ExtensionStore
+	turnStores            map[string]*ExtensionStore
 }
 
 func (h *internalSessionHost) markThread(threadID string) {
@@ -143,6 +160,24 @@ func (h *internalSessionHost) readyHandlersSnapshot() []func(ThreadReadyInput) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return append([]func(ThreadReadyInput){}, h.readyHandlers...)
+}
+
+func (h *internalSessionHost) addConfigChangedHandler(handler func(ConfigChangedInput)) {
+	if h == nil || handler == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.configChangedHandlers = append(h.configChangedHandlers, handler)
+}
+
+func (h *internalSessionHost) configChangedHandlersSnapshot() []func(ConfigChangedInput) {
+	if h == nil {
+		return nil
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return append([]func(ConfigChangedInput){}, h.configChangedHandlers...)
 }
 
 func (h *internalSessionHost) sessionStore(sessionID string) *ExtensionStore {
@@ -276,6 +311,16 @@ func (r *RuntimeRouter) RegisterThreadReadyHandler(handler func(ThreadReadyInput
 		return
 	}
 	r.internalHost.addReadyHandler(handler)
+}
+
+// RegisterConfigChangedHandler installs a host-owned contributor notified when
+// a Guardian policy refresh changes a live thread's effective approvals
+// reviewer (Rust ConfigContributor::on_config_changed).
+func (r *RuntimeRouter) RegisterConfigChangedHandler(handler func(ConfigChangedInput)) {
+	if r == nil {
+		return
+	}
+	r.internalHost.addConfigChangedHandler(handler)
 }
 
 // SpawnInternalSession starts a fresh host-owned internal session bound to

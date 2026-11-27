@@ -200,6 +200,7 @@ func rustTopLevelDirectoriesSnapshot() []string {
 		"model-provider-info",
 		"models-manager",
 		"mxc-sandbox",
+		"network-policy-types",
 		"network-proxy",
 		"ollama",
 		"otel",

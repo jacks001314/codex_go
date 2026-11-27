@@ -11,14 +11,14 @@ import (
 // and by whether the fragment is a full snapshot or a delta. Unchanged state
 // never reaches this function.
 func (r *RuntimeRouter) recordDeferredToolsFragmentMetrics(report *contextfrag.DeferredToolsFragmentReport) {
-	if r == nil || report == nil || r.services.SkillShadowMetrics == nil {
+	if r == nil || report == nil || r.services.SkillsMetrics == nil {
 		return
 	}
 	kind := "delta"
 	if report.Snapshot {
 		kind = "snapshot"
 	}
-	sink := r.services.SkillShadowMetrics
+	sink := r.services.SkillsMetrics
 	for _, stage := range []struct {
 		name       string
 		namespaces int

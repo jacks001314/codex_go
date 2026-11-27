@@ -423,18 +423,20 @@ func (c *stdioClient) CallWithOptionsContext(ctx context.Context, options *stdio
 	if options != nil {
 		ctx = contextWithMCPClientContextAndRoots(ctx, options.ThreadID, options.TurnID, options.ItemID, options.Roots)
 	}
-	// Rust #57196: a shared connection must pause only the calling chat's
-	// timeout while it awaits input, so every transport attempt gets the budget
-	// that is left after subtracting time spent waiting on the user.
-	budget := newMCPCallBudget(c.callTimeout())
 	if delegate := c.legacyDelegate(); delegate != nil {
 		return delegate.CallWithOptionsContext(ctx, options, method, params, out)
 	}
-	initCtx, cancelInit := budget.context(ctx)
+	// Rust keeps the startup handshake and the first tool request on separate
+	// deadlines. A discovery fallback may legitimately spend its own startup
+	// budget and then initialize a fresh helper; that must not leave the
+	// subsequent request with an already-expired tool-call deadline.
+	initBudget := newMCPCallBudget(c.startupBudget())
+	initCtx, cancelInit := initBudget.context(ctx)
 	err := c.ensureInitialized(initCtx, options)
 	cancelInit()
 	if err != nil {
-		fallbackCtx, cancelFallback := budget.context(ctx)
+		fallbackBudget := newMCPCallBudget(c.startupBudget())
+		fallbackCtx, cancelFallback := fallbackBudget.context(ctx)
 		fallback := c.tryLegacyFallback(fallbackCtx, options, err)
 		cancelFallback()
 		if fallback != nil {
@@ -442,6 +444,9 @@ func (c *stdioClient) CallWithOptionsContext(ctx context.Context, options *stdio
 		}
 		return err
 	}
+	// Rust #57196: the request budget starts after initialization and pauses
+	// only while this chat awaits user input.
+	budget := newMCPCallBudget(c.callTimeout())
 	stderr := c.currentStderr()
 	baseParams := params
 	requestParams := params
@@ -856,7 +861,7 @@ func (c *stdioClient) startProcess(protocolMode MCPProtocolMode, launchEnv map[s
 // discoverModernProtocol probes `server/discover` with the probe budget Rust
 // reserves so a fresh handshake can still run afterwards.
 func (c *stdioClient) discoverModernProtocol(ctx context.Context, options *stdioCallOptions) (*stdioRPCResponse, error) {
-	probeCtx, cancel := context.WithTimeout(ctx, mcpDiscoveryProbeTimeout(c.callTimeout()))
+	probeCtx, cancel := context.WithTimeout(ctx, mcpDiscoveryProbeTimeout(c.startupBudget()))
 	defer cancel()
 	response, err := c.doRequest(probeCtx, options, "server/discover", map[string]any{})
 	if err != nil {
@@ -945,10 +950,7 @@ func (c *stdioClient) restartLegacyHandshake(ctx context.Context, options *stdio
 // timeout while still following the caller's cancellation (Rust #62552 gives
 // the legacy retry a fresh timeout).
 func (c *stdioClient) freshStartupContext(parent context.Context) (context.Context, context.CancelFunc) {
-	limit := c.startupTimeout()
-	if limit <= 0 {
-		return context.WithCancel(parent)
-	}
+	limit := c.startupBudget()
 	ctx, cancelTimeout := context.WithTimeout(context.WithoutCancel(parent), limit)
 	// The parent's own deadline is what the retry replaces; an explicit
 	// cancellation still aborts it.
@@ -963,13 +965,13 @@ func (c *stdioClient) freshStartupContext(parent context.Context) (context.Conte
 	}
 }
 
-// startupTimeout reports the configured startup budget for this server; zero
-// means the caller's deadline alone applies.
-func (c *stdioClient) startupTimeout() time.Duration {
-	if c == nil || c.config == nil {
-		return 0
+// startupBudget reports the configured startup budget for this server. Rust's
+// rmcp-client uses a 30 second default when the server config omits one.
+func (c *stdioClient) startupBudget() time.Duration {
+	if c != nil && c.config != nil && c.config.StartupTimeout > 0 {
+		return c.config.StartupTimeout
 	}
-	return c.config.StartupTimeout
+	return defaultMCPStartupTimeout
 }
 
 // stopProcessForRestart tears down only the current helper so this client can
@@ -1154,16 +1156,14 @@ func hasPathSeparator(value string) bool {
 	return strings.ContainsAny(value, `/\`)
 }
 
+// callTimeout reports the per-tool-call budget. It intentionally does not fall
+// back to StartupTimeout: Rust keeps those two deadlines independent and uses
+// a 300 second default tool timeout.
 func (c *stdioClient) callTimeout() time.Duration {
-	if c != nil && c.config != nil {
-		if c.config.ToolTimeout > 0 {
-			return c.config.ToolTimeout
-		}
-		if c.config.StartupTimeout > 0 {
-			return c.config.StartupTimeout
-		}
+	if c != nil && c.config != nil && c.config.ToolTimeout > 0 {
+		return c.config.ToolTimeout
 	}
-	return 15 * time.Second
+	return defaultMCPToolTimeout
 }
 
 // serverCapabilitiesRaw returns the advertised capabilities captured during

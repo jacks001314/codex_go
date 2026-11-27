@@ -12,9 +12,9 @@ func newStateTestProcess() *unifiedExecProcess {
 	}
 }
 
-// Rust #62557: a confirmed termination marks the process exited without
-// replacing the exit code the output collector later publishes.
-func TestUnifiedExecTerminateMarksExitedAndPreservesExitCodeLikeRust(t *testing.T) {
+// Rust #63896: termination can close stdin before the final read publishes the
+// exit code, but hasExited stays false until status and code are available.
+func TestUnifiedExecTerminatePublishesExitStatusWithCodeLikeRust(t *testing.T) {
 	process := newStateTestProcess()
 	if process.hasExited() {
 		t.Fatal("fresh process reported exited")
@@ -22,16 +22,16 @@ func TestUnifiedExecTerminateMarksExitedAndPreservesExitCodeLikeRust(t *testing.
 	if err := process.terminate(); err != nil {
 		t.Fatalf("terminate() error = %v", err)
 	}
-	if !process.hasExited() {
-		t.Fatal("terminated process did not report exited")
+	if process.hasExited() {
+		t.Fatal("terminated process reported exited before its exit code was known")
 	}
 	if err := process.writeStdin("input"); !errors.Is(err, ErrUnifiedExecStdinClosed) {
 		t.Fatalf("writeStdin() error = %v, want stdin closed", err)
 	}
 	exitCode := 7
 	process.finishWithExit(nil, &exitCode)
-	if process.exitCode != 7 || !process.exited {
-		t.Fatalf("final state = exited:%t code:%d", process.exited, process.exitCode)
+	if !process.hasExited() || process.exitCode != 7 {
+		t.Fatalf("final state = exited:%t code:%d", process.hasExited(), process.exitCode)
 	}
 }
 
@@ -43,13 +43,13 @@ func TestUnifiedExecRejectedStdinKeepsReportedExitCodeLikeRust(t *testing.T) {
 	if err := process.writeStdin("input"); !errors.Is(err, ErrUnifiedExecStdinClosed) {
 		t.Fatalf("writeStdin() error = %v, want stdin closed", err)
 	}
-	if !process.hasExited() {
-		t.Fatal("process with a rejected stdin did not report exited")
+	if process.hasExited() {
+		t.Fatal("rejected stdin reported exited before its exit code was known")
 	}
 	exitCode := 3
 	process.finishWithExit(nil, &exitCode)
-	if process.exitCode != 3 {
-		t.Fatalf("exit code after rejected stdin = %d, want 3", process.exitCode)
+	if !process.hasExited() || process.exitCode != 3 {
+		t.Fatalf("state after rejected stdin = exited:%t code:%d, want true/3", process.hasExited(), process.exitCode)
 	}
 }
 

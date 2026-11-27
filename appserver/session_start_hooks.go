@@ -57,6 +57,27 @@ func validPendingSessionStartSource(source SessionStartSource) bool {
 	return ok
 }
 
+// lifecycleSubagentHookContext mirrors Rust #64310. Native thread-spawn
+// children use SubagentStart/SubagentStop. Hosted workers can retain the
+// host's session source while inheriting the root session ID, so that identity
+// split is enough to classify them on this host-owned runtime.
+func lifecycleSubagentHookContext(record *session.Record) *SubagentHookContext {
+	if record == nil || senderSessionSourceIsInternal(record) {
+		return nil
+	}
+	threadID := strings.TrimSpace(string(record.ID))
+	sessionID := strings.TrimSpace(record.SessionID)
+	hostedWorker := sessionID != "" && sessionID != threadID
+	if !runtimeRecordIsThreadSpawn(record) && !hostedWorker {
+		return nil
+	}
+	agentType := strings.TrimSpace(record.Metadata.AgentRole)
+	if agentType == "" {
+		agentType = "default"
+	}
+	return &SubagentHookContext{AgentID: threadID, AgentType: agentType}
+}
+
 func (r *RuntimeRouter) markThreadPendingSessionStartSource(threadID string, source SessionStartSource) error {
 	threadID = strings.TrimSpace(threadID)
 	if r == nil || threadID == "" || !validPendingSessionStartSource(source) {
@@ -146,31 +167,68 @@ func (r *RuntimeRouter) runPendingSessionStartHook(ctx context.Context, params *
 		if len(hooks) == 0 {
 			return false, nil
 		}
-		request := &HookSessionStartRequest{
-			ThreadID:       params.ThreadID,
-			CWD:            cwd,
-			TranscriptPath: r.sessionStartTranscriptPath(record),
-			Model:          firstNonEmpty(params.Model, record.Metadata.Model),
-			PermissionMode: r.hookPermissionModeForTurn(params),
-			Source:         source,
-			Hooks:          hooks,
+		sessionID := hookSessionIdentifier(record.SessionID, params.ThreadID)
+		model := firstNonEmpty(params.Model, record.Metadata.Model)
+		permissionMode := r.hookPermissionModeForTurn(params)
+		transcriptPath := r.sessionStartTranscriptPath(record)
+		subagent := lifecycleSubagentHookContext(record)
+		event := HookEventSessionStart
+		matchers := []string{string(source)}
+		if subagent != nil {
+			event = HookEventSubagentStart
+			matchers = []string{subagent.AgentType}
+			if source != SessionStartSourceStartup && source != SessionStartSourceFork {
+				// Internal/synthetic child sessions do not replay root lifecycle
+				// hooks when resumed, compacted, or cleared.
+				return false, nil
+			}
 		}
-		if deferredSessionStartOnCancel(ctx, hooks, source) {
+		if deferredLifecycleStartOnCancel(ctx, hooks, event, matchers) {
 			// Rust #63523: a cancelled turn leaves an event queued when a
 			// matching synchronous hook would run, so the next turn retries it.
 			// Events that only match asynchronous hooks still run now.
 			return true, nil
 		}
-		result, err := r.requireHookRunner().RunSessionStart(ctx, request)
+		var result *HookRunResult
+		var err error
+		if subagent != nil {
+			turnID := ""
+			if active := r.threads.ActiveTurn(params.ThreadID); active != nil {
+				turnID = strings.TrimSpace(active.TurnID)
+			}
+			result, err = r.requireHookRunner().RunSubagentStart(ctx, &HookSubagentStartRequest{
+				SessionID:      sessionID,
+				ThreadID:       params.ThreadID,
+				TurnID:         turnID,
+				CWD:            cwd,
+				TranscriptPath: transcriptPath,
+				Model:          model,
+				PermissionMode: permissionMode,
+				AgentID:        subagent.AgentID,
+				AgentType:      subagent.AgentType,
+				Hooks:          hooks,
+			})
+		} else {
+			result, err = r.requireHookRunner().RunSessionStart(ctx, &HookSessionStartRequest{
+				SessionID:      sessionID,
+				ThreadID:       params.ThreadID,
+				CWD:            cwd,
+				TranscriptPath: transcriptPath,
+				Model:          model,
+				PermissionMode: permissionMode,
+				Source:         source,
+				Hooks:          hooks,
+			})
+		}
 		if err != nil {
 			// The runner failed or the turn was torn down mid-hook: keep the
 			// event queued so the next turn retries it (Rust #63523).
 			return true, err
 		}
-		if result != nil && result.Stopped {
+		if subagent == nil && result != nil && result.Stopped {
 			return false, fmt.Errorf("%w: SessionStart hook stopped execution: %s", ErrInvalidHook, strings.TrimSpace(result.StopReason))
 		}
-		if result != nil && result.Blocked {
+		if subagent == nil && result != nil && result.Blocked {
 			return false, fmt.Errorf("%w: SessionStart hook blocked execution: %s", ErrInvalidHook, strings.TrimSpace(result.BlockReason))
 		}
 		mergeSessionStartAdditionalContext(params, result)
@@ -183,7 +241,11 @@ func (r *RuntimeRouter) runPendingSessionStartHook(ctx context.Context, params *
 // at least one synchronous hook. An unset execution mode runs synchronously,
 // matching hooks/list and the runner.
 func sessionStartHasSynchronousMatch(hooks []HookMetadata, source SessionStartSource) bool {
-	for _, metadata := range selectHookHandlers(hooks, HookEventSessionStart, []string{string(source)}) {
+	return lifecycleStartHasSynchronousMatch(hooks, HookEventSessionStart, []string{string(source)})
+}
+
+func lifecycleStartHasSynchronousMatch(hooks []HookMetadata, event HookEventName, matchers []string) bool {
+	for _, metadata := range selectHookHandlers(hooks, event, matchers) {
 		if metadata.ExecutionMode != HookExecutionAsync {
 			return true
 		}
@@ -195,10 +257,14 @@ func sessionStartHasSynchronousMatch(hooks []HookMetadata, source SessionStartSo
 // cancellation was already requested, an event with a matching synchronous hook
 // stays queued instead of running, while asynchronous-only matches still run.
 func deferredSessionStartOnCancel(ctx context.Context, hooks []HookMetadata, source SessionStartSource) bool {
+	return deferredLifecycleStartOnCancel(ctx, hooks, HookEventSessionStart, []string{string(source)})
+}
+
+func deferredLifecycleStartOnCancel(ctx context.Context, hooks []HookMetadata, event HookEventName, matchers []string) bool {
 	if ctx == nil || ctx.Err() == nil {
 		return false
 	}
-	return sessionStartHasSynchronousMatch(hooks, source)
+	return lifecycleStartHasSynchronousMatch(hooks, event, matchers)
 }
 
 // mergeSessionStartEncryptedContext hands the ciphertext a synchronous MCP

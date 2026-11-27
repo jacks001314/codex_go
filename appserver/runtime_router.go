@@ -154,7 +154,7 @@ type RuntimeServices struct {
 	// AgentTurnOutcomeReporter receives every terminal turn result (Rust #59725).
 	AgentTurnOutcomeReporter AgentTurnOutcomeReporter
 	Analytics                telemetry.TurnEventSink
-	SkillShadowMetrics       SkillShadowMetricSink
+	SkillsMetrics            SkillsMetricSink
 	SkillInjectionMetrics    telemetry.CounterDurationSink
 	TurnMetrics              telemetry.TurnMetricSink
 	// VoiceMetrics receives the voice session lifecycle counters. The Go port
@@ -264,7 +264,10 @@ func (r *RuntimeRouter) configureEnvironmentHTTPPolicy() {
 	r.services.Environment.SetHTTPClient(client)
 }
 
-type SkillShadowMetricSink interface {
+// SkillsMetricSink carries the shared skills catalog and deferred-tool metrics.
+// The background shadow ranking experiment that originally introduced this
+// sink was removed with Rust #63993.
+type SkillsMetricSink interface {
 	Counter(name string, inc int, tags map[string]string)
 	Histogram(name string, value int, tags map[string]string)
 	// HistogramWithBounds records a histogram observation with explicit bucket
@@ -669,15 +672,10 @@ type RuntimeRouter struct {
 	// already started (Rust keeps one prewarm handle per session).
 	shellSnapshotV2Prewarmed map[string]struct{}
 	mcpEventStreams          *mcpEventStreamManager
-	skillShadowMu            sync.Mutex
-	skillShadowState         map[string]*skillShadowThreadState
-	// skillShadowWG tracks background shadow-ranking workers so shutdown can
-	// drain queued observations (Rust #49812).
-	skillShadowWG    sync.WaitGroup
-	startupPrewarmMu sync.Mutex
-	startupPrewarms  map[string]*startupPrewarmState
-	mcpRuntimes      *mcpRuntimeCoordinator
-	mcpConfigManaged atomic.Bool
+	startupPrewarmMu         sync.Mutex
+	startupPrewarms          map[string]*startupPrewarmState
+	mcpRuntimes              *mcpRuntimeCoordinator
+	mcpConfigManaged         atomic.Bool
 	// mcpConfigMu guards mcpAppliedRuntimeConfig, the process-wide runtime MCP
 	// configuration that was last published. A failed refresh republishes it
 	// with enterprise MCP disabled (Rust #49260 fail-closed reload).
@@ -2299,7 +2297,7 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 		CommandExec:           NewCommandExecService(),
 		Processes:             NewProcessService(),
 		Feedback:              &FeedbackSnapshot{Diagnostics: NewFeedbackDiagnostics(nil)},
-		SkillShadowMetrics:    runtimeMetrics,
+		SkillsMetrics:         runtimeMetrics,
 		SkillInjectionMetrics: runtimeMetrics,
 		TurnMetrics:           runtimeMetrics,
 		VoiceMetrics:          runtimeMetrics,
@@ -3345,7 +3343,6 @@ func (r *RuntimeRouter) close() error {
 			closeErr = err
 		}
 	}
-	r.closeSkillShadowSelection()
 	if r.services.UnifiedExec != nil {
 		if err := r.services.UnifiedExec.Close(); err != nil && closeErr == nil {
 			closeErr = err
@@ -6661,7 +6658,7 @@ func (r *RuntimeRouter) lifecycleRecordSnapshots(ids []session.ThreadID) map[str
 }
 
 func (r *RuntimeRouter) runSessionEndHookOnce(record *session.Record, reason string) {
-	if r == nil || record == nil || strings.TrimSpace(string(record.ID)) == "" {
+	if r == nil || record == nil || !recordRunsSessionEndHooks(record) {
 		return
 	}
 	threadID := string(record.ID)
@@ -6697,6 +6694,25 @@ func (r *RuntimeRouter) runSessionEndHookOnce(record *session.Record, reason str
 	}
 	// Rust 6f647caa9b: abort outstanding background hook work during shutdown.
 	r.requireHookRunner().ShutdownAsync(threadID)
+}
+
+// recordRunsSessionEndHooks mirrors Rust #64000: SessionEnd belongs to the root
+// session only. A hosted child can share its root's session id, while spawned
+// agents use SubagentStart/SubagentStop.
+func recordRunsSessionEndHooks(record *session.Record) bool {
+	if record == nil || strings.TrimSpace(string(record.ID)) == "" {
+		return false
+	}
+	threadID := strings.TrimSpace(string(record.ID))
+	if sessionID := strings.TrimSpace(record.SessionID); sessionID != "" && sessionID != threadID {
+		return false
+	}
+	if strings.TrimSpace(string(record.ParentThreadID)) != "" || strings.TrimSpace(string(record.AttachedThreadParentID)) != "" {
+		return false
+	}
+	source := strings.ToLower(strings.TrimSpace(record.Metadata.Source))
+	source = strings.NewReplacer("-", "_", ":", "_", "/", "_").Replace(source)
+	return !strings.HasPrefix(source, "subagent") && !strings.HasPrefix(source, "internal_")
 }
 
 func (r *RuntimeRouter) handleEphemeralThreadStartRuntime(request *Request) (*ThreadStartResponse, bool, error) {
@@ -11560,13 +11576,27 @@ func applyThreadModelSettings(thread *Thread, settings *Settings) {
 	}
 }
 
-// applyLiveThreadModelSettings reports a loaded thread's current model and
-// reasoning effort (Rust #42151).
+// applyThreadViewSettings overlays the live settings used to display a thread.
+// Rust #63990 reads these settings without materializing an execution
+// permission profile, so a thread read or list reports the same model,
+// reasoning effort and environment roots the loaded thread uses.
+func applyThreadViewSettings(thread *Thread, settings *Settings) {
+	if thread == nil || settings == nil {
+		return
+	}
+	applyThreadModelSettings(thread, settings)
+	if environments := cloneThreadEnvironments(settings.Environments); environments != nil {
+		thread.Environments = *environments
+	}
+}
+
+// applyLiveThreadModelSettings reports a loaded thread's current model,
+// reasoning effort and selected environments (Rust #42151, #63990).
 func (r *RuntimeRouter) applyLiveThreadModelSettings(thread *Thread) {
 	if r == nil || thread == nil || strings.TrimSpace(thread.ID) == "" || !r.threadIsLoaded(thread.ID) {
 		return
 	}
-	applyThreadModelSettings(thread, r.threadSettingsForTurn(thread.ID))
+	applyThreadViewSettings(thread, r.threadSettingsForTurn(thread.ID))
 	// Rust #62879 apply_live_thread_settings: a loaded thread reports whether it
 	// joined the Daybreak propagation experiment at startup.
 	if r.services.ThreadRouter != nil {
@@ -23369,6 +23399,9 @@ func (r *RuntimeRouter) startTurnRuntimeAsync(params *turn.TurnStartParams, resp
 		cancel()
 		r.emitTurnRuntimeError(params.ThreadID, response.Turn.ID, err)
 		return
+	}
+	if r.parkRuntimeTurnInitialInput(params.ThreadID, response.Turn.ID, paramsCopy) {
+		r.armRuntimeTurnInitialInputPersistence(ctx, params.ThreadID, response.Turn.ID)
 	}
 	// Rust #62674 starts remote executor discovery while the turn runtime is
 	// still being prepared so the first step can reuse its inventory.

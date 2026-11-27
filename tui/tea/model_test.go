@@ -6793,10 +6793,14 @@ func TestModelStatusLineAndTitleCommands(t *testing.T) {
 	})
 	state.SetStatus("idle")
 	writes := []string{}
+	pickerCWD := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(pickerCWD, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", pickerCWD, err)
+	}
 	model := NewModel(state, Options{
 		Width:            90,
 		Height:           24,
-		SessionPickerCWD: `D:\repo`,
+		SessionPickerCWD: pickerCWD,
 		OnWriteTerminalTitle: func(sequence string) bubbletea.Cmd {
 			writes = append(writes, sequence)
 			return nil

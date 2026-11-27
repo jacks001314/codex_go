@@ -35,6 +35,43 @@ func TestGuardianV3FeatureRegisteredLikeRust(t *testing.T) {
 	}
 }
 
+// TestGuardianV3ShadowFeatureRegisteredLikeRust pins Rust #63949: Guardian V3
+// shadow intake is an under-development, default-disabled feature.
+func TestGuardianV3ShadowFeatureRegisteredLikeRust(t *testing.T) {
+	const key = "guardianv3.shadow_enabled"
+	if !Known(key) {
+		t.Fatalf("%s should be known", key)
+	}
+	if got := StageFor(key); got != StageUnderDevelopment {
+		t.Fatalf("StageFor(%s) = %q, want %q", key, got, StageUnderDevelopment)
+	}
+	if Defaults()[key] {
+		t.Fatalf("%s default = true, want false", key)
+	}
+}
+
+// TestSkillSearchRemovedCompatibilityLikeRust pins Rust #63993: the shadow
+// ranking experiment was removed, while both true and false skill_search
+// overrides remain accepted as ignored compatibility settings.
+func TestSkillSearchRemovedCompatibilityLikeRust(t *testing.T) {
+	const key = "skill_search"
+	if !Known(key) {
+		t.Fatalf("%s must stay a known removed compatibility flag", key)
+	}
+	if got := StageFor(key); got != StageRemoved {
+		t.Fatalf("StageFor(%s) = %q, want %q", key, got, StageRemoved)
+	}
+	if Defaults()[key] {
+		t.Fatalf("%s default = true, want false", key)
+	}
+	for _, enabled := range []bool{false, true} {
+		settings, usages := ResolveSettings(map[string]any{key: enabled})
+		if len(settings) != 0 || len(usages) != 0 {
+			t.Fatalf("ResolveSettings(%s=%v) = settings %#v usages %#v, want ignored", key, enabled, settings, usages)
+		}
+	}
+}
+
 // TestGuardianRecordedItemsFeatureRegisteredLikeRust pins Rust #56124: the
 // reviewer raw-event forwarding flag is registered under development and off
 // by default.

@@ -149,6 +149,10 @@ type AgentRequest struct {
 	// endpoint, stay out of diagnostics, and are dropped for a redirect that
 	// preserves the body. Codex's default request construction supplies none.
 	ToolResults []ToolResultAttachment
+	// OmitRequestBodyFromLogs suppresses the encoded JSON body in request
+	// diagnostics while keeping the wire payload and byte count unchanged
+	// (Rust #64003's EncodedJsonBody::omit_from_logs).
+	OmitRequestBodyFromLogs bool
 	// Trace is the W3C trace context of the request that started this turn
 	// (Rust's `request_trace`): the websocket payload carries it so the model
 	// call stays inside the caller's trace.
